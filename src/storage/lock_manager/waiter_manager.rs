@@ -25,7 +25,7 @@ pub fn store_wait_table_is_empty(is_empty: bool) {
     WAIT_TABLE_IS_EMPTY.store(is_empty, Ordering::Relaxed);
 }
 
-pub fn load_wait_table_is_empty() -> bool {
+pub fn wait_table_is_empty() -> bool {
     WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed)
 }
 
@@ -490,14 +490,14 @@ mod tests {
         assert!(wait_table
             .remove_waiter(1, Lock { ts: 2, hash: 2 })
             .is_some());
-        assert_eq!(load_wait_table_is_empty(), true);
+        assert_eq!(wait_table_is_empty(), true);
         wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
         wait_table.add_waiter(3, dummy_waiter(2, 3, 3));
         store_wait_table_is_empty(false);
         wait_table.get_ready_waiters(2, vec![2]);
-        assert_eq!(load_wait_table_is_empty(), false);
+        assert_eq!(wait_table_is_empty(), false);
         wait_table.get_ready_waiters(3, vec![3]);
-        assert_eq!(load_wait_table_is_empty(), true);
+        assert_eq!(wait_table_is_empty(), true);
     }
 
     #[test]
