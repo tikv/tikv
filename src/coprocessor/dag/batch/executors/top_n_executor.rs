@@ -154,7 +154,6 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         }
     }
 
-    #[allow(clippy::transmute_ptr_to_ptr)]
     fn process_batch_input(&mut self, mut data: LazyBatchColumnVec) -> Result<()> {
         let src_schema_unbounded = unsafe { erase_lifetime(self.src.schema()) };
         for expr in self.order_exprs.iter() {
