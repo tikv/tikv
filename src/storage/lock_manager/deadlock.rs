@@ -208,6 +208,12 @@ impl Inner {
         self.store_id == self.leader_id
     }
 
+    fn update_max_ts_if_needed(&mut self, ts: u64) {
+        if ts > self.max_ts {
+            self.max_ts = ts;
+        }
+    }
+
     fn reset(&mut self) {
         self.leader_client.take();
         self.recving.borrow_mut().clear();
@@ -436,9 +442,7 @@ impl Detector {
     fn handle_detect(&self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
         let mut inner = self.inner.borrow_mut();
         if inner.is_leader() {
-            if txn_ts > inner.max_ts {
-                inner.max_ts = txn_ts;
-            }
+            inner.update_max_ts_if_needed(txn_ts);
             match tp {
                 DetectType::Detect => {
                     if let Some(deadlock_key_hash) = inner
@@ -512,11 +516,9 @@ impl Detector {
                 } = req.get_entry();
 
                 let mut inner = inner.borrow_mut();
-                if *txn > inner.max_ts {
-                    inner.max_ts = *txn;
-                }
-
+                inner.update_max_ts_if_needed(*txn);
                 let mut detect_table = inner.detect_table.borrow_mut();
+
                 let res = match req.get_tp() {
                     DeadlockRequestType::Detect => {
                         if let Some(deadlock_key_hash) =
