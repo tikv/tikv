@@ -984,32 +984,30 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         }
 
         // Titan num live blob file
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
             STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
                 .with_label_values(&[name, cf])
                 .set(v as i64);
         }
 
         // Titan num obsolete blob file
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE) {
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
+        {
             STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC
                 .with_label_values(&[name, cf])
                 .set(v as i64);
         }
 
         // Titan live blob file size
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE) {
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE) {
             STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC
                 .with_label_values(&[name, cf])
                 .set(v as i64);
         }
 
         // Titan obsolete blob file size
-        if let Some(v) =
-            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE) {
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+        {
             STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC
                 .with_label_values(&[name, cf])
                 .set(v as i64);
