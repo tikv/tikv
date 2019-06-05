@@ -339,7 +339,7 @@ fn test_lease_read_callback_destroy() {
 }
 
 #[test]
-fn test_read_index_when_transfer_leader() {
+fn test_read_index_when_transfer_leader_1() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
@@ -417,15 +417,14 @@ fn test_read_index_when_transfer_leader() {
     }
 
     let resp1 = resp1.recv().unwrap();
-    assert_eq!(resp1.get_responses()[0].get_get().get_value(), b"v1");
+    assert!(
+        resp1.get_header().get_error().has_stale_command()
+            || resp1.get_responses()[0].get_get().get_value() == b"v1"
+    );
 
     // Response 2 should contains an error.
     let resp2 = resp2.recv().unwrap();
-    assert!(
-        resp2.get_header().get_error().has_stale_command(),
-        "{:?}",
-        resp2
-    );
+    assert!(resp2.get_header().get_error().has_stale_command());
     drop(cluster);
 }
 
