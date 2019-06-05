@@ -13,33 +13,45 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
-pub enum Extremum {
-    Min,
-    Max,
+pub trait Extremum {
+    #[inline]
+    fn tp() -> ExprType;
+
+    #[inline]
+    fn ord() -> Ordering;
 }
 
-impl Extremum {
-    pub fn tp(&self) -> ExprType {
-        match self {
-            Extremum::Max => ExprType::Max,
-            Extremum::Min => ExprType::Min,
+macro_rules! extremum {
+    ($e:ident, $ord:path) => {
+        pub struct $e;
+        impl Extremum for $e {
+            #[inline]
+            fn tp() -> ExprType {
+                ExprType::$e
+            }
+            #[inline]
+            fn ord() -> Ordering {
+                $ord
+            }
         }
-    }
-
-    pub fn ord(&self) -> Ordering {
-        match self {
-            Extremum::Max => Ordering::Less,
-            Extremum::Min => Ordering::Greater,
-        }
-    }
+    };
 }
+
+extremum!(Max, Ordering::Less);
+extremum!(Min, Ordering::Greater);
 
 /// The parser for `MAX/MIN` aggregate functions.
-pub struct AggrFnDefinitionParserExtremum(pub Extremum);
+pub struct AggrFnDefinitionParserExtremum<T: Extremum>(std::marker::PhantomData<T>);
 
-impl super::AggrDefinitionParser for AggrFnDefinitionParserExtremum {
+impl<T: Extremum> AggrFnDefinitionParserExtremum<T> {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum<T> {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
-        assert_eq!(aggr_def.get_tp(), self.0.tp());
+        assert_eq!(aggr_def.get_tp(), T::tp());
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
@@ -52,7 +64,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserExtremum {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
-        assert_eq!(aggr_def.get_tp(), self.0.tp());
+        assert_eq!(aggr_def.get_tp(), T::tp());
 
         // `MAX/MIN` outputs one column which has the same type with its child
         out_schema.push(aggr_def.take_field_type());
@@ -67,7 +79,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserExtremum {
 
         match_template_evaluable! {
             TT, match eval_type {
-                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT>::new(self.0.ord())))
+                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT>::new(T::ord())))
             }
         }
     }
@@ -137,21 +149,10 @@ where
         _ctx: &mut EvalContext,
         value: &Option<Self::ParameterType>,
     ) -> Result<()> {
-        match value {
-            None => Ok(()),
-            Some(value) => {
-                // TODO: is there a way to eliminate the clone?
-                match &self.extremum {
-                    Some(lhs) => {
-                        if lhs.cmp(value) == self.ord {
-                            self.extremum = Some(value.clone());
-                        }
-                    }
-                    None => self.extremum = Some(value.clone()),
-                }
-                Ok(())
-            }
+        if value.is_some() && (self.extremum.is_none() || self.extremum.cmp(value) == self.ord) {
+            self.extremum = value.clone();
         }
+        Ok(())
     }
 
     #[inline]
@@ -175,7 +176,7 @@ mod tests {
     #[test]
     fn test_max() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int>::new(Extremum::Max.ord());
+        let function = AggFnExtremum::<Int>::new(Max::ord());
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -225,7 +226,7 @@ mod tests {
     #[test]
     fn test_min() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int>::new(Extremum::Min.ord());
+        let function = AggFnExtremum::<Int>::new(Min::ord());
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -279,8 +280,8 @@ mod tests {
 
     #[test]
     fn test_integration() {
-        let max_parser = AggrFnDefinitionParserExtremum(Extremum::Max);
-        let min_parser = AggrFnDefinitionParserExtremum(Extremum::Min);
+        let max_parser = AggrFnDefinitionParserExtremum::<Max>::new();
+        let min_parser = AggrFnDefinitionParserExtremum::<Min>::new();
 
         let max = ExprDefBuilder::aggr_func(ExprType::Max, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
