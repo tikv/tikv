@@ -175,12 +175,14 @@ impl Display for Command {
                 ref ctx,
                 ref keys,
                 start_ts,
+                ref options,
                 ..
             } => write!(
                 f,
-                "kv::command::acquirepessimisticlock keys({}) @ {} | {:?}",
+                "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
                 keys.len(),
                 start_ts,
+                options.for_update_ts,
                 ctx
             ),
             Command::Commit {
