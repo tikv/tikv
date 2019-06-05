@@ -255,11 +255,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
+
         let number_of_groups = self.groups.len();
         let group_by_exps_len = self.group_by_exps.len();
         let mut group_by_columns: Vec<_> = self
@@ -281,11 +284,19 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             for group_index in 0..group_by_exps_len {
                 let offset_begin = group_info.group_key_offsets[group_index] as usize;
                 let offset_end = group_info.group_key_offsets[group_index + 1] as usize;
-                group_by_columns[group_index].push_raw(&group_key[offset_begin..offset_end]);
+                group_by_columns[group_index]
+                    .mut_raw()
+                    .push(&group_key[offset_begin..offset_end]);
             }
         }
 
         Ok(group_by_columns)
+    }
+
+    /// Slow hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
     }
 }
 
@@ -363,12 +374,16 @@ mod tests {
         assert_eq!(r.data.columns_len(), 5); // 3 result column, 2 group by column
 
         // Let's check the two group by column first.
-        r.data[3].decode(&Tz::utc(), &exec.schema()[3]).unwrap();
+        r.data[3]
+            .ensure_decoded(&Tz::utc(), &exec.schema()[3])
+            .unwrap();
         assert_eq!(
             r.data[3].decoded().as_int_slice(),
             &[Some(5), None, None, Some(1)]
         );
-        r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+        r.data[4]
+            .ensure_decoded(&Tz::utc(), &exec.schema()[4])
+            .unwrap();
         assert_eq!(
             r.data[4].decoded().as_real_slice(),
             &[Real::new(2.5).ok(), Real::new(8.0).ok(), None, None]

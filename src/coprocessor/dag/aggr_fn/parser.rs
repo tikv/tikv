@@ -23,6 +23,9 @@ pub trait AggrDefinitionParser {
     /// RPN expression (maybe wrapped by some casting according to types) will be appended in
     /// `out_exp`.
     ///
+    /// The parser may choose particular aggregate function implementation based on the data
+    /// type, so `schema` is also needed in case of data type depending on the column.
+    ///
     /// # Panic
     ///
     /// May panic if the aggregate function definition is not supported by this parser.
@@ -30,7 +33,7 @@ pub trait AggrDefinitionParser {
         &self,
         aggr_def: Expr,
         time_zone: &Tz,
-        max_columns: usize,
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>>;
@@ -40,7 +43,9 @@ pub trait AggrDefinitionParser {
 fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinitionParser>> {
     match value {
         ExprType::Count => Ok(Box::new(super::impl_count::AggrFnDefinitionParserCount)),
+        ExprType::Sum => Ok(Box::new(super::impl_sum::AggrFnDefinitionParserSum)),
         ExprType::Avg => Ok(Box::new(super::impl_avg::AggrFnDefinitionParserAvg)),
+        ExprType::First => Ok(Box::new(super::impl_first::AggrFnDefinitionParserFirst)),
         v => Err(box_err!(
             "Aggregation function expr type {:?} is not supported in batch mode",
             v
@@ -76,11 +81,11 @@ impl AggrDefinitionParser for AllAggrDefinitionParser {
         &self,
         aggr_def: Expr,
         time_zone: &Tz,
-        max_columns: usize,
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp()).unwrap();
-        parser.parse(aggr_def, time_zone, max_columns, out_schema, out_exp)
+        parser.parse(aggr_def, time_zone, src_schema, out_schema, out_exp)
     }
 }
