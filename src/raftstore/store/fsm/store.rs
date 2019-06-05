@@ -823,31 +823,31 @@ impl<T, C> RaftPollerBuilder<T, C> {
         kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
     }
 
-    /// `clear_stale_data` clean up all possible garbage data.
-    fn clear_stale_data(&self, meta: &StoreMeta) -> Result<()> {
-        let t = Instant::now();
+    // /// `clear_stale_data` clean up all possible garbage data.
+    // fn clear_stale_data(&self, meta: &StoreMeta) -> Result<()> {
+    //     let t = Instant::now();
 
-        let mut ranges = Vec::new();
-        let mut last_start_key = keys::data_key(b"");
-        for region_id in meta.region_ranges.values() {
-            let region = &meta.regions[region_id];
-            let start_key = keys::enc_start_key(region);
-            ranges.push((last_start_key, start_key));
-            last_start_key = keys::enc_end_key(region);
-        }
-        ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
+    //     let mut ranges = Vec::new();
+    //     let mut last_start_key = keys::data_key(b"");
+    //     for region_id in meta.region_ranges.values() {
+    //         let region = &meta.regions[region_id];
+    //         let start_key = keys::enc_start_key(region);
+    //         ranges.push((last_start_key, start_key));
+    //         last_start_key = keys::enc_end_key(region);
+    //     }
+    //     ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocks::util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
+    //     rocks::util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
 
-        info!(
-            "cleans up garbage data";
-            "store_id" => self.store.get_id(),
-            "garbage_range_count" => ranges.len(),
-            "takes" => ?t.elapsed()
-        );
+    //     info!(
+    //         "cleans up garbage data";
+    //         "store_id" => self.store.get_id(),
+    //         "garbage_range_count" => ranges.len(),
+    //         "takes" => ?t.elapsed()
+    //     );
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }
 
 impl<T, C> HandlerBuilder<PeerFsm, StoreFsm> for RaftPollerBuilder<T, C>
