@@ -38,7 +38,7 @@ use crate::raftstore::Result as RaftStoreResult;
 use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
-use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
+use tikv_util::file::{calc_crc32, delete_file_if_exist, delete_dir_if_exist, file_exists, get_file_size};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
 
@@ -306,6 +306,8 @@ struct MetaFile {
 pub struct Snap {
     key: SnapKey,
     display_path: String,
+    subdir_path: PathBuf,
+    tmp_subdir_path: PathBuf,
     cf_files: Vec<CfFile>,
     cf_index: usize,
     meta_file: MetaFile,
@@ -335,13 +337,15 @@ impl Snap {
         };
         let prefix = format!("{}_{}", snap_prefix, key);
         let display_path = Snap::get_display_path(&dir_path, &prefix);
+        let subdir_path = dir_path.join(&prefix);
+        let tmp_subdir_path = dir_path.join(format!("{}{}", prefix, TMP_FILE_SUFFIX));
 
         let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
         for cf in SNAPSHOT_CFS {
-            let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
-            let path = dir_path.join(&filename);
-            let tmp_path = dir_path.join(format!("{}{}", filename, TMP_FILE_SUFFIX));
-            let clone_path = dir_path.join(format!("{}{}", filename, CLONE_FILE_SUFFIX));
+            let filename = format!("{}{}", cf, SST_FILE_SUFFIX);
+            let path = subdir_path.join(&filename);
+            let tmp_path = tmp_subdir_path.join(&filename);
+            let clone_path = subdir_path.join(format!("{}{}", filename, CLONE_FILE_SUFFIX));
             let cf_file = CfFile {
                 cf,
                 path,
@@ -352,9 +356,9 @@ impl Snap {
             cf_files.push(cf_file);
         }
 
-        let meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
-        let meta_path = dir_path.join(&meta_filename);
-        let meta_tmp_path = dir_path.join(format!("{}{}", meta_filename, TMP_FILE_SUFFIX));
+        let meta_filename = META_FILE_SUFFIX;
+        let meta_path = subdir_path.join(&meta_filename);
+        let meta_tmp_path = tmp_subdir_path.join(&meta_filename);
         let meta_file = MetaFile {
             path: meta_path,
             tmp_path: meta_tmp_path,
@@ -364,6 +368,8 @@ impl Snap {
         let mut s = Snap {
             key: key.clone(),
             display_path,
+            subdir_path,
+            tmp_subdir_path,
             cf_files,
             cf_index: 0,
             meta_file,
@@ -444,6 +450,7 @@ impl Snap {
             return Ok(s);
         }
 
+        fs::create_dir_all(s.tmp_subdir_path.as_path())?;
         let f = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -479,6 +486,7 @@ impl Snap {
         if self.exists() {
             return Ok(());
         }
+        fs::create_dir_all(self.tmp_subdir_path.as_path())?;
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -645,7 +653,6 @@ impl Snap {
             // some meta data to the header. So here we should use the kv count instead of the file size
             // to indicate if the sst file is empty.
             if cf_file.kv_count > 0 {
-                fs::rename(&cf_file.tmp_path, &cf_file.path)?;
                 cf_file.size = size;
                 // add size
                 self.size_track.fetch_add(size, Ordering::SeqCst);
@@ -666,8 +673,6 @@ impl Snap {
             f.write_all(&v[..])?;
             f.flush()?;
         }
-        fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
-        self.hold_tmp_files = false;
         Ok(())
     }
 
@@ -757,6 +762,8 @@ impl Snap {
         self.meta_file.meta = snapshot_meta;
         self.save_meta_file()?;
 
+        fs::rename(&self.tmp_subdir_path, &self.subdir_path)?;
+        self.hold_tmp_files = false;
         Ok(())
     }
 
@@ -886,18 +893,9 @@ impl Snapshot for Snap {
             "deleting snapshot file";
             "snapshot" => %self.path(),
         );
-        for cf_file in &self.cf_files {
-            delete_file_if_exist(&cf_file.clone_path).unwrap();
-            if self.hold_tmp_files {
-                delete_file_if_exist(&cf_file.tmp_path).unwrap();
-            }
-            if delete_file_if_exist(&cf_file.path).unwrap() {
-                self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
-            }
-        }
-        delete_file_if_exist(&self.meta_file.path).unwrap();
+        delete_dir_if_exist(&self.subdir_path).unwrap();
         if self.hold_tmp_files {
-            delete_file_if_exist(&self.meta_file.tmp_path).unwrap();
+            delete_dir_if_exist(&self.tmp_subdir_path).unwrap();
         }
     }
 
@@ -954,7 +952,6 @@ impl Snapshot for Snap {
                 ));
             }
 
-            fs::rename(&cf_file.tmp_path, &cf_file.path)?;
             self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
         }
         // write meta file
@@ -965,7 +962,7 @@ impl Snapshot for Snap {
             meta_file.write_all(&v[..])?;
             meta_file.sync_all()?;
         }
-        fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        fs::rename(&self.tmp_subdir_path, &self.subdir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
@@ -1156,15 +1153,27 @@ impl SnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        for f in fs::read_dir(path)? {
-            let p = f?;
-            if p.file_type()?.is_file() {
+        //TODO: migrating from the old file layout
+        let collect_snap_size=|path|-> io::Result<()>{
+            for f in fs::read_dir(path)?{
+                let p = f?;
                 if let Some(s) = p.file_name().to_str() {
-                    if s.ends_with(TMP_FILE_SUFFIX) {
-                        fs::remove_file(p.path())?;
-                    } else if s.ends_with(SST_FILE_SUFFIX) {
+                    if s.ends_with(SST_FILE_SUFFIX){
                         let len = p.metadata()?.len();
                         core.snap_size.fetch_add(len, Ordering::SeqCst);
+                    }
+                }
+            }
+            Ok(())
+        };
+        for f in fs::read_dir(path)? {
+            let p = f?;
+            if p.file_type()?.is_dir() {
+                if let Some(s) = p.file_name().to_str() {
+                    if s.ends_with(TMP_FILE_SUFFIX) {
+                        fs::remove_dir_all(p.path())?;
+                    } else {
+                        collect_snap_size(p.path())?
                     }
                 }
             }
@@ -1192,7 +1201,7 @@ impl SnapManager {
                     Ok(p) => p,
                 };
                 match p.file_type() {
-                    Ok(t) if t.is_file() => {}
+                    Ok(t) if t.is_dir() => {}
                     _ => return None,
                 }
                 let file_name = p.file_name();
