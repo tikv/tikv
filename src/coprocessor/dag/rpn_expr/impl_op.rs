@@ -54,6 +54,21 @@ impl RpnFnLogicalOr {
     }
 }
 
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 1)]
+pub struct RpnFnUnaryNot;
+
+impl RpnFnUnaryNot {
+    #[inline]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg: &Option<i64>,
+    ) -> Result<Option<i64>> {
+        Ok(arg.map(|v| (v == 0) as i64))
+    }
+}
+
 #[derive(Clone, Debug, RpnFunction)]
 #[rpn_function(args = 1)]
 pub struct RpnFnIsNull<T: Evaluable> {
@@ -213,6 +228,24 @@ mod tests {
                 .push_param(arg0)
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::LogicalOr)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_unary_not() {
+        let test_cases = vec![
+            (Some(0), Some(1)),
+            (Some(1), Some(0)),
+            (Some(2), Some(0)),
+            (Some(-1), Some(0)),
+            (None, None),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::UnaryNot)
                 .unwrap();
             assert_eq!(output, expect_output);
         }

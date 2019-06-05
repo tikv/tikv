@@ -1294,15 +1294,14 @@ impl Peer {
         // update the `read_index` of read request that before this successful
         // `ready`.
         if !self.is_leader() && !ready.read_states.is_empty() {
+            // NOTE: there could still be some read requests following, which will be cleared in
+            // `clear_uncommitted` later.
             for state in &ready.read_states {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
                 self.post_pending_read_index_on_replica(ctx);
             }
-            return;
-        }
-
-        if self.ready_to_handle_read() {
+        } else if self.ready_to_handle_read() {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
@@ -1546,15 +1545,24 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: None,
                 };
-                self.post_propose(meta, is_conf_change, cb);
+                self.post_propose(ctx, meta, is_conf_change, cb);
                 true
             }
         }
     }
 
-    fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
+    fn post_propose<T, C>(
+        &mut self,
+        poll_ctx: &mut PollContext<T, C>,
+        mut meta: ProposalMeta,
+        is_conf_change: bool,
+        cb: Callback,
+    ) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(monotonic_raw_now());
+        if poll_ctx.lease_time.is_none() {
+            poll_ctx.lease_time = Some(monotonic_raw_now());
+        }
+        meta.renew_lease_time = poll_ctx.lease_time;
 
         if !cb.is_none() {
             let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
@@ -1845,7 +1853,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(meta, false, Callback::None);
+                self.post_propose(poll_ctx, meta, false, Callback::None);
             }
         }
 
