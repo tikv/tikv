@@ -126,7 +126,7 @@ RawKVClient is a client of the TiKV server and only supports the GET/PUT/DELETE/
 
 ### Possible Error
 
-If you get the error like follows.
+If you see this error:
 
 ```bash
 build rawkv-demo: cannot load github.com/pingcap/pd/pd-client: cannot find module providing package github.com/pingcap/pd/pd-client
