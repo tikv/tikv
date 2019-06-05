@@ -175,7 +175,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].as_int_slice(),
-            &[Some(0xffffffffffffffff as u64 as i64)]
+            &[Some(0xffffffffffffffffu64 as i64)]
         );
 
         state.update(&mut ctx, &Option::<Int>::None).unwrap();
@@ -183,7 +183,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].as_int_slice(),
-            &[Some(0xffffffffffffffff as u64 as i64)]
+            &[Some(0xffffffffffffffffu64 as i64)]
         );
 
         // 7 & 4 == 4
@@ -281,7 +281,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].as_int_slice(),
-            &[Some(18446744073709551615 as u64 as i64)]
+            &[Some(18446744073709551615u64 as i64)]
         );
     }
 
@@ -350,7 +350,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].as_int_slice(),
-            &[Some(18446744073709551602 as u64 as i64)]
+            &[Some(18446744073709551602u64 as i64)]
         );
     }
 
@@ -459,8 +459,8 @@ mod tests {
             aggr_result[0].as_int_slice(),
             &[
                 Some(0),
-                Some(18446744073709551615 as u64 as i64),
-                Some(18446744073709551520 as u64 as i64)
+                Some(18446744073709551615u64 as i64),
+                Some(18446744073709551520u64 as i64)
             ]
         );
     }
