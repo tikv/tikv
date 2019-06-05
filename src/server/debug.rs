@@ -344,11 +344,34 @@ impl Debugger {
         Ok(errors)
     }
 
+<<<<<<< HEAD
     pub fn recover_regions(
         &self,
         regions: Vec<Region>,
         read_only: bool,
     ) -> Result<Vec<(u64, Error)>> {
+=======
+    pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) {
+        let db = &self.engines.kv;
+        let wb = WriteBatch::new();
+        for region_id in regions {
+            let key = keys::region_state_key(region_id);
+            let region_state = db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key).unwrap().unwrap();
+            if region_state.get_state() == PeerState::Tombstone {
+                println!("skip because it's already tombstone");
+                return;
+            }
+            let region = &region_state.get_region();
+            write_peer_state(db, &wb, region, PeerState::Tombstone, None).unwrap();
+        }
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        db.write_opt(wb, &write_opts).unwrap();
+    }
+
+    pub fn recover_regions(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
+>>>>>>> cab4a6bde... init
         let db = &self.engines.kv;
 
         let mut errors = Vec::with_capacity(regions.len());
