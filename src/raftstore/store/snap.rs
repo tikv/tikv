@@ -658,7 +658,7 @@ impl Snap {
                 cf_file.size = size;
                 // add size
                 self.size_track.fetch_add(size, Ordering::SeqCst);
-                cf_file.checksum = calc_crc32(&cf_file.path)?;
+                cf_file.checksum = calc_crc32(&cf_file.tmp_path)?;
             } else {
                 // Clean up the `tmp_path` if this cf file is empty.
                 delete_file_if_exist(&cf_file.tmp_path).unwrap();
@@ -895,6 +895,11 @@ impl Snapshot for Snap {
             "deleting snapshot file";
             "snapshot" => %self.path(),
         );
+        for cf_file in &self.cf_files {
+            if file_exists(&cf_file.path) {
+                self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
+            }
+        }
         delete_dir_if_exist(&self.subdir_path).unwrap();
         if self.hold_tmp_files {
             delete_dir_if_exist(&self.tmp_subdir_path).unwrap();
@@ -1141,6 +1146,26 @@ impl SnapManager {
         SnapManagerBuilder::default().build(path, router)
     }
 
+    fn gen_migrate_target(origin_filename: &str) -> (String, String) {
+        // Old snapshots files are named like
+        // "XXX_region_term_index.meta" or
+        // "XXX_region_term_index_cf.sst".
+        // Now "XXX_region_term_index" is the folder name
+        // and ".meta" or "cf.sst" is the filename
+        let parts: Vec<_> = origin_filename.splitn(2, '.').collect();
+        let components: Vec<_> = parts
+            .first()
+            .map_or(Default::default(), |base| base.splitn(5, '_').collect());
+        let (snapname, basename) = if components.len() >= 5 {
+            (&components[..4], components[4])
+        } else {
+            (&components[..], Default::default())
+        };
+        let dirname = snapname.join(&"_");
+        let filename = basename.to_owned() + "." + parts.get(1).copied().unwrap_or_default();
+        (dirname, filename)
+    }
+
     pub fn init(&self) -> io::Result<()> {
         // Use write lock so only one thread initialize the directory at a time.
         let core = self.core.wl();
@@ -1169,22 +1194,7 @@ impl SnapManager {
                         fs::remove_file(p.path())?;
                         continue;
                     }
-                    // Old snapshots files are named like
-                    // "XXX_region_term_index.meta" or
-                    // "XXX_region_term_index_cf.sst".
-                    // Now "XXX_region_term_index" is the folder name
-                    // and ".meta" or "cf.sst" is the filename
-                    let parts: Vec<_> = s.splitn(2, '.').collect();
-                    let components: Vec<_> = parts
-                        .first()
-                        .map_or(Default::default(), |base| base.splitn(5, '_').collect());
-                    let (snapname, basename) = if components.len() > 4 {
-                        (&components[..4], components[5])
-                    } else {
-                        (&components[..], Default::default())
-                    };
-                    let dirname = snapname.join(&"_");
-                    let filename = basename.to_owned() + parts.get(1).copied().unwrap_or_default();
+                    let (dirname, filename) = Self::gen_migrate_target(s);
                     let dirpath = path.join(dirname);
                     let filepath = dirpath.join(filename);
                     fs::create_dir_all(dirpath)?;
@@ -1559,6 +1569,7 @@ pub mod tests {
     use super::{
         ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
+        SST_FILE_SUFFIX,
     };
 
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
@@ -1745,6 +1756,27 @@ pub mod tests {
                     cf_file_meta.get_checksum()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_gen_migrate_target() {
+        let key = SnapKey::new(1, 1, 1);
+        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
+        let dirname = prefix.clone();
+        let legacy_meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
+        let meta_filename = META_FILE_SUFFIX.to_owned();
+        assert_eq!(
+            SnapManager::gen_migrate_target(&legacy_meta_filename),
+            (dirname.clone(), meta_filename)
+        );
+        for cf in super::SNAPSHOT_CFS.iter() {
+            let legacy_cf_filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
+            let cf_filename = format!("{}{}", cf, SST_FILE_SUFFIX);
+            assert_eq!(
+                SnapManager::gen_migrate_target(&legacy_cf_filename),
+                (dirname.clone(), cf_filename)
+            );
         }
     }
 
@@ -1954,11 +1986,18 @@ pub mod tests {
         assert!(s2.exists());
     }
 
+    fn iter_snapshot_files(dir_path: PathBuf) -> impl Iterator<Item = io::Result<fs::DirEntry>> {
+        fs::read_dir(dir_path)
+            .unwrap()
+            .filter_map(|p| p.ok())
+            .filter(|f| f.file_type().unwrap().is_dir())
+            .flat_map(|f| fs::read_dir(f.path()).unwrap())
+    }
+
     // Make all the snapshot in the specified dir corrupted to have incorrect size.
     fn corrupt_snapshot_size_in<T: Into<PathBuf>>(dir: T) {
         let dir_path = dir.into();
-        let read_dir = fs::read_dir(dir_path).unwrap();
-        for p in read_dir {
+        for p in iter_snapshot_files(dir_path) {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
                 if !e
@@ -1978,8 +2017,7 @@ pub mod tests {
     fn corrupt_snapshot_checksum_in<T: Into<PathBuf>>(dir: T) -> Vec<SnapshotMeta> {
         let dir_path = dir.into();
         let mut res = Vec::new();
-        let read_dir = fs::read_dir(dir_path).unwrap();
-        for p in read_dir {
+        for p in iter_snapshot_files(dir_path) {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
                 if e.file_name()
@@ -2024,8 +2062,7 @@ pub mod tests {
     fn corrupt_snapshot_meta_file<T: Into<PathBuf>>(dir: T) -> usize {
         let mut total = 0;
         let dir_path = dir.into();
-        let read_dir = fs::read_dir(dir_path).unwrap();
-        for p in read_dir {
+        for p in iter_snapshot_files(dir_path) {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
                 if e.file_name()
