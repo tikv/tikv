@@ -466,6 +466,7 @@ impl Snap {
             if cf_file.size == 0 {
                 continue;
             }
+            info!("create snap file {}", &cf_file.tmp_path);
             let f = OpenOptions::new()
                 .write(true)
                 .create_new(true)
