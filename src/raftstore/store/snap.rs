@@ -38,7 +38,9 @@ use crate::raftstore::Result as RaftStoreResult;
 use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
-use tikv_util::file::{calc_crc32, delete_file_if_exist, delete_dir_if_exist, file_exists, get_file_size};
+use tikv_util::file::{
+    calc_crc32, delete_dir_if_exist, delete_file_if_exist, file_exists, get_file_size,
+};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
 
@@ -1153,12 +1155,49 @@ impl SnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        //TODO: migrating from the old file layout
-        let collect_snap_size=|path|-> io::Result<()>{
-            for f in fs::read_dir(path)?{
+
+        // In the older version all snapshot file is in one big folder.
+        // This code migrate old snapshot files to current file layout
+        // that put files of each snapshot to its own folder
+        for f in fs::read_dir(path)? {
+            let p = f?;
+            if p.file_type()?.is_file() {
+                if let Some(s) = p.file_name().to_str() {
+                    if s.ends_with(TMP_FILE_SUFFIX) {
+                        // .tmp files is deleted in this function
+                        // in old version, so just delete it here
+                        fs::remove_file(p.path())?;
+                        continue;
+                    }
+                    // Old snapshots files are named like
+                    // "XXX_region_term_index.meta" or
+                    // "XXX_region_term_index_cf.sst".
+                    // Now "XXX_region_term_index" is the folder name
+                    // and ".meta" or "cf.sst" is the filename
+                    let parts: Vec<_> = s.splitn(2, '.').collect();
+                    let components: Vec<_> = parts
+                        .first()
+                        .map_or(Default::default(), |base| base.splitn(5, '_').collect());
+                    let (snapname, basename) = if components.len() > 4 {
+                        (&components[..4], components[5])
+                    } else {
+                        (&components[..], Default::default())
+                    };
+                    let dirname = snapname.join(&"_");
+                    let filename = basename.to_owned() + parts.get(1).copied().unwrap_or_default();
+                    let dirpath = path.join(dirname);
+                    let filepath = dirpath.join(filename);
+                    fs::create_dir_all(dirpath)?;
+                    fs::rename(p.path(), filepath)?;
+                }
+            }
+        }
+
+        let collect_snap_size = |path| -> io::Result<()> {
+            for f in fs::read_dir(path)? {
                 let p = f?;
                 if let Some(s) = p.file_name().to_str() {
-                    if s.ends_with(SST_FILE_SUFFIX){
+                    if s.ends_with(SST_FILE_SUFFIX) {
                         let len = p.metadata()?.len();
                         core.snap_size.fetch_add(len, Ordering::SeqCst);
                     }
