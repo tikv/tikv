@@ -1347,7 +1347,6 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("pd")
-                        .required(true)
                         .short("p")
                         .takes_value(true)
                         .multiple(true)
