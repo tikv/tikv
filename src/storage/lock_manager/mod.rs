@@ -12,7 +12,8 @@ pub use self::deadlock::{
 };
 pub use self::util::{extract_lock_from_result, gen_key_hash, gen_key_hashes};
 pub use self::waiter_manager::{
-    Scheduler as WaiterMgrScheduler, Task as WaiterTask, WaiterManager, WAIT_TABLE_IS_EMPTY,
+    load_wait_table_is_empty, store_wait_table_is_empty, Scheduler as WaiterMgrScheduler,
+    Task as WaiterTask, WaiterManager,
 };
 use crate::pd::Error as PdError;
 use futures::future::Future;

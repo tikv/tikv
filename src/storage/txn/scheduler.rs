@@ -31,7 +31,7 @@ use tikv_util::collections::HashMap;
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{
-    self, DetectorScheduler, WaiterMgrScheduler, WAIT_TABLE_IS_EMPTY,
+    self, store_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
 };
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
@@ -490,7 +490,7 @@ impl<E: Engine> Scheduler<E> {
         //
         // But it's still possible that the waiter_mgr removes some waiters and set
         // `WAIT_TABLE_IS_EMPTY` to true just after we set it to false here.
-        WAIT_TABLE_IS_EMPTY.store(false, Ordering::Relaxed);
+        store_wait_table_is_empty(false);
         self.release_lock(&tctx.lock, cid);
     }
 }

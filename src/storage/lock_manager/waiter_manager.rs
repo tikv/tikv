@@ -21,6 +21,14 @@ use tokio_timer::Delay;
 // If it is true, there is no need to calculate keys' hashes and wake up waiters.
 pub static WAIT_TABLE_IS_EMPTY: AtomicBool = AtomicBool::new(true);
 
+pub fn store_wait_table_is_empty(is_empty: bool) {
+    WAIT_TABLE_IS_EMPTY.store(is_empty, Ordering::Relaxed);
+}
+
+pub fn load_wait_table_is_empty() -> bool {
+    WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed)
+}
+
 pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
 pub enum Task {
@@ -94,9 +102,9 @@ impl WaitTable {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
     }
 
-    fn sync_wait_table_is_empty(&self) {
+    fn set_wait_table_is_empty(&self) {
         if self.wait_table.is_empty() {
-            WAIT_TABLE_IS_EMPTY.store(true, Ordering::Relaxed);
+            store_wait_table_is_empty(true);
         }
     }
 
@@ -122,7 +130,7 @@ impl WaitTable {
             if waiters.is_empty() {
                 self.wait_table.remove(&ts);
             }
-            self.sync_wait_table_is_empty();
+            self.set_wait_table_is_empty();
         }
         ready_waiters
     }
@@ -137,7 +145,7 @@ impl WaitTable {
                 if waiters.is_empty() {
                     self.wait_table.remove(&lock.ts);
                 }
-                self.sync_wait_table_is_empty();
+                self.set_wait_table_is_empty();
                 return Some(waiter);
             }
         }
@@ -478,18 +486,18 @@ mod tests {
     fn test_wait_table_is_empty() {
         let mut wait_table = WaitTable::new();
         wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
-        WAIT_TABLE_IS_EMPTY.store(false, Ordering::Relaxed);
+        store_wait_table_is_empty(false);
         assert!(wait_table
             .remove_waiter(1, Lock { ts: 2, hash: 2 })
             .is_some());
-        assert_eq!(WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed), true);
+        assert_eq!(load_wait_table_is_empty(), true);
         wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
         wait_table.add_waiter(3, dummy_waiter(2, 3, 3));
-        WAIT_TABLE_IS_EMPTY.store(false, Ordering::Relaxed);
+        store_wait_table_is_empty(false);
         wait_table.get_ready_waiters(2, vec![2]);
-        assert_eq!(WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed), false);
+        assert_eq!(load_wait_table_is_empty(), false);
         wait_table.get_ready_waiters(3, vec![3]);
-        assert_eq!(WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed), true);
+        assert_eq!(load_wait_table_is_empty(), true);
     }
 
     #[test]

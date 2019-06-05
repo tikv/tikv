@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{mem, thread, u64};
 
@@ -11,7 +10,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{
-    self, DetectorScheduler, WaiterMgrScheduler, WAIT_TABLE_IS_EMPTY,
+    self, load_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
 };
 use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
@@ -491,7 +490,7 @@ fn gen_key_hashes_if_needed(
     waiter_mgr_scheduler: &Option<WaiterMgrScheduler>,
     keys: &[Key],
 ) -> Option<Vec<u64>> {
-    if waiter_mgr_scheduler.is_some() && !WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed) {
+    if waiter_mgr_scheduler.is_some() && !load_wait_table_is_empty() {
         Some(lock_manager::gen_key_hashes(keys))
     } else {
         None
@@ -702,7 +701,7 @@ fn process_write_impl<S: Snapshot>(
             mut scan_key,
             key_locks,
         } => {
-            let wait_table_is_empty = WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed);
+            let wait_table_is_empty = load_wait_table_is_empty();
             // Map (txn's start_ts, is_pessimistic_txn) => Option<key_hashes>
             let mut txn_to_keys = if waiter_mgr_scheduler.is_some() {
                 Some(HashMap::new())
