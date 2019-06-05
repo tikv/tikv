@@ -5,6 +5,7 @@ pub mod function;
 pub mod types;
 
 pub mod impl_arithmetic;
+pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_op;
 
@@ -150,6 +151,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Box
         ScalarFuncSig::DecimalIsFalse => Box::new(RpnFnDecimalIsFalse),
         ScalarFuncSig::LogicalAnd => Box::new(RpnFnLogicalAnd),
         ScalarFuncSig::LogicalOr => Box::new(RpnFnLogicalOr),
+        ScalarFuncSig::UnaryNot => Box::new(RpnFnUnaryNot),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => Box::new(RpnFnArithmetic::<RealPlus>::new()),
         ScalarFuncSig::PlusDecimal => Box::new(RpnFnArithmetic::<DecimalPlus>::new()),

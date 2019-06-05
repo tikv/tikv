@@ -243,7 +243,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 if let Some(index) = some_index {
                     let index = *index;
                     if !self.is_column_filled[index] {
-                        columns[index].push_raw(val);
+                        columns[index].mut_raw().push(val);
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
                     } else {
@@ -285,7 +285,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                     ));
                 };
 
-                columns[i].push_raw(default_value);
+                columns[i].mut_raw().push(default_value);
             } else {
                 // Reset to not-filled, prepare for next function call.
                 self.is_column_filled[i] = false;
@@ -541,7 +541,7 @@ mod tests {
                 } else {
                     assert!(columns[id].is_raw());
                     columns[id]
-                        .decode(&Tz::utc(), self.get_field_type(col_idx))
+                        .ensure_decoded(&Tz::utc(), self.get_field_type(col_idx))
                         .unwrap();
                 }
                 assert_eq!(columns[id].decoded(), &values[col_idx]);
@@ -786,10 +786,14 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0), Some(1)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), None]);
             assert!(result.data[2].is_raw());
-            result.data[2].decode(&Tz::utc(), &schema[2]).unwrap();
+            result.data[2]
+                .ensure_decoded(&Tz::utc(), &schema[2])
+                .unwrap();
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(7), None]);
         }
     }
@@ -832,6 +836,7 @@ mod tests {
                     primary: vec![],
                     ts: 1,
                     ttl: 2,
+                    txn_size: 0,
                 });
             kv.push((key, Err(value)));
         }
@@ -880,7 +885,9 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(7)]);
         }
 
@@ -906,7 +913,9 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(7)]);
 
             let result = executor.next_batch(1);
@@ -952,7 +961,9 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(2), Some(0)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), Some(7)]);
         }
 

@@ -42,6 +42,7 @@ mod tests {
             primary: vec![],
             ts,
             ttl: 100,
+            txn_size: 0,
         }));
         let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts);
