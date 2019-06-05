@@ -1247,18 +1247,18 @@ impl ApplyDelegate {
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        ctx.engines
-            .kv
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    e
-                )
-            });
+        // ctx.engines
+        //     .kv
+        //     .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
+        //     .unwrap_or_else(|e| {
+        //         panic!(
+        //             "{} failed to delete files in range [{}, {}): {:?}",
+        //             self.tag,
+        //             escape(&start_key),
+        //             escape(&end_key),
+        //             e
+        //         )
+        //     });
 
         // Delete all remaining keys.
         engine_util::delete_all_in_range_cf(

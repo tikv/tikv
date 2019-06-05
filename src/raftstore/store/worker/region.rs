@@ -389,18 +389,16 @@ impl SnapContext {
         use_delete_files: bool,
     ) {
         if use_delete_files {
-            if let Err(e) =
-                engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
-            {
-                error!(
-                    "failed to delete files in range";
-                    "region_id" => region_id,
-                    "start_key" => log_wrappers::Key(start_key),
-                    "end_key" => log_wrappers::Key(end_key),
-                    "err" => %e,
-                );
-                return;
-            }
+            // if let Err(e) = util::delete_all_files_in_range(&self.engines.kv, start_key, end_key) {
+            //     error!(
+            //         "failed to delete files in range";
+            //         "region_id" => region_id,
+            //         "start_key" => log_wrappers::Key(start_key),
+            //         "end_key" => log_wrappers::Key(end_key),
+            //         "err" => %e,
+            //     );
+            //     return;
+            // }
         }
         if let Err(e) = engine_util::delete_all_in_range(
             &self.engines.kv,
@@ -468,7 +466,7 @@ impl SnapContext {
         let now = time::Instant::now();
         let mut cleaned_range_keys = vec![];
         {
-            let use_delete_files = true;
+            let use_delete_files = false;
             for (region_id, start_key, end_key) in self.pending_delete_ranges.timeout_ranges(now) {
                 self.cleanup_range(
                     region_id,

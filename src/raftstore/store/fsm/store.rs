@@ -797,7 +797,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             "takes" => ?t.elapsed(),
         );
 
-        self.clear_stale_data(&meta)?;
+        //self.clear_stale_data(&meta)?;
 
         Ok(region_peers)
     }
