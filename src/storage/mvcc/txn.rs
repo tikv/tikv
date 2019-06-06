@@ -234,6 +234,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     pessimistic: false,
                 });
             }
+            // Overwrite the lock with small for_update_ts
             if for_update_ts > lock.for_update_ts {
                 self.lock_key(key, LockType::Pessimistic, primary.to_vec(), None, options);
             } else {
@@ -532,6 +533,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(is_pessimistic_txn)
     }
 
+    /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
     pub fn pessimistic_rollback(&mut self, key: Key, for_update_ts: u64) -> Result<()> {
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.lock_type == LockType::Pessimistic
@@ -1368,12 +1370,12 @@ mod tests {
         // Succeed if the lock doesn't exist.
         must_pessimistic_rollback(&engine, k, 2, 2);
 
-        // Succeed if for_update_ts is different.
+        // Succeed if for_update_ts is larger or different.
         must_acquire_pessimistic_lock(&engine, k, k, 2, 3);
         must_pessimistic_locked(&engine, k, 2, 3);
         must_pessimistic_rollback(&engine, k, 2, 2);
         must_pessimistic_locked(&engine, k, 2, 3);
-        must_pessimistic_rollback(&engine, k, 2, 3);
+        must_pessimistic_rollback(&engine, k, 2, 4);
         must_unlocked(&engine, k);
 
         // Succeed if rollbacks a non-pessimistic lock.
