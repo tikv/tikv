@@ -926,6 +926,7 @@ impl Snapshot for Snap {
             {
                 let mut file = cf_file.file.take().unwrap();
                 file.flush()?;
+                file.sync_all()?;
             }
             if cf_file.written_size != cf_file.size {
                 return Err(io::Error::new(
@@ -1046,7 +1047,6 @@ impl Write for Snap {
 
             let left = (cf_file.size - cf_file.written_size) as usize;
             if left == 0 {
-                cf_file.file.as_mut().unwrap().sync_all()?;
                 self.cf_index += 1;
                 continue;
             }
@@ -1058,7 +1058,6 @@ impl Write for Snap {
                 file.write_all(&next_buf[0..left])?;
                 digest.write(&next_buf[0..left]);
                 cf_file.written_size += left as u64;
-                cf_file.file.as_mut().unwrap().sync_all()?;
                 self.cf_index += 1;
                 next_buf = &next_buf[left..];
             } else {
