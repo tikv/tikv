@@ -305,6 +305,7 @@ struct MetaFile {
 
 pub struct Snap {
     key: SnapKey,
+    is_sending: bool,
     display_path: String,
     dir_path: PathBuf,
     cf_files: Vec<CfFile>,
@@ -364,6 +365,7 @@ impl Snap {
 
         let mut s = Snap {
             key: key.clone(),
+            is_sending,
             display_path,
             dir_path,
             cf_files,
@@ -926,7 +928,9 @@ impl Snapshot for Snap {
             {
                 let mut file = cf_file.file.take().unwrap();
                 file.flush()?;
-                file.sync_all()?;
+                if !self.is_sending {
+                    file.sync_all()?;
+                }
             }
             if cf_file.written_size != cf_file.size {
                 return Err(io::Error::new(
