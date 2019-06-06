@@ -38,7 +38,9 @@ use crate::raftstore::Result as RaftStoreResult;
 use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
-use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
+use tikv_util::file::{
+    calc_crc32, delete_file_if_exist, file_exists, fsync_by_path, get_file_size,
+};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
 
@@ -306,6 +308,7 @@ struct MetaFile {
 pub struct Snap {
     key: SnapKey,
     display_path: String,
+    dir_path: PathBuf,
     cf_files: Vec<CfFile>,
     cf_index: usize,
     meta_file: MetaFile,
@@ -364,6 +367,7 @@ impl Snap {
         let mut s = Snap {
             key: key.clone(),
             display_path,
+            dir_path,
             cf_files,
             cf_index: 0,
             meta_file,
@@ -646,6 +650,7 @@ impl Snap {
             // to indicate if the sst file is empty.
             if cf_file.kv_count > 0 {
                 fs::rename(&cf_file.tmp_path, &cf_file.path)?;
+                fsync_by_path(&self.dir_path)?;
                 cf_file.size = size;
                 // add size
                 self.size_track.fetch_add(size, Ordering::SeqCst);
@@ -667,6 +672,7 @@ impl Snap {
             f.flush()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        fsync_by_path(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
@@ -966,6 +972,7 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        fsync_by_path(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
@@ -1054,6 +1061,7 @@ impl Write for Snap {
                 file.write_all(&next_buf[0..left])?;
                 digest.write(&next_buf[0..left]);
                 cf_file.written_size += left as u64;
+                cf_file.file.as_mut().unwrap().sync_all()?;
                 self.cf_index += 1;
                 next_buf = &next_buf[left..];
             } else {

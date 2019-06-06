@@ -46,6 +46,13 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
+/// Call fsync on file or directory by its path
+pub fn fsync_by_path<P: AsRef<Path>>(path: P) -> io::Result<()> {
+    // File::open will not error when opening a directory
+    // because it just call libc::open and do not do the file or dir check
+    fs::File::open(path)?.sync_all()
+}
+
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// Calculates the given file's CRC32 checksum.
