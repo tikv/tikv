@@ -76,15 +76,19 @@ ctl:
 run:
 	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
 
-# An optimized build suitable for development and benchmarking
+# An optimized build suitable for development and benchmarking, by default built
+# with RocksDB compiled with the "portable" option, for -march=x86-64 (an
+# sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
+# enabled (the "sse" option)
 release:
 	make dist_release
 
-# An optimized build with additional SSE4.2 optimizations
+# An optimized build that builds an "unportable" RocksDB, which means it is
+# built with -march native. It again includes the "sse" option by default.
 unportable_release:
 	make dist_unportable_release
 
-# An optimized build with jemalloc memory profiling enabled
+# An optimized build with jemalloc memory profiling enabled.
 prof_release:
 	make dist_prof_release
 
