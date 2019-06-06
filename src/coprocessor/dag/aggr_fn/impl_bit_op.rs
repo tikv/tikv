@@ -45,7 +45,7 @@ macro_rules! bit_op {
     };
 }
 
-bit_op!(BitAnd, ExprType::Agg_BitAnd, 0xffffffffffffffff, &=);
+bit_op!(BitAnd, ExprType::Agg_BitAnd, 0xffff_ffff_ffff_ffff, &=);
 bit_op!(BitOr, ExprType::Agg_BitOr, 0, |=);
 bit_op!(BitXor, ExprType::Agg_BitXor, 0, ^=);
 
@@ -89,12 +89,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         assert_eq!(aggr_def.get_tp(), T::tp());
 
         // bit operation outputs one column.
-        out_schema.push(
-            FieldTypeBuilder::new()
-                .tp(FieldTypeTp::LongLong)
-                .flag(FieldTypeFlag::UNSIGNED)
-                .build(),
-        );
+        out_schema.push(aggr_def.take_field_type());
 
         // Rewrite expression to insert CAST() if needed.
         let child = aggr_def.take_children().into_iter().next().unwrap();
@@ -175,7 +170,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].as_int_slice(),
-            &[Some(0xffffffffffffffffu64 as i64)]
+            &[Some(0xffff_ffff_ffff_ffff_u64 as i64)]
         );
 
         state.update(&mut ctx, &Option::<Int>::None).unwrap();
@@ -183,7 +178,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].as_int_slice(),
-            &[Some(0xffffffffffffffffu64 as i64)]
+            &[Some(0xffff_ffff_ffff_ffff_u64 as i64)]
         );
 
         // 7 & 4 == 4
