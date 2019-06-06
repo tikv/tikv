@@ -80,7 +80,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
     }
 }
 
-/// The bit operation aggregate functions.
+/// The MAX/MIN aggregate functions.
 #[derive(Debug, AggrFunction)]
 #[aggr_function(state = AggFnStateExtremum::<T>::new(self.ord))]
 pub struct AggFnExtremum<T, E>
@@ -327,8 +327,8 @@ mod tests {
         {
             let max_result = exp[0].eval(&mut ctx, 6, &src_schema, &mut columns).unwrap();
             assert!(max_result.is_vector());
-            let bit_and_slice: &[Option<Int>] = max_result.vector_value().unwrap().as_ref();
-            max_state.update_vector(&mut ctx, bit_and_slice).unwrap();
+            let max_slice: &[Option<Int>] = max_result.vector_value().unwrap().as_ref();
+            max_state.update_vector(&mut ctx, max_slice).unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
@@ -336,8 +336,8 @@ mod tests {
         {
             let min_result = exp[1].eval(&mut ctx, 6, &src_schema, &mut columns).unwrap();
             assert!(min_result.is_vector());
-            let bit_or_slice: &[Option<Int>] = min_result.vector_value().unwrap().as_ref();
-            min_state.update_vector(&mut ctx, bit_or_slice).unwrap();
+            let min_slice: &[Option<Int>] = min_result.vector_value().unwrap().as_ref();
+            min_state.update_vector(&mut ctx, min_slice).unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
