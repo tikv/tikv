@@ -6,6 +6,7 @@ mod impl_avg;
 mod impl_bit_op;
 mod impl_count;
 mod impl_first;
+mod impl_max_min;
 mod impl_sum;
 mod parser;
 mod summable;
