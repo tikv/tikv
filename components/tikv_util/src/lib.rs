@@ -569,6 +569,10 @@ pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
 }
 
+pub unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
+    &*(v as *const T)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
