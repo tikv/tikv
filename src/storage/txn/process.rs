@@ -725,7 +725,7 @@ fn process_write_impl<S: Snapshot>(
                             if wait_table_is_empty {
                                 None
                             } else {
-                                Some(vec![])
+                                Some(vec![lock_manager::gen_key_hash(&current_key)])
                             }
                         });
                 }
