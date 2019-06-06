@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 
 use cop_datatype::builder::FieldTypeBuilder;
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::dag::rpn_expr::impl_cast::get_cast_fn;
@@ -48,6 +48,27 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
             .tp(FieldTypeTp::Double)
             .flen(cop_datatype::MAX_REAL_WIDTH)
             .decimal(cop_datatype::UNSPECIFIED_LENGTH)
+            .build(),
+    };
+    let func = get_cast_fn(ret_field_type, &new_ret_field_type)?;
+    exp.push(RpnExpressionNode::FnCall {
+        func,
+        field_type: new_ret_field_type,
+    });
+    Ok(())
+}
+
+/// Rewrites the expression to insert necessary cast functions for Bit operation family functions.
+pub fn rewrite_exp_for_bit_op(schema: &[FieldType], exp: &mut RpnExpression) -> Result<()> {
+    let ret_field_type = exp.ret_field_type(schema);
+    let ret_eval_type = box_try!(EvalType::try_from(ret_field_type.tp()));
+    let new_ret_field_type = match ret_eval_type {
+        EvalType::Int => {
+            return Ok(());
+        }
+        _ => FieldTypeBuilder::new()
+            .tp(FieldTypeTp::LongLong)
+            .flag(FieldTypeFlag::UNSIGNED)
             .build(),
     };
     let func = get_cast_fn(ret_field_type, &new_ret_field_type)?;
