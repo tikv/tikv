@@ -3,6 +3,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use tikv_util::codec::{bytes, number};
 use tipb::expression::FieldType;
 
 use super::*;
@@ -10,7 +11,6 @@ use crate::coprocessor::codec::data_type::scalar::ScalarValueRef;
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{Error, Result};
-use tikv_util::codec::{bytes, number};
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
@@ -48,6 +48,16 @@ impl VectorValue {
         match_template_evaluable! {
             TT, match eval_tp {
                 EvalType::TT => VectorValue::TT(Vec::with_capacity(capacity)),
+            }
+        }
+    }
+
+    /// Creates a new empty `VectorValue` with the same eval type.
+    #[inline]
+    pub fn clone_empty(&self, capacity: usize) -> Self {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(_) => VectorValue::TT(Vec::with_capacity(capacity)),
             }
         }
     }
@@ -175,7 +185,7 @@ impl VectorValue {
         Ok(())
     }
 
-    /// Returns a `ScalarValueRef` to the element at the index.
+    /// Gets a reference of the element in corresponding index.
     ///
     /// # Panics
     ///
