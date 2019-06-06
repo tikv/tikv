@@ -19,19 +19,21 @@ pub trait Extremum: Clone + std::fmt::Debug + Send + Sync + 'static {
     const ORD: Ordering;
 }
 
-macro_rules! extremum {
-    ($e:ident, $ord:path) => {
-        #[derive(Debug, Clone, Copy)]
-        pub struct $e;
-        impl Extremum for $e {
-            const TP: ExprType = ExprType::$e;
-            const ORD: Ordering = $ord;
-        }
-    };
+#[derive(Debug, Clone, Copy)]
+pub struct Max;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Min;
+
+impl Extremum for Max {
+    const TP: ExprType = ExprType::Max;
+    const ORD: Ordering = Ordering::Less;
 }
 
-extremum!(Max, Ordering::Less);
-extremum!(Min, Ordering::Greater);
+impl Extremum for Min {
+    const TP: ExprType = ExprType::Min;
+    const ORD: Ordering = Ordering::Greater;
+}
 
 /// The parser for `MAX/MIN` aggregate functions.
 pub struct AggrFnDefinitionParserExtremum<T: Extremum>(std::marker::PhantomData<T>);
