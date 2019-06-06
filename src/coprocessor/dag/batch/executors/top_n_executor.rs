@@ -301,7 +301,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
 ///
 /// WARN: The content of this structure is valid only if `BatchTopNExecutor` is valid (i.e.
 /// not dropped). Thus it is called unsafe.
-pub struct HeapItemUnsafe {
+struct HeapItemUnsafe {
     /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
     order_is_desc_ptr: NonNull<[bool]>,
     /// The source columns that evaluated column in this structure is referring to.
@@ -310,6 +310,9 @@ pub struct HeapItemUnsafe {
     /// are placed behind a reference counter. However, there won't be a place other than
     /// `HeapItemUnsafe` holding this reference counter, so Rc won't break
     /// `BatchTopNExecutor: Send`.
+    ///
+    /// WARN: Actually we cannot ensure that this is still `Send` in future, since `Rc` may
+    /// use something like thread local variables which does not break its API.
     source_column_data: Rc<LazyBatchColumnVec>,
 
     /// A pointer to the `eval_columns_buffer` field in `BatchTopNExecutor`.
