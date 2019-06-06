@@ -38,9 +38,7 @@ use crate::raftstore::Result as RaftStoreResult;
 use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
-use tikv_util::file::{
-    calc_crc32, delete_file_if_exist, file_exists, fsync_by_path, get_file_size,
-};
+use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
 
@@ -650,7 +648,7 @@ impl Snap {
             // to indicate if the sst file is empty.
             if cf_file.kv_count > 0 {
                 fs::rename(&cf_file.tmp_path, &cf_file.path)?;
-                fsync_by_path(&self.dir_path)?;
+                sync_dir(&self.dir_path)?;
                 cf_file.size = size;
                 // add size
                 self.size_track.fetch_add(size, Ordering::SeqCst);
@@ -672,7 +670,7 @@ impl Snap {
             f.flush()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
-        fsync_by_path(&self.dir_path)?;
+        sync_dir(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
@@ -963,7 +961,7 @@ impl Snapshot for Snap {
             fs::rename(&cf_file.tmp_path, &cf_file.path)?;
             self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
         }
-        fsync_by_path(&self.dir_path)?;
+        sync_dir(&self.dir_path)?;
         // write meta file
         let mut v = vec![];
         self.meta_file.meta.write_to_vec(&mut v)?;
@@ -973,7 +971,7 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
-        fsync_by_path(&self.dir_path)?;
+        sync_dir(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
