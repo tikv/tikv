@@ -4,6 +4,7 @@ use tipb::expression::{Expr, ExprType, FieldType};
 
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::aggr_fn::impl_bit_op::*;
+use crate::coprocessor::dag::aggr_fn::impl_max_min::*;
 use crate::coprocessor::dag::aggr_fn::AggrFunction;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::{Error, Result};
@@ -50,6 +51,8 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinit
         ExprType::Agg_BitAnd => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitAnd>::new())),
         ExprType::Agg_BitOr => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitOr>::new())),
         ExprType::Agg_BitXor => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitXor>::new())),
+        ExprType::Max => Ok(Box::new(AggrFnDefinitionParserExtremum::<Max>::new())),
+        ExprType::Min => Ok(Box::new(AggrFnDefinitionParserExtremum::<Min>::new())),
         v => Err(box_err!(
             "Aggregation function expr type {:?} is not supported in batch mode",
             v
