@@ -3,8 +3,7 @@
 use std::convert::TryFrom;
 
 use cop_codegen::AggrFunction;
-use cop_datatype::builder::FieldTypeBuilder;
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use cop_datatype::{EvalType, FieldTypeAccessor};
 use tipb::expression::{Expr, ExprType, FieldType};
 
 use crate::coprocessor::codec::data_type::*;
@@ -157,7 +156,7 @@ mod tests {
     use super::*;
     use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
     use crate::coprocessor::dag::aggr_fn::parser::AggrDefinitionParser;
-    use cop_datatype::FieldTypeAccessor;
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
 
     #[test]
     fn test_bit_and() {
