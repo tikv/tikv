@@ -197,4 +197,10 @@ mod tests {
         assert!(!create_dir_if_not_exist(&subdir).unwrap());
         assert!(delete_dir_if_exist(&subdir).unwrap());
     }
+
+    #[test]
+    fn test_fsync_by_path() {
+        let tmp_dir = TempDir::new("").unwrap();
+        fsync_by_path(tmp_dir.path()).unwrap();
+    }
 }
