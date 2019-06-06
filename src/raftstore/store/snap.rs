@@ -963,6 +963,7 @@ impl Snapshot for Snap {
             fs::rename(&cf_file.tmp_path, &cf_file.path)?;
             self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
         }
+        fsync_by_path(&self.dir_path)?;
         // write meta file
         let mut v = vec![];
         self.meta_file.meta.write_to_vec(&mut v)?;

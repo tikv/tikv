@@ -202,5 +202,7 @@ mod tests {
     fn test_fsync_by_path() {
         let tmp_dir = TempDir::new("").unwrap();
         fsync_by_path(tmp_dir.path()).unwrap();
+        let non_existent_file = tmp_dir.path().join("non_existent_file");
+        fsync_by_path(non_existent_file).unwrap_err();
     }
 }
