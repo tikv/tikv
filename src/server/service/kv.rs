@@ -1322,6 +1322,7 @@ fn future_prewrite<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
+    options.for_update_ts = req.get_for_update_ts();
     options.is_pessimistic_lock = req.take_is_pessimistic_lock();
     options.txn_size = req.get_txn_size();
 
@@ -1364,6 +1365,7 @@ fn future_acquire_pessimistic_lock<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.is_first_lock = req.get_is_first_lock();
+    options.for_update_ts = req.get_for_update_ts();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_acquire_pessimistic_lock(
@@ -1371,7 +1373,6 @@ fn future_acquire_pessimistic_lock<E: Engine>(
         keys,
         req.take_primary_lock(),
         req.get_start_version(),
-        req.get_for_update_ts(),
         options,
         cb,
     );
