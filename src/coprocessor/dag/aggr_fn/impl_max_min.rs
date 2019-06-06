@@ -13,13 +13,15 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
-pub trait Extremum {
+/// A trait for MAX/MIN aggregation functions
+pub trait Extremum: Clone + std::fmt::Debug + Send + Sync + 'static {
     const TP: ExprType;
     const ORD: Ordering;
 }
 
 macro_rules! extremum {
     ($e:ident, $ord:path) => {
+        #[derive(Debug, Clone, Copy)]
         pub struct $e;
         impl Extremum for $e {
             const TP: ExprType = ExprType::$e;
@@ -70,7 +72,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         match_template_evaluable! {
             TT, match eval_type {
-                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT>::new(T::ORD)))
+                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT, T>::new()))
             }
         }
     }
@@ -79,24 +81,26 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 /// The bit operation aggregate functions.
 #[derive(Debug, AggrFunction)]
 #[aggr_function(state = AggFnStateExtremum::<T>::new(self.ord))]
-pub struct AggFnExtremum<T>
+pub struct AggFnExtremum<T, E>
 where
     T: Evaluable + Ord,
+    E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
-    _phantom: std::marker::PhantomData<T>,
+    _phantom: std::marker::PhantomData<(T, E)>,
     ord: Ordering,
 }
 
-impl<T> AggFnExtremum<T>
+impl<T, E> AggFnExtremum<T, E>
 where
     T: Evaluable + Ord,
+    E: Extremum,
     VectorValue: VectorValueExt<T>,
 {
-    fn new(ord: Ordering) -> Self {
+    fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            ord,
+            ord: E::ORD,
         }
     }
 }
@@ -108,7 +112,6 @@ where
     T: Evaluable + Ord,
     VectorValue: VectorValueExt<T>,
 {
-    _phantom: std::marker::PhantomData<T>,
     ord: Ordering,
     extremum: Option<T>,
 }
@@ -120,7 +123,6 @@ where
 {
     pub fn new(ord: Ordering) -> Self {
         Self {
-            _phantom: std::marker::PhantomData,
             ord,
             extremum: None,
         }
@@ -167,7 +169,7 @@ mod tests {
     #[test]
     fn test_max() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int>::new(Max::ORD);
+        let function = AggFnExtremum::<Int, Max>::new();
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -217,7 +219,7 @@ mod tests {
     #[test]
     fn test_min() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int>::new(Min::ORD);
+        let function = AggFnExtremum::<Int, Min>::new();
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
