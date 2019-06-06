@@ -42,8 +42,8 @@ impl FieldTypeBuilder {
     }
 }
 
-impl Into<FieldType> for FieldTypeBuilder {
-    fn into(self) -> FieldType {
-        self.build()
+impl From<FieldTypeBuilder> for FieldType {
+    fn from(fp_builder: FieldTypeBuilder) -> FieldType {
+        fp_builder.build()
     }
 }

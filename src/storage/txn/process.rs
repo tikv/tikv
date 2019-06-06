@@ -535,10 +535,10 @@ fn process_write_impl<S: Snapshot>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = mutations.len();
-            for (i, m) in mutations.into_iter().enumerate() {
-                // If `options.is_pessimistic_lock` is empty, the transaction is optimistic
-                // or else pessimistic.
-                if options.is_pessimistic_lock.is_empty() {
+            // If `options.is_pessimistic_lock` is empty, the transaction is optimistic
+            // or else pessimistic.
+            if options.is_pessimistic_lock.is_empty() {
+                for m in mutations {
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}
                         e @ Err(MvccError::KeyIsLocked { .. }) => {
@@ -546,7 +546,9 @@ fn process_write_impl<S: Snapshot>(
                         }
                         Err(e) => return Err(Error::from(e)),
                     }
-                } else {
+                }
+            } else {
+                for (i, m) in mutations.into_iter().enumerate() {
                     match txn.pessimistic_prewrite(
                         m,
                         &primary,
@@ -767,6 +769,34 @@ fn process_write_impl<S: Snapshot>(
             };
 
             (pr, modifies, rows, ctx, None)
+        }
+        Command::ResolveLockLite {
+            ctx,
+            start_ts,
+            commit_ts,
+            resolve_keys,
+        } => {
+            let key_hashes = if waiter_mgr_scheduler.is_some() {
+                Some(lock_manager::gen_key_hashes(&resolve_keys))
+            } else {
+                None
+            };
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            let rows = resolve_keys.len();
+            let mut is_pessimistic_txn = false;
+            // ti-client guarantees the size of resolve_keys will not too large, so no necessary
+            // to control the write_size as ResolveLock.
+            for key in resolve_keys {
+                if commit_ts > 0 {
+                    is_pessimistic_txn = txn.commit(key, commit_ts)?;
+                } else {
+                    is_pessimistic_txn = txn.rollback(key)?;
+                }
+            }
+            notify_waiter_mgr(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector(&detector_scheduler, is_pessimistic_txn, start_ts);
+            statistics.add(&txn.take_statistics());
+            (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));

@@ -198,7 +198,7 @@ size, disability, ethnicity, sex characteristics, gender identity and expression
 level of experience, education, socio-economic status, nationality, personal
 appearance, race, religion, or sexual identity and orientation.
 
-### Socia Media
+### Social Media
 
 - [Twitter](https://twitter.com/tikvproject)
 - [Blog](https://tikv.org/blog/)
