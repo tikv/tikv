@@ -49,7 +49,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
-pub const PESSIMISTIC_TXN: u8 = b'p';
+pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
@@ -99,7 +99,6 @@ pub enum Command {
         keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: u64,
-        for_update_ts: u64,
         options: Options,
     },
     Commit {
@@ -176,14 +175,14 @@ impl Display for Command {
                 ref ctx,
                 ref keys,
                 start_ts,
-                for_update_ts,
+                ref options,
                 ..
             } => write!(
                 f,
-                "kv::command::acquirepessimisticlock keys({}) @ {},{} | {:?}",
+                "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
                 keys.len(),
                 start_ts,
-                for_update_ts,
+                options.for_update_ts,
                 ctx
             ),
             Command::Commit {
@@ -436,6 +435,7 @@ pub struct Options {
     pub key_only: bool,
     pub reverse_scan: bool,
     pub is_first_lock: bool,
+    pub for_update_ts: u64,
     pub is_pessimistic_lock: Vec<bool>,
     // How many keys this transaction involved.
     pub txn_size: u64,
@@ -449,6 +449,7 @@ impl Options {
             key_only,
             reverse_scan: false,
             is_first_lock: false,
+            for_update_ts: 0,
             is_pessimistic_lock: vec![],
             txn_size: 0,
         }
@@ -938,7 +939,6 @@ impl<E: Engine> Storage<E> {
         keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: u64,
-        for_update_ts: u64,
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
@@ -959,7 +959,6 @@ impl<E: Engine> Storage<E> {
             keys,
             primary,
             start_ts,
-            for_update_ts,
             options,
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;

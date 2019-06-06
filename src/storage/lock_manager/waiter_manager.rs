@@ -521,7 +521,7 @@ mod tests {
         let pr = ProcessResult::Res;
         waiter_mgr_scheduler.wait_for(0, StorageCb::Boolean(cb), pr, Lock { ts: 0, hash: 0 }, true);
         assert_eq!(
-            rx.recv_timeout(Duration::from_millis(1100))
+            rx.recv_timeout(Duration::from_millis(2000))
                 .unwrap()
                 .unwrap(),
             ()
@@ -541,7 +541,7 @@ mod tests {
         );
         waiter_mgr_scheduler.wake_up(0, vec![3, 1, 2], 1);
         assert!(rx
-            .recv_timeout(Duration::from_millis(100))
+            .recv_timeout(Duration::from_millis(500))
             .unwrap()
             .is_err());
     }
