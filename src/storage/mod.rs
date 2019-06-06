@@ -1065,7 +1065,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Roll back the single pessimistic lock identified by `start_ts` and `for_update_ts`
+    /// Roll back pessimistic locks identified by `start_ts` and `for_update_ts`
     pub fn async_pessimistic_rollback(
         &self,
         ctx: Context,
