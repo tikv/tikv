@@ -3,6 +3,7 @@
 //! This module provides aggregate functions for batch executors.
 
 mod impl_avg;
+mod impl_bit_op;
 mod impl_count;
 mod impl_first;
 mod impl_sum;
