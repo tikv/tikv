@@ -648,6 +648,7 @@ impl Snap {
             // to indicate if the sst file is empty.
             if cf_file.kv_count > 0 {
                 fs::rename(&cf_file.tmp_path, &cf_file.path)?;
+                sync_dir(&self.dir_path)?;
                 cf_file.size = size;
                 // add size
                 self.size_track.fetch_add(size, Ordering::SeqCst);
@@ -669,6 +670,7 @@ impl Snap {
             f.flush()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        sync_dir(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
