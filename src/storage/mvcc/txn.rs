@@ -1396,5 +1396,4 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
     }
-
 }
