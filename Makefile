@@ -76,19 +76,47 @@ ctl:
 run:
 	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
 
+# An optimized build suitable for development and benchmarking, by default built
+# with RocksDB compiled with the "portable" option, for -march=x86-64 (an
+# sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
+# enabled (the "sse" option)
 release:
+	make dist_release
+
+# An optimized build that builds an "unportable" RocksDB, which means it is
+# built with -march native. It again includes the "sse" option by default.
+unportable_release:
+	make dist_unportable_release
+
+# An optimized build with jemalloc memory profiling enabled.
+prof_release:
+	make dist_prof_release
+
+# An optimized build instrumented with failpoints.
+# This is used for schrodinger chaos testing.
+fail_release:
+	make dist_fail_release
+
+# The target used by CI/CD to build the distributable release artifacts.
+# Individual developers should only need to use the `dist_` rules when working
+# on the CI/CD system.
+dist_release:
 	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
 
-unportable_release:
+# Distributable bins with SSE4.2 optimizations
+dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make release
 
-prof_release:
+# Distributable bins with jemalloc memory profiling
+dist_prof_release:
 	ENABLE_FEATURES=mem-profiling make release
 
-fail_release:
+# Distributable bins instrumented with failpoints.
+# This is used for schrodinger chaos testing.
+dist_fail_release:
 	FAIL_POINT=1 make release
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
