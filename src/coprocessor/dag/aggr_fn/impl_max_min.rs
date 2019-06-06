@@ -14,25 +14,16 @@ use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
 pub trait Extremum {
-    #[inline]
-    fn tp() -> ExprType;
-
-    #[inline]
-    fn ord() -> Ordering;
+    const TP: ExprType;
+    const ORD: Ordering;
 }
 
 macro_rules! extremum {
     ($e:ident, $ord:path) => {
         pub struct $e;
         impl Extremum for $e {
-            #[inline]
-            fn tp() -> ExprType {
-                ExprType::$e
-            }
-            #[inline]
-            fn ord() -> Ordering {
-                $ord
-            }
+            const TP: ExprType = ExprType::$e;
+            const ORD: Ordering = $ord;
         }
     };
 }
@@ -51,7 +42,7 @@ impl<T: Extremum> AggrFnDefinitionParserExtremum<T> {
 
 impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum<T> {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
-        assert_eq!(aggr_def.get_tp(), T::tp());
+        assert_eq!(aggr_def.get_tp(), T::TP);
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
@@ -64,7 +55,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
-        assert_eq!(aggr_def.get_tp(), T::tp());
+        assert_eq!(aggr_def.get_tp(), T::TP);
 
         // `MAX/MIN` outputs one column which has the same type with its child
         out_schema.push(aggr_def.take_field_type());
@@ -79,7 +70,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         match_template_evaluable! {
             TT, match eval_type {
-                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT>::new(T::ord())))
+                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT>::new(T::ORD)))
             }
         }
     }
@@ -176,7 +167,7 @@ mod tests {
     #[test]
     fn test_max() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int>::new(Max::ord());
+        let function = AggFnExtremum::<Int>::new(Max::ORD);
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -226,7 +217,7 @@ mod tests {
     #[test]
     fn test_min() {
         let mut ctx = EvalContext::default();
-        let function = AggFnExtremum::<Int>::new(Min::ord());
+        let function = AggFnExtremum::<Int>::new(Min::ORD);
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
