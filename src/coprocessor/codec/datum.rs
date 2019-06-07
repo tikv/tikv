@@ -122,7 +122,7 @@ impl Datum {
             Datum::U64(u) => self.cmp_u64(ctx, u),
             Datum::F64(f) => self.cmp_f64(ctx, f),
             Datum::Bytes(ref bs) => self.cmp_bytes(ctx, bs),
-            Datum::Dur(ref d) => self.cmp_dur(ctx, d),
+            Datum::Dur(d) => self.cmp_dur(ctx, d),
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(ref t) => self.cmp_time(ctx, t),
             Datum::Json(ref j) => self.cmp_json(j),
@@ -173,7 +173,7 @@ impl Datum {
                 cmp_f64(ff, f)
             }
             Datum::Dur(ref d) => {
-                let ff = d.to_secs();
+                let ff = d.as_secs_f64();
                 cmp_f64(ff, f)
             }
             Datum::Time(ref t) => {
@@ -225,14 +225,14 @@ impl Datum {
         }
     }
 
-    fn cmp_dur(&self, ctx: &mut EvalContext, d: &Duration) -> Result<Ordering> {
+    fn cmp_dur(&self, ctx: &mut EvalContext, d: Duration) -> Result<Ordering> {
         match *self {
-            Datum::Dur(ref d2) => Ok(d2.cmp(d)),
+            Datum::Dur(ref d2) => Ok(d2.cmp(&d)),
             Datum::Bytes(ref bs) => {
                 let d2 = Duration::parse(bs, MAX_FSP)?;
-                Ok(d2.cmp(d))
+                Ok(d2.cmp(&d))
             }
-            _ => self.cmp_f64(ctx, d.to_secs()),
+            _ => self.cmp_f64(ctx, d.as_secs_f64()),
         }
     }
 
@@ -386,7 +386,7 @@ impl Datum {
             Datum::I64(i) => i,
             Datum::U64(u) => u as i64,
             Datum::F64(f) => f.to_bits() as i64,
-            Datum::Dur(ref d) => d.to_nanos(),
+            Datum::Dur(ref d) => d.as_nanos(),
             Datum::Time(_)
             | Datum::Bytes(_)
             | Datum::Dec(_)
@@ -904,7 +904,7 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
                 }
                 Datum::Dur(ref d) => {
                     self.write_u8(DURATION_FLAG)?;
-                    self.encode_i64(d.to_nanos())?;
+                    self.encode_i64(d.as_nanos())?;
                 }
                 Datum::Dec(ref d) => {
                     self.write_u8(DECIMAL_FLAG)?;

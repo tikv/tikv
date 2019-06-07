@@ -92,7 +92,7 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
 #[inline]
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
-        Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
+        Datum::Dur(d) => Ok(Datum::I64(d.as_nanos())),
         Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64())),
         _ => Ok(data),
     }

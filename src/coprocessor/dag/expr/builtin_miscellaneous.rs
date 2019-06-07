@@ -70,7 +70,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         self.children
             .first()
             .map_or(Ok(None), |child| child.eval_duration(ctx, row))

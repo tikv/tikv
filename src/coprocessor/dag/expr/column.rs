@@ -70,7 +70,7 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_duration<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Duration>>> {
+    pub fn eval_duration<'a>(&self, row: &'a [Datum]) -> Result<Option<Duration>> {
         row[self.offset].as_duration()
     }
 
@@ -176,10 +176,7 @@ mod tests {
                 .eval_time(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e
-                .eval_duration(&mut ctx, &row)
-                .unwrap_or(None)
-                .map(|t| t.into_owned());
+            let dur = e.eval_duration(&mut ctx, &row).unwrap_or(None);
             let j = e
                 .eval_json(&mut ctx, &row)
                 .unwrap_or(None)

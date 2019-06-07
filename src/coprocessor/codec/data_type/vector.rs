@@ -567,7 +567,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::DURATION_FLAG);
-                        output.encode_i64(val.to_nanos())?;
+                        output.encode_i64(val.as_nanos())?;
                     }
                 }
                 Ok(())

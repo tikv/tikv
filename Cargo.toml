@@ -126,6 +126,7 @@ twoway = "0.2.0"
 ordered-float = "1.0"
 nom = "5.0.0-beta1"
 servo_arc = "0.1.1"
+bitfield = "0.13.2"
 profiler = { path = "components/profiler" }
 mime = "0.3.13"
 match_template = { path = "components/match_template" }

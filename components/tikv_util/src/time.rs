@@ -29,7 +29,7 @@ pub fn duration_to_sec(d: Duration) -> f64 {
 
 /// Converts Duration to nanoseconds.
 #[inline]
-pub fn duration_to_nanos(d: Duration) -> u64 {
+pub fn duration_as_nanos(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000_000_000 + nanos
@@ -435,7 +435,7 @@ mod tests {
             let exp_sec = ms as f64 / 1000.0;
             let act_sec = duration_to_sec(d);
             assert!((act_sec - exp_sec).abs() < f64::EPSILON);
-            assert_eq!(ms * 1_000_000, duration_to_nanos(d));
+            assert_eq!(ms * 1_000_000, duration_as_nanos(d));
         }
     }
 

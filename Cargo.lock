@@ -124,6 +124,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitfield"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "bitflags"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2321,6 +2326,7 @@ dependencies = [
  "arrow 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bitfield 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2948,6 +2954,7 @@ dependencies = [
 "checksum backtrace 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)" = "89a47830402e9981c5c41223151efcced65a0510c13097c769cede7efb34782a"
 "checksum backtrace-sys 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)" = "bff67d0c06556c0b8e6b5f090f0eac52d950d9dfd1d35ba04e4ca3543eaf6a7e"
 "checksum base64 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)" = "621fc7ecb8008f86d7fb9b95356cd692ce9514b80a86d85b397f32a22da7b9e2"
+"checksum bitfield 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)" = "46afbd2983a5d5a7bd740ccb198caf5b82f45c40c09c0eed36052d91cb92e719"
 "checksum bitflags 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b3c30d3802dfb7281680d6285f2ccdaa8c2d8fee41f93805dba5c4cf50dc23cf"
 "checksum build_const 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "39092a32794787acd8525ee150305ff051b0aa6cc2abaf193924f5ab05425f39"
 "checksum byteorder 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)" = "e4ca3a1755927e5b00c3fe43250053b957b5c074d9f17782b88ef7aa0fb4dfe2"
