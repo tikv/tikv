@@ -58,4 +58,3 @@ ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
 ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
 
 ENTRYPOINT ["/bin/bash"]
-
