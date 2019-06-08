@@ -10,6 +10,7 @@ mod selection;
 mod simple_aggr;
 mod stream_aggr;
 mod table_scan;
+mod top_n;
 mod util;
 
 fn main() {
@@ -24,6 +25,7 @@ fn main() {
     simple_aggr::bench(&mut c);
     hash_aggr::bench(&mut c);
     stream_aggr::bench(&mut c);
+    top_n::bench(&mut c);
     integrated::bench(&mut c);
 
     c.final_summary();
