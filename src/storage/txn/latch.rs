@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::usize;
 
-use spin;
+use spin::Mutex;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -63,7 +63,7 @@ impl Lock {
 /// Each latch is indexed by a slot ID, hence the term latch and slot are used interchangeably, but
 /// conceptually a latch is a queue, and a slot is an index to the queue.
 pub struct Latches {
-    slots: Vec<spin::Mutex<Latch>>,
+    slots: Vec<Mutex<Latch>>,
     size: usize,
 }
 
@@ -74,7 +74,7 @@ impl Latches {
     pub fn new(size: usize) -> Latches {
         let size = usize::next_power_of_two(size);
         let mut slots = Vec::with_capacity(size);
-        (0..size).for_each(|_| slots.push(spin::Mutex::new(Latch::new())));
+        (0..size).for_each(|_| slots.push(Mutex::new(Latch::new())));
         Latches { slots, size }
     }
 

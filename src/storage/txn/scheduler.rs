@@ -20,7 +20,7 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use spin;
+use spin::Mutex;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -140,7 +140,7 @@ impl TaskContext {
 
 struct SchedulerInner {
     // slot_id -> { cid -> `TaskContext` } in the slot.
-    task_contexts: Vec<spin::Mutex<HashMap<u64, TaskContext>>>,
+    task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
     // cmd id generator
     id_alloc: AtomicU64,
@@ -259,7 +259,7 @@ impl<E: Engine> Scheduler<E> {
         info!("Scheduler::new is called to initialize the transaction scheduler");
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
-            task_contexts.push(spin::Mutex::new(Default::default()));
+            task_contexts.push(Mutex::new(Default::default()));
         }
 
         let inner = Arc::new(SchedulerInner {
