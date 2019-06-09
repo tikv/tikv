@@ -46,6 +46,13 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
+/// Call fsync on directory by its path
+pub fn sync_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
+    // File::open will not error when opening a directory
+    // because it just call libc::open and do not do the file or dir check
+    fs::File::open(path)?.sync_all()
+}
+
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// Calculates the given file's CRC32 checksum.
@@ -189,5 +196,13 @@ mod tests {
         assert!(create_dir_if_not_exist(&subdir).unwrap());
         assert!(!create_dir_if_not_exist(&subdir).unwrap());
         assert!(delete_dir_if_exist(&subdir).unwrap());
+    }
+
+    #[test]
+    fn test_sync_dir() {
+        let tmp_dir = TempDir::new("").unwrap();
+        sync_dir(tmp_dir.path()).unwrap();
+        let non_existent_file = tmp_dir.path().join("non_existent_file");
+        sync_dir(non_existent_file).unwrap_err();
     }
 }
