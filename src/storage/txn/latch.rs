@@ -6,6 +6,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 use std::usize;
 
+const WAITING_LIST_SHRINK_SIZE: usize = 32;
+
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
 /// Latches are indexed by slot IDs. The keys of a command are hashed to slot IDs, then the command
@@ -129,6 +131,13 @@ impl Latches {
             assert_eq!(front, who);
             if let Some(wakeup) = latch.waiting.front() {
                 wakeup_list.push(*wakeup);
+            }
+            // For some hot keys, the waiting list maybe very long, so we should shrink the waiting
+            // VecDeque after pop.
+            if latch.waiting.capacity() > WAITING_LIST_SHRINK_SIZE
+                && latch.waiting.len() < WAITING_LIST_SHRINK_SIZE
+            {
+                latch.waiting.shrink_to_fit();
             }
         }
         wakeup_list
