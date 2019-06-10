@@ -2,15 +2,12 @@
 
 use std::cmp::Ordering;
 
-use cop_codegen::RpnFunction;
-
+use super::function::*;
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
-#[derive(RpnFunction)]
-#[rpn_function(args = 2)]
 pub struct RpnFnCompare<C: Comparer> {
     _phantom: std::marker::PhantomData<C>,
 }
@@ -22,15 +19,29 @@ impl<C: Comparer> RpnFnCompare<C> {
             _phantom: std::marker::PhantomData,
         }
     }
+}
 
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        lhs: &Option<C::T>,
-        rhs: &Option<C::T>,
-    ) -> Result<Option<i64>> {
-        C::compare(lhs, rhs)
+impl<C: Comparer> RpnFunction for RpnFnCompare<C> {
+    fn name(&self) -> &'static str {
+        "RpnFnCompare"
+    }
+
+    fn args_len(&self) -> usize {
+        2
+    }
+
+    fn eval(
+        &self,
+        rows: usize,
+        ctx: &mut EvalContext,
+        payload: RpnFnCallPayload<'_>,
+    ) -> Result<VectorValue> {
+        let rpn_fn = compare_fn::<C>();
+        (rpn_fn.fn_ptr)(rows, ctx, payload)
+    }
+
+    fn box_clone(&self) -> Box<dyn RpnFunction> {
+        Box::new(*self)
     }
 }
 
@@ -53,6 +64,95 @@ impl<C: Comparer> Clone for RpnFnCompare<C> {
 }
 
 // ======
+
+pub const fn compare_fn<C: Comparer>() -> RpnFn {
+    fn run<C: Comparer>(
+        rows: usize,
+        ctx: &mut EvalContext,
+        payload: RpnFnCallPayload<'_>,
+    ) -> Result<VectorValue> {
+        ArgConstructor::new(1, ArgConstructor::new(0, CompareEvaluator::<C>::new()))
+            .eval(Null, rows, ctx, payload)
+    }
+    RpnFn {
+        name: "RpnFnCompare",
+        args_len: 2,
+        fn_ptr: run::<C>,
+    }
+}
+
+pub fn compare<C: Comparer>(lhs: &Option<C::T>, rhs: &Option<C::T>) -> Result<Option<i64>> {
+    C::compare(lhs, rhs)
+}
+
+pub struct CompareEvaluator<C: Comparer> {
+    _phantom: std::marker::PhantomData<C>,
+}
+
+impl<C: Comparer> CompareEvaluator<C> {
+    fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<C: Comparer> Evaluator for CompareEvaluator<C> {
+    #[inline]
+    fn eval<D: ArgDef>(
+        self,
+        def: D,
+        rows: usize,
+        ctx: &mut EvalContext,
+        payload: RpnFnCallPayload<'_>,
+    ) -> Result<VectorValue> {
+        CompareFn::<C>::eval(def, rows, ctx, payload)
+    }
+}
+
+trait CompareFn<C: Comparer> {
+    fn eval(
+        self,
+        rows: usize,
+        ctx: &mut EvalContext,
+        payload: RpnFnCallPayload<'_>,
+    ) -> Result<VectorValue>;
+}
+
+impl<C: Comparer, D: ArgDef> CompareFn<C> for D {
+    default fn eval(
+        self,
+        _rows: usize,
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+    ) -> Result<VectorValue> {
+        panic!("Cannot apply CompareFn on {:?}", self)
+    }
+}
+
+impl<'a, C, Arg0, Arg1> CompareFn<C> for Arg<Arg0, Arg<Arg1, Null>>
+where
+    C: Comparer,
+    Arg0: RpnFnArg<Type = &'a Option<C::T>>,
+    Arg1: RpnFnArg<Type = &'a Option<C::T>>,
+{
+    #[inline]
+    fn eval(
+        self,
+        rows: usize,
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+    ) -> Result<VectorValue> {
+        let arg = &self;
+        let mut result = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let (arg0, arg) = arg.extract(row);
+            let (arg1, _) = arg.extract(row);
+            result.push(compare::<C>(arg0, arg1)?);
+        }
+        Ok(VectorValue::from(result))
+    }
+}
 
 pub trait Comparer: 'static + Send + Sync {
     type T: Evaluable;
