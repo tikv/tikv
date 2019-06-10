@@ -9,7 +9,7 @@ pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_op;
 
-pub use self::function::{RpnFn, RpnFunction};
+pub use self::function::RpnFn;
 pub use self::types::{RpnExpression, RpnExpressionBuilder};
 
 use cop_datatype::{FieldTypeAccessor, FieldTypeFlag};
