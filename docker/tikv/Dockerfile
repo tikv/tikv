@@ -12,6 +12,7 @@ ENV ROCKSDB_SYS_SSE 1
 # Install dependencies at first
 COPY Cargo.toml Cargo.lock ./
 COPY Makefile Makefile
+COPY scripts scripts
 
 # Remove fuzz and test workspace, remove profiler feature
 RUN sed -i '/fuzz/d' Cargo.toml && \
@@ -69,9 +70,9 @@ RUN make dist_release
 
 FROM pingcap/alpine-glibc
 
-COPY --from=toolchain /tikv/bin/tikv-ctl /tikv-ctl
-COPY --from=toolchain /tikv/bin/tikv-server /tikv-server
-COPY --from=toolchain /tikv/bin/tikv-importer /tikv-importer
+COPY --from=toolchain /bin/tikv-ctl /tikv-ctl
+COPY --from=toolchain /bin/tikv-server /tikv-server
+COPY --from=toolchain /bin/tikv-importer /tikv-importer
 
 EXPOSE 20160
 
