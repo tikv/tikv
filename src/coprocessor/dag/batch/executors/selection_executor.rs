@@ -120,26 +120,20 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
 mod tests {
     use super::*;
 
-    use cop_codegen::RpnFunction;
+    use cop_codegen::rpn_fn;
     use cop_datatype::FieldTypeTp;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
     use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
-    use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
 
     #[test]
     fn test_empty_rows() {
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 0)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<i64>> {
-                // This function should never be called because we filter no rows
-                unreachable!()
-            }
+        #[rpn_fn]
+        fn foo() -> Result<Option<i64>> {
+            // This function should never be called because we filter no rows
+            unreachable!()
         }
 
         let src_exec = MockExecutor::new(
@@ -161,7 +155,7 @@ mod tests {
         let mut exec = BatchSelectionExecutor::new_for_test(
             src_exec,
             vec![RpnExpressionBuilder::new()
-                .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+                .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
                 .build()],
         );
 
@@ -289,28 +283,19 @@ mod tests {
     }
 
     /// This function returns 1 when the value is even, 0 otherwise.
-    #[derive(Debug, Clone, Copy, RpnFunction)]
-    #[rpn_function(args = 1)]
-    struct FnIsEven;
-
-    impl FnIsEven {
-        fn call(
-            _ctx: &mut EvalContext,
-            _payload: RpnFnCallPayload<'_>,
-            v: &Option<i64>,
-        ) -> Result<Option<i64>> {
-            let r = match v {
-                None => Some(0),
-                Some(v) => {
-                    if v % 2 == 0 {
-                        Some(1)
-                    } else {
-                        Some(0)
-                    }
+    #[rpn_fn]
+    fn is_even(v: &Option<i64>) -> Result<Option<i64>> {
+        let r = match v {
+            None => Some(0),
+            Some(v) => {
+                if v % 2 == 0 {
+                    Some(1)
+                } else {
+                    Some(0)
                 }
-            };
-            Ok(r)
-        }
+            }
+        };
+        Ok(r)
     }
 
     /// Builds an executor that will return these data:
@@ -371,7 +356,7 @@ mod tests {
 
         let predicate = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(FnIsEven, FieldTypeTp::LongLong)
+            .push_fn_call(is_even_fn(), FieldTypeTp::LongLong)
             .build();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
@@ -396,11 +381,11 @@ mod tests {
     fn test_predicate_2() {
         let src_exec = make_src_executor_using_fixture_2();
 
-        // Use FnIsEven(column[1]) as the predicate.
+        // Use is_even(column[1]) as the predicate.
 
         let predicate = RpnExpressionBuilder::new()
             .push_column_ref(1)
-            .push_fn_call(FnIsEven, FieldTypeTp::LongLong)
+            .push_fn_call(is_even_fn(), FieldTypeTp::LongLong)
             .build();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
@@ -425,13 +410,13 @@ mod tests {
     /// return true should be remained.
     #[test]
     fn test_multiple_predicate_1() {
-        // Use [FnIsEven(column[0]), FnIsEven(column[1])] as the predicate.
+        // Use [is_even(column[0]), is_even(column[1])] as the predicate.
 
         let predicate: Vec<_> = (0..=1)
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(FnIsEven, FieldTypeTp::LongLong)
+                    .push_fn_call(is_even_fn(), FieldTypeTp::LongLong)
                     .build()
             })
             .collect();
@@ -468,7 +453,7 @@ mod tests {
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(FnIsEven, FieldTypeTp::LongLong)
+                    .push_fn_call(is_even_fn(), FieldTypeTp::LongLong)
                     .build()
             })
             .collect();
@@ -508,20 +493,11 @@ mod tests {
         use crate::coprocessor::Error;
 
         /// This function returns error when value is None.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 1)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v: &Option<i64>,
-            ) -> Result<Option<i64>> {
-                match v {
-                    None => Err(Error::Other(box_err!("foo"))),
-                    Some(v) => Ok(Some(*v)),
-                }
+        #[rpn_fn]
+        fn foo(v: &Option<i64>) -> Result<Option<i64>> {
+            match v {
+                None => Err(Error::Other(box_err!("foo"))),
+                Some(v) => Ok(Some(*v)),
             }
         }
 
@@ -562,7 +538,7 @@ mod tests {
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+                    .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
                     .build()
             })
             .collect();
