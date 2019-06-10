@@ -344,18 +344,28 @@ impl Debugger {
         Ok(errors)
     }
 
-    pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) {
+    pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv;
         let wb = WriteBatch::new();
+        let mut errors = Vec::with_capacity(regions.len());
         for region_id in regions {
             let key = keys::region_state_key(region_id);
-            let region_state = db
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
-                .unwrap()
-                .unwrap();
+            let region_state = match db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key) {
+                Ok(Some(state)) => state,
+                Ok(None) => {
+                    let error = box_err!("{} region local state not exists", region_id);
+                    errors.push((region_id, error));
+                    continue;
+                }
+                Err(_) => {
+                    let error = box_err!("{} gets region local state fail", region_id);
+                    errors.push((region_id, error));
+                    continue;
+                }
+            };
             if region_state.get_state() == PeerState::Tombstone {
-                println!("skip because it's already tombstone");
-                return;
+                v1!("skip because it's already tombstone");
+                continue;
             }
             let region = &region_state.get_region();
             write_peer_state(db, &wb, region, PeerState::Tombstone, None).unwrap();
@@ -364,6 +374,7 @@ impl Debugger {
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         db.write_opt(&wb, &write_opts).unwrap();
+        Ok(errors)
     }
 
     pub fn recover_regions(
@@ -1832,6 +1843,28 @@ mod tests {
             let state = get_region_state(engine, region_id).get_state();
             assert_eq!(state, PeerState::Tombstone);
         }
+    }
+
+    #[test]
+    fn test_tombstone_regions_by_id() {
+        let debugger = new_debugger();
+        debugger.set_store_id(11);
+        let engine = debugger.engines.kv.as_ref();
+
+        // tombstone region 1 which currently not exists.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(!errors.is_empty());
+
+        // region 1 with peers at stores 11, 12, 13.
+        init_region_state(engine, 1, &[11, 12, 13]);
+
+        // tombstone region 1.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(errors.is_empty());
+
+        // tombstone region 1 again.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(errors.is_empty());
     }
 
     #[test]

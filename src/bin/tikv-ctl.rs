@@ -829,7 +829,16 @@ impl DebugExecutor for Debugger {
     }
 
     fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
-        self.set_region_tombstone_by_id(region_ids);
+        let ret = self
+            .set_region_tombstone_by_id(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
+        if ret.is_empty() {
+            v1!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            ve1!("region: {}, error: {}", region_id, error);
+        }
     }
 
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
