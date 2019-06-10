@@ -363,7 +363,7 @@ impl Debugger {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        db.write_opt(wb, &write_opts).unwrap();
+        db.write_opt(&wb, &write_opts).unwrap();
     }
 
     pub fn recover_regions(
