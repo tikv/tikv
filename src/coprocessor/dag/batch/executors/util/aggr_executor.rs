@@ -30,13 +30,16 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::{erase_lifetime, erase_lifetime_mut};
 use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::Result;
 
@@ -302,6 +305,39 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.entities.src.collect_statistics(destination);
     }
+}
+
+/// Decodes all columns that are not decoded.
+pub fn ensure_columns_decoded(
+    tz: &Tz,
+    exprs: &[RpnExpression],
+    schema: &[FieldType],
+    input: &mut LazyBatchColumnVec,
+) -> Result<()> {
+    for expr in exprs {
+        expr.ensure_columns_decoded(tz, schema, input)?;
+    }
+    Ok(())
+}
+
+/// Evaluates expressions and outputs the result into the given Vec. Lifetime of the expressions
+/// are erased.
+pub unsafe fn eval_exprs_no_lifetime<'a>(
+    context: &mut EvalContext,
+    exprs: &[RpnExpression],
+    schema: &[FieldType],
+    input: &LazyBatchColumnVec,
+    output: &mut Vec<RpnStackNode<'a>>,
+) -> Result<()> {
+    for expr in exprs {
+        output.push(erase_lifetime(expr).eval_unchecked(
+            erase_lifetime_mut(context),
+            input.rows_len(),
+            erase_lifetime(schema),
+            erase_lifetime(input),
+        )?)
+    }
+    Ok(())
 }
 
 /// Shared test facilities for different aggregation executors.
