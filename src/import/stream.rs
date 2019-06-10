@@ -12,7 +12,7 @@ use kvproto::metapb::*;
 use super::client::*;
 use super::common::*;
 use super::engine::*;
-use super::{Config, Result};
+use super::{Config, Result, Error};
 
 pub struct SSTFile {
     pub meta: SSTMeta,
@@ -69,7 +69,7 @@ impl<Client: ImportClient> SSTFileStream<Client> {
     }
 
     pub fn next(&mut self) -> Result<Option<LazySSTRange>> {
-        if !self.iter.valid() {
+        if !self.iter.valid()? {
             return Ok(None);
         }
 
@@ -84,12 +84,12 @@ impl<Client: ImportClient> SSTFileStream<Client> {
                 w.put(k, v)?;
                 self.ctx.add(k.len() + v.len());
             }
-            if !self.iter.next() || self.ctx.should_stop_before(self.iter.key()) {
+            if !self.iter.next()? || self.ctx.should_stop_before(self.iter.key()) {
                 break;
             }
         }
 
-        let end = if self.iter.valid() {
+        let end = if self.iter.valid()? {
             self.iter.key()
         } else {
             self.stream_range.get_end()
@@ -143,25 +143,25 @@ impl RangeIterator {
         };
 
         // Seek to the first valid range.
-        res.seek_next();
+        res.seek_next().unwrap();
         res
     }
 
-    pub fn next(&mut self) -> bool {
+    pub fn next(&mut self) -> Result<bool> {
         if !self.iter.next() {
-            return false;
+            return Ok(false);
         }
         {
             let range = &self.ranges[self.ranges_index];
             if before_end(self.iter.key(), range.get_end()) {
-                return true;
+                return Ok(true);
             }
             self.ranges_index += 1;
         }
         self.seek_next()
     }
 
-    fn seek_next(&mut self) -> bool {
+    fn seek_next(&mut self) -> Result<bool> {
         while let Some(range) = self.ranges.get(self.ranges_index) {
             if !self.iter.seek(SeekKey::Key(range.get_start())) {
                 break;
@@ -183,8 +183,15 @@ impl RangeIterator {
         self.iter.value()
     }
 
-    pub fn valid(&self) -> bool {
-        self.iter.valid() && self.ranges_index < self.ranges.len()
+    pub fn valid(&self) -> Result<bool> {
+        if !self.iter.valid() {
+            if let Err(e) = self.iter.status() {
+                return Err(Error::RocksDB(e));
+            }
+            Ok(false)
+        } else {
+            Ok(self.ranges_index < self.ranges.len())
+        }
     }
 }
 
