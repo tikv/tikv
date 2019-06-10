@@ -158,6 +158,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Box
         ScalarFuncSig::MinusInt => map_int_sig(value, children, minus_mapper)?,
         ScalarFuncSig::MinusReal => Box::new(RpnFnArithmetic::<RealMinus>::new()),
         ScalarFuncSig::MinusDecimal => Box::new(RpnFnArithmetic::<DecimalMinus>::new()),
+        ScalarFuncSig::MultiplyDecimal => Box::new(RpnFnArithmetic::<DecimalMultiply>::new()),
         ScalarFuncSig::ModReal => Box::new(RpnFnArithmetic::<RealMod>::new()),
         ScalarFuncSig::ModDecimal => Box::new(RpnFnArithmetic::<DecimalMod>::new()),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
