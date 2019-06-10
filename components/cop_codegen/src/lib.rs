@@ -45,7 +45,7 @@ pub fn rpn_fn(attr: TokenStream, input: TokenStream) -> TokenStream {
         Ok(tokens) => TokenStream::from(tokens),
         Err(e) => {
             e.emit();
-            std::process::exit(1)
+            TokenStream::new()
         }
     }
 }

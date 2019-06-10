@@ -278,27 +278,19 @@ fn parse_arg_type(arg: &FnArg) -> Result<TypePath> {
 }
 
 fn ctx_type() -> TokenStream {
-    "crate::coprocessor::dag::expr::EvalContext"
-        .parse()
-        .unwrap()
+    quote! { crate::coprocessor::dag::expr::EvalContext }
 }
 
 fn payload_type() -> TokenStream {
-    "crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload"
-        .parse()
-        .unwrap()
+    quote! { crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload }
 }
 
 fn result_type() -> TokenStream {
-    "crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue>"
-        .parse()
-        .unwrap()
+    quote! { crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> }
 }
 
 fn rpn_fn_type() -> TokenStream {
-    "crate::coprocessor::dag::rpn_expr::function::RpnFn"
-        .parse()
-        .unwrap()
+    quote! { crate::coprocessor::dag::rpn_expr::function::RpnFn }
 }
 
 #[cfg(test)]
