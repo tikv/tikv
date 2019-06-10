@@ -8,6 +8,13 @@ use crate::storage::Key;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+pub const PHYSICAL_SHIFT_BITS: usize = 18;
+
+// In milliseconds
+pub fn extract_physical_timestamp(ts: u64) -> u64 {
+    ts >> PHYSICAL_SHIFT_BITS
+}
+
 pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
     match res {
         Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked { key, ts, .. }))) => Lock {

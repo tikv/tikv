@@ -8,7 +8,7 @@ use criterion::black_box;
 use protobuf::RepeatedField;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::{ExecType, Executor as PbExecutor, IndexScan};
+use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
 use test_coprocessor::*;
@@ -19,6 +19,7 @@ use tikv::coprocessor::dag::expr::EvalConfig;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 
+use crate::util::executor_descriptor::index_scan;
 use crate::util::scan_bencher;
 
 pub type IndexScanParam = bool;
@@ -31,7 +32,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
     for NormalIndexScanExecutorBuilder<T>
 {
     type T = T;
-    type E = IndexScanExecutor<T>;
+    type E = Box<dyn Executor>;
     type P = IndexScanParam;
 
     fn build(
@@ -54,7 +55,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
         executor.next().unwrap().unwrap();
-        executor
+        Box::new(executor) as Box<dyn Executor>
     }
 }
 
@@ -64,7 +65,7 @@ pub struct BatchIndexScanExecutorBuilder<T: TxnStore + 'static> {
 
 impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScanExecutorBuilder<T> {
     type T = T;
-    type E = BatchIndexScanExecutor<T>;
+    type E = Box<dyn BatchExecutor>;
     type P = IndexScanParam;
 
     fn build(
@@ -85,7 +86,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
         executor.next_batch(1);
-        executor
+        Box::new(executor) as Box<dyn BatchExecutor>
     }
 }
 
@@ -106,11 +107,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
         store: &Store<RocksEngine>,
         unique: bool,
     ) -> Box<dyn RequestHandler> {
-        let mut exec = PbExecutor::new();
-        exec.set_tp(ExecType::TypeIndexScan);
-        exec.mut_idx_scan()
-            .set_columns(RepeatedField::from_slice(columns));
-        exec.mut_idx_scan().set_unique(unique);
+        let exec = index_scan(columns, unique);
         crate::util::build_dag_handler::<T>(&[exec], ranges, store, batch)
     }
 }

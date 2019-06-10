@@ -2,6 +2,7 @@
 
 use super::client::Client;
 use super::metrics::*;
+use super::util::extract_physical_timestamp;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
 use crate::pd::{PdClient, RpcClient, INVALID_ID};
@@ -24,6 +25,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
+
+// 2 mins
+const TXN_DETECT_INFO_TTL: u64 = 120000;
 
 #[derive(Default)]
 struct DetectTable {
@@ -90,6 +94,13 @@ impl DetectTable {
 
     pub fn clear(&mut self) {
         self.wait_for_map.clear();
+    }
+
+    pub fn expire<F>(&mut self, is_expired: F)
+    where
+        F: Fn(u64) -> bool,
+    {
+        self.wait_for_map.retain(|ts, _| !is_expired(*ts));
     }
 }
 
@@ -176,6 +187,7 @@ struct Inner {
     leader_client: Option<Client>,
     recving: Rc<RefCell<HashMap<u64, Client>>>,
     failed: Rc<RefCell<HashSet<u64>>>,
+    max_ts: u64,
 }
 
 impl Inner {
@@ -194,11 +206,18 @@ impl Inner {
             leader_client: None,
             recving: Rc::new(RefCell::new(HashMap::new())),
             failed: Rc::new(RefCell::new(HashSet::new())),
+            max_ts: 0,
         }
     }
 
     fn is_leader(&self) -> bool {
         self.store_id == self.leader_id
+    }
+
+    fn update_max_ts_if_needed(&mut self, ts: u64) {
+        if ts > self.max_ts {
+            self.max_ts = ts;
+        }
     }
 
     fn reset(&mut self) {
@@ -357,7 +376,7 @@ pub struct Detector {
     pd_client: Arc<RpcClient>,
     inner: Rc<RefCell<Inner>>,
     monitor_membership_interval: u64,
-    is_membership_change_monitor_scheduled: bool,
+    is_initialized: bool,
 }
 
 unsafe impl Send for Detector {}
@@ -379,11 +398,11 @@ impl Detector {
                 security_mgr,
             ))),
             monitor_membership_interval,
-            is_membership_change_monitor_scheduled: false,
+            is_initialized: false,
         }
     }
 
-    fn schedule_membership_change_monitor(&mut self, handle: &Handle) {
+    fn schedule_membership_change_monitor(&self, handle: &Handle) {
         info!("schedule membership change monitor");
         let pd_client = Arc::clone(&self.pd_client);
         let inner = Rc::clone(&self.inner);
@@ -403,12 +422,34 @@ impl Detector {
         })
         .map_err(|e| panic!("unexpected err: {:?}", e));
         handle.spawn(timer);
-        self.is_membership_change_monitor_scheduled = true;
+    }
+
+    fn schedule_detect_table_expiration(&self, handle: &Handle) {
+        info!("schedule detect table expiration");
+        let inner = Rc::clone(&self.inner);
+        let timer = Interval::new_interval(Duration::from_millis(TXN_DETECT_INFO_TTL))
+            .for_each(move |_| {
+                let max_ts = extract_physical_timestamp(inner.borrow().max_ts);
+                inner.borrow().detect_table.borrow_mut().expire(|ts| {
+                    let ts = extract_physical_timestamp(ts);
+                    ts + TXN_DETECT_INFO_TTL <= max_ts
+                });
+                Ok(())
+            })
+            .map_err(|e| panic!("unexpected err: {:?}", e));
+        handle.spawn(timer);
+    }
+
+    fn init(&mut self, handle: &Handle) {
+        self.schedule_membership_change_monitor(handle);
+        self.schedule_detect_table_expiration(handle);
+        self.is_initialized = true;
     }
 
     fn handle_detect(&self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
         let mut inner = self.inner.borrow_mut();
         if inner.is_leader() {
+            inner.update_max_ts_if_needed(txn_ts);
             match tp {
                 DetectType::Detect => {
                     if let Some(deadlock_key_hash) = inner
@@ -462,8 +503,7 @@ impl Detector {
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
-        let inner = self.inner.borrow();
-        if !inner.is_leader() {
+        if !self.inner.borrow().is_leader() {
             let status = RpcStatus::new(
                 RpcStatusCode::FailedPrecondition,
                 Some("i'm not the leader of deadlock detector".to_string()),
@@ -473,7 +513,7 @@ impl Detector {
             return;
         }
 
-        let detect_table = Rc::clone(&self.inner.borrow().detect_table);
+        let inner = Rc::clone(&self.inner);
         let s = stream
             .map_err(Error::Grpc)
             .and_then(move |mut req| {
@@ -483,12 +523,15 @@ impl Detector {
                     key_hash,
                     ..
                 } = req.get_entry();
+
+                let mut inner = inner.borrow_mut();
+                inner.update_max_ts_if_needed(*txn);
+                let mut detect_table = inner.detect_table.borrow_mut();
+
                 let res = match req.get_tp() {
                     DeadlockRequestType::Detect => {
                         if let Some(deadlock_key_hash) =
-                            detect_table
-                                .borrow_mut()
-                                .detect(*txn, *wait_for_txn, *key_hash)
+                            detect_table.detect(*txn, *wait_for_txn, *key_hash)
                         {
                             let mut resp = DeadlockResponse::new();
                             resp.set_entry(req.take_entry());
@@ -500,14 +543,12 @@ impl Detector {
                     }
 
                     DeadlockRequestType::CleanUpWaitFor => {
-                        detect_table
-                            .borrow_mut()
-                            .clean_up_wait_for(*txn, *wait_for_txn, *key_hash);
+                        detect_table.clean_up_wait_for(*txn, *wait_for_txn, *key_hash);
                         None
                     }
 
                     DeadlockRequestType::CleanUp => {
-                        detect_table.borrow_mut().clean_up(*txn);
+                        detect_table.clean_up(*txn);
                         None
                     }
                 };
@@ -525,8 +566,8 @@ impl Detector {
 
 impl FutureRunnable<Task> for Detector {
     fn run(&mut self, task: Task, handle: &Handle) {
-        if !self.is_membership_change_monitor_scheduled {
-            self.schedule_membership_change_monitor(handle);
+        if !self.is_initialized {
+            self.init(handle);
         }
 
         match task {
@@ -600,7 +641,10 @@ impl deadlock_grpc::Deadlock for Service {
 
 #[cfg(test)]
 mod tests {
+    use super::super::util::PHYSICAL_SHIFT_BITS;
     use super::*;
+    use crate::tikv_util::time::duration_to_ms;
+    use std::time::SystemTime;
 
     #[test]
     fn test_detect_table() {
@@ -635,5 +679,24 @@ mod tests {
         // clean up non-exist entry
         detect_table.clean_up(3);
         detect_table.clean_up_wait_for(3, 1, 1);
+    }
+
+    #[test]
+    fn test_detect_table_expire() {
+        let mut detect_table = DetectTable::default();
+        let now = duration_to_ms(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap(),
+        );
+        detect_table.detect(now << PHYSICAL_SHIFT_BITS, 1, 1);
+        detect_table.detect((now - 100) << PHYSICAL_SHIFT_BITS, 1, 1);
+        detect_table.detect((now - 200) << PHYSICAL_SHIFT_BITS, 1, 1);
+        assert_eq!(detect_table.wait_for_map.len(), 3);
+        detect_table.expire(|ts| {
+            let ts = extract_physical_timestamp(ts);
+            ts + 101 <= now
+        });
+        assert_eq!(detect_table.wait_for_map.len(), 2);
     }
 }
