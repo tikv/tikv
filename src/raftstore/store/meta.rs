@@ -10,9 +10,9 @@ use crate::raftstore::store::worker::ReadDelegate;
 use crate::raftstore::store::Peer;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
-
+use spin::RwLock as SpinRwLock;
 use tikv_util::collections::HashMap;
-use tikv_util::{HandyRwLock, RingQueue};
+use tikv_util::RingQueue;
 
 const PENDING_VOTES_CAP: usize = 20;
 const READERS_SLOT_COUNT: usize = 1 << 6; // 64 slots.
@@ -24,14 +24,14 @@ pub struct StoreMeta {
     /// store id
     pub store_id: AtomicU64,
     /// region_id -> reader
-    readers: Vec<RwLock<HashMap<u64, SharedReader>>>,
+    readers: Vec<SpinRwLock<HashMap<u64, SharedReader>>>,
 }
 
 impl StoreMeta {
     pub fn new() -> Self {
         let mut readers = Vec::with_capacity(READERS_SLOT_COUNT);
         for _ in 0..READERS_SLOT_COUNT {
-            readers.push(RwLock::new(HashMap::new()));
+            readers.push(SpinRwLock::new(HashMap::new()));
         }
         StoreMeta {
             inner: Mutex::new(StoreMetaInner::default()),
@@ -42,13 +42,13 @@ impl StoreMeta {
 
     pub(super) fn insert_reader(&self, region_id: u64, reader: ReadDelegate) {
         let slot = region_id as usize % READERS_SLOT_COUNT;
-        let mut readers = self.readers[slot].write().unwrap();
+        let mut readers = self.readers[slot].write();
         readers.insert(region_id, Arc::new(RwLock::new(reader)));
     }
 
     pub(super) fn remove_reader(&self, region_id: u64) {
         let slot = region_id as usize % READERS_SLOT_COUNT;
-        let mut readers = self.readers[slot].write().unwrap();
+        let mut readers = self.readers[slot].write();
         readers.remove(&region_id);
     }
 
@@ -57,7 +57,7 @@ impl StoreMeta {
         F: FnOnce(Option<&ReadDelegate>) -> R,
     {
         let slot = region_id as usize % READERS_SLOT_COUNT;
-        match self.readers[slot].rl().get(&region_id).map(Arc::clone) {
+        match self.readers[slot].read().get(&region_id).map(Arc::clone) {
             Some(reader) => f(Some(reader.read().unwrap().deref())),
             None => f(None),
         }
@@ -68,7 +68,7 @@ impl StoreMeta {
         F: FnOnce(Option<&mut ReadDelegate>) -> R,
     {
         let slot = region_id as usize % READERS_SLOT_COUNT;
-        match self.readers[slot].rl().get(&region_id).map(Arc::clone) {
+        match self.readers[slot].read().get(&region_id).map(Arc::clone) {
             Some(reader) => f(Some(reader.write().unwrap().deref_mut())),
             None => f(None),
         }
