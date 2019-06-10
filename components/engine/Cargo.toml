@@ -32,8 +32,7 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/tabokie/rust-rocksdb.git"
-branch = "blob-run-mode"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 package = "rocksdb"
 
 [dev-dependencies]
