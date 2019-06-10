@@ -708,10 +708,8 @@ fn process_write_impl<S: Snapshot>(
             let mut write_size = 0;
             let rows = key_locks.len();
             for (current_key, current_lock) in key_locks {
-                if txn_to_keys.is_some() {
+                if let Some(txn_to_keys) = txn_to_keys.as_mut() {
                     txn_to_keys
-                        .as_mut()
-                        .unwrap()
                         .entry((current_lock.ts, current_lock.for_update_ts != 0))
                         .and_modify(|key_hashes: &mut Option<Vec<u64>>| {
                             if key_hashes.is_some() {
@@ -758,17 +756,17 @@ fn process_write_impl<S: Snapshot>(
                     break;
                 }
             }
-            if txn_to_keys.is_some() {
-                txn_to_keys.unwrap().into_iter().for_each(
-                    |((ts, is_pessimistic_txn), key_hashes)| {
+            if let Some(txn_to_keys) = txn_to_keys {
+                txn_to_keys
+                    .into_iter()
+                    .for_each(|((ts, is_pessimistic_txn), key_hashes)| {
                         notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, ts, key_hashes, 0);
                         notify_deadlock_detector_if_needed(
                             &detector_scheduler,
                             is_pessimistic_txn,
                             ts,
                         );
-                    },
-                );
+                    });
             }
 
             let pr = if scan_key.is_none() {
