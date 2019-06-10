@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::client::Client;
+use super::metrics::*;
 use super::util::extract_physical_timestamp;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
@@ -36,6 +37,9 @@ struct DetectTable {
 impl DetectTable {
     /// Return deadlock key hash if deadlocked
     pub fn detect(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> Option<u64> {
+        let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
+        TASK_COUNTER_VEC.detect.inc();
+
         if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
             return Some(deadlock_key_hash);
         }
@@ -80,10 +84,12 @@ impl DetectTable {
                 }
             }
         }
+        TASK_COUNTER_VEC.clean_up_wait_for.inc();
     }
 
     pub fn clean_up(&mut self, txn_ts: u64) {
         self.wait_for_map.remove(&txn_ts);
+        TASK_COUNTER_VEC.clean_up.inc();
     }
 
     pub fn clear(&mut self) {
@@ -325,13 +331,14 @@ impl Inner {
     }
 
     fn reconnect_leader(&mut self, handle: &Handle) {
+        ERROR_COUNTER_VEC.reconnect_leader.inc();
         self.leader_client.take();
 
         // Make compiler happy.
         let addrs = self.addrs.borrow();
         let addr = addrs.get(&self.leader_id);
         if addr.is_none() {
-            info!("leader address not found"; "leader_id" => self.leader_id);
+            warn!("leader address not found"; "leader_id" => self.leader_id);
             return;
         }
         let mut leader_client = Client::new(Arc::clone(&self.security_mgr), addr.unwrap().as_str());
@@ -486,6 +493,7 @@ impl Detector {
                 }
             }
             warn!("detect request dropped"; "tp" => ?tp, "txn_ts" =>  txn_ts, "lock" => ?lock);
+            ERROR_COUNTER_VEC.dropped.inc();
         }
     }
 
@@ -501,6 +509,7 @@ impl Detector {
                 Some("i'm not the leader of deadlock detector".to_string()),
             );
             handle.spawn(sink.fail(status).map_err(|_| ()));
+            ERROR_COUNTER_VEC.not_leader.inc();
             return;
         }
 
