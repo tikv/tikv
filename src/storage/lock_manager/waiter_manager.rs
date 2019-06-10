@@ -15,9 +15,21 @@ use prometheus::HistogramTimer;
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
+
+// If it is true, there is no need to calculate keys' hashes and wake up waiters.
+pub static WAIT_TABLE_IS_EMPTY: AtomicBool = AtomicBool::new(true);
+
+pub fn store_wait_table_is_empty(is_empty: bool) {
+    WAIT_TABLE_IS_EMPTY.store(is_empty, Ordering::Relaxed);
+}
+
+pub fn wait_table_is_empty() -> bool {
+    WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed)
+}
 
 pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
@@ -93,6 +105,12 @@ impl WaitTable {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
     }
 
+    fn set_wait_table_is_empty(&self) {
+        if self.wait_table.is_empty() {
+            store_wait_table_is_empty(true);
+        }
+    }
+
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
         self.wait_table.entry(ts).or_insert(vec![]).push(waiter);
         true
@@ -115,6 +133,7 @@ impl WaitTable {
             if waiters.is_empty() {
                 self.wait_table.remove(&ts);
             }
+            self.set_wait_table_is_empty();
         }
         ready_waiters
     }
@@ -129,6 +148,7 @@ impl WaitTable {
                 if waiters.is_empty() {
                     self.wait_table.remove(&lock.ts);
                 }
+                self.set_wait_table_is_empty();
                 return Some(waiter);
             }
         }
@@ -469,6 +489,24 @@ mod tests {
             }
         }
         assert!(wait_for_enties.is_empty());
+    }
+
+    #[test]
+    fn test_wait_table_is_empty() {
+        let mut wait_table = WaitTable::new();
+        wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
+        store_wait_table_is_empty(false);
+        assert!(wait_table
+            .remove_waiter(1, Lock { ts: 2, hash: 2 })
+            .is_some());
+        assert_eq!(wait_table_is_empty(), true);
+        wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
+        wait_table.add_waiter(3, dummy_waiter(2, 3, 3));
+        store_wait_table_is_empty(false);
+        wait_table.get_ready_waiters(2, vec![2]);
+        assert_eq!(wait_table_is_empty(), false);
+        wait_table.get_ready_waiters(3, vec![3]);
+        assert_eq!(wait_table_is_empty(), true);
     }
 
     #[test]
