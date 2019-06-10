@@ -1753,7 +1753,14 @@ fn main() {
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
 
-    let debug_executor = new_debug_executor(db, raft_db, skip_paranoid_checks, host, &cfg, Arc::clone(&mgr));
+    let debug_executor = new_debug_executor(
+        db,
+        raft_db,
+        skip_paranoid_checks,
+        host,
+        &cfg,
+        Arc::clone(&mgr),
+    );
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
