@@ -804,7 +804,7 @@ impl Peer {
         }
     }
 
-    fn on_role_changed(&mut self, ready: &Ready, worker: &FutureWorker<PdTask>) {
+    fn on_role_changed(&mut self, ready: &Ready, _worker: &FutureWorker<PdTask>) {
         // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
             match ss.raft_state {
@@ -1061,11 +1061,7 @@ impl Peer {
             if self.is_applying_snapshot() {
                 self.pending_messages = mem::replace(&mut ready.messages, vec![]);
             } else {
-                self.send(
-                    trans,
-                    ready.messages.drain(..),
-                    &mut metrics.message,
-                );
+                self.send(trans, ready.messages.drain(..), &mut metrics.message);
             }
         }
 
@@ -1978,7 +1974,11 @@ impl Peer {
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {
-                warn!("{} failed to look up recipient peer {}", self.tag, msg.get_to());
+                warn!(
+                    "{} failed to look up recipient peer {}",
+                    self.tag,
+                    msg.get_to()
+                );
                 return;
             }
         };
