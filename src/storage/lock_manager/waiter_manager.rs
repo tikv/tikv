@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::deadlock::Scheduler as DetectorScheduler;
+use super::metrics::*;
 use super::util::extract_raw_key_from_process_result;
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
@@ -11,6 +12,7 @@ use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
+use prometheus::HistogramTimer;
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
@@ -83,6 +85,7 @@ struct Waiter {
     cb: StorageCb,
     pr: ProcessResult,
     lock: Lock,
+    _lifetime_timer: HistogramTimer,
 }
 
 type Waiters = Vec<Waiter>;
@@ -348,8 +351,10 @@ impl FutureRunnable<Task> for WaiterManager {
                         cb,
                         pr,
                         lock,
+                        _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
                     },
                 );
+                TASK_COUNTER_VEC.wait_for.inc();
             }
             Task::WakeUp {
                 lock_ts,
@@ -357,9 +362,11 @@ impl FutureRunnable<Task> for WaiterManager {
                 commit_ts,
             } => {
                 self.handle_wake_up(handle, lock_ts, hashes, commit_ts);
+                TASK_COUNTER_VEC.wake_up.inc();
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);
+                TASK_COUNTER_VEC.dump.inc();
             }
             Task::Deadlock {
                 start_ts,
@@ -367,6 +374,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 deadlock_key_hash,
             } => {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
+                TASK_COUNTER_VEC.deadlock.inc();
             }
         }
     }
@@ -406,6 +414,7 @@ mod tests {
             cb: StorageCb::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
+            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
         }
     }
 
