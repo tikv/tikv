@@ -39,7 +39,7 @@ use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
-    calc_crc32, delete_dir_if_exist, delete_file_if_exist, file_exists, get_file_size,
+    calc_crc32, delete_dir_if_exist, delete_file_if_exist, file_exists, get_file_size, sync_dir,
 };
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
@@ -307,9 +307,11 @@ struct MetaFile {
 
 pub struct Snap {
     key: SnapKey,
+    is_sending: bool,
     display_path: String,
     subdir_path: PathBuf,
     tmp_subdir_path: PathBuf,
+    dir_path: PathBuf,
     cf_files: Vec<CfFile>,
     cf_index: usize,
     meta_file: MetaFile,
@@ -369,9 +371,11 @@ impl Snap {
 
         let mut s = Snap {
             key: key.clone(),
+            is_sending,
             display_path,
             subdir_path,
             tmp_subdir_path,
+            dir_path,
             cf_files,
             cf_index: 0,
             meta_file,
@@ -929,6 +933,9 @@ impl Snapshot for Snap {
             {
                 let mut file = cf_file.file.take().unwrap();
                 file.flush()?;
+                if !self.is_sending {
+                    file.sync_all()?;
+                }
             }
             if cf_file.written_size != cf_file.size {
                 return Err(io::Error::new(
@@ -970,6 +977,8 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.tmp_subdir_path, &self.subdir_path)?;
+        sync_dir(&self.subdir_path)?;
+        sync_dir(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
@@ -1046,7 +1055,6 @@ impl Write for Snap {
 
             let left = (cf_file.size - cf_file.written_size) as usize;
             if left == 0 {
-                cf_file.file.as_mut().unwrap().sync_all()?;
                 self.cf_index += 1;
                 continue;
             }

@@ -327,6 +327,18 @@ impl ArithmeticOp for DecimalMod {
     }
 }
 
+#[derive(Debug)]
+pub struct DecimalMultiply;
+
+impl ArithmeticOp for DecimalMultiply {
+    type T = Decimal;
+
+    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        let res: codec::Result<Decimal> = (lhs * rhs).into();
+        Ok(Some(res?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,6 +566,7 @@ mod tests {
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
+
     #[test]
     fn test_mod_int_unsigned() {
         let tests = vec![
@@ -667,6 +680,20 @@ mod tests {
                 .push_param(lhs.parse::<Decimal>().ok())
                 .push_param(rhs.parse::<Decimal>().ok())
                 .evaluate(ScalarFuncSig::ModDecimal)
+                .unwrap();
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_multiply_decimal() {
+        let test_cases = vec![("1.1", "2.2", "2.42")];
+        for (lhs, rhs, expected) in test_cases {
+            let expected: Option<Decimal> = expected.parse().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs.parse::<Decimal>().ok())
+                .push_param(rhs.parse::<Decimal>().ok())
+                .evaluate(ScalarFuncSig::MultiplyDecimal)
                 .unwrap();
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
