@@ -31,7 +31,9 @@ use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
-use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
+use crate::storage::lock_manager::{
+    self, store_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
+};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
@@ -483,6 +485,12 @@ impl<E: Engine> Scheduler<E> {
             lock.clone(),
             is_first_lock,
         );
+        // Set `WAIT_TABLE_IS_EMPTY` here to prevent there is an on-the-fly WaitFor msg
+        // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
+        //
+        // But it's still possible that the waiter_mgr removes some waiters and set
+        // `WAIT_TABLE_IS_EMPTY` to true just after we set it to false here.
+        store_wait_table_is_empty(false);
         self.release_lock(&tctx.lock, cid);
     }
 }
