@@ -1042,7 +1042,7 @@ impl Peer {
                 });
             let region = snap_data.take_region();
 
-            let meta = ctx.store_meta.lock().unwrap();
+            let meta = ctx.store_meta.inner.lock().unwrap();
             // Region's range changes if and only if epoch version change. So if the snapshot's
             // version is not larger than now, we can make sure there is no overlap.
             if region.get_region_epoch().get_version()
@@ -1171,9 +1171,8 @@ impl Peer {
 
         if apply_snap_result.is_some() {
             self.activate(ctx);
-            let mut meta = ctx.store_meta.lock().unwrap();
-            meta.readers
-                .insert(self.region_id, ReadDelegate::from_peer(self));
+            ctx.store_meta
+                .insert_reader(self.region_id, ReadDelegate::from_peer(self));
         }
 
         apply_snap_result
@@ -1388,9 +1387,9 @@ impl Peer {
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
+            ctx.store_meta.with_mut_reader(self.region_id, |reader| {
+                self.maybe_update_read_progress(reader.unwrap(), progress);
+            });
         }
         has_ready
     }
@@ -1441,14 +1440,14 @@ impl Peer {
             }
         };
         if let Some(progress) = progress {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
+            ctx.store_meta.with_mut_reader(self.region_id, |reader| {
+                self.maybe_update_read_progress(reader.unwrap(), progress);
+            });
         }
         if let Some(progress) = read_progress {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
+            ctx.store_meta.with_mut_reader(self.region_id, |reader| {
+                self.maybe_update_read_progress(reader.unwrap(), progress);
+            });
         }
     }
 

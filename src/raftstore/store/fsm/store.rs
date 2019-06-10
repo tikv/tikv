@@ -1,5 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
+use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use std::{mem, thread, u64};
+
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
@@ -7,17 +14,11 @@ use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SSTMeta;
-use kvproto::metapb::{self, Region, RegionEpoch};
+use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::{Ready, StateRole};
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
@@ -39,6 +40,7 @@ use crate::raftstore::store::fsm::{
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use crate::raftstore::store::local_metrics::RaftMetrics;
+use crate::raftstore::store::meta::{StoreMeta, StoreMetaInner};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::raftstore::store::transport::Transport;
@@ -61,77 +63,17 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use tikv_util::{is_zero_duration, sys as sys_util, Either};
 
 type Key = Vec<u8>;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
-pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
     pub engine: Arc<DB>,
     pub capacity: u64,
-}
-
-pub struct StoreMeta {
-    /// store id
-    pub store_id: Option<u64>,
-    /// region_end_key -> region_id
-    pub region_ranges: BTreeMap<Vec<u8>, u64>,
-    /// region_id -> region
-    pub regions: HashMap<u64, Region>,
-    /// region_id -> reader
-    pub readers: HashMap<u64, ReadDelegate>,
-    /// `MsgRequestPreVote` or `MsgRequestVote` messages from newly split Regions shouldn't be dropped if there is no
-    /// such Region in this store now. So the messages are recorded temporarily and will be handled later.
-    pub pending_votes: RingQueue<RaftMessage>,
-    /// The regions with pending snapshots.
-    pub pending_snapshot_regions: Vec<Region>,
-    /// A marker used to indicate the peer of a Region has received a merge target message and waits to be destroyed.
-    /// target_region_id -> (source_region_id -> merge_target_epoch)
-    pub pending_merge_targets: HashMap<u64, HashMap<u64, RegionEpoch>>,
-    /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
-    /// source_region_id -> target_region_id
-    pub targets_map: HashMap<u64, u64>,
-    /// In raftstore, the execute order of `PrepareMerge` and `CommitMerge` is not certain because of the messages
-    /// belongs two regions. To make them in order, `PrepareMerge` will set this structure and `CommitMerge` will retry
-    /// later if there is no related lock.
-    /// source_region_id -> (version, BiLock).
-    pub merge_locks: HashMap<u64, (u64, Option<Arc<AtomicBool>>)>,
-}
-
-impl StoreMeta {
-    pub fn new(vote_capacity: usize) -> StoreMeta {
-        StoreMeta {
-            store_id: None,
-            region_ranges: BTreeMap::default(),
-            regions: HashMap::default(),
-            readers: HashMap::default(),
-            pending_votes: RingQueue::with_capacity(vote_capacity),
-            pending_snapshot_regions: Vec::default(),
-            pending_merge_targets: HashMap::default(),
-            targets_map: HashMap::default(),
-            merge_locks: HashMap::default(),
-        }
-    }
-
-    #[inline]
-    pub fn set_region(
-        &mut self,
-        host: &CoprocessorHost,
-        region: Region,
-        peer: &mut crate::raftstore::store::Peer,
-    ) {
-        let prev = self.regions.insert(region.get_id(), region.clone());
-        if prev.map_or(true, |r| r.get_id() != region.get_id()) {
-            // TODO: may not be a good idea to panic when holding a lock.
-            panic!("{} region corrupted", peer.tag);
-        }
-        let reader = self.readers.get_mut(&region.get_id()).unwrap();
-        peer.set_region(host, reader, region);
-    }
 }
 
 pub type RaftRouter = BatchRouter<PeerFsm, StoreFsm>;
@@ -199,7 +141,7 @@ pub struct PollContext<T, C: 'static> {
     pub router: RaftRouter,
     pub compact_scheduler: Scheduler<CompactTask>,
     pub importer: Arc<SSTImporter>,
-    pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub store_meta: Arc<StoreMeta>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
@@ -662,7 +604,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             self.poll_ctx.need_flush_trans = false;
         }
         if !self.poll_ctx.queued_snapshot.is_empty() {
-            let mut meta = self.poll_ctx.store_meta.lock().unwrap();
+            let mut meta = self.poll_ctx.store_meta.inner.lock().unwrap();
             meta.pending_snapshot_regions
                 .retain(|r| !self.poll_ctx.queued_snapshot.contains(&r.get_id()));
             self.poll_ctx.queued_snapshot.clear();
@@ -689,7 +631,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub router: RaftRouter,
     compact_scheduler: Scheduler<CompactTask>,
     pub importer: Arc<SSTImporter>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<StoreMeta>,
     future_poller: ThreadPoolSender,
     snap_mgr: SnapManager,
     pub coprocessor_host: Arc<CoprocessorHost>,
@@ -720,7 +662,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut raft_wb = WriteBatch::new();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
-        let mut meta = self.store_meta.lock().unwrap();
+        let mut meta = self.store_meta.inner.lock().unwrap();
         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
@@ -838,7 +780,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
-    fn clear_stale_data(&self, meta: &StoreMeta) -> Result<()> {
+    fn clear_stale_data(&self, meta: &StoreMetaInner) -> Result<()> {
         let t = Instant::now();
 
         let mut ranges = Vec::new();
@@ -955,7 +897,7 @@ impl RaftBatchSystem {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<StoreMeta>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()> {
@@ -1034,11 +976,10 @@ impl RaftBatchSystem {
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
 
         {
-            let mut meta = builder.store_meta.lock().unwrap();
             for (_, peer_fsm) in &region_peers {
-                let peer = peer_fsm.get_peer();
-                meta.readers
-                    .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
+                let region_id = peer_fsm.region_id();
+                let reader = ReadDelegate::from_peer(peer_fsm.get_peer());
+                builder.store_meta.insert_reader(region_id, reader);
             }
         }
 
@@ -1193,7 +1134,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             // Maybe split, but not registered yet.
             self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
             if util::is_first_vote_msg(msg.get_message()) {
-                let mut meta = self.ctx.store_meta.lock().unwrap();
+                let mut meta = self.ctx.store_meta.inner.lock().unwrap();
                 // Last check on whether target peer is created, otherwise, the
                 // vote message will never be comsumed.
                 if meta.regions.contains_key(&region_id) {
@@ -1334,8 +1275,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let target = msg.get_to_peer();
         // we may encounter a message with larger peer id, which means
         // current peer is stale, then we should remove current peer
-        let mut guard = self.ctx.store_meta.lock().unwrap();
-        let meta: &mut StoreMeta = &mut *guard;
+        let mut guard = self.ctx.store_meta.inner.lock().unwrap();
+        let meta: &mut StoreMetaInner = &mut *guard;
         if meta.regions.contains_key(&region_id) {
             return Ok(true);
         }
@@ -1450,7 +1391,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         // self.cfg.region_split_check_diff.0 / 16 is an experienced value.
         let mut region_declined_bytes = {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.inner.lock().unwrap();
             calc_region_declined_bytes(
                 event,
                 &meta.region_ranges,
@@ -1503,7 +1444,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         ranges_need_check.push(self.fsm.store.last_compact_checked_key.clone());
 
         let largest_key = {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.inner.lock().unwrap();
             if meta.region_ranges.is_empty() {
                 debug!(
                     "there is no range need to check";
@@ -1566,7 +1507,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         stats.set_used_size(used_size);
         stats.set_store_id(self.ctx.store_id());
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.inner.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
         }
 
@@ -1765,7 +1706,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // destroyed. We need to make sure that no stale peer exists.
         let mut delete_ssts = Vec::new();
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.inner.lock().unwrap();
             for sst in ssts {
                 if !meta.regions.contains_key(&sst.get_region_id()) {
                     delete_ssts.push(sst);
@@ -1795,7 +1736,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return Ok(());
         }
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.inner.lock().unwrap();
             for sst in ssts {
                 if let Some(r) = meta.regions.get(&sst.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
@@ -1851,7 +1792,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
         let (mut target_region_id, mut oldest) = (0, Instant::now());
         let target_peer = {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.inner.lock().unwrap();
             for region_id in meta.regions.keys() {
                 match self.fsm.store.consistency_check_time.get(region_id) {
                     Some(time) => {
@@ -1918,7 +1859,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         let mut regions = vec![];
         {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.inner.lock().unwrap();
             for (_, region_id) in meta
                 .region_ranges
                 .range((Excluded(start_key), Included(end_key)))

@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -9,10 +10,9 @@ use super::Result;
 use crate::import::SSTImporter;
 use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
-use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use crate::raftstore::store::{
-    self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
+    self, initial_region, keys, Config as StoreConfig, SnapManager, StoreMeta, Transport,
 };
 use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
@@ -117,7 +117,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<StoreMeta>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()>
@@ -132,10 +132,7 @@ where
             )));
         }
         self.store.set_id(store_id);
-        {
-            let mut meta = store_meta.lock().unwrap();
-            meta.store_id = Some(store_id);
-        }
+        store_meta.store_id.store(store_id, Ordering::Release);
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
             info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
@@ -320,7 +317,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<StoreMeta>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()>

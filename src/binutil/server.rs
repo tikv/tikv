@@ -9,8 +9,7 @@ use crate::fatal;
 use crate::import::{ImportSSTService, SSTImporter};
 use crate::pd::{PdClient, RpcClient};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use crate::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use crate::raftstore::store::{fsm, LocalReader};
+use crate::raftstore::store::{fsm, LocalReader, StoreMeta};
 use crate::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
 use crate::server::resolve;
 use crate::server::status_server::StatusServer;
@@ -28,7 +27,7 @@ use engine::Engines;
 use fs2::FileExt;
 use std::fs::File;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tikv_util::check_environment_variables;
@@ -176,7 +175,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
-    let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+    let store_meta = Arc::new(StoreMeta::new());
     let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
     let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
 

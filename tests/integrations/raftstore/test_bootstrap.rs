@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tempdir::TempDir;
 
@@ -14,7 +14,7 @@ use engine::*;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::store::StoreMeta;
+use tikv::raftstore::store::StoreMeta;
 use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
 use tikv::server::Node;
 use tikv_util::worker::FutureWorker;
@@ -92,7 +92,7 @@ fn test_node_bootstrap_with_prepared_data() {
         simulate_trans,
         snap_mgr,
         pd_worker,
-        Arc::new(Mutex::new(StoreMeta::new(0))),
+        Arc::new(StoreMeta::new()),
         coprocessor_host,
         importer,
     )

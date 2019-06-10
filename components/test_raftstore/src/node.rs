@@ -25,7 +25,6 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::worker::FutureWorker;
 
 use super::*;
-use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -203,7 +202,7 @@ impl Simulator for NodeCluster {
             Arc::new(SSTImporter::new(dir).unwrap())
         };
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let store_meta = Arc::new(StoreMeta::new());
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         node.start(
             engines.clone(),

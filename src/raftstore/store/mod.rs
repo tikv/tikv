@@ -10,6 +10,7 @@ pub mod util;
 
 mod bootstrap;
 mod local_metrics;
+mod meta;
 mod metrics;
 mod peer;
 mod peer_storage;
@@ -23,6 +24,7 @@ pub use self::bootstrap::{
 };
 pub use self::config::Config;
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
+pub use self::meta::StoreMeta;
 pub use self::msg::{
     Callback, CasualMessage, PeerMsg, PeerTicks, RaftCommand, ReadCallback, ReadResponse,
     SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,

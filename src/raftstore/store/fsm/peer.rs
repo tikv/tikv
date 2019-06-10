@@ -36,12 +36,13 @@ use tikv_util::{escape, is_zero_duration};
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
-use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
+use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, ChangePeer, ExecResult, Fsm,
     RegionProposal,
 };
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
+use crate::raftstore::store::meta::StoreMetaInner;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
 use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
@@ -400,7 +401,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let version = self.region().get_region_epoch().get_version();
         // If there is no merge lock for that key, insert one to let target peer know `PrepareMerge`
         // is already executed.
-        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.inner.lock().unwrap();
         let (exist_version, ready_to_merge) =
             match meta.merge_locks.insert(region_id, (version, None)) {
                 None => return,
@@ -1047,7 +1048,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // is the state of target peer at the time when source peer is merged. So here we record the
         // merge target epoch version to let the target peer on this store to decide whether to
         // destroy the source peer.
-        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.inner.lock().unwrap();
         meta.targets_map.insert(self.region_id(), target_region_id);
         let v = meta
             .pending_merge_targets
@@ -1209,7 +1210,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(Some(key));
         }
 
-        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.inner.lock().unwrap();
         if meta.regions[&self.region_id()] != *self.region() {
             if !self.fsm.peer.is_initialized() {
                 info!(
@@ -1346,7 +1347,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         assert!(!self.fsm.peer.is_applying_snapshot());
 
         // Clear merge related structures.
-        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.inner.lock().unwrap();
         meta.pending_merge_targets.remove(&region_id);
         if let Some(target) = meta.targets_map.remove(&region_id) {
             if meta.pending_merge_targets.contains_key(&target) {
@@ -1366,9 +1367,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.merge_locks.remove(&region_id);
 
         // Destroy read delegates.
-        if let Some(reader) = meta.readers.remove(&region_id) {
-            reader.mark_invalid();
-        }
+        self.ctx.store_meta.remove_reader(region_id);
 
         self.ctx
             .apply_router
@@ -1421,10 +1420,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // Apply failed, skip.
             return;
         }
-        {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
-        }
+
+        self.ctx
+            .store_meta
+            .set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
 
         let peer_id = cp.peer.get_id();
         let now = Instant::now();
@@ -1516,10 +1515,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
         self.register_split_region_check_tick();
-        let mut guard = self.ctx.store_meta.lock().unwrap();
-        let meta: &mut StoreMeta = &mut *guard;
+        let mut guard = self.ctx.store_meta.inner.lock().unwrap();
+        let meta: &mut StoreMetaInner = &mut *guard;
         let region_id = derived.get_id();
-        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
+
+        self.ctx.store_meta.set_region_with_inner(
+            meta,
+            &self.ctx.coprocessor_host,
+            derived,
+            &mut self.fsm.peer,
+        );
+
         self.fsm.peer.post_split();
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
@@ -1623,8 +1629,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
             new_peer.peer.activate(self.ctx);
             meta.regions.insert(new_region_id, new_region);
-            meta.readers
-                .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+            self.ctx
+                .store_meta
+                .insert_reader(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
@@ -1661,7 +1668,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn validate_merge_peer(&self, target_region: &metapb::Region) -> Result<bool> {
         let region_id = target_region.get_id();
         let exist_region = {
-            let meta = self.ctx.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.inner.lock().unwrap();
             meta.regions.get(&region_id).cloned()
         };
         if let Some(r) = exist_region {
@@ -1827,14 +1834,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState, merged: bool) {
-        {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(
-                &self.ctx.coprocessor_host,
-                region.clone(),
-                &mut self.fsm.peer,
-            );
-        }
+        self.ctx.store_meta.set_region(
+            &self.ctx.coprocessor_host,
+            region.clone(),
+            &mut self.fsm.peer,
+        );
+
         self.fsm.peer.pending_merge_state = Some(state);
         self.notify_prepare_merge();
 
@@ -1853,7 +1858,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn check_locks(
         &self,
         source: &metapb::Region,
-        meta: &mut StoreMeta,
+        meta: &mut StoreMetaInner,
     ) -> Option<Arc<AtomicBool>> {
         let source_region_id = source.get_id();
         let source_version = source.get_region_epoch().get_version();
@@ -1897,7 +1902,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         source: metapb::Region,
     ) -> Option<Arc<AtomicBool>> {
         self.register_split_region_check_tick();
-        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.inner.lock().unwrap();
 
         let ready_to_merge = self.check_locks(&source, &mut meta);
         if ready_to_merge.is_some() {
@@ -1920,9 +1925,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
-        meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
-        let reader = meta.readers.remove(&source.get_id()).unwrap();
-        reader.mark_invalid();
+
+        self.ctx.store_meta.set_region_with_inner(
+            &mut meta,
+            &self.ctx.coprocessor_host,
+            region,
+            &mut self.fsm.peer,
+        );
+
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
@@ -1971,9 +1981,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         self.fsm.peer.pending_merge_state = None;
         {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
+            let mut meta = self.ctx.store_meta.inner.lock().unwrap();
             if let Some(r) = region {
-                meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
+                self.ctx.store_meta.set_region_with_inner(
+                    &mut meta,
+                    &self.ctx.coprocessor_host,
+                    r,
+                    &mut self.fsm.peer,
+                );
             }
             let region = self.fsm.peer.region();
             let region_id = region.get_id();
@@ -2058,7 +2073,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "region" => ?region,
         );
 
-        let mut meta = self.ctx.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.inner.lock().unwrap();
         debug!(
             "check snapshot range";
             "region_id" => self.region_id(),
@@ -2159,7 +2174,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if msg.get_admin_request().has_prepare_merge() {
             let target_region = msg.get_admin_request().get_prepare_merge().get_target();
             {
-                let meta = self.ctx.store_meta.lock().unwrap();
+                let meta = self.ctx.store_meta.inner.lock().unwrap();
                 match meta.regions.get(&target_region.get_id()) {
                     Some(r) => {
                         if r != target_region {
@@ -2335,7 +2350,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         } else {
             Excluded(enc_end_key(self.fsm.peer.region()))
         };
-        let meta = self.ctx.store_meta.lock().unwrap();
+        let meta = self.ctx.store_meta.inner.lock().unwrap();
         meta.region_ranges
             .range((start, Unbounded::<Vec<u8>>))
             .next()
@@ -2912,8 +2927,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 /// Checks merge target, returns whether the source peer should be destroyed.
 /// It returns true when there is a network isolation which leads to a follower of a merge target
 /// Region's log falls behind and then receive a snapshot with epoch version after merge.
-pub fn maybe_destroy_source(
-    meta: &StoreMeta,
+pub(super) fn maybe_destroy_source(
+    meta: &StoreMetaInner,
     target_region_id: u64,
     source_region_id: u64,
     region_epoch: RegionEpoch,
