@@ -3,6 +3,7 @@
 mod client;
 mod config;
 pub mod deadlock;
+mod metrics;
 mod util;
 pub mod waiter_manager;
 
