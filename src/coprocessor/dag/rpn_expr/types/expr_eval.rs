@@ -2,7 +2,6 @@
 
 use tipb::expression::FieldType;
 
-use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallPayload;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
@@ -254,14 +253,14 @@ impl RpnExpression {
                     // Now we receives a function call `Foo`, so there are `[A, B, C]` in the stack
                     // as the last several elements. We will directly use the last N (N = number of
                     // arguments) elements in the stack as function arguments.
-                    assert!(stack.len() >= func.args_len());
-                    let stack_slice_begin = stack.len() - func.args_len();
+                    assert!(stack.len() >= func.args_len);
+                    let stack_slice_begin = stack.len() - func.args_len;
                     let stack_slice = &stack[stack_slice_begin..];
                     let call_info = RpnFnCallPayload {
                         raw_args: stack_slice,
                         ret_field_type: field_type,
                     };
-                    let ret = func.eval(rows, context, call_info)?;
+                    let ret = (func.fn_ptr)(rows, context, call_info)?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Owned(Box::new(ret)),
@@ -282,17 +281,15 @@ mod tests {
 
     use super::*;
 
-    use cop_codegen::RpnFunction;
+    use cop_codegen::rpn_fn;
     use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
-
-    use super::super::RpnFnCallPayload;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
     use crate::coprocessor::codec::data_type::Real;
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
     use crate::coprocessor::dag::expr::EvalContext;
-    use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
+    use crate::coprocessor::dag::rpn_expr::{RpnExpressionBuilder, RpnFn};
     use crate::coprocessor::Result;
 
     /// Single constant node
@@ -392,18 +389,13 @@ mod tests {
     /// Single function call node (i.e. nullary function)
     #[test]
     fn test_eval_single_fn_call_node() {
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 0)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<i64>> {
-                Ok(Some(42))
-            }
+        #[rpn_fn]
+        fn foo() -> Result<Option<i64>> {
+            Ok(Some(42))
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -420,24 +412,15 @@ mod tests {
     /// Unary function (argument is scalar)
     #[test]
     fn test_eval_unary_function_scalar() {
-        /// FnFoo(v) performs v * 2.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 1)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v: &Option<Real>,
-            ) -> Result<Option<Real>> {
-                Ok(v.map(|v| v * 2.0))
-            }
+        /// foo(v) performs v * 2.
+        #[rpn_fn]
+        fn foo(v: &Option<Real>) -> Result<Option<Real>> {
+            Ok(v.map(|v| v * 2.0))
         }
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
-            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .push_fn_call(foo_fn(), FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -458,19 +441,10 @@ mod tests {
     /// Unary function (argument is vector)
     #[test]
     fn test_eval_unary_function_vector() {
-        /// FnFoo(v) performs v + 5.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 1)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v: &Option<i64>,
-            ) -> Result<Option<i64>> {
-                Ok(v.map(|v| v + 5))
-            }
+        /// foo(v) performs v + 5.
+        #[rpn_fn]
+        fn foo(v: &Option<i64>) -> Result<Option<i64>> {
+            Ok(v.map(|v| v + 5))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -484,7 +458,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
@@ -500,19 +474,10 @@ mod tests {
     /// Unary function (argument is raw column). The column should be decoded.
     #[test]
     fn test_eval_unary_function_raw_column() {
-        /// FnFoo(v) performs v + 5.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 1)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v: &Option<i64>,
-            ) -> Result<Option<i64>> {
-                Ok(Some(v.unwrap() + 5))
-            }
+        /// foo(v) performs v + 5.
+        #[rpn_fn]
+        fn foo(v: &Option<i64>) -> Result<Option<i64>> {
+            Ok(Some(v.unwrap() + 5))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -536,7 +501,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
@@ -552,26 +517,16 @@ mod tests {
     /// Binary function (arguments are scalar, scalar)
     #[test]
     fn test_eval_binary_function_scalar_scalar() {
-        /// FnFoo(v) performs v1 + float(v2) - 1.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 2)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<Real>,
-                v2: &Option<i64>,
-            ) -> Result<Option<Real>> {
-                Ok(Some(v1.unwrap() + v2.unwrap() as f64 - 1.0))
-            }
+        /// foo(v) performs v1 + float(v2) - 1.
+        #[rpn_fn]
+        fn foo(v1: &Option<Real>, v2: &Option<i64>) -> Result<Option<Real>> {
+            Ok(Some(v1.unwrap() + v2.unwrap() as f64 - 1.0))
         }
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
             .push_constant(3i64)
-            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .push_fn_call(foo_fn(), FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -592,20 +547,10 @@ mod tests {
     /// Binary function (arguments are vector, scalar)
     #[test]
     fn test_eval_binary_function_vector_scalar() {
-        /// FnFoo(v) performs v1 - v2.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 2)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<Real>,
-                v2: &Option<Real>,
-            ) -> Result<Option<Real>> {
-                Ok(Some(v1.unwrap() - v2.unwrap()))
-            }
+        /// foo(v) performs v1 - v2.
+        #[rpn_fn]
+        fn foo(v1: &Option<Real>, v2: &Option<Real>) -> Result<Option<Real>> {
+            Ok(Some(v1.unwrap() - v2.unwrap()))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -620,7 +565,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
             .push_constant(1.5f64)
-            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .push_fn_call(foo_fn(), FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
@@ -640,20 +585,10 @@ mod tests {
     /// Binary function (arguments are scalar, vector)
     #[test]
     fn test_eval_binary_function_scalar_vector() {
-        /// FnFoo(v) performs v1 - float(v2).
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 2)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<Real>,
-                v2: &Option<i64>,
-            ) -> Result<Option<Real>> {
-                Ok(Some(v1.unwrap() - v2.unwrap() as f64))
-            }
+        /// foo(v) performs v1 - float(v2).
+        #[rpn_fn]
+        fn foo(v1: &Option<Real>, v2: &Option<i64>) -> Result<Option<Real>> {
+            Ok(Some(v1.unwrap() - v2.unwrap() as f64))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -668,7 +603,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
             .push_column_ref(0)
-            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .push_fn_call(foo_fn(), FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
@@ -688,22 +623,12 @@ mod tests {
     /// Binary function (arguments are vector, vector)
     #[test]
     fn test_eval_binary_function_vector_vector() {
-        /// FnFoo(v) performs int(v1*2.5 - float(v2)*3.5).
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 2)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<Real>,
-                v2: &Option<i64>,
-            ) -> Result<Option<i64>> {
-                Ok(Some(
-                    (v1.unwrap().into_inner() * 2.5 - (v2.unwrap() as f64) * 3.5) as i64,
-                ))
-            }
+        /// foo(v) performs int(v1*2.5 - float(v2)*3.5).
+        #[rpn_fn]
+        fn foo(v1: &Option<Real>, v2: &Option<i64>) -> Result<Option<i64>> {
+            Ok(Some(
+                (v1.unwrap().into_inner() * 2.5 - (v2.unwrap() as f64) * 3.5) as i64,
+            ))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![
@@ -724,11 +649,11 @@ mod tests {
         ]);
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
-        // FnFoo(col1, col0)
+        // foo(col1, col0)
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(1)
             .push_column_ref(0)
-            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
@@ -745,20 +670,10 @@ mod tests {
     /// and it should be Ok.
     #[test]
     fn test_eval_binary_function_raw_column() {
-        /// FnFoo(v1, v2) performs v1 * v2.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 2)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<i64>,
-                v2: &Option<i64>,
-            ) -> Result<Option<i64>> {
-                Ok(Some(v1.unwrap() * v2.unwrap()))
-            }
+        /// foo(v1, v2) performs v1 * v2.
+        #[rpn_fn]
+        fn foo(v1: &Option<i64>, v2: &Option<i64>) -> Result<Option<i64>> {
+            Ok(Some(v1.unwrap() * v2.unwrap()))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -783,7 +698,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
             .push_column_ref(0)
-            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
@@ -799,21 +714,10 @@ mod tests {
     /// Ternary function (arguments are vector, scalar, vector)
     #[test]
     fn test_eval_ternary_function() {
-        /// FnFoo(v) performs v1 - v2 * v3.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 3)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<i64>,
-                v2: &Option<i64>,
-                v3: &Option<i64>,
-            ) -> Result<Option<i64>> {
-                Ok(Some(v1.unwrap() - v2.unwrap() * v3.unwrap()))
-            }
+        /// foo(v) performs v1 - v2 * v3.
+        #[rpn_fn]
+        fn foo(v1: &Option<i64>, v2: &Option<i64>, v3: &Option<i64>) -> Result<Option<i64>> {
+            Ok(Some(v1.unwrap() - v2.unwrap() * v3.unwrap()))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -829,7 +733,7 @@ mod tests {
             .push_column_ref(0)
             .push_constant(3i64)
             .push_column_ref(0)
-            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
@@ -843,79 +747,40 @@ mod tests {
     }
 
     // Comprehensive expression:
-    //      FnA(
+    //      fn_a(
     //          Col0,
-    //          FnB(),
-    //          FnC(
-    //              FnD(Col1, Const0),
+    //          fn_b(),
+    //          fn_c(
+    //              fn_d(Col1, Const0),
     //              Const1
     //          )
     //      )
     //
-    // RPN: Col0, FnB, Col1, Const0, FnD, Const1, FnC, FnA
+    // RPN: Col0, fn_b, Col1, Const0, fn_d, Const1, fn_c, fn_a
     #[test]
     fn test_eval_comprehensive() {
-        /// FnA(v1, v2, v3) performs v1 * v2 - v3.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 3)]
-        struct FnA;
-
-        impl FnA {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<Real>,
-                v2: &Option<Real>,
-                v3: &Option<Real>,
-            ) -> Result<Option<Real>> {
-                Ok(Some(v1.unwrap() * v2.unwrap() - v3.unwrap()))
-            }
+        /// fn_a(v1, v2, v3) performs v1 * v2 - v3.
+        #[rpn_fn]
+        fn fn_a(v1: &Option<Real>, v2: &Option<Real>, v3: &Option<Real>) -> Result<Option<Real>> {
+            Ok(Some(v1.unwrap() * v2.unwrap() - v3.unwrap()))
         }
 
-        /// FnB() returns 42.0.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 0)]
-        struct FnB;
-
-        impl FnB {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-            ) -> Result<Option<Real>> {
-                Ok(Real::new(42.0).ok())
-            }
+        /// fn_b() returns 42.0.
+        #[rpn_fn]
+        fn fn_b() -> Result<Option<Real>> {
+            Ok(Real::new(42.0).ok())
         }
 
-        /// FnC(v1, v2) performs float(v2 - v1).
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 2)]
-        struct FnC;
-
-        impl FnC {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<i64>,
-                v2: &Option<i64>,
-            ) -> Result<Option<Real>> {
-                Ok(Real::new((v2.unwrap() - v1.unwrap()) as f64).ok())
-            }
+        /// fn_c(v1, v2) performs float(v2 - v1).
+        #[rpn_fn]
+        fn fn_c(v1: &Option<i64>, v2: &Option<i64>) -> Result<Option<Real>> {
+            Ok(Real::new((v2.unwrap() - v1.unwrap()) as f64).ok())
         }
 
-        /// FnD(v1, v2) performs v1 + v2 * 2.
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 2)]
-        struct FnD;
-
-        impl FnD {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v1: &Option<i64>,
-                v2: &Option<i64>,
-            ) -> Result<Option<i64>> {
-                Ok(Some(v1.unwrap() + v2.unwrap() * 2))
-            }
+        /// fn_d(v1, v2) performs v1 + v2 * 2.
+        #[rpn_fn]
+        fn fn_d(v1: &Option<i64>, v2: &Option<i64>) -> Result<Option<i64>> {
+            Ok(Some(v1.unwrap() + v2.unwrap() * 2))
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![
@@ -936,23 +801,23 @@ mod tests {
         ]);
         let schema = &[FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
 
-        // Col0, FnB, Col1, Const0, FnD, Const1, FnC, FnA
+        // Col0, fn_b, Col1, Const0, fn_d, Const1, fn_c, fn_a
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(FnB, FieldTypeTp::Double)
+            .push_fn_call(fn_b_fn(), FieldTypeTp::Double)
             .push_column_ref(1)
             .push_constant(7i64)
-            .push_fn_call(FnD, FieldTypeTp::LongLong)
+            .push_fn_call(fn_d_fn(), FieldTypeTp::LongLong)
             .push_constant(11i64)
-            .push_fn_call(FnC, FieldTypeTp::Double)
-            .push_fn_call(FnA, FieldTypeTp::Double)
+            .push_fn_call(fn_c_fn(), FieldTypeTp::Double)
+            .push_fn_call(fn_a_fn(), FieldTypeTp::Double)
             .build();
 
-        //      FnA(
+        //      fn_a(
         //          [0.5, -0.1, 3.5],
         //          42.0,
-        //          FnC(
-        //              FnD([1, 5, -4], 7),
+        //          fn_c(
+        //              fn_d([1, 5, -4], 7),
         //              11
         //          )
         //      )
@@ -976,22 +841,13 @@ mod tests {
     /// Unary function, but supplied zero arguments. Should panic.
     #[test]
     fn test_eval_fail_1() {
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 1)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                _v: &Option<i64>,
-            ) -> Result<Option<i64>> {
-                unreachable!()
-            }
+        #[rpn_fn]
+        fn foo(_v: &Option<i64>) -> Result<Option<i64>> {
+            unreachable!()
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -1004,28 +860,18 @@ mod tests {
     /// Irregular RPN expression (contains unused node). Should panic.
     #[test]
     fn test_eval_fail_2() {
-        /// FnFoo(v) performs v * 2.
-
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 1)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v: &Option<Real>,
-            ) -> Result<Option<Real>> {
-                Ok(v.map(|v| v * 2.0))
-            }
+        /// foo(v) performs v * 2.
+        #[rpn_fn]
+        fn foo(v: &Option<Real>) -> Result<Option<Real>> {
+            Ok(v.map(|v| v * 2.0))
         }
 
-        // FnFoo only accepts 1 parameter but we will give 2.
+        // foo() only accepts 1 parameter but we will give 2.
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(3.0f64)
             .push_constant(1.5f64)
-            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .push_fn_call(foo_fn(), FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -1039,25 +885,15 @@ mod tests {
     /// Note: When field type is not matching, it doesn't panic.
     #[test]
     fn test_eval_fail_3() {
-        // Expects real argument, receives int argument.
-
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 1)]
-        struct FnFoo;
-
-        impl FnFoo {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                v: &Option<Real>,
-            ) -> Result<Option<Real>> {
-                Ok(v.map(|v| v * 2.5))
-            }
+        /// Expects real argument, receives int argument.
+        #[rpn_fn]
+        fn foo(v: &Option<Real>) -> Result<Option<Real>> {
+            Ok(v.map(|v| v * 2.5))
         }
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(7i64)
-            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .push_fn_call(foo_fn(), FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -1076,85 +912,50 @@ mod tests {
         use tikv_util::codec::number::NumberEncoder;
 
         // We will build an expression tree from:
-        //      FnD(
-        //          FnA(
+        //      fn_d(
+        //          fn_a(
         //              Const1,
-        //              FnB(Col1, FnC()),
+        //              fn_b(Col1, fn_c()),
         //              Col0
         //          )
         //      )
 
-        /// FnA(a: int, b: float, c: int) performs: float(a) - b * float(c)
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 3)]
-        struct FnA;
-
-        impl FnA {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                a: &Option<i64>,
-                b: &Option<Real>,
-                c: &Option<i64>,
-            ) -> Result<Option<Real>> {
-                Ok(Real::new(a.unwrap() as f64 - b.unwrap().into_inner() * c.unwrap() as f64).ok())
-            }
+        /// fn_a(a: int, b: float, c: int) performs: float(a) - b * float(c)
+        #[rpn_fn]
+        fn fn_a(a: &Option<i64>, b: &Option<Real>, c: &Option<i64>) -> Result<Option<Real>> {
+            Ok(Real::new(a.unwrap() as f64 - b.unwrap().into_inner() * c.unwrap() as f64).ok())
         }
 
-        /// FnB(a: float, b: int) performs: a * (float(b) - 1.5)
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 2)]
-        struct FnB;
-
-        impl FnB {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                a: &Option<Real>,
-                b: &Option<i64>,
-            ) -> Result<Option<Real>> {
-                Ok(Real::new(a.unwrap().into_inner() * (b.unwrap() as f64 - 1.5)).ok())
-            }
+        /// fn_b(a: float, b: int) performs: a * (float(b) - 1.5)
+        #[rpn_fn]
+        fn fn_b(a: &Option<Real>, b: &Option<i64>) -> Result<Option<Real>> {
+            Ok(Real::new(a.unwrap().into_inner() * (b.unwrap() as f64 - 1.5)).ok())
         }
 
-        /// FnC() returns: int(42)
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 0)]
-        struct FnC;
-
-        impl FnC {
-            fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<i64>> {
-                Ok(Some(42))
-            }
+        /// fn_c() returns: int(42)
+        #[rpn_fn]
+        fn fn_c() -> Result<Option<i64>> {
+            Ok(Some(42))
         }
 
-        /// FnD(a: float) performs: int(a)
-        #[derive(Debug, Clone, Copy, RpnFunction)]
-        #[rpn_function(args = 1)]
-        struct FnD;
-
-        impl FnD {
-            fn call(
-                _ctx: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-                a: &Option<Real>,
-            ) -> Result<Option<i64>> {
-                Ok(Some(a.unwrap().into_inner() as i64))
-            }
+        /// fn_d(a: float) performs: int(a)
+        #[rpn_fn]
+        fn fn_d(a: &Option<Real>) -> Result<Option<i64>> {
+            Ok(Some(a.unwrap().into_inner() as i64))
         }
 
-        fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<Box<dyn RpnFunction>> {
-            // FnA: CastIntAsInt
-            // FnB: CastIntAsReal
-            // FnC: CastIntAsString
-            // FnD: CastIntAsDecimal
-            match value {
-                ScalarFuncSig::CastIntAsInt => Ok(Box::new(FnA)),
-                ScalarFuncSig::CastIntAsReal => Ok(Box::new(FnB)),
-                ScalarFuncSig::CastIntAsString => Ok(Box::new(FnC)),
-                ScalarFuncSig::CastIntAsDecimal => Ok(Box::new(FnD)),
+        fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<RpnFn> {
+            // fn_a: CastIntAsInt
+            // fn_b: CastIntAsReal
+            // fn_c: CastIntAsString
+            // fn_d: CastIntAsDecimal
+            Ok(match value {
+                ScalarFuncSig::CastIntAsInt => fn_a_fn(),
+                ScalarFuncSig::CastIntAsReal => fn_b_fn(),
+                ScalarFuncSig::CastIntAsString => fn_c_fn(),
+                ScalarFuncSig::CastIntAsDecimal => fn_d_fn(),
                 _ => unreachable!(),
-            }
+            })
         }
 
         let node_fn_b = {
@@ -1167,7 +968,7 @@ mod tests {
                 .set_tp(FieldTypeTp::Double);
             node_col_1.mut_val().encode_i64(1).unwrap();
 
-            // FnC
+            // fn_c
             let mut node_fn_c = Expr::new();
             node_fn_c.set_tp(ExprType::ScalarFunc);
             node_fn_c.set_sig(ScalarFuncSig::CastIntAsString);
@@ -1176,7 +977,7 @@ mod tests {
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
 
-            // FnB
+            // fn_b
             let mut node_fn_b = Expr::new();
             node_fn_b.set_tp(ExprType::ScalarFunc);
             node_fn_b.set_sig(ScalarFuncSig::CastIntAsReal);
@@ -1208,7 +1009,7 @@ mod tests {
                 .set_tp(FieldTypeTp::LongLong);
             node_col_0.mut_val().encode_i64(0).unwrap();
 
-            // FnA
+            // fn_a
             let mut node_fn_a = Expr::new();
             node_fn_a.set_tp(ExprType::ScalarFunc);
             node_fn_a.set_sig(ScalarFuncSig::CastIntAsInt);
@@ -1222,7 +1023,7 @@ mod tests {
             node_fn_a
         };
 
-        // FnD
+        // fn_d
         let mut node_fn_d = Expr::new();
         node_fn_d.set_tp(ExprType::ScalarFunc);
         node_fn_d.set_sig(ScalarFuncSig::CastIntAsDecimal);

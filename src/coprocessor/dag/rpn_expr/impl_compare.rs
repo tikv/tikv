@@ -4,72 +4,15 @@ use std::cmp::Ordering;
 
 use cop_codegen::rpn_fn;
 
-use super::function::*;
-use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
-
-pub struct RpnFnCompare<C: Comparer> {
-    _phantom: std::marker::PhantomData<C>,
-}
-
-impl<C: Comparer> RpnFnCompare<C> {
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<C: Comparer> RpnFunction for RpnFnCompare<C> {
-    fn name(&self) -> &'static str {
-        "RpnFnCompare"
-    }
-
-    fn args_len(&self) -> usize {
-        2
-    }
-
-    fn eval(
-        &self,
-        rows: usize,
-        ctx: &mut EvalContext,
-        payload: RpnFnCallPayload<'_>,
-    ) -> Result<VectorValue> {
-        let rpn_fn = compare_fn::<C>();
-        (rpn_fn.fn_ptr)(rows, ctx, payload)
-    }
-
-    fn box_clone(&self) -> Box<dyn RpnFunction> {
-        Box::new(*self)
-    }
-}
-
-impl<C: Comparer> std::fmt::Debug for RpnFnCompare<C> {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RpnFnCompare")
-    }
-}
-
-// See rust-lang/rust#26925 for why the followings are implemented manually. =====
-
-impl<C: Comparer> Copy for RpnFnCompare<C> {}
-
-impl<C: Comparer> Clone for RpnFnCompare<C> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self::new()
-    }
-}
-
-// ======
 
 #[rpn_fn]
 #[inline]
-pub fn compare<C: Comparer>(lhs: &Option<C::T>, rhs: &Option<C::T>) -> Result<Option<i64>> {
+pub fn compare<C: Comparer>(lhs: &Option<C::T>, rhs: &Option<C::T>) -> Result<Option<i64>>
+where
+    C: Comparer,
+{
     C::compare(lhs, rhs)
 }
 

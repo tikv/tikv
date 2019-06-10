@@ -2,17 +2,14 @@
 
 use tipb::expression::FieldType;
 
-use super::super::function::RpnFunction;
+use super::super::function::RpnFn;
 use crate::coprocessor::codec::data_type::ScalarValue;
 
 /// A type for each node in the RPN expression list.
 #[derive(Debug, Clone)]
 pub enum RpnExpressionNode {
     /// Represents a function call.
-    FnCall {
-        func: Box<dyn RpnFunction>,
-        field_type: FieldType,
-    },
+    FnCall { func: RpnFn, field_type: FieldType },
 
     /// Represents a scalar constant value.
     Constant {
@@ -37,9 +34,9 @@ impl RpnExpressionNode {
 
     /// Borrows the function instance for `FnCall` variant.
     #[inline]
-    pub fn fn_call_func(&self) -> Option<&dyn RpnFunction> {
+    pub fn fn_call_func(&self) -> Option<RpnFn> {
         match self {
-            RpnExpressionNode::FnCall { ref func, .. } => Some(&*func),
+            RpnExpressionNode::FnCall { func, .. } => Some(*func),
             _ => None,
         }
     }

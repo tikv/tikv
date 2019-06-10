@@ -24,16 +24,6 @@ use syn::{DeriveInput, Ident, ItemFn};
 
 type Result<T> = std::result::Result<T, Diagnostic>;
 
-#[proc_macro_derive(RpnFunction, attributes(rpn_function))]
-pub fn rpn_function_derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let r = rpn_function::RpnFunctionOpts::from_derive_input(&input);
-    match r {
-        Err(e) => panic!("{}", e),
-        Ok(r) => TokenStream::from(r.generate_tokens()),
-    }
-}
-
 #[proc_macro_derive(AggrFunction, attributes(aggr_function))]
 pub fn aggr_function_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

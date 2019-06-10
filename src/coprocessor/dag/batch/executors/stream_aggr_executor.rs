@@ -370,7 +370,7 @@ mod tests {
 
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
-    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{arithmetic_fn, RealPlus};
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
 
     #[test]
@@ -390,7 +390,7 @@ mod tests {
             RpnExpressionBuilder::new()
                 .push_column_ref(1)
                 .push_constant(2.0)
-                .push_fn_call(RpnFnArithmetic::<RealPlus>::new(), FieldTypeTp::Double)
+                .push_fn_call(arithmetic_fn::<RealPlus>(), FieldTypeTp::Double)
                 .build(),
         ];
 
