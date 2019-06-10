@@ -1,5 +1,45 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! People implementing RPN functions with fixed argument type and count don't necessarily
+//! understand how `Evaluator` and `RpnDef` work. There's a procedure macro called `rpn_fn`
+//! helping you create RPN functions. For example:
+//!
+//! ```
+//! use cop_codegen::rpn_fn;
+//!
+//! #[rpn_fn]
+//! fn foo(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
+//! You can still call the `foo` function as what it looks. The macro doesn't change the function
+//! itself. Instead, it creates a `foo_fn()` function (simply add `_fn` to the original function
+//! name) that generates an `RpnFn` struct.
+//!
+//! If you needs `EvalContext` or the raw `RpnFnCallPayload`, just put it ahead of the function
+//! parameters, and add `ctx` or `payload` argument to the attribute. For example:
+//!
+//! ```
+//! // This generates `with_context_fn() -> RpnFn`
+//! #[rpn_fn(ctx)]
+//! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
+//!     // Your RPN function logic
+//! }
+//!
+//! // This generates `with_ctx_and_payload_fn() -> RpnFn`
+//! #[rpn_fn(ctx, payload)]
+//! fn with_ctx_and_payload(
+//!     ctx: &mut EvalContext,
+//!     payload: RpnFnCallPayload<'_>
+//! ) -> Result<Option<Int>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
+//! If you are curious about what code the macro will generate, check the test code
+//! in `components/cop_codegen/rpn_functions.rs`.
+
 use super::types::{RpnFnCallPayload, RpnStackNode};
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
 use crate::coprocessor::dag::expr::EvalContext;
