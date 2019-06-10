@@ -12,7 +12,7 @@ use kvproto::metapb::*;
 use super::client::*;
 use super::common::*;
 use super::engine::*;
-use super::{Config, Result, Error};
+use super::{Config, Error, Result};
 
 pub struct SSTFile {
     pub meta: SSTMeta,
@@ -241,7 +241,7 @@ mod tests {
         for i in start..end {
             let k = format!("k-{:04}", i);
             let v = format!("v-{:04}", i);
-            assert!(iter.valid());
+            assert!(iter.valid().unwrap());
             assert_eq!(iter.key(), k.as_bytes());
             assert_eq!(iter.value(), v.as_bytes());
             iter.next();
@@ -263,7 +263,7 @@ mod tests {
         for &(start, end) in unfinished_ranges {
             check_range_iter(&mut iter, start, end);
         }
-        assert!(!iter.valid());
+        assert!(!iter.valid().unwrap());
     }
 
     #[test]
