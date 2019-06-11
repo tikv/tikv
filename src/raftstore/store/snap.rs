@@ -32,7 +32,7 @@ use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
     calc_crc32, create_dir_if_not_exist, delete_dir_if_exist, delete_file_if_exist, file_exists,
-    get_file_size, sync_by_path,
+    get_file_size, sync_dir,
 };
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
@@ -837,8 +837,8 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.tmp_subdir_path, &self.subdir_path)?;
-        sync_by_path(&self.subdir_path)?;
-        sync_by_path(&self.dir_path)?;
+        sync_dir(&self.subdir_path)?;
+        sync_dir(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
@@ -1074,9 +1074,9 @@ impl SnapManager {
                     let dirpath = path.join(dirname);
                     let filepath = dirpath.join(filename);
                     create_dir_if_not_exist(&dirpath)?;
-                    sync_by_path(&dirpath)?;
+                    sync_dir(&path)?;
                     fs::rename(p.path(), &filepath)?;
-                    sync_by_path(&filepath)?;
+                    sync_dir(&dirpath)?;
                 }
             }
         }

@@ -46,8 +46,8 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Call fsync on file or directory by its path
-pub fn sync_by_path<P: AsRef<Path>>(path: P) -> io::Result<()> {
+/// Call fsync on directory by its path
+pub fn sync_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
     // File::open will not error when opening a directory
     // because it just call libc::open and do not do the file or dir check
     fs::File::open(path)?.sync_all()
@@ -199,10 +199,10 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_by_path() {
+    fn test_sync_dir() {
         let tmp_dir = TempDir::new("").unwrap();
-        sync_by_path(tmp_dir.path()).unwrap();
+        sync_dir(tmp_dir.path()).unwrap();
         let non_existent_file = tmp_dir.path().join("non_existent_file");
-        sync_by_path(non_existent_file).unwrap_err();
+        sync_dir(non_existent_file).unwrap_err();
     }
 }
