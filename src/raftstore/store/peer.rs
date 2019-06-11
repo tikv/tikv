@@ -804,7 +804,7 @@ impl Peer {
         }
     }
 
-    fn on_role_changed(&mut self, ready: &Ready, _worker: &FutureWorker<PdTask>) {
+    fn on_role_changed(&mut self, ready: &Ready, worker: &FutureWorker<PdTask>) {
         // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
             match ss.raft_state {
@@ -834,6 +834,7 @@ impl Peer {
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+                    self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
