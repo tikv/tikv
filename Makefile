@@ -172,22 +172,22 @@ expression: format clippy
 docker: docker-tikv docker-tikv-ctl docker-tikv-server docker-tikv-importer
 
 docker-rust-toolchain:
-	docker build -t tikv/rust-toolchain -f docker/rust-toolchain/Dockerfile .
+	docker build -t tikv/rust-toolchain:${TIKV_BUILD_GIT_HASH} -f docker/rust-toolchain/Dockerfile .
 
 docker-tikv: docker-rust-toolchain
-	docker build -t tikv/tikv -f docker/tikv/Dockerfile .
+	docker build -t tikv/tikv:${TIKV_BUILD_GIT_HASH} -f docker/tikv/Dockerfile .
 
 docker-tikv-ctl: docker-tikv
-	docker build -t tikv/tikv-ctl -f docker/tikv-ctl/Dockerfile .
+	docker build -t tikv/tikv-ctl:${TIKV_BUILD_GIT_HASH} -f docker/tikv-ctl/Dockerfile .
 
 docker-tikv-server: docker-tikv
-	docker build -t tikv/tikv-server -f docker/tikv-server/Dockerfile .
+	docker build -t tikv/tikv-server:${TIKV_BUILD_GIT_HASH} -f docker/tikv-server/Dockerfile .
 
 docker-tikv-importer: docker-tikv
-	docker build -t tikv/tikv-importer -f docker/tikv-importer/Dockerfile .
+	docker build -t tikv/tikv-importer:${TIKV_BUILD_GIT_HASH} -f docker/tikv-importer/Dockerfile .
 
 docker-and-binary: docker
-	docker run --rm -ti -v $(pwd)/bin:/release --entrypoint=/bin/cp tikv/tikv /tikv-server /tikv-importer /tikv-ctl  /release/
+	docker run --rm -ti -v $(pwd)/bin:/release --entrypoint=/bin/cp tikv/tikv:${TIKV_BUILD_GIT_HASH} /tikv-server /tikv-importer /tikv-ctl  /release/
 
 docker-clean:
 	docker rmi tikv/tikv tikv/tikv-ctl tikv/tikv-server tikv/tikv-importer
