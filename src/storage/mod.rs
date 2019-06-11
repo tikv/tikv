@@ -332,7 +332,7 @@ impl Command {
     pub fn tag(&self) -> CommandKind {
         match *self {
             Command::Prewrite { .. } => CommandKind::prewrite,
-            Command::AcquirePessimisticLock { .. } => CommandKind::pessimistic_lock,
+            Command::AcquirePessimisticLock { .. } => CommandKind::acquire_pessimistic_lock,
             Command::Commit { .. } => CommandKind::commit,
             Command::Cleanup { .. } => CommandKind::cleanup,
             Command::Rollback { .. } => CommandKind::rollback,
