@@ -32,7 +32,7 @@ use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
     calc_crc32, create_dir_if_not_exist, delete_dir_if_exist, delete_file_if_exist, file_exists,
-    get_file_size, sync_dir,
+    get_file_size, sync_by_path,
 };
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
@@ -759,7 +759,7 @@ impl Snapshot for Snap {
         );
         for cf_file in &self.cf_files {
             if delete_file_if_exist(&cf_file.path).unwrap() {
-                // Here the file is used as a lock to avoid duplicated fetch_sub calls
+                // The file is used as a lock to avoid duplicated fetch_sub calls
                 // since delete can be called in parallel
                 self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
             }
@@ -837,8 +837,8 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.tmp_subdir_path, &self.subdir_path)?;
-        sync_dir(&self.subdir_path)?;
-        sync_dir(&self.dir_path)?;
+        sync_by_path(&self.subdir_path)?;
+        sync_by_path(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
@@ -1016,7 +1016,7 @@ impl SnapManager {
         SnapManagerBuilder::default().build(path, router)
     }
 
-    fn gen_migrate_target(origin_filename: &str) -> (String, String) {
+    fn convert_old_filename(origin_filename: &str) -> (String, String) {
         // Old snapshots files are named like
         // "type_region_term_index.meta" or
         // "type_region_term_index_cf.sst",
@@ -1034,8 +1034,8 @@ impl SnapManager {
         };
         let dirname = snapname.join(&"_");
         let extname = parts.get(1).copied().unwrap_or_default();
-        let filename = if basename.is_empty() {
-            String::from(extname)
+        let filename = if extname == META_FILE_NAME {
+            META_FILE_NAME.to_owned()
         } else {
             basename.to_owned() + "." + extname
         };
@@ -1060,7 +1060,7 @@ impl SnapManager {
         for f in fs::read_dir(path)? {
             let p = f?;
             // In the older version all snapshot file are in the same folder.
-            // This code migrate old snapshot files to current file layout
+            // Migrate old snapshot files to current file layout
             // that put files of each snapshot to its own folder
             if p.file_type()?.is_file() {
                 if let Some(s) = p.file_name().to_str() {
@@ -1070,13 +1070,13 @@ impl SnapManager {
                         fs::remove_file(p.path())?;
                         continue;
                     }
-                    let (dirname, filename) = Self::gen_migrate_target(s);
+                    let (dirname, filename) = Self::convert_old_filename(s);
                     let dirpath = path.join(dirname);
                     let filepath = dirpath.join(filename);
                     create_dir_if_not_exist(&dirpath)?;
-                    sync_dir(&dirpath)?;
+                    sync_by_path(&dirpath)?;
                     fs::rename(p.path(), &filepath)?;
-                    sync_dir(&filepath)?;
+                    sync_by_path(&filepath)?;
                 }
             }
         }
@@ -1641,21 +1641,21 @@ pub mod tests {
     }
 
     #[test]
-    fn test_gen_migrate_target() {
+    fn test_convert_old_filename() {
         let key = SnapKey::new(1, 1, 1);
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         let dirname = prefix.clone();
         let legacy_meta_filename = format!("{}{}", prefix, LEGACY_META_FILE_SUFFIX);
         let meta_filename = META_FILE_NAME.to_owned();
         assert_eq!(
-            SnapManager::gen_migrate_target(&legacy_meta_filename),
+            SnapManager::convert_old_filename(&legacy_meta_filename),
             (dirname.clone(), meta_filename)
         );
         for cf in super::SNAPSHOT_CFS.iter() {
             let legacy_cf_filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
             let cf_filename = format!("{}{}", cf, SST_FILE_SUFFIX);
             assert_eq!(
-                SnapManager::gen_migrate_target(&legacy_cf_filename),
+                SnapManager::convert_old_filename(&legacy_cf_filename),
                 (dirname.clone(), cf_filename)
             );
         }
