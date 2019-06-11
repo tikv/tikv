@@ -17,6 +17,8 @@ if [[ "`uname`" != "Linux" ]]; then
     exit 0
 fi
 
+command -v gdb >/dev/null 2>&1 || { echo "skipping sse4.2 check - gdb is required"; exit 0; }
+
 echo "checking bins for sse4.2"
 
 for dir in $dirs; do
