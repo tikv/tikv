@@ -4,7 +4,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [Unreleased]
 - Ignore errors when sending raft message [4734](https://github.com/tikv/tikv/pull/4734)
-- More check for leader transferring during configuration changes [4799](https://github.com/tikv/tikv/pull/4853)
+- More check for leader transferring during configuration changes [4799](https://github.com/tikv/tikv/pull/4799)
 - Synchronize all files and directories for received snapshots [#4853](https://github.com/tikv/tikv/pull/4853)
 
 ## [2.1.11]
