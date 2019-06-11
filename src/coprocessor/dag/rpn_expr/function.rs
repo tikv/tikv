@@ -46,7 +46,7 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
 #[derive(Clone, Copy)]
-/// A RPN function
+/// An RPN function
 pub struct RpnFn {
     /// The display name of the function.
     pub name: &'static str,

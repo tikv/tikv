@@ -119,18 +119,22 @@ impl RpnFnGenerator {
         let tp = parse_str::<Type>(&tp).unwrap();
         let (_, ty_generics, _) = self.item_fn.decl.generics.split_for_impl();
         let (impl_generics, _, where_clause) = generics.split_for_impl();
-        let mut extract_args = String::new();
-        let mut call_args = String::new();
-        for meta in &self.meta {
-            call_args += &format!("{}, ", meta);
-        }
-        for arg_index in 0..self.arg_types.len() {
-            let arg_var = format!("arg{}", arg_index);
-            extract_args += &format!("let ({}, arg) = arg.extract(row);", arg_var);
-            call_args += &format!("{}, ", arg_var);
-        }
-        let extract_args: TokenStream = extract_args.parse().unwrap();
-        let call_args: TokenStream = call_args.parse().unwrap();
+        //        let mut extract_args = String::new();
+        //        let mut call_args = String::new();
+        //        for meta in &self.meta {
+        //            call_args += &format!("{}, ", meta);
+        //        }
+        //        for arg_index in 0..self.arg_types.len() {
+        //            let arg_var = format!("arg{}", arg_index);
+        //            extract_args += &format!("let ({}, arg) = arg.extract(row);", arg_var);
+        //            call_args += &format!("{}, ", arg_var);
+        //        }
+        //        let extract_args: TokenStream = extract_args.parse().unwrap();
+        //        let call_args: TokenStream = call_args.parse().unwrap();
+        let meta = &self.meta;
+        let extract = (0..self.arg_types.len())
+            .map(|i| syn::parse_str::<Ident>(&format!("arg{}", i)).unwrap());
+        let call_arg = extract.clone();
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let (ctx_type, payload_type, result_type) = (ctx_type(), payload_type(), result_type());
         quote! {
@@ -144,8 +148,8 @@ impl RpnFnGenerator {
                     let arg = &self;
                      let mut result = Vec::with_capacity(rows);
                      for row in 0..rows {
-                         #extract_args
-                         result.push( #fn_ident #ty_generics_turbofish ( #call_args )?);
+                         #(let (#extract, arg) = arg.extract(row));*;
+                         result.push( #fn_ident #ty_generics_turbofish ( #(#meta),* #(#call_arg),* )?);
                      }
                      Ok(crate::coprocessor::codec::data_type::Evaluable::into_vector_value(result))
                 }
