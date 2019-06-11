@@ -533,9 +533,9 @@ impl ArgDef for Null {}
 ///   its eval method is the constructed `ArgDef`. Implementors can then extract values from the
 ///   arguments, execute the RPN function and fill the result vector.
 pub trait Evaluator {
-    fn eval<D: ArgDef>(
+    fn eval(
         self,
-        def: D,
+        def: impl ArgDef,
         rows: usize,
         context: &mut EvalContext,
         payload: RpnFnCallPayload<'_>,
@@ -548,15 +548,16 @@ pub struct ArgConstructor<E: Evaluator> {
 }
 
 impl<E: Evaluator> ArgConstructor<E> {
+    #[inline]
     pub fn new(arg_index: usize, inner: E) -> Self {
         ArgConstructor { arg_index, inner }
     }
 }
 
 impl<E: Evaluator> Evaluator for ArgConstructor<E> {
-    fn eval<D: ArgDef>(
+    fn eval(
         self,
-        def: D,
+        def: impl ArgDef,
         rows: usize,
         context: &mut EvalContext,
         payload: RpnFnCallPayload<'_>,
