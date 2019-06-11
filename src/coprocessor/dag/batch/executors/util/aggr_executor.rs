@@ -330,7 +330,7 @@ pub unsafe fn eval_exprs_no_lifetime<'a>(
     output: &mut Vec<RpnStackNode<'a>>,
 ) -> Result<()> {
     for expr in exprs {
-        output.push(erase_lifetime(expr).eval_unchecked(
+        output.push(erase_lifetime(expr).eval_decoded(
             erase_lifetime_mut(context),
             input.rows_len(),
             erase_lifetime(schema),
