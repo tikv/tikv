@@ -186,7 +186,7 @@ docker-tikv-server: docker-tikv
 docker-tikv-importer: docker-tikv
 	docker build -t tikv/tikv-importer -f docker/tikv-importer/Dockerfile .
 
-build-docker-and-binary-release: docker
+docker-and-binary: docker
 	docker run --rm -ti -v $(pwd)/bin:/release --entrypoint=/bin/cp tikv/tikv /tikv-server /tikv-importer /tikv-ctl  /release/
 
 docker-clean:
