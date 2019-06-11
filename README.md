@@ -169,7 +169,7 @@ To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https:
 
 ### Configuration
 
-Read our configuration guide to learn about various [configuration options](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
+Read our configuration guide to learn about various [configuration options](https://github.com/tikv/tikv/tree/master/docs/op-guide).
 
 ## Contributing
 
