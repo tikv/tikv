@@ -11,9 +11,9 @@ use tipb::executor::Aggregation;
 use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
+use crate::coprocessor::dag::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
@@ -119,14 +119,19 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
         let group_by_len = group_by_exps.len();
+        let mut group_key_offsets = Vec::with_capacity(1024);
+        group_key_offsets.push(0);
         let aggr_impl = SlowHashAggregationImpl {
             states: Vec::with_capacity(1024),
             groups: HashMap::default(),
             group_by_exps,
-            group_key_buffer: Box::new(Vec::new()),
-            group_key_offsets: vec![0],
-            group_by_results: Vec::with_capacity(group_by_len),
-            aggr_expr_results: Vec::with_capacity(aggr_defs.len()),
+            group_key_buffer: Box::new(Vec::with_capacity(8192)),
+            group_key_offsets,
+            states_offset_each_row: Vec::with_capacity(
+                crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE,
+            ),
+            group_by_results_unsafe: Vec::with_capacity(group_by_len),
+            aggr_expr_results_unsafe: Vec::with_capacity(aggr_defs.len()),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -147,19 +152,31 @@ pub struct SlowHashAggregationImpl {
     groups: HashMap<GroupKeyRefUnsafe, usize>,
     group_by_exps: Vec<RpnExpression>,
 
+    /// Encoded group keys are stored in this buffer sequentially. Offsets of each encoded
+    /// element are stored in `group_key_offsets`.
+    ///
+    /// `GroupKeyRefUnsafe` contains a raw pointer to this buffer.
     #[allow(clippy::box_vec)]
     group_key_buffer: Box<Vec<u8>>,
+
+    /// The offsets of encoded keys in `group_key_buffer`. This `Vec` always has a leading `0`
+    /// element. Then, the begin and end offsets of the "i"-th column of the group key whose group
+    /// index is "j" are `group_key_offsets[j * group_by_len + i]` and
+    /// `group_key_offsets[j * group_by_len + i + 1]`. (group_by_len is the count of group by
+    /// expressions)
     group_key_offsets: Vec<usize>,
+
+    states_offset_each_row: Vec<usize>,
 
     /// Stores evaluation results of group by expressions.
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
-    group_by_results: Vec<RpnStackNode<'static>>,
+    group_by_results_unsafe: Vec<RpnStackNode<'static>>,
 
     /// Stores evaluation results of aggregate expressions.
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
-    aggr_expr_results: Vec<RpnStackNode<'static>>,
+    aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
 unsafe impl Send for SlowHashAggregationImpl {}
@@ -181,6 +198,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         entities: &mut Entities<Src>,
         mut input: LazyBatchColumnVec,
     ) -> Result<()> {
+        // 1. Calculate which group each src row belongs to.
+        self.states_offset_each_row.clear();
+
         let context = &mut entities.context;
         let src_schema = entities.src.schema();
         let rows_len = input.rows_len();
@@ -190,34 +210,24 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         // Decode columns with mutable input first, so subsequent access to input can be immutable
         // (and the borrow checker will be happy)
         ensure_columns_decoded(&context.cfg.tz, &self.group_by_exps, src_schema, &mut input)?;
-        ensure_columns_decoded(
-            &context.cfg.tz,
-            &entities.each_aggr_exprs,
-            src_schema,
-            &mut input,
-        )?;
-        assert!(self.group_by_results.is_empty());
-        assert!(self.aggr_expr_results.is_empty());
+        assert!(self.group_by_results_unsafe.is_empty());
         unsafe {
             eval_exprs_no_lifetime(
                 context,
                 &self.group_by_exps,
                 src_schema,
                 &input,
-                &mut self.group_by_results,
-            )?;
-            eval_exprs_no_lifetime(
-                context,
-                &entities.each_aggr_exprs,
-                src_schema,
-                &input,
-                &mut self.aggr_expr_results,
+                &mut self.group_by_results_unsafe,
             )?;
         }
 
+        let buffer_ptr = (&*self.group_key_buffer).into();
         for row_index in 0..rows_len {
             let offset_begin = self.group_key_buffer.len();
-            for group_by_result in &self.group_by_results {
+
+            // always encode group keys to the buffer first
+            // we'll then remove them if the group already exists
+            for group_by_result in &self.group_by_results_unsafe {
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
                         value.encode(row_index, field_type, &mut self.group_key_buffer)?;
@@ -228,10 +238,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                 }
             }
             let group_key_ref_unsafe = GroupKeyRefUnsafe {
-                buffer: (&*self.group_key_buffer).into(),
+                buffer_ptr,
                 begin: offset_begin,
                 end: self.group_key_buffer.len(),
             };
+
             let group_len = self.groups.len();
             let group_index = match self.groups.entry(group_key_ref_unsafe) {
                 Entry::Vacant(entry) => {
@@ -250,39 +261,21 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     *entry.get()
                 }
             };
-            let state_begin = group_index * aggr_fn_len;
-            for (aggr_expr_result, state) in self
-                .aggr_expr_results
-                .iter()
-                .zip(&mut self.states[state_begin..state_begin + aggr_fn_len])
-            {
-                match aggr_expr_result {
-                    RpnStackNode::Scalar { value, .. } => {
-                        match_template_evaluable! {
-                            TT, match value {
-                                ScalarValue::TT(scalar_value) => {
-                                    state.update(context, scalar_value)?;
-                                },
-                            }
-                        }
-                    }
-                    RpnStackNode::Vector { value, .. } => {
-                        match_template_evaluable! {
-                            TT, match &**value {
-                                VectorValue::TT(vector_value) => {
-                                    state.update(context, &vector_value[row_index])?;
-                                },
-                            }
-                        }
-                    }
-                }
-            }
+            self.states_offset_each_row.push(group_index * aggr_fn_len);
         }
+
+        // 2. Update states according to the group.
+        HashAggregationHelper::update_each_row_states_by_offset(
+            entities,
+            &mut input,
+            &mut self.states,
+            &self.states_offset_each_row,
+        )?;
 
         // Remember to remove expression results of the current batch. They are invalid
         // in the next batch.
-        self.group_by_results.clear();
-        self.aggr_expr_results.clear();
+        self.group_by_results_unsafe.clear();
+        self.aggr_expr_results_unsafe.clear();
 
         Ok(())
     }
@@ -345,22 +338,22 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 /// reference.
 struct GroupKeyRefUnsafe {
     /// Points to the `group_key_buffer` of `SlowHashAggregationImpl`
-    buffer: NonNull<Vec<u8>>,
+    buffer_ptr: NonNull<Vec<u8>>,
     begin: usize,
     end: usize,
 }
 
 impl Hash for GroupKeyRefUnsafe {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        unsafe { self.buffer.as_ref()[self.begin..self.end].hash(state) }
+        unsafe { self.buffer_ptr.as_ref()[self.begin..self.end].hash(state) }
     }
 }
 
 impl PartialEq for GroupKeyRefUnsafe {
     fn eq(&self, other: &GroupKeyRefUnsafe) -> bool {
         unsafe {
-            self.buffer.as_ref()[self.begin..self.end]
-                == other.buffer.as_ref()[other.begin..other.end]
+            self.buffer_ptr.as_ref()[self.begin..self.end]
+                == other.buffer_ptr.as_ref()[other.begin..other.end]
         }
     }
 }

@@ -93,12 +93,12 @@ pub struct BatchStreamAggregationImpl {
     /// Stores evaluation results of group by expressions.
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
-    group_by_results: Vec<RpnStackNode<'static>>,
+    group_by_results_unsafe: Vec<RpnStackNode<'static>>,
 
     /// Stores evaluation results of aggregate expressions.
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
-    aggr_expr_results: Vec<RpnStackNode<'static>>,
+    aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
 impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
@@ -149,8 +149,8 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             group_by_exps_types,
             keys: Vec::new(),
             states: Vec::new(),
-            group_by_results: Vec::with_capacity(group_by_len),
-            aggr_expr_results: Vec::with_capacity(aggr_defs.len()),
+            group_by_results_unsafe: Vec::with_capacity(group_by_len),
+            aggr_expr_results_unsafe: Vec::with_capacity(aggr_defs.len()),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -196,22 +196,22 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             src_schema,
             &mut input,
         )?;
-        assert!(self.group_by_results.is_empty());
-        assert!(self.aggr_expr_results.is_empty());
+        assert!(self.group_by_results_unsafe.is_empty());
+        assert!(self.aggr_expr_results_unsafe.is_empty());
         unsafe {
             eval_exprs_no_lifetime(
                 context,
                 &self.group_by_exps,
                 src_schema,
                 &input,
-                &mut self.group_by_results,
+                &mut self.group_by_results_unsafe,
             )?;
             eval_exprs_no_lifetime(
                 context,
                 &entities.each_aggr_exprs,
                 src_schema,
                 &input,
-                &mut self.aggr_expr_results,
+                &mut self.aggr_expr_results_unsafe,
             )?;
         }
 
@@ -219,7 +219,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let mut group_key_ref = Vec::with_capacity(group_by_len);
         let mut group_start_row = 0;
         for row_index in 0..rows_len {
-            for group_by_result in &self.group_by_results {
+            for group_by_result in &self.group_by_results_unsafe {
                 group_key_ref.push(group_by_result.get_scalar_ref(row_index));
             }
             match self.keys.rchunks_exact(group_by_len).next() {
@@ -233,7 +233,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                             context,
                             &mut self.states,
                             aggr_fn_len,
-                            &self.aggr_expr_results,
+                            &self.aggr_expr_results_unsafe,
                             group_start_row,
                             row_index,
                         )?;
@@ -254,15 +254,15 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             context,
             &mut self.states,
             aggr_fn_len,
-            &self.aggr_expr_results,
+            &self.aggr_expr_results_unsafe,
             group_start_row,
             rows_len,
         )?;
 
         // Remember to remove expression results of the current batch. They are invalid
         // in the next batch.
-        self.group_by_results.clear();
-        self.aggr_expr_results.clear();
+        self.group_by_results_unsafe.clear();
+        self.aggr_expr_results_unsafe.clear();
 
         Ok(())
     }
