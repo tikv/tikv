@@ -498,6 +498,9 @@ impl Debugger {
             if raft_state.get_hard_state().get_commit() < apply_state.get_applied_index() {
                 return Err(Error::Other("commit index < applied index".into()));
             }
+            if raft_state.get_last_index() < raft_state.get_hard_state().get_commit() {
+                return Err(Error::Other("last index < commit index".into()));
+            }
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
             let peer_storage = box_try!(PeerStorage::new(
