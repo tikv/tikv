@@ -9,7 +9,6 @@ use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::mysql::time::Tz;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::interface::*;
@@ -66,9 +65,7 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
         assert!(!group_by_definitions.is_empty());
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
-            if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-                return Err(box_err!("Group by expression cannot be a scalar"));
-            }
+            // Works for both vector and scalar. No need to check as other aggregation executor.
         }
 
         let aggr_definitions = descriptor.get_agg_func();
@@ -81,14 +78,27 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
 
 pub struct BatchStreamAggregationImpl {
     group_by_exps: Vec<RpnExpression>,
+
     /// used in the `iterate_each_group_for_aggregation` method
     group_by_exps_types: Vec<EvalType>,
+
     /// Stores all group keys for the current result partial.
     /// The last `group_by_exps.len()` elements are the keys of the last group.
     keys: Vec<ScalarValue>,
+
     /// Stores all group states for the current result partial.
     /// The last `each_aggr_fn.len()` elements are the states of the last group.
     states: Vec<Box<dyn AggrFunctionState>>,
+
+    /// Stores evaluation results of group by expressions.
+    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
+    /// are only valid in the same batch where they are added.
+    group_by_results_unsafe: Vec<RpnStackNode<'static>>,
+
+    /// Stores evaluation results of aggregate expressions.
+    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
+    /// are only valid in the same batch where they are added.
+    aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
 impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
@@ -133,11 +143,14 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             })
             .collect();
 
+        let group_by_len = group_by_exps.len();
         let aggr_impl = BatchStreamAggregationImpl {
             group_by_exps,
             group_by_exps_types,
             keys: Vec::new(),
             states: Vec::new(),
+            group_by_results_unsafe: Vec::with_capacity(group_by_len),
+            aggr_expr_results_unsafe: Vec::with_capacity(aggr_defs.len()),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -183,17 +196,31 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             src_schema,
             &mut input,
         )?;
-        let group_by_results = eval_exprs(context, &self.group_by_exps, src_schema, &input)?;
-        let aggr_expr_results = eval_exprs(context, &entities.each_aggr_exprs, src_schema, &input)?;
+        assert!(self.group_by_results_unsafe.is_empty());
+        assert!(self.aggr_expr_results_unsafe.is_empty());
+        unsafe {
+            eval_exprs_no_lifetime(
+                context,
+                &self.group_by_exps,
+                src_schema,
+                &input,
+                &mut self.group_by_results_unsafe,
+            )?;
+            eval_exprs_no_lifetime(
+                context,
+                &entities.each_aggr_exprs,
+                src_schema,
+                &input,
+                &mut self.aggr_expr_results_unsafe,
+            )?;
+        }
 
         // Stores input references, clone them when needed
         let mut group_key_ref = Vec::with_capacity(group_by_len);
         let mut group_start_row = 0;
         for row_index in 0..rows_len {
-            for group_by_result in &group_by_results {
-                // Unwrap is fine because we have verified the group by expression before.
-                let group_column = group_by_result.vector_value().unwrap();
-                group_key_ref.push(group_column.get_scalar_ref(row_index));
+            for group_by_result in &self.group_by_results_unsafe {
+                group_key_ref.push(group_by_result.get_scalar_ref(row_index));
             }
             match self.keys.rchunks_exact(group_by_len).next() {
                 Some(current_key) if &group_key_ref[..] == current_key => {
@@ -206,7 +233,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                             context,
                             &mut self.states,
                             aggr_fn_len,
-                            &aggr_expr_results,
+                            &self.aggr_expr_results_unsafe,
                             group_start_row,
                             row_index,
                         )?;
@@ -227,10 +254,15 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             context,
             &mut self.states,
             aggr_fn_len,
-            &aggr_expr_results,
+            &self.aggr_expr_results_unsafe,
             group_start_row,
             rows_len,
         )?;
+
+        // Remember to remove expression results of the current batch. They are invalid
+        // in the next batch.
+        self.group_by_results_unsafe.clear();
+        self.aggr_expr_results_unsafe.clear();
 
         Ok(())
     }
@@ -300,30 +332,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
     fn is_partial_results_ready(&self) -> bool {
         AggregationExecutorImpl::<Src>::groups_len(self) >= 2
     }
-}
-
-fn ensure_columns_decoded(
-    tz: &Tz,
-    exprs: &[RpnExpression],
-    schema: &[FieldType],
-    input: &mut LazyBatchColumnVec,
-) -> Result<()> {
-    for expr in exprs {
-        expr.ensure_columns_decoded(tz, schema, input)?;
-    }
-    Ok(())
-}
-
-fn eval_exprs<'a, 'b>(
-    context: &'a mut EvalContext,
-    exprs: &'b [RpnExpression],
-    schema: &'b [FieldType],
-    input: &'b LazyBatchColumnVec,
-) -> Result<Vec<RpnStackNode<'b>>> {
-    exprs
-        .iter()
-        .map(|expr| expr.eval_unchecked(context, input.rows_len(), schema, &input))
-        .collect()
 }
 
 fn update_current_states(

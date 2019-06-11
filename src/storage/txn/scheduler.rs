@@ -20,9 +20,10 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use spin::Mutex;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
@@ -30,7 +31,9 @@ use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
-use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
+use crate::storage::lock_manager::{
+    self, store_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
+};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
@@ -171,7 +174,7 @@ impl SchedulerInner {
     }
 
     fn dequeue_task(&self, cid: u64) -> Task {
-        let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
+        let mut tasks = self.task_contexts[id_index(cid)].lock();
         let task = tasks.get_mut(&cid).unwrap().task.take().unwrap();
         assert_eq!(task.cid, cid);
         task
@@ -187,7 +190,7 @@ impl SchedulerInner {
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
 
-        let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
+        let mut tasks = self.task_contexts[id_index(cid)].lock();
         if tasks.insert(cid, tctx).is_some() {
             panic!("TaskContext cid={} shouldn't exist", cid);
         }
@@ -196,7 +199,6 @@ impl SchedulerInner {
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.task_contexts[id_index(cid)]
             .lock()
-            .unwrap()
             .remove(&cid)
             .unwrap();
 
@@ -218,7 +220,7 @@ impl SchedulerInner {
     ///
     /// Returns `true` if successful; returns `false` otherwise.
     fn acquire_lock(&self, cid: u64) -> bool {
-        let mut task_contexts = self.task_contexts[id_index(cid)].lock().unwrap();
+        let mut task_contexts = self.task_contexts[id_index(cid)].lock();
         let tctx = task_contexts.get_mut(&cid).unwrap();
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
@@ -462,6 +464,12 @@ impl<E: Engine> Scheduler<E> {
             lock.clone(),
             is_first_lock,
         );
+        // Set `WAIT_TABLE_IS_EMPTY` here to prevent there is an on-the-fly WaitFor msg
+        // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
+        //
+        // But it's still possible that the waiter_mgr removes some waiters and set
+        // `WAIT_TABLE_IS_EMPTY` to true just after we set it to false here.
+        store_wait_table_is_empty(false);
         self.release_lock(&tctx.lock, cid);
     }
 }
@@ -506,9 +514,9 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         Command::ResolveLockLite {
             ref resolve_keys, ..
         } => latches.gen_lock(resolve_keys),
-        Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
-            latches.gen_lock(keys)
-        }
+        Command::Commit { ref keys, .. }
+        | Command::Rollback { ref keys, .. }
+        | Command::PessimisticRollback { ref keys, .. } => latches.gen_lock(keys),
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
         _ => Lock::new(vec![]),
@@ -563,7 +571,6 @@ mod tests {
                 keys: vec![(Key::from_raw(b"k"), false)],
                 primary: b"k".to_vec(),
                 start_ts: 10,
-                for_update_ts: 10,
                 options: Options::default(),
             },
             Command::Commit {
@@ -582,13 +589,19 @@ mod tests {
                 keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
             },
+            Command::PessimisticRollback {
+                ctx: Context::new(),
+                keys: vec![Key::from_raw(b"k")],
+                start_ts: 10,
+                for_update_ts: 20,
+            },
             Command::ResolveLock {
                 ctx: Context::new(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![(
                     Key::from_raw(b"k"),
-                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, false, 0),
+                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, 0, 0),
                 )],
             },
             Command::ResolveLockLite {
