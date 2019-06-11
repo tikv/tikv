@@ -1857,14 +1857,18 @@ mod tests {
 
         // region 1 with peers at stores 11, 12, 13.
         init_region_state(engine, 1, &[11, 12, 13]);
+        let mut expected_state = get_region_state(engine, 1);
+        expected_state.set_state(PeerState::Tombstone);
 
         // tombstone region 1.
         let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
         assert!(errors.is_empty());
+        assert_eq!(get_region_state(engine, 1), expected_state);
 
         // tombstone region 1 again.
         let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
         assert!(errors.is_empty());
+        assert_eq!(get_region_state(engine, 1), expected_state);
     }
 
     #[test]
