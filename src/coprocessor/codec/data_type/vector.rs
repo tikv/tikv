@@ -1,16 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::{TryFrom, TryInto};
-
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
-use tikv_util::codec::{bytes, number};
+use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::expression::FieldType;
 
 use super::*;
 use crate::coprocessor::codec::data_type::scalar::ScalarValueRef;
 use crate::coprocessor::codec::datum;
-use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::{Error, Result};
+use crate::coprocessor::codec::Result;
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
@@ -123,6 +119,7 @@ impl VectorValue {
     /// # Panics
     ///
     /// Panics if `retain_arr` is not long enough.
+    #[deprecated]
     pub fn retain_by_array(&mut self, retain_arr: &[bool]) {
         assert!(self.len() <= retain_arr.len());
         match_template_evaluable! {
@@ -156,11 +153,6 @@ impl VectorValue {
                 },
             }
         }
-    }
-
-    #[inline]
-    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
-        VectorLikeValueRef::Vector(self)
     }
 
     /// Evaluates values into MySQL logic values.
@@ -199,240 +191,19 @@ impl VectorValue {
         }
     }
 
-    /// Pushes a value into the column by decoding the datum and converting to current
-    /// column's type.
-    ///
-    /// For values that needs a time zone, `time_zone` will be used.
-    ///
-    /// For values that current type's type is not sufficient, `field_type` will be used.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `field_type` doesn't match current column's type.
-    #[inline]
-    #[allow(clippy::cast_lossless)]
-    pub fn push_datum(
-        &mut self,
-        mut raw_datum: &[u8],
-        time_zone: &Tz,
-        field_type: &FieldType,
-    ) -> Result<()> {
-        #[inline]
-        fn decode_int(v: &mut &[u8]) -> Result<i64> {
-            number::decode_i64(v)
-                .map_err(|_| Error::InvalidDataType("Failed to decode data as i64".to_owned()))
-        }
-
-        #[inline]
-        fn decode_uint(v: &mut &[u8]) -> Result<u64> {
-            number::decode_u64(v)
-                .map_err(|_| Error::InvalidDataType("Failed to decode data as u64".to_owned()))
-        }
-
-        #[inline]
-        fn decode_var_int(v: &mut &[u8]) -> Result<i64> {
-            number::decode_var_i64(v)
-                .map_err(|_| Error::InvalidDataType("Failed to decode data as var_i64".to_owned()))
-        }
-
-        #[inline]
-        fn decode_var_uint(v: &mut &[u8]) -> Result<u64> {
-            number::decode_var_u64(v)
-                .map_err(|_| Error::InvalidDataType("Failed to decode data as var_u64".to_owned()))
-        }
-
-        #[inline]
-        fn decode_float(v: &mut &[u8]) -> Result<f64> {
-            number::decode_f64(v)
-                .map_err(|_| Error::InvalidDataType("Failed to decode data as f64".to_owned()))
-        }
-
-        #[inline]
-        fn decode_decimal(v: &mut &[u8]) -> Result<Decimal> {
-            Decimal::decode(v)
-                .map_err(|_| Error::InvalidDataType("Failed to decode data as decimal".to_owned()))
-        }
-
-        #[inline]
-        fn decode_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
-            bytes::decode_bytes(v, false)
-                .map_err(|_| Error::InvalidDataType("Failed to decode data as bytes".to_owned()))
-        }
-
-        #[inline]
-        fn decode_compact_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
-            bytes::decode_compact_bytes(v).map_err(|_| {
-                Error::InvalidDataType("Failed to decode data as compact bytes".to_owned())
-            })
-        }
-
-        #[inline]
-        fn decode_json(v: &mut &[u8]) -> Result<Json> {
-            Json::decode(v)
-                .map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
-        }
-
-        #[inline]
-        fn decode_duration_from_i64(v: i64) -> Result<Duration> {
-            Duration::from_nanos(v, 0)
-                .map_err(|_| Error::InvalidDataType("Failed to decode i64 as duration".to_owned()))
-        }
-
-        #[inline]
-        fn decode_date_time_from_uint(
-            v: u64,
-            time_zone: &Tz,
-            field_type: &FieldType,
-        ) -> Result<DateTime> {
-            let fsp = field_type.decimal() as i8;
-            let time_type = field_type.tp().try_into()?;
-            DateTime::from_packed_u64(v, time_type, fsp, time_zone)
-        }
-
-        // The inner implementation is much like `table::decode_col_value`, however it constructs
-        // value directly without constructing a `Datum` to improve performance.
-
-        // TODO: Use BufferReader.
-        // TODO: Confirm correctness with TiDB team.
-
-        // Make sure that the `field_type` given matches current column's type.
-        let tp = field_type.tp();
-        assert_eq!(EvalType::try_from(tp).unwrap(), self.eval_type());
-
-        if raw_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-
-        let flag = raw_datum[0];
-        raw_datum = &raw_datum[1..];
-
-        match self {
-            VectorValue::Int(ref mut vec) => match flag {
-                datum::NIL_FLAG => vec.push(None),
-                datum::INT_FLAG => vec.push(Some(decode_int(&mut raw_datum)?)),
-                datum::UINT_FLAG => vec.push(Some(decode_uint(&mut raw_datum)? as i64)),
-                datum::VAR_INT_FLAG => vec.push(Some(decode_var_int(&mut raw_datum)?)),
-                datum::VAR_UINT_FLAG => vec.push(Some(decode_var_uint(&mut raw_datum)? as i64)),
-                flag => {
-                    return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Int vector",
-                        flag
-                    )));
-                }
-            },
-            VectorValue::Real(ref mut vec) => match flag {
-                datum::NIL_FLAG => vec.push(None),
-                // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
-                datum::FLOAT_FLAG => {
-                    let mut v = decode_float(&mut raw_datum)?;
-                    if tp == FieldTypeTp::Float {
-                        v = (v as f32) as f64;
-                    }
-                    vec.push(Real::new(v).ok()); // NaN to None
-                }
-                flag => {
-                    return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Real vector",
-                        flag
-                    )));
-                }
-            },
-            VectorValue::Decimal(ref mut vec) => match flag {
-                datum::NIL_FLAG => vec.push(None),
-                // In both index and record, it's flag is `DECIMAL`. See TiDB's `encode()`.
-                datum::DECIMAL_FLAG => vec.push(Some(decode_decimal(&mut raw_datum)?)),
-                flag => {
-                    return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Decimal vector",
-                        flag
-                    )));
-                }
-            },
-            VectorValue::Bytes(ref mut vec) => match flag {
-                datum::NIL_FLAG => vec.push(None),
-                // In index, it's flag is `BYTES`. See TiDB's `encode()`.
-                datum::BYTES_FLAG => vec.push(Some(decode_bytes(&mut raw_datum)?)),
-                // In record, it's flag is `COMPACT_BYTES`. See TiDB's `encode()`.
-                datum::COMPACT_BYTES_FLAG => vec.push(Some(decode_compact_bytes(&mut raw_datum)?)),
-                flag => {
-                    return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Bytes vector",
-                        flag
-                    )));
-                }
-            },
-            VectorValue::DateTime(ref mut vec) => match flag {
-                datum::NIL_FLAG => vec.push(None),
-                // In index, it's flag is `UINT`. See TiDB's `encode()`.
-                datum::UINT_FLAG => {
-                    let v = decode_uint(&mut raw_datum)?;
-                    let v = decode_date_time_from_uint(v, time_zone, field_type)?;
-                    vec.push(Some(v));
-                }
-                // In record, it's flag is `VAR_UINT`. See TiDB's `flatten()` and `encode()`.
-                datum::VAR_UINT_FLAG => {
-                    let v = decode_var_uint(&mut raw_datum)?;
-                    let v = decode_date_time_from_uint(v, time_zone, field_type)?;
-                    vec.push(Some(v));
-                }
-                flag => {
-                    return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for DateTime vector",
-                        flag
-                    )));
-                }
-            },
-            VectorValue::Duration(ref mut vec) => match flag {
-                datum::NIL_FLAG => vec.push(None),
-                // In index, it's flag is `DURATION`. See TiDB's `encode()`.
-                datum::DURATION_FLAG => {
-                    let v = decode_int(&mut raw_datum)?;
-                    let v = decode_duration_from_i64(v)?;
-                    vec.push(Some(v));
-                }
-                // In record, it's flag is `VAR_INT`. See TiDB's `flatten()` and `encode()`.
-                datum::VAR_INT_FLAG => {
-                    let v = decode_var_int(&mut raw_datum)?;
-                    let v = decode_duration_from_i64(v)?;
-                    vec.push(Some(v));
-                }
-                flag => {
-                    return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Duration vector",
-                        flag
-                    )));
-                }
-            },
-            VectorValue::Json(ref mut vec) => match flag {
-                datum::NIL_FLAG => vec.push(None),
-                // In both index and record, it's flag is `JSON`. See TiDB's `encode()`.
-                datum::JSON_FLAG => vec.push(Some(decode_json(&mut raw_datum)?)),
-                flag => {
-                    return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Json vector",
-                        flag
-                    )));
-                }
-            },
-        }
-
-        Ok(())
-    }
-
     /// Returns maximum encoded size in binary format.
-    pub fn maximum_encoded_size(&self) -> Result<usize> {
+    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> Result<usize> {
         match self {
-            VectorValue::Int(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Int(_) => Ok(logical_rows.len() * 9),
 
             // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
             // this function only calculates a maximum encoded size (for constructing buffers), not
             // actual encoded size.
-            VectorValue::Real(ref vec) => Ok(vec.len() * 9),
-            VectorValue::Decimal(ref vec) => {
+            VectorValue::Real(_) => Ok(logical_rows.len() * 9),
+            VectorValue::Decimal(vec) => {
                 let mut size = 0;
-                for el in vec {
+                for idx in logical_rows {
+                    let el = &vec[*idx];
                     match el {
                         Some(v) => {
                             // FIXME: We don't need approximate size. Maximum size is enough (so
@@ -446,9 +217,10 @@ impl VectorValue {
                 }
                 Ok(size)
             }
-            VectorValue::Bytes(ref vec) => {
+            VectorValue::Bytes(vec) => {
                 let mut size = 0;
-                for el in vec {
+                for idx in logical_rows {
+                    let el = &vec[*idx];
                     match el {
                         Some(v) => {
                             size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
@@ -460,11 +232,12 @@ impl VectorValue {
                 }
                 Ok(size)
             }
-            VectorValue::DateTime(ref vec) => Ok(vec.len() * 9),
-            VectorValue::Duration(ref vec) => Ok(vec.len() * 9),
-            VectorValue::Json(ref vec) => {
+            VectorValue::DateTime(_) => Ok(logical_rows.len() * 9),
+            VectorValue::Duration(_) => Ok(logical_rows.len() * 9),
+            VectorValue::Json(vec) => {
                 let mut size = 0;
-                for el in vec {
+                for idx in logical_rows {
+                    let el = &vec[*idx];
                     match el {
                         Some(v) => {
                             size += 1 /* FLAG */ + v.binary_len();
@@ -940,10 +713,12 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::test;
+    use crate::coprocessor::codec::mysql::Tz;
+    use cop_datatype::FieldTypeTp;
 
     use super::*;
 
+    /*
     #[bench]
     fn bench_push_datum_int(b: &mut test::Bencher) {
         use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
@@ -1012,6 +787,8 @@ mod benches {
             }
         });
     }
+
+    */
 
     /// Bench performance of retain by array. It is used in Selection executor.
     #[bench]

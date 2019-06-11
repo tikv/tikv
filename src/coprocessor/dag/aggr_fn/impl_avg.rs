@@ -185,7 +185,7 @@ mod tests {
         );
 
         state
-            .update_vector(&mut ctx, &[Real::new(0.0).ok(), Real::new(-4.5).ok(), None])
+            .update_vector(&mut ctx, &[Real::new(0.0).ok(), Real::new(-4.5).ok(), None], &[0, 1, 2])
             .unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
@@ -216,6 +216,7 @@ mod tests {
             col.mut_decoded().push_int(None);
             col
         }]);
+        let logical_rows = (0..4).collect();
 
         let mut schema = vec![];
         let mut exp = vec![];
@@ -232,9 +233,9 @@ mod tests {
         let mut state = aggr_fn.create_state();
         let mut ctx = EvalContext::default();
 
-        let exp_result = exp[0].eval(&mut ctx, 4, &src_schema, &mut columns).unwrap();
+        let exp_result = exp[0].eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 4).unwrap();
         assert!(exp_result.is_vector());
-        let slice: &[Option<Decimal>] = exp_result.vector_value().unwrap().as_ref();
+        let slice: &[Option<Decimal>] = exp_result.vector_value().unwrap().as_ref().as_ref();
         state.update_vector(&mut ctx, slice).unwrap();
 
         let mut aggr_result = [

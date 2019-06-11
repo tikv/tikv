@@ -46,54 +46,54 @@ impl DAGBuilder {
                         Error::Other(box_err!("Unable to use BatchIndexScanExecutor: {}", e))
                     })?;
                 }
-                ExecType::TypeSelection => {
-                    let descriptor = ed.get_selection();
-                    BatchSelectionExecutor::check_supported(&descriptor).map_err(|e| {
-                        Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
-                    })?;
-                }
-                ExecType::TypeAggregation | ExecType::TypeStreamAgg
-                    if ed.get_aggregation().get_group_by().is_empty() =>
-                {
-                    let descriptor = ed.get_aggregation();
-                    BatchSimpleAggregationExecutor::check_supported(&descriptor).map_err(|e| {
-                        Error::Other(box_err!(
-                            "Unable to use BatchSimpleAggregationExecutor: {}",
-                            e
-                        ))
-                    })?;
-                }
-                ExecType::TypeAggregation => {
-                    let descriptor = ed.get_aggregation();
-                    if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
-                        BatchSlowHashAggregationExecutor::check_supported(&descriptor).map_err(
-                            |e| {
-                                Error::Other(box_err!(
-                                    "Unable to use BatchSlowHashAggregationExecutor: {}",
-                                    e
-                                ))
-                            },
-                        )?;
-                    }
-                }
-                ExecType::TypeStreamAgg => {
-                    // Note: We won't check whether the source of stream aggregation is in order.
-                    //       It is undefined behavior if the source is unordered.
-                    let descriptor = ed.get_aggregation();
-                    BatchStreamAggregationExecutor::check_supported(&descriptor).map_err(|e| {
-                        Error::Other(box_err!(
-                            "Unable to use BatchStreamAggregationExecutor: {}",
-                            e
-                        ))
-                    })?;
-                }
-                ExecType::TypeLimit => {}
-                ExecType::TypeTopN => {
-                    let descriptor = ed.get_topN();
-                    BatchTopNExecutor::check_supported(&descriptor).map_err(|e| {
-                        Error::Other(box_err!("Unable to use BatchTopNExecutor: {}", e))
-                    })?;
-                }
+                //                ExecType::TypeSelection => {
+                //                    let descriptor = ed.get_selection();
+                //                    BatchSelectionExecutor::check_supported(&descriptor).map_err(|e| {
+                //                        Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
+                //                    })?;
+                //                }
+                //                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                //                    if ed.get_aggregation().get_group_by().is_empty() =>
+                //                {
+                //                    let descriptor = ed.get_aggregation();
+                //                    BatchSimpleAggregationExecutor::check_supported(&descriptor).map_err(|e| {
+                //                        Error::Other(box_err!(
+                //                            "Unable to use BatchSimpleAggregationExecutor: {}",
+                //                            e
+                //                        ))
+                //                    })?;
+                //                }
+                //                ExecType::TypeAggregation => {
+                //                    let descriptor = ed.get_aggregation();
+                //                    if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
+                //                        BatchSlowHashAggregationExecutor::check_supported(&descriptor).map_err(
+                //                            |e| {
+                //                                Error::Other(box_err!(
+                //                                    "Unable to use BatchSlowHashAggregationExecutor: {}",
+                //                                    e
+                //                                ))
+                //                            },
+                //                        )?;
+                //                    }
+                //                }
+                //                ExecType::TypeStreamAgg => {
+                //                    // Note: We won't check whether the source of stream aggregation is in order.
+                //                    //       It is undefined behavior if the source is unordered.
+                //                    let descriptor = ed.get_aggregation();
+                //                    BatchStreamAggregationExecutor::check_supported(&descriptor).map_err(|e| {
+                //                        Error::Other(box_err!(
+                //                            "Unable to use BatchStreamAggregationExecutor: {}",
+                //                            e
+                //                        ))
+                //                    })?;
+                //                }
+                ExecType::TypeLimit => {} //                ExecType::TypeTopN => {
+                //                    let descriptor = ed.get_topN();
+                //                    BatchTopNExecutor::check_supported(&descriptor).map_err(|e| {
+                //                        Error::Other(box_err!("Unable to use BatchTopNExecutor: {}", e))
+                //                    })?;
+                //                }
+                _ => return Err(box_err!("Unsupported")),
             }
         }
 
@@ -162,82 +162,82 @@ impl DAGBuilder {
             summary_slot_index += 1;
 
             let new_executor: Box<dyn BatchExecutor> = match ed.get_tp() {
-                ExecType::TypeSelection => {
-                    COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
-
-                    Box::new(
-                        BatchSelectionExecutor::new(
-                            config.clone(),
-                            executor,
-                            ed.take_selection().take_conditions().into_vec(),
-                        )?
-                        .with_summary_collector(C::new(summary_slot_index)),
-                    )
-                }
-                ExecType::TypeAggregation | ExecType::TypeStreamAgg
-                    if ed.get_aggregation().get_group_by().is_empty() =>
-                {
-                    COPR_EXECUTOR_COUNT
-                        .with_label_values(&["simple_aggregation"])
-                        .inc();
-
-                    Box::new(
-                        BatchSimpleAggregationExecutor::new(
-                            config.clone(),
-                            executor,
-                            ed.mut_aggregation().take_agg_func().into_vec(),
-                        )?
-                        .with_summary_collector(C::new(summary_slot_index)),
-                    )
-                }
-                ExecType::TypeAggregation => {
-                    if BatchFastHashAggregationExecutor::check_supported(&ed.get_aggregation())
-                        .is_ok()
-                    {
-                        COPR_EXECUTOR_COUNT
-                            .with_label_values(&["fast_hash_aggregation"])
-                            .inc();
-
-                        Box::new(
-                            BatchFastHashAggregationExecutor::new(
-                                config.clone(),
-                                executor,
-                                ed.mut_aggregation().take_group_by().into_vec(),
-                                ed.mut_aggregation().take_agg_func().into_vec(),
-                            )?
-                            .with_summary_collector(C::new(summary_slot_index)),
-                        )
-                    } else {
-                        COPR_EXECUTOR_COUNT
-                            .with_label_values(&["slow_hash_aggregation"])
-                            .inc();
-
-                        Box::new(
-                            BatchSlowHashAggregationExecutor::new(
-                                config.clone(),
-                                executor,
-                                ed.mut_aggregation().take_group_by().into_vec(),
-                                ed.mut_aggregation().take_agg_func().into_vec(),
-                            )?
-                            .with_summary_collector(C::new(summary_slot_index)),
-                        )
-                    }
-                }
-                ExecType::TypeStreamAgg => {
-                    COPR_EXECUTOR_COUNT
-                        .with_label_values(&["stream_aggregation"])
-                        .inc();
-
-                    Box::new(
-                        BatchStreamAggregationExecutor::new(
-                            config.clone(),
-                            executor,
-                            ed.mut_aggregation().take_group_by().into_vec(),
-                            ed.mut_aggregation().take_agg_func().into_vec(),
-                        )?
-                        .with_summary_collector(C::new(summary_slot_index)),
-                    )
-                }
+                //                ExecType::TypeSelection => {
+                //                    COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+                //
+                //                    Box::new(
+                //                        BatchSelectionExecutor::new(
+                //                            config.clone(),
+                //                            executor,
+                //                            ed.take_selection().take_conditions().into_vec(),
+                //                        )?
+                //                        .with_summary_collector(C::new(summary_slot_index)),
+                //                    )
+                //                }
+                //                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                //                    if ed.get_aggregation().get_group_by().is_empty() =>
+                //                {
+                //                    COPR_EXECUTOR_COUNT
+                //                        .with_label_values(&["simple_aggregation"])
+                //                        .inc();
+                //
+                //                    Box::new(
+                //                        BatchSimpleAggregationExecutor::new(
+                //                            config.clone(),
+                //                            executor,
+                //                            ed.mut_aggregation().take_agg_func().into_vec(),
+                //                        )?
+                //                        .with_summary_collector(C::new(summary_slot_index)),
+                //                    )
+                //                }
+                //                ExecType::TypeAggregation => {
+                //                    if BatchFastHashAggregationExecutor::check_supported(&ed.get_aggregation())
+                //                        .is_ok()
+                //                    {
+                //                        COPR_EXECUTOR_COUNT
+                //                            .with_label_values(&["fast_hash_aggregation"])
+                //                            .inc();
+                //
+                //                        Box::new(
+                //                            BatchFastHashAggregationExecutor::new(
+                //                                config.clone(),
+                //                                executor,
+                //                                ed.mut_aggregation().take_group_by().into_vec(),
+                //                                ed.mut_aggregation().take_agg_func().into_vec(),
+                //                            )?
+                //                            .with_summary_collector(C::new(summary_slot_index)),
+                //                        )
+                //                    } else {
+                //                        COPR_EXECUTOR_COUNT
+                //                            .with_label_values(&["slow_hash_aggregation"])
+                //                            .inc();
+                //
+                //                        Box::new(
+                //                            BatchSlowHashAggregationExecutor::new(
+                //                                config.clone(),
+                //                                executor,
+                //                                ed.mut_aggregation().take_group_by().into_vec(),
+                //                                ed.mut_aggregation().take_agg_func().into_vec(),
+                //                            )?
+                //                            .with_summary_collector(C::new(summary_slot_index)),
+                //                        )
+                //                    }
+                //                }
+                //                ExecType::TypeStreamAgg => {
+                //                    COPR_EXECUTOR_COUNT
+                //                        .with_label_values(&["stream_aggregation"])
+                //                        .inc();
+                //
+                //                    Box::new(
+                //                        BatchStreamAggregationExecutor::new(
+                //                            config.clone(),
+                //                            executor,
+                //                            ed.mut_aggregation().take_group_by().into_vec(),
+                //                            ed.mut_aggregation().take_agg_func().into_vec(),
+                //                        )?
+                //                        .with_summary_collector(C::new(summary_slot_index)),
+                //                    )
+                //                }
                 ExecType::TypeLimit => {
                     COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
 
@@ -246,29 +246,29 @@ impl DAGBuilder {
                             .with_summary_collector(C::new(summary_slot_index)),
                     )
                 }
-                ExecType::TypeTopN => {
-                    COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
-
-                    let mut d = ed.take_topN();
-                    let order_bys = d.get_order_by().len();
-                    let mut order_exprs_def = Vec::with_capacity(order_bys);
-                    let mut order_is_desc = Vec::with_capacity(order_bys);
-                    for mut item in d.take_order_by().into_iter() {
-                        order_exprs_def.push(item.take_expr());
-                        order_is_desc.push(item.get_desc());
-                    }
-
-                    Box::new(
-                        BatchTopNExecutor::new(
-                            config.clone(),
-                            executor,
-                            order_exprs_def,
-                            order_is_desc,
-                            d.get_limit() as usize,
-                        )?
-                        .with_summary_collector(C::new(summary_slot_index)),
-                    )
-                }
+                //                ExecType::TypeTopN => {
+                //                    COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
+                //
+                //                    let mut d = ed.take_topN();
+                //                    let order_bys = d.get_order_by().len();
+                //                    let mut order_exprs_def = Vec::with_capacity(order_bys);
+                //                    let mut order_is_desc = Vec::with_capacity(order_bys);
+                //                    for mut item in d.take_order_by().into_iter() {
+                //                        order_exprs_def.push(item.take_expr());
+                //                        order_is_desc.push(item.get_desc());
+                //                    }
+                //
+                //                    Box::new(
+                //                        BatchTopNExecutor::new(
+                //                            config.clone(),
+                //                            executor,
+                //                            order_exprs_def,
+                //                            order_is_desc,
+                //                            d.get_limit() as usize,
+                //                        )?
+                //                        .with_summary_collector(C::new(summary_slot_index)),
+                //                    )
+                //                }
                 _ => {
                     return Err(Error::Other(box_err!(
                         "Unexpected non-first executor {:?}",

@@ -100,6 +100,7 @@ impl LazyBatchColumnVec {
     /// # Panics
     ///
     /// Panics if `retain_arr` is not long enough.
+    #[deprecated]
     pub fn retain_rows_by_array(&mut self, retain_arr: &[bool]) {
         if self.rows_len() == 0 {
             return;
@@ -117,28 +118,36 @@ impl LazyBatchColumnVec {
     }
 
     /// Returns maximum encoded size.
-    pub fn maximum_encoded_size(&self, output_offsets: impl AsRef<[u32]>) -> Result<usize> {
+    // TODO: Move to other place.
+    pub fn maximum_encoded_size(
+        &self,
+        logical_rows: impl AsRef<[usize]>,
+        output_offsets: impl AsRef<[u32]>,
+    ) -> Result<usize> {
+        let logical_rows = logical_rows.as_ref();
         let mut size = 0;
         for offset in output_offsets.as_ref() {
-            size += self.columns[(*offset) as usize].maximum_encoded_size()?;
+            size += self.columns[(*offset) as usize].maximum_encoded_size(logical_rows)?;
         }
         Ok(size)
     }
 
     /// Encodes into binary format.
+    // TODO: Move to other place.
     pub fn encode(
         &self,
+        logical_rows: impl AsRef<[usize]>,
         output_offsets: impl AsRef<[u32]>,
         schema: impl AsRef<[FieldType]>,
         output: &mut Vec<u8>,
     ) -> Result<()> {
-        let len = self.rows_len();
         let schema = schema.as_ref();
-        for i in 0..len {
-            for offset in output_offsets.as_ref() {
+        let output_offsets = output_offsets.as_ref();
+        for idx in logical_rows.as_ref() {
+            for offset in output_offsets {
                 let offset = *offset as usize;
                 let col = &self.columns[offset];
-                col.encode(i, &schema[offset], output)?;
+                col.encode(*idx, &schema[offset], output)?;
             }
         }
         Ok(())
@@ -151,13 +160,8 @@ impl LazyBatchColumnVec {
         for col in &self.columns {
             min_len = min_len.min(col.len());
         }
-        self.truncate(min_len);
-    }
-
-    /// Shortens the rows, keeping the first `len` rows and dropping the rest.
-    pub fn truncate(&mut self, len: usize) {
         for col in &mut self.columns {
-            col.truncate(len);
+            col.truncate(min_len);
         }
         self.assert_columns_equal_length();
     }
@@ -232,6 +236,9 @@ mod tests {
         push_raw_row(columns, raw_row);
     }
 
+    /*
+    // TODO: Move to lazy_column.rs
+
     #[test]
     fn test_ensure_column_decoded() {
         use cop_datatype::FieldTypeTp;
@@ -245,6 +252,7 @@ mod tests {
             let values = vec![
                 vec![Datum::U64(1), Datum::F64(1.0), Datum::Null],
                 vec![Datum::Null, Datum::Null, Datum::Bytes(vec![0u8, 2u8])],
+                vec![Datum::U64(42), Datum::F64(-5.5), Datum::Null],
             ];
 
             // Empty LazyBatchColumnVec
@@ -300,6 +308,10 @@ mod tests {
             assert!(columns[1].is_decoded());
         }
     }
+    */
+
+    /*
+    // TODO: This function is no longer necessary
 
     #[test]
     fn test_retain_rows_by_array() {
@@ -568,4 +580,5 @@ mod tests {
             assert_eq!(column1.decoded().as_real_slice(), &[]);
         }
     }
+    */
 }

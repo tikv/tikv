@@ -14,9 +14,6 @@ pub struct BatchLimitExecutor<Src: BatchExecutor> {
 
 impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
     pub fn new(src: Src, limit: usize) -> Result<Self> {
-        if limit == 0 {
-            return Err(box_err!("limit should not be zero"));
-        }
         Ok(Self {
             src,
             remaining_rows: limit,
@@ -33,12 +30,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut result = self.src.next_batch(scan_rows);
-        if result.data.rows_len() < self.remaining_rows {
-            self.remaining_rows -= result.data.rows_len();
+        if result.logical_rows.len() < self.remaining_rows {
+            self.remaining_rows -= result.logical_rows.len();
         } else {
-            result.data.truncate(self.remaining_rows);
-            self.remaining_rows = 0;
+            // We don't need to touch the physical data.
+            result.logical_rows.truncate(self.remaining_rows);
             result.is_drained = Ok(true);
+            self.remaining_rows = 0;
         }
 
         result
@@ -50,6 +48,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,3 +246,4 @@ mod tests {
         }
     }
 }
+*/

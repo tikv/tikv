@@ -119,9 +119,14 @@ where
     }
 
     #[inline]
-    fn update_vector(&mut self, ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()> {
-        if let Some(v) = values.first() {
-            self.update(ctx, v)?;
+    fn update_vector(
+        &mut self,
+        ctx: &mut EvalContext,
+        physical_values: &[Option<T>],
+        logical_rows: &[usize],
+    ) -> Result<()> {
+        if let Some(physical_index) = logical_rows.first() {
+            self.update(ctx, &physical_values[*physical_index])?;
         }
         Ok(())
     }
@@ -154,7 +159,8 @@ where
     default fn update_vector(
         &mut self,
         _ctx: &mut EvalContext,
-        _values: &[Option<T1>],
+        _physical_values: &[Option<T1>],
+        _logical_rows: &[usize],
     ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
