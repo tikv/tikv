@@ -244,7 +244,7 @@ mod tests {
             assert!(iter.valid().unwrap());
             assert_eq!(iter.key(), k.as_bytes());
             assert_eq!(iter.value(), v.as_bytes());
-            iter.next();
+            iter.next().unwrap();
         }
     }
 
