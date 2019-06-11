@@ -10,6 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+extern crate fail;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -905,4 +906,22 @@ where
     let epoch = cluster.pd_client.get_region_epoch(region_id);
     let admin_req = new_admin_request(region_id, &epoch, conf_change);
     cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
+}
+
+#[test]
+fn test_stale_peer_cache() {
+    let _guard = ::raftstore_cases::test_conf_change::fail::setup();
+    // 3 nodes cluster.
+    let mut cluster = new_node_cluster(0, 3);
+
+    cluster.run();
+    // Now region 1 only has peer (1, 1);
+    let (key, value) = (b"k1", b"v1");
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+    let engine_3 = cluster.get_engine(3);
+    must_get_equal(&engine_3, b"k1", b"v1");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    fail::cfg("stale_peer_cache_2", "return").unwrap();
+    cluster.must_put(b"k2", b"v2");
 }

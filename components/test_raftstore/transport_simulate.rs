@@ -621,6 +621,35 @@ impl Filter<RaftMessage> for LeadingFilter {
     }
 }
 
+impl Filter<StoreMsg> for LeadingFilter {
+    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
+        let mut filtered_msg = self.first_filtered_msg.lock().unwrap();
+        let mut to_send = vec![];
+        for msg in msgs.drain(..) {
+            if let StoreMsg::RaftMessage(raft_msg) = msg {
+                if raft_msg.get_message().get_msg_type() == self.filter_type {
+                    if filtered_msg.is_none() {
+                        *filtered_msg = Some(raft_msg);
+                    }
+                } else if raft_msg.get_message().get_msg_type() == self.flush_type {
+                    to_send.push(StoreMsg::RaftMessage(filtered_msg.take().unwrap()));
+                    to_send.push(StoreMsg::RaftMessage(raft_msg));
+                } else {
+                    to_send.push(StoreMsg::RaftMessage(raft_msg));
+                }
+            } else {
+                to_send.push(msg);
+            }
+        }
+        msgs.extend(to_send);
+        check_messages(msgs)
+    }
+
+    fn after(&self, _: Result<()>) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Filter leading duplicated Snap.
 ///
 /// It will pause the first snapshot and filter out all the snapshot that
