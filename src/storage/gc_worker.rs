@@ -791,7 +791,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
         AUTO_GC_SAFE_POINT_GAUGE.set(safe_point as i64);
 
-        match safe_point.cmp(&self.safe_point) {
+        let updated = match safe_point.cmp(&self.safe_point) {
             Ordering::Less => {
                 panic!(
                     "got new safe point {} which is less than current safe point {}. \
@@ -805,7 +805,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 self.safe_point = safe_point;
                 true
             }
-        }
+        };
+        AUTO_GC_SAFE_POINT_GAUGE.set(self.safe_point as i64);
+        return updated;
     }
 
     /// Scans all regions on the TiKV whose leader is this TiKV, and does GC on all of them.
