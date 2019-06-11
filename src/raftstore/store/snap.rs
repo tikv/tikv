@@ -59,7 +59,7 @@ const SNAP_REV_PREFIX: &str = "rev";
 const TMP_FILE_SUFFIX: &str = ".tmp";
 const SST_FILE_SUFFIX: &str = ".sst";
 const CLONE_FILE_SUFFIX: &str = ".clone";
-const META_FILE_SUFFIX: &str = ".meta";
+const META_FILE_NAME: &str = "meta";
 
 const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
@@ -355,9 +355,8 @@ impl Snap {
             cf_files.push(cf_file);
         }
 
-        let meta_filename = META_FILE_SUFFIX;
-        let meta_path = subdir_path.join(&meta_filename);
-        let meta_tmp_path = tmp_subdir_path.join(&meta_filename);
+        let meta_path = subdir_path.join(META_FILE_NAME);
+        let meta_tmp_path = tmp_subdir_path.join(META_FILE_NAME);
         let meta_file = MetaFile {
             path: meta_path,
             tmp_path: meta_tmp_path,
@@ -1023,7 +1022,7 @@ impl SnapManager {
         // "type_region_term_index_cf.sst",
         // where "type" is one of "gen" or "rev".
         // Now "type_region_term_index" is the folder name
-        // and ".meta" or "cf.sst" is the filename
+        // and "meta" or "cf.sst" is the filename
         let parts: Vec<_> = origin_filename.splitn(2, '.').collect();
         let components: Vec<_> = parts
             .first()
@@ -1034,7 +1033,12 @@ impl SnapManager {
             (&components[..], Default::default())
         };
         let dirname = snapname.join(&"_");
-        let filename = basename.to_owned() + "." + parts.get(1).copied().unwrap_or_default();
+        let extname = parts.get(1).copied().unwrap_or_default();
+        let filename = if basename.is_empty() {
+            String::from(extname)
+        } else {
+            basename.to_owned() + "." + extname
+        };
         (dirname, filename)
     }
 
@@ -1437,7 +1441,7 @@ pub mod tests {
 
     use super::{
         ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
-        SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
+        SnapshotDeleter, SnapshotStatistics, META_FILE_NAME, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
         SST_FILE_SUFFIX,
     };
 
@@ -1450,6 +1454,7 @@ pub mod tests {
     const TEST_WRITE_BATCH_SIZE: usize = 10 * 1024 * 1024;
     const TEST_META_FILE_BUFFER_SIZE: usize = 1000;
     const BYTE_SIZE: usize = 1;
+    const LEGACY_META_FILE_SUFFIX: &str = ".meta";
 
     #[derive(Clone)]
     struct DummyDeleter;
@@ -1640,8 +1645,8 @@ pub mod tests {
         let key = SnapKey::new(1, 1, 1);
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         let dirname = prefix.clone();
-        let legacy_meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
-        let meta_filename = META_FILE_SUFFIX.to_owned();
+        let legacy_meta_filename = format!("{}{}", prefix, LEGACY_META_FILE_SUFFIX);
+        let meta_filename = META_FILE_NAME.to_owned();
         assert_eq!(
             SnapManager::gen_migrate_target(&legacy_meta_filename),
             (dirname.clone(), meta_filename)
@@ -1870,7 +1875,7 @@ pub mod tests {
                     .file_name()
                     .into_string()
                     .unwrap()
-                    .ends_with(META_FILE_SUFFIX)
+                    .ends_with(META_FILE_NAME)
                 {
                     let mut f = OpenOptions::new().append(true).open(e.path()).unwrap();
                     f.write_all(b"xxxxx").unwrap();
@@ -1889,7 +1894,7 @@ pub mod tests {
                 if e.file_name()
                     .into_string()
                     .unwrap()
-                    .ends_with(META_FILE_SUFFIX)
+                    .ends_with(META_FILE_NAME)
                 {
                     let mut snapshot_meta = SnapshotMeta::new();
                     let mut buf = Vec::with_capacity(TEST_META_FILE_BUFFER_SIZE);
@@ -1934,7 +1939,7 @@ pub mod tests {
                 if e.file_name()
                     .into_string()
                     .unwrap()
-                    .ends_with(META_FILE_SUFFIX)
+                    .ends_with(META_FILE_NAME)
                 {
                     let mut f = OpenOptions::new()
                         .read(true)
