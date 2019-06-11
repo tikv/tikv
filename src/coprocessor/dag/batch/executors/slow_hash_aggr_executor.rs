@@ -5,7 +5,6 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
-
 use tikv_util::collections::HashMap;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, FieldType};
@@ -131,7 +130,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
                 crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE,
             ),
             group_by_results_unsafe: Vec::with_capacity(group_by_len),
-            aggr_expr_results_unsafe: Vec::with_capacity(aggr_defs.len()),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -172,11 +170,6 @@ pub struct SlowHashAggregationImpl {
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
     group_by_results_unsafe: Vec<RpnStackNode<'static>>,
-
-    /// Stores evaluation results of aggregate expressions.
-    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
-    /// are only valid in the same batch where they are added.
-    aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
 unsafe impl Send for SlowHashAggregationImpl {}
@@ -275,7 +268,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         // Remember to remove expression results of the current batch. They are invalid
         // in the next batch.
         self.group_by_results_unsafe.clear();
-        self.aggr_expr_results_unsafe.clear();
 
         Ok(())
     }
