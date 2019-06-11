@@ -169,7 +169,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         let data_unbounded = unsafe { erase_lifetime(&*data) };
         for expr_unbounded in order_exprs_unbounded.iter() {
             self.eval_columns_buffer_unsafe
-                .push(expr_unbounded.eval_unchecked(
+                .push(expr_unbounded.eval_decoded(
                     &mut self.context,
                     data.rows_len(),
                     src_schema_unbounded,
