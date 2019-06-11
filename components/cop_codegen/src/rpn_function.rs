@@ -83,6 +83,14 @@ pub struct RpnFnGenerator {
 
 impl RpnFnGenerator {
     pub fn new(meta: Vec<Ident>, item_fn: ItemFn) -> Result<Self> {
+        // FIXME: The macro cannot handle lifetime definitions now
+        if let Some(lifetime) = item_fn.decl.generics.lifetimes().next() {
+            return Err(lifetime
+                .span()
+                .unwrap()
+                .error("Lifetime definition is not allowed"));
+        }
+
         let arg_types = item_fn
             .decl
             .inputs
