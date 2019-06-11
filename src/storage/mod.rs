@@ -117,6 +117,12 @@ pub enum Command {
         keys: Vec<Key>,
         start_ts: u64,
     },
+    PessimisticRollback {
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
+    },
     ScanLock {
         ctx: Context,
         max_ts: u64,
@@ -217,6 +223,19 @@ impl Display for Command {
                 start_ts,
                 ctx
             ),
+            Command::PessimisticRollback {
+                ref ctx,
+                ref keys,
+                start_ts,
+                for_update_ts,
+            } => write!(
+                f,
+                "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}",
+                keys.len(),
+                start_ts,
+                for_update_ts,
+                ctx
+            ),
             Command::ScanLock {
                 ref ctx,
                 max_ts,
@@ -313,10 +332,11 @@ impl Command {
     pub fn tag(&self) -> &'static str {
         match *self {
             Command::Prewrite { .. } => "prewrite",
-            Command::AcquirePessimisticLock { .. } => "pessimistic_lock",
+            Command::AcquirePessimisticLock { .. } => "acquire_pessimistic_lock",
             Command::Commit { .. } => "commit",
             Command::Cleanup { .. } => "cleanup",
             Command::Rollback { .. } => "rollback",
+            Command::PessimisticRollback { .. } => "pessimistic_rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::ResolveLockLite { .. } => "resolve_lock_lite",
@@ -333,6 +353,7 @@ impl Command {
             | Command::AcquirePessimisticLock { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
+            | Command::PessimisticRollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
@@ -351,6 +372,7 @@ impl Command {
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
+            | Command::PessimisticRollback { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::ResolveLockLite { ref ctx, .. }
@@ -368,6 +390,7 @@ impl Command {
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
+            | Command::PessimisticRollback { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::ResolveLockLite { ref mut ctx, .. }
@@ -402,6 +425,7 @@ impl Command {
             }
             Command::Commit { ref keys, .. }
             | Command::Rollback { ref keys, .. }
+            | Command::PessimisticRollback { ref keys, .. }
             | Command::Pause { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
@@ -962,7 +986,7 @@ impl<E: Engine> Storage<E> {
             options,
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_lock.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
         Ok(())
     }
 
@@ -1038,6 +1062,31 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
+        Ok(())
+    }
+
+    /// Roll back pessimistic locks identified by `start_ts` and `for_update_ts`
+    pub fn async_pessimistic_rollback(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
+        callback: Callback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
+        let cmd = Command::PessimisticRollback {
+            ctx,
+            keys,
+            start_ts,
+            for_update_ts,
+        };
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
         Ok(())
     }
 

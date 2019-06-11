@@ -689,6 +689,32 @@ fn process_write_impl<S: Snapshot>(
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
+        Command::PessimisticRollback {
+            ctx,
+            keys,
+            start_ts,
+            for_update_ts,
+        } => {
+            assert!(waiter_mgr_scheduler.is_some());
+            let key_hashes = gen_key_hashes_if_needed(&waiter_mgr_scheduler, &keys);
+
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
+            let rows = keys.len();
+            for k in keys {
+                txn.pessimistic_rollback(k, for_update_ts)?;
+            }
+
+            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector_if_needed(&detector_scheduler, true, start_ts);
+            statistics.add(&txn.take_statistics());
+            (
+                ProcessResult::MultiRes { results: vec![] },
+                txn.into_modifies(),
+                rows,
+                ctx,
+                None,
+            )
+        }
         Command::ResolveLock {
             ctx,
             txn_status,
