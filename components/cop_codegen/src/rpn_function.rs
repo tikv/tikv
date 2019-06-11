@@ -182,18 +182,6 @@ impl RpnFnGenerator {
         let tp = parse_str::<Type>(&tp).unwrap();
         let (_, ty_generics, _) = self.item_fn.decl.generics.split_for_impl();
         let (impl_generics, _, where_clause) = generics.split_for_impl();
-        //        let mut extract_args = String::new();
-        //        let mut call_args = String::new();
-        //        for meta in &self.meta {
-        //            call_args += &format!("{}, ", meta);
-        //        }
-        //        for arg_index in 0..self.arg_types.len() {
-        //            let arg_var = format!("arg{}", arg_index);
-        //            extract_args += &format!("let ({}, arg) = arg.extract(row);", arg_var);
-        //            call_args += &format!("{}, ", arg_var);
-        //        }
-        //        let extract_args: TokenStream = extract_args.parse().unwrap();
-        //        let call_args: TokenStream = call_args.parse().unwrap();
         let meta = &self.meta;
         let extract = (0..self.arg_types.len())
             .map(|i| syn::parse_str::<Ident>(&format!("arg{}", i)).unwrap());
@@ -202,19 +190,19 @@ impl RpnFnGenerator {
         let (ctx_type, payload_type, result_type) = (ctx_type(), payload_type(), result_type());
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
-                fn eval(
+                default fn eval(
                     self,
                     rows: usize,
                     ctx: &mut #ctx_type,
                     payload: #payload_type,
                 ) -> #result_type {
                     let arg = &self;
-                     let mut result = Vec::with_capacity(rows);
-                     for row in 0..rows {
-                         #(let (#extract, arg) = arg.extract(row));*;
-                         result.push( #fn_ident #ty_generics_turbofish ( #(#meta),* #(#call_arg),* )?);
-                     }
-                     Ok(crate::coprocessor::codec::data_type::Evaluable::into_vector_value(result))
+                    let mut result = Vec::with_capacity(rows);
+                    for row in 0..rows {
+                        #(let (#extract, arg) = arg.extract(row));*;
+                        result.push( #fn_ident #ty_generics_turbofish ( #(#meta),* #(#call_arg),* )?);
+                    }
+                    Ok(crate::coprocessor::codec::data_type::Evaluable::into_vector_value(result))
                 }
             }
         }
@@ -433,7 +421,7 @@ mod tests {
                     crate::coprocessor::dag::rpn_expr::function::Null
                 >
             > {
-                fn eval(
+                default fn eval(
                     self,
                     rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
@@ -579,7 +567,7 @@ mod tests {
                 Arg0_,
                 crate::coprocessor::dag::rpn_expr::function::Null
             > where B: N<M> {
-                fn eval(
+                default fn eval(
                     self,
                     rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,

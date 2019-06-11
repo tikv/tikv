@@ -37,6 +37,44 @@
 //! }
 //! ```
 //!
+//! A trait whose name looks like `CamelCasedFnName_Fn` is created by the macro. If you need to
+//! customize the execution logic for specific argument type, you may implement it on your own.
+//! For example, you are going to implement an RPN function called `regex_match` taking two
+//! arguments, the regex and the string to match. You want to build the regex only once if the
+//! first argument is a scalar. The code may look like:
+//!
+//! ```
+//! fn regex_match_impl(regex: &Regex, text: &Option<Bytes>) -> Result<Option<i32>> {
+//!     // match text
+//! }
+//!
+//! #[rpn_fn]
+//! fn regex_match(regex: &Option<Bytes>, text: &Option<Bytes>) -> Result<Option<i32>> {
+//!     let regex = build_regex(regex);
+//!     regex_match_impl(&regex, text)
+//! }
+//!
+//! // Pay attention that the first argument is specialized to `ScalarArg`
+//! impl<'a, Arg1> RegexMatch_Fn for Arg<ScalarArg<'a, Bytes>, Arg<Arg1, Null>>
+//! where Arg1: RpnFnArg<Type = &'a Option<Bytes>> {
+//!     fn eval(
+//!         self,
+//!         rows: usize,
+//!         ctx: &mut EvalContext,
+//!         payload: RpnFnCallPayload<'_>,
+//!     ) -> Result<VectorValue> {
+//!         let (regex, arg) = self.extract(0);
+//!         let regex = build_regex(regex);
+//!         let mut result = Vec::with_capacity(rows);
+//!         for row in 0..rows {
+//!             let (text, _) = arg.extract(row);
+//!             result.push(regex_match_impl(&regex, text)?);
+//!         }
+//!         Ok(Evaluable::into_vector_value(result))
+//!     }
+//! }
+//! ```
+//!
 //! If you are curious about what code the macro will generate, check the test code
 //! in `components/cop_codegen/rpn_functions.rs`.
 
