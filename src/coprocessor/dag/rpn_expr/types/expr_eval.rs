@@ -6,8 +6,8 @@ use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallPayload;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-use crate::coprocessor::codec::data_type::VectorLikeValueRef;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
+use crate::coprocessor::codec::data_type::{ScalarValueRef, VectorLikeValueRef};
 use crate::coprocessor::codec::mysql::time::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
@@ -62,8 +62,8 @@ impl<'a> RpnStackNode<'a> {
     #[inline]
     pub fn field_type(&self) -> &FieldType {
         match self {
-            RpnStackNode::Scalar { ref field_type, .. } => field_type,
-            RpnStackNode::Vector { ref field_type, .. } => field_type,
+            RpnStackNode::Scalar { field_type, .. } => field_type,
+            RpnStackNode::Vector { field_type, .. } => field_type,
         }
     }
 
@@ -71,7 +71,7 @@ impl<'a> RpnStackNode<'a> {
     #[inline]
     pub fn scalar_value(&self) -> Option<&ScalarValue> {
         match self {
-            RpnStackNode::Scalar { ref value, .. } => Some(*value),
+            RpnStackNode::Scalar { value, .. } => Some(*value),
             RpnStackNode::Vector { .. } => None,
         }
     }
@@ -81,7 +81,7 @@ impl<'a> RpnStackNode<'a> {
     pub fn vector_value(&self) -> Option<&VectorValue> {
         match self {
             RpnStackNode::Scalar { .. } => None,
-            RpnStackNode::Vector { ref value, .. } => Some(&value),
+            RpnStackNode::Vector { value, .. } => Some(&value),
         }
     }
 
@@ -89,8 +89,8 @@ impl<'a> RpnStackNode<'a> {
     #[inline]
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         match self {
-            RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
-            RpnStackNode::Vector { ref value, .. } => value.as_vector_like(),
+            RpnStackNode::Scalar { value, .. } => value.as_vector_like(),
+            RpnStackNode::Vector { value, .. } => value.as_vector_like(),
         }
     }
 
@@ -109,6 +109,21 @@ impl<'a> RpnStackNode<'a> {
         match self {
             RpnStackNode::Vector { .. } => true,
             _ => false,
+        }
+    }
+
+    /// Gets a reference of the element in corresponding index.
+    ///
+    /// If this is a `Scalar` variant, the returned reference will be the same for any index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if index is out of range and this is a `Vector` variant.
+    #[inline]
+    pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
+        match self {
+            RpnStackNode::Vector { value, .. } => value.get_scalar_ref(index),
+            RpnStackNode::Scalar { value, .. } => value.as_scalar_value_ref(),
         }
     }
 }
@@ -134,7 +149,7 @@ impl RpnExpression {
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
         self.ensure_columns_decoded(&context.cfg.tz, schema, columns)?;
-        self.eval_unchecked(context, rows, schema, columns)
+        self.eval_decoded(context, rows, schema, columns)
     }
 
     /// Evaluates the expression into a boolean vector.
@@ -180,17 +195,17 @@ impl RpnExpression {
         columns: &'a mut LazyBatchColumnVec,
     ) -> Result<()> {
         for node in self.as_ref() {
-            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
+            if let RpnExpressionNode::ColumnRef { offset, .. } = node {
                 columns[*offset].ensure_decoded(tz, &schema[*offset])?;
             }
         }
         Ok(())
     }
 
-    /// Evaluates the expression into a vector.
+    /// Evaluates the expression into a vector. The input columns must be already decoded.
     ///
-    /// It differs from `eval` in that `eval_unchecked` needn't receive a mutable reference
-    /// to `LazyBatchColumnVec`. However, since `eval_unchecked` doesn't decode columns,
+    /// It differs from `eval` in that `eval_decoded` needn't receive a mutable reference
+    /// to `LazyBatchColumnVec`. However, since `eval_decoded` doesn't decode columns,
     /// it will panic if referred columns are not decoded.
     ///
     /// # Panics
@@ -200,7 +215,7 @@ impl RpnExpression {
     /// Panics if referred columns are not decoded.
     ///
     /// Panics when referenced column does not have equal length as specified in `rows`.
-    pub fn eval_unchecked<'a>(
+    pub fn eval_decoded<'a>(
         &'a self,
         context: &mut EvalContext,
         rows: usize,
@@ -221,7 +236,7 @@ impl RpnExpression {
                         field_type,
                     });
                 }
-                RpnExpressionNode::ColumnRef { ref offset } => {
+                RpnExpressionNode::ColumnRef { offset } => {
                     let field_type = &schema[*offset];
                     let decoded_column = columns[*offset].decoded();
                     assert_eq!(decoded_column.len(), rows);
