@@ -161,12 +161,12 @@ pub struct ReadyContext<'a, T: 'a> {
     pub raft_wb: WriteBatch,
     pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
-    pub trans: &'a mut T,
+    pub trans: &'a T,
     pub ready_res: Vec<(Ready, InvokeContext)>,
 }
 
 impl<'a, T> ReadyContext<'a, T> {
-    pub fn new(metrics: &'a mut RaftMetrics, trans: &'a mut T, cap: usize) -> ReadyContext<'a, T> {
+    pub fn new(metrics: &'a mut RaftMetrics, trans: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
             kv_wb: WriteBatch::new(),
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
@@ -608,7 +608,7 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
+    fn send<T, I>(&mut self, trans: &T, msgs: I, metrics: &mut RaftMessageMetrics)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
@@ -1029,7 +1029,7 @@ impl Peer {
     pub fn post_raft_ready_append<T: Transport>(
         &mut self,
         metrics: &mut RaftMetrics,
-        trans: &mut T,
+        trans: &T,
         ready: &mut Ready,
         invoke_ctx: InvokeContext,
     ) -> Option<ApplySnapResult> {
@@ -1965,7 +1965,7 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // set current epoch

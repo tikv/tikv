@@ -1476,8 +1476,8 @@ mod test {
         let mut kv_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
         let mut metrics = RaftMetrics::default();
-        let mut trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &mut trans, ents.len());
+        let trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, ents.len());
         store
             .append(&mut ctx, &ents[1..], &mut ready_ctx)
             .expect("");
@@ -1501,8 +1501,8 @@ mod test {
     fn append_ents(store: &mut PeerStorage, ents: &[Entry]) {
         let mut ctx = InvokeContext::new(store);
         let mut metrics = RaftMetrics::default();
-        let mut trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &mut trans, ents.len());
+        let trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, ents.len());
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
         store.engines.raft.write(ready_ctx.raft_wb).expect("");
@@ -1765,8 +1765,8 @@ mod test {
         let mut ctx = InvokeContext::new(&s);
         let mut kv_wb = WriteBatch::new();
         let mut metrics = RaftMetrics::default();
-        let mut trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &mut trans, 2);
+        let trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, 2);
         s.append(
             &mut ctx,
             &[new_entry(6, 5), new_entry(7, 5)],
