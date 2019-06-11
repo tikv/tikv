@@ -807,7 +807,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             }
         };
         AUTO_GC_SAFE_POINT_GAUGE.set(self.safe_point as i64);
-        return updated;
+        updated
     }
 
     /// Scans all regions on the TiKV whose leader is this TiKV, and does GC on all of them.
