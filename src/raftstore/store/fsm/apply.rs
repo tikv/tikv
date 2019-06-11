@@ -587,6 +587,13 @@ impl Debug for WaitSourceMergeState {
     }
 }
 
+#[derive(Debug)]
+struct PendingSnapshot {
+    tasks: VecDeque<GenSnapTask>,
+    /// The counter of pending request snapshots. See more in `Peer`.
+    pending_count: Arc<AtomicUsize>,
+}
+
 /// The apply delegate of a Region which is responsible for handling committed
 /// raft log entries of a Region.
 ///
@@ -620,8 +627,8 @@ pub struct ApplyDelegate {
 
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
-    /// The counter of pending request snapshots. See more in `Peer`.
-    pending_request_snapshot_count: Arc<AtomicUsize>,
+    /// The generate snapshot tasks waiting to be handled.
+    pending_snaps: PendingSnapshot,
 
     /// Marks the delegate as merged by CommitMerge.
     merged: bool,
@@ -652,6 +659,10 @@ pub struct ApplyDelegate {
 
 impl ApplyDelegate {
     fn from_registration(reg: Registration) -> ApplyDelegate {
+        let pending_snaps = PendingSnapshot {
+            tasks: VecDeque::new(),
+            pending_count: reg.pending_request_snapshot_count,
+        };
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
@@ -669,7 +680,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
-            pending_request_snapshot_count: reg.pending_request_snapshot_count,
+            pending_snaps,
         }
     }
 
@@ -2238,15 +2249,25 @@ type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
 
 pub struct GenSnapTask {
     region_id: u64,
+    commit_index: u64,
     snap_notifier: SyncSender<RaftSnapshot>,
 }
 
 impl GenSnapTask {
-    pub fn new(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
+    pub fn new(
+        region_id: u64,
+        commit_index: u64,
+        snap_notifier: SyncSender<RaftSnapshot>,
+    ) -> GenSnapTask {
         GenSnapTask {
             region_id,
+            commit_index,
             snap_notifier,
         }
+    }
+
+    pub fn commit_index(&self) -> u64 {
+        self.commit_index
     }
 
     pub fn generate_and_schedule_snapshot(
@@ -2265,6 +2286,15 @@ impl GenSnapTask {
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
+    }
+}
+
+impl Debug for GenSnapTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GenSnapTask")
+            .field("region_id", &self.region_id)
+            .field("commit_index", &self.commit_index)
+            .finish()
     }
 }
 
@@ -2590,57 +2620,72 @@ impl ApplyFsm {
     }
 
     #[allow(unused_mut)]
-    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext, snap_task: GenSnapTask) {
+    fn maybe_handle_snapshot(
+        &mut self,
+        apply_ctx: &mut ApplyContext,
+        snap_task: Option<GenSnapTask>,
+    ) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        let mut need_sync = apply_ctx
-            .apply_res
-            .iter()
-            .any(|res| res.region_id == self.delegate.region_id())
-            && self.delegate.last_sync_apply_index != self.delegate.apply_state.get_applied_index();
-        (|| {
-            fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
-        })();
-        if need_sync {
-            if apply_ctx.timer.is_none() {
-                apply_ctx.timer = Some(SlowTimer::new());
+        let applied_index = self.delegate.apply_state.get_applied_index();
+        if let Some(task) = snap_task {
+            self.delegate.pending_snaps.tasks.push_back(task);
+        }
+        while let Some(task) = self.delegate.pending_snaps.tasks.pop_front() {
+            if task.commit_index() > applied_index {
+                self.delegate.pending_snaps.tasks.push_front(task);
+                break;
             }
-            if apply_ctx.kv_wb.is_none() {
-                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            let mut need_sync = apply_ctx
+                .apply_res
+                .iter()
+                .any(|res| res.region_id == self.delegate.region_id())
+                && self.delegate.last_sync_apply_index != applied_index;
+            (|| {
+                fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
+            })();
+            if need_sync {
+                if apply_ctx.timer.is_none() {
+                    apply_ctx.timer = Some(SlowTimer::new());
+                }
+                if apply_ctx.kv_wb.is_none() {
+                    apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                }
+                self.delegate
+                    .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+                fail_point!(
+                    "apply_on_handle_snapshot_finish_1_1",
+                    self.delegate.id == 1 && self.delegate.region_id() == 1,
+                    |_| unimplemented!()
+                );
+
+                apply_ctx.flush();
+                // For now, it's more like last_flush_apply_index.
+                // TODO: Update it only when `flush()` returns true.
+                self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
+            }
+
+            if let Err(e) = task
+                .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
+            {
+                error!(
+                    "schedule snapshot failed";
+                    "error" => ?e,
+                    "region_id" => self.delegate.region_id(),
+                    "peer_id" => self.delegate.id()
+                );
             }
             self.delegate
-                .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+                .pending_snaps
+                .pending_count
+                .fetch_sub(1, Ordering::SeqCst);
             fail_point!(
-                "apply_on_handle_snapshot_1_1",
+                "apply_on_handle_snapshot_finish_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
                 |_| unimplemented!()
             );
-
-            apply_ctx.flush();
-            // For now, it's more like last_flush_apply_index.
-            // TODO: Update it only when `flush()` returns true.
-            self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
         }
-
-        if let Err(e) = snap_task
-            .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
-        {
-            error!(
-                "schedule snapshot failed";
-                "error" => ?e,
-                "region_id" => self.delegate.region_id(),
-                "peer_id" => self.delegate.id()
-            );
-        }
-        self.delegate
-            .pending_request_snapshot_count
-            .fetch_sub(1, Ordering::SeqCst);
-        fail_point!(
-            "apply_on_handle_snapshot_finish_1_1",
-            self.delegate.id == 1 && self.delegate.region_id() == 1,
-            |_| unimplemented!()
-        );
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
@@ -2663,12 +2708,16 @@ impl ApplyFsm {
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
                 Some(Msg::LogsUpToDate(_)) => {}
-                Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
+                Some(Msg::Snapshot(snap_task)) => {
+                    self.maybe_handle_snapshot(apply_ctx, Some(snap_task))
+                }
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f(&self.delegate),
                 None => break,
             }
         }
+        // Try handle snapshot again.
+        self.maybe_handle_snapshot(apply_ctx, None);
         if let Some(timer) = channel_timer {
             let elapsed = duration_to_sec(timer.elapsed());
             APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
@@ -3178,7 +3227,7 @@ mod tests {
             2,
             vec![
                 Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
-                Msg::Snapshot(GenSnapTask::new(2, tx)),
+                Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
@@ -3899,4 +3948,76 @@ mod tests {
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
     }
+
+    #[test]
+    fn test_snapshot() {
+        let (_path, engines) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let mut host = CoprocessorHost::default();
+        let obs = ApplyObserver::default();
+        host.registry
+            .register_query_observer(1, Box::new(obs.clone()));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, snapshot_rx) = dummy_scheduler();
+        let sender = Notifier::Sender(tx);
+        let cfg = Arc::new(Config::default());
+        let (router, mut system) = create_apply_batch_system(&cfg);
+        let builder = super::Builder {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host: Arc::new(host),
+            importer: importer.clone(),
+            engines: engines.clone(),
+            router: router.clone(),
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+
+        let mut reg = Registration::default();
+        reg.id = 3;
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(2, 3));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let apply_entry = |index| {
+            let (capture_tx, capture_rx) = mpsc::channel();
+            let put_entry = EntryBuilder::new(index, 1)
+                .put(b"k1", b"v1")
+                .epoch(1, 3)
+                .capture_resp(&router, 3, 1, capture_tx.clone())
+                .build();
+            router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![put_entry])));
+            let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert!(!resp.get_header().has_error(), "{:?}", resp);
+            assert_eq!(resp.get_responses().len(), 1);
+            validate(&router, 1, move |delegate| {
+                assert_eq!(delegate.applied_index_term, 1);
+                assert_eq!(delegate.apply_state.get_applied_index(), index);
+            });
+            fetch_apply_res(&rx);
+        };
+
+        // Snapshot needs applied index = 2.
+        let (tx, _) = mpsc::sync_channel(0);
+        router.schedule_task(1, Msg::Snapshot(GenSnapTask::new(1, 2, tx)));
+
+        // Apply entry at index 1.
+        apply_entry(1);
+
+        // Must wait applied index = 2.
+        snapshot_rx.try_recv().unwrap_err();
+
+        // Apply entry at index 2.
+        apply_entry(2);
+
+        snapshot_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+        system.shutdown();
+    }
+
 }
