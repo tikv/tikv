@@ -759,7 +759,9 @@ impl Snapshot for Snap {
             "snapshot" => %self.path(),
         );
         for cf_file in &self.cf_files {
-            if file_exists(&cf_file.path) {
+            if delete_file_if_exist(&cf_file.path).unwrap() {
+                // Here the file is used as a lock to avoid duplicated fetch_sub calls
+                // since delete can be called in parallel
                 self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
             }
         }
