@@ -31,7 +31,8 @@ use crate::raftstore::Result as RaftStoreResult;
 use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{
-    calc_crc32, delete_dir_if_exist, delete_file_if_exist, file_exists, get_file_size, sync_dir,
+    calc_crc32, create_dir_if_not_exist, delete_dir_if_exist, delete_file_if_exist, file_exists,
+    get_file_size, sync_dir,
 };
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
@@ -1016,9 +1017,10 @@ impl SnapManager {
 
     fn gen_migrate_target(origin_filename: &str) -> (String, String) {
         // Old snapshots files are named like
-        // "XXX_region_term_index.meta" or
-        // "XXX_region_term_index_cf.sst".
-        // Now "XXX_region_term_index" is the folder name
+        // "type_region_term_index.meta" or
+        // "type_region_term_index_cf.sst",
+        // where "type" is one of "gen" or "rev".
+        // Now "type_region_term_index" is the folder name
         // and ".meta" or "cf.sst" is the filename
         let parts: Vec<_> = origin_filename.splitn(2, '.').collect();
         let components: Vec<_> = parts
@@ -1049,15 +1051,15 @@ impl SnapManager {
             ));
         }
 
-        // In the older version all snapshot file is in one big folder.
-        // This code migrate old snapshot files to current file layout
-        // that put files of each snapshot to its own folder
         for f in fs::read_dir(path)? {
             let p = f?;
+            // In the older version all snapshot file are in the same folder.
+            // This code migrate old snapshot files to current file layout
+            // that put files of each snapshot to its own folder
             if p.file_type()?.is_file() {
                 if let Some(s) = p.file_name().to_str() {
                     if s.ends_with(TMP_FILE_SUFFIX) {
-                        // .tmp files is deleted in this function
+                        // .tmp files are deleted at starting stage
                         // in old version, so just delete it here
                         fs::remove_file(p.path())?;
                         continue;
@@ -1065,8 +1067,10 @@ impl SnapManager {
                     let (dirname, filename) = Self::gen_migrate_target(s);
                     let dirpath = path.join(dirname);
                     let filepath = dirpath.join(filename);
-                    fs::create_dir_all(dirpath)?;
-                    fs::rename(p.path(), filepath)?;
+                    create_dir_if_not_exist(&dirpath)?;
+                    sync_dir(&dirpath)?;
+                    fs::rename(p.path(), &filepath)?;
+                    sync_dir(&filepath)?;
                 }
             }
         }
