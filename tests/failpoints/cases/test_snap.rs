@@ -3,15 +3,21 @@
 use std::fs;
 use std::io;
 use std::sync::atomic::Ordering;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::*;
 
 use fail;
+use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
+use tikv::raftstore::store::fsm::PeerFsm;
+use tikv::raftstore::store::*;
+use tikv::raftstore::Result;
 use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_overlap_cleanup() {
@@ -215,5 +221,102 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
                 exist, region_id
             );
         }
+    }
+}
+
+#[test]
+fn test_node_request_snapshot_on_split() {
+    let _guard = crate::setup();
+
+    let mut cluster = new_node_cluster(0, 3);
+    // We don't want to generate snapshots due to compact log.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    // Make sure peer 2 does not in the pending state.
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    for _ in 0..100 {
+        cluster.must_put(&[7; 100], &[7; 100]);
+    }
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+
+    let split_fp = "apply_before_split_1_3";
+    fail::cfg(split_fp, "pause").unwrap();
+    let (split_tx, split_rx) = mpsc::channel();
+    cluster.split_region(
+        &region,
+        b"k1",
+        Callback::Write(Box::new(move |_| {
+            split_tx.send(()).unwrap();
+        })),
+    );
+    // Split is stopped on peer3.
+    split_rx
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+
+    // Request snapshot.
+    let (request_tx, request_rx) = mpsc::channel();
+    let router = cluster.sim.rl().get_router(2).unwrap();
+    router
+        .send(
+            region.get_id(),
+            PeerMsg::CasualMessage(CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
+                let idx = peer.peer.raft_group.get_store().committed_index();
+                peer.peer.raft_group.request_snapshot(idx).unwrap();
+                request_tx.send(idx).unwrap();
+            }))),
+        )
+        .unwrap();
+    let committed_index = request_rx.recv().unwrap();
+
+    // Install snapshot filter after requesting snapshot.
+    let (tx, rx) = mpsc::channel();
+    let notifier = Mutex::new(Some(tx));
+    cluster.sim.wl().add_recv_filter(
+        2,
+        Box::new(SnapshotFilter {
+            notifier,
+            region_id: region.get_id(),
+        }),
+    );
+    // There is no snapshot as long as we pause the split.
+    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+
+    // Continue split.
+    fail::remove(split_fp);
+    split_rx.recv().unwrap();
+    let mut m = rx.recv().unwrap();
+    let snapshot = m.take_message().take_snapshot();
+
+    // Requested snapshot_index >= committed_index.
+    assert!(
+        snapshot.get_metadata().get_index() >= committed_index,
+        "{:?} | {}",
+        m,
+        committed_index
+    );
+}
+
+/// Pause Snap and wait till first append message arrives.
+pub struct SnapshotFilter {
+    notifier: Mutex<Option<Sender<RaftMessage>>>,
+    region_id: u64,
+}
+
+impl Filter for SnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot
+                && msg.get_region_id() == self.region_id
+            {
+                let tx = self.notifier.lock().unwrap().take().unwrap();
+                tx.send(msg.clone()).unwrap();
+            }
+        }
+        Ok(())
     }
 }

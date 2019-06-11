@@ -709,10 +709,14 @@ impl Peer {
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            self.send_raft_message(msg, trans);
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
-                MessageType::MsgAppendResponse => metrics.append_resp += 1,
+                MessageType::MsgAppendResponse => {
+                    if msg.get_request_snapshot() != raft::INVALID_INDEX {
+                        metrics.request_snapshot += 1;
+                    }
+                    metrics.append_resp += 1;
+                }
                 MessageType::MsgRequestPreVote => metrics.prevote += 1,
                 MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
@@ -744,6 +748,7 @@ impl Peer {
                 | MessageType::MsgReadIndex
                 | MessageType::MsgReadIndexResp => {}
             }
+            self.send_raft_message(msg, trans);
         }
     }
 
@@ -1002,12 +1007,12 @@ impl Peer {
     }
 
     #[inline]
-    fn is_splitting(&self) -> bool {
+    pub fn is_splitting(&self) -> bool {
         self.last_committed_split_idx > self.get_store().applied_index()
     }
 
     #[inline]
-    fn is_merging(&self) -> bool {
+    pub fn is_merging(&self) -> bool {
         self.last_committed_prepare_merge_idx > self.get_store().applied_index()
             || self.pending_merge_state.is_some()
     }
@@ -1893,10 +1898,26 @@ impl Peer {
         true
     }
 
-    pub fn get_min_progress(&self) -> u64 {
-        self.raft_group.status_ref().progress.map_or(0, |p| {
-            p.iter().map(|(_, pr)| pr.matched).min().unwrap_or_default()
-        })
+    pub fn get_min_progress(&self) -> Result<u64> {
+        let mut min = None;
+        if let Some(progress) = self.raft_group.status_ref().progress {
+            for (id, pr) in progress.iter() {
+                if pr.state == ProgressState::Snapshot {
+                    return Err(box_err!(
+                        "there is a pending snapshot peer {} [{:?}], skip merge",
+                        id,
+                        pr
+                    ));
+                }
+                if min.is_none() {
+                    min = Some(pr.matched);
+                }
+                if min.unwrap() > pr.matched {
+                    min = Some(pr.matched);
+                }
+            }
+        }
+        Ok(min.unwrap_or(0))
     }
 
     fn pre_propose_prepare_merge<T, C>(
@@ -1905,7 +1926,7 @@ impl Peer {
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
-        let min_progress = self.get_min_progress();
+        let min_progress = self.get_min_progress()?;
         let min_index = min_progress + 1;
         if min_progress == 0 || last_index - min_progress > ctx.cfg.merge_max_log_gap {
             return Err(box_err!(

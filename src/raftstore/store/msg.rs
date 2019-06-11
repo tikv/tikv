@@ -12,6 +12,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
 
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
+use crate::raftstore::store::fsm::PeerFsm;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
 use crate::storage::kv::CompactedEvent;
@@ -209,6 +210,10 @@ pub enum CasualMessage {
     ClearRegionSize,
     /// Indicate a target region is overlapped.
     RegionOverlapped,
+
+    /// A test only message, it is useful when we want to access
+    /// peer's internal state.
+    Test(Box<dyn FnOnce(&mut PeerFsm) + Send + 'static>),
 }
 
 impl fmt::Debug for CasualMessage {
@@ -248,6 +253,7 @@ impl fmt::Debug for CasualMessage {
                 "clear region size"
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
+            CasualMessage::Test(_) => write!(fmt, "Test"),
         }
     }
 }
