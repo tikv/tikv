@@ -2633,6 +2633,7 @@ impl ApplyFsm {
             self.delegate.pending_snaps.tasks.push_back(task);
         }
         while let Some(task) = self.delegate.pending_snaps.tasks.pop_front() {
+            // Handle the task if its commit index has been applied.
             if task.commit_index() > applied_index {
                 self.delegate.pending_snaps.tasks.push_front(task);
                 break;
@@ -2663,11 +2664,11 @@ impl ApplyFsm {
                 apply_ctx.flush();
                 // For now, it's more like last_flush_apply_index.
                 // TODO: Update it only when `flush()` returns true.
-                self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
+                self.delegate.last_sync_apply_index = applied_index;
             }
 
-            if let Err(e) = task
-                .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
+            if let Err(e) =
+                task.generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
             {
                 error!(
                     "schedule snapshot failed";
