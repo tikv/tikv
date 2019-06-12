@@ -192,7 +192,7 @@ docker-tag-with-hash: docker
 	docker tag tikv/tikv-importer tikv/tikv-importer:${TIKV_BUILD_GIT_HASH}
 	docker tag tikv/tikv-ctl tikv/tikv-ctl:${TIKV_BUILD_GIT_HASH}
 
-docker-and-binary: docker-tikv
+docker-and-binary: docker
 	docker run --rm -v $(pwd)/bin:/release --entrypoint=/bin/cp tikv/tikv /tikv-server /tikv-importer /tikv-ctl  /release/
 
 docker-clean:
