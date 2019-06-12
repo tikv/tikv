@@ -332,11 +332,11 @@ pub fn ensure_columns_decoded(
 // TODO: Move to aggr_helper.
 /// Evaluates expressions and outputs the result into the given Vec. Lifetime of the expressions
 /// are erased.
-pub unsafe fn eval_exprs_no_lifetime<'a>(
+pub unsafe fn eval_exprs_decoded_no_lifetime<'a>(
     context: &mut EvalContext,
     exprs: &[RpnExpression],
     schema: &[FieldType],
-    input_physical_columns: &mut LazyBatchColumnVec,
+    input_physical_columns: &LazyBatchColumnVec,
     input_logical_rows: &[usize],
     output: &mut Vec<RpnStackNode<'a>>,
 ) -> Result<()> {

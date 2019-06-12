@@ -76,17 +76,17 @@ impl DAGBuilder {
                 //                        )?;
                 //                    }
                 //                }
-                //                ExecType::TypeStreamAgg => {
-                //                    // Note: We won't check whether the source of stream aggregation is in order.
-                //                    //       It is undefined behavior if the source is unordered.
-                //                    let descriptor = ed.get_aggregation();
-                //                    BatchStreamAggregationExecutor::check_supported(&descriptor).map_err(|e| {
-                //                        Error::Other(box_err!(
-                //                            "Unable to use BatchStreamAggregationExecutor: {}",
-                //                            e
-                //                        ))
-                //                    })?;
-                //                }
+                ExecType::TypeStreamAgg => {
+                    // Note: We won't check whether the source of stream aggregation is in order.
+                    //       It is undefined behavior if the source is unordered.
+                    let descriptor = ed.get_aggregation();
+                    BatchStreamAggregationExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!(
+                            "Unable to use BatchStreamAggregationExecutor: {}",
+                            e
+                        ))
+                    })?;
+                }
                 ExecType::TypeLimit => {} //                ExecType::TypeTopN => {
                 //                    let descriptor = ed.get_topN();
                 //                    BatchTopNExecutor::check_supported(&descriptor).map_err(|e| {
@@ -223,21 +223,21 @@ impl DAGBuilder {
                 //                        )
                 //                    }
                 //                }
-                //                ExecType::TypeStreamAgg => {
-                //                    COPR_EXECUTOR_COUNT
-                //                        .with_label_values(&["stream_aggregation"])
-                //                        .inc();
-                //
-                //                    Box::new(
-                //                        BatchStreamAggregationExecutor::new(
-                //                            config.clone(),
-                //                            executor,
-                //                            ed.mut_aggregation().take_group_by().into_vec(),
-                //                            ed.mut_aggregation().take_agg_func().into_vec(),
-                //                        )?
-                //                        .with_summary_collector(C::new(summary_slot_index)),
-                //                    )
-                //                }
+                ExecType::TypeStreamAgg => {
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["stream_aggregation"])
+                        .inc();
+
+                    Box::new(
+                        BatchStreamAggregationExecutor::new(
+                            config.clone(),
+                            executor,
+                            ed.mut_aggregation().take_group_by().into_vec(),
+                            ed.mut_aggregation().take_agg_func().into_vec(),
+                        )?
+                        .with_summary_collector(C::new(summary_slot_index)),
+                    )
+                }
                 ExecType::TypeLimit => {
                     COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
 

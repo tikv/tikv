@@ -101,6 +101,10 @@ pub struct BatchStreamAggregationImpl {
     aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
+// `RpnStackNode` is not `Send`. However, we will never use its data between different
+// function calls, so it is safe.
+unsafe impl Send for BatchStreamAggregationImpl {}
+
 impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
     pub fn new(
         config: Arc<EvalConfig>,
@@ -178,49 +182,59 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
-        mut input: LazyBatchColumnVec,
+        mut input_physical_columns: LazyBatchColumnVec,
+        input_logical_rows: &[usize],
     ) -> Result<()> {
         let context = &mut entities.context;
         let src_schema = entities.src.schema();
 
-        let rows_len = input.rows_len();
+        let logical_rows_len = input_logical_rows.len();
         let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
         // Decode columns with mutable input first, so subsequent access to input can be immutable
         // (and the borrow checker will be happy)
-        ensure_columns_decoded(&context.cfg.tz, &self.group_by_exps, src_schema, &mut input)?;
+        ensure_columns_decoded(
+            &context.cfg.tz,
+            &self.group_by_exps,
+            src_schema,
+            &mut input_physical_columns,
+            input_logical_rows,
+        )?;
         ensure_columns_decoded(
             &context.cfg.tz,
             &entities.each_aggr_exprs,
             src_schema,
-            &mut input,
+            &mut input_physical_columns,
+            input_logical_rows,
         )?;
         assert!(self.group_by_results_unsafe.is_empty());
         assert!(self.aggr_expr_results_unsafe.is_empty());
         unsafe {
-            eval_exprs_no_lifetime(
+            eval_exprs_decoded_no_lifetime(
                 context,
                 &self.group_by_exps,
                 src_schema,
-                &input,
+                &input_physical_columns,
+                input_logical_rows,
                 &mut self.group_by_results_unsafe,
             )?;
-            eval_exprs_no_lifetime(
+            eval_exprs_decoded_no_lifetime(
                 context,
                 &entities.each_aggr_exprs,
                 src_schema,
-                &input,
+                &input_physical_columns,
+                input_logical_rows,
                 &mut self.aggr_expr_results_unsafe,
             )?;
         }
 
         // Stores input references, clone them when needed
         let mut group_key_ref = Vec::with_capacity(group_by_len);
-        let mut group_start_row = 0;
-        for row_index in 0..rows_len {
+        let mut group_start_logical_row = 0;
+        for logical_row_idx in 0..logical_rows_len {
             for group_by_result in &self.group_by_results_unsafe {
-                group_key_ref.push(group_by_result.get_scalar_ref(row_index));
+                group_key_ref.push(group_by_result.get_logical_scalar_ref(logical_row_idx));
             }
             match self.keys.rchunks_exact(group_by_len).next() {
                 Some(current_key) if &group_key_ref[..] == current_key => {
@@ -228,19 +242,19 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                 }
                 _ => {
                     // Update the complete group
-                    if row_index > 0 {
+                    if logical_row_idx > 0 {
                         update_current_states(
                             context,
                             &mut self.states,
                             aggr_fn_len,
                             &self.aggr_expr_results_unsafe,
-                            group_start_row,
-                            row_index,
+                            group_start_logical_row,
+                            logical_row_idx,
                         )?;
                     }
 
                     // create a new group
-                    group_start_row = row_index;
+                    group_start_logical_row = logical_row_idx;
                     self.keys
                         .extend(group_key_ref.drain(..).map(ScalarValueRef::to_owned));
                     for aggr_fn in &entities.each_aggr_fn {
@@ -255,8 +269,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             &mut self.states,
             aggr_fn_len,
             &self.aggr_expr_results_unsafe,
-            group_start_row,
-            rows_len,
+            group_start_logical_row,
+            logical_rows_len,
         )?;
 
         // Remember to remove expression results of the current batch. They are invalid
@@ -339,8 +353,8 @@ fn update_current_states(
     states: &mut [Box<dyn AggrFunctionState>],
     aggr_fn_len: usize,
     aggr_expr_results: &[RpnStackNode<'_>],
-    start_row: usize,
-    end_row: usize,
+    start_logical_row: usize,
+    end_logical_row: usize,
 ) -> Result<()> {
     if aggr_fn_len == 0 {
         return Ok(());
@@ -353,16 +367,26 @@ fn update_current_states(
                     match_template_evaluable! {
                         TT, match value {
                             ScalarValue::TT(scalar_value) => {
-                                state.update_repeat(context, scalar_value, end_row - start_row)?;
+                                state.update_repeat(
+                                    context,
+                                    scalar_value,
+                                    end_logical_row - start_logical_row,
+                                )?;
                             },
                         }
                     }
                 }
                 RpnStackNode::Vector { value, .. } => {
+                    let physical_vec = value.as_ref();
+                    let logical_rows = value.logical_rows();
                     match_template_evaluable! {
-                        TT, match &**value {
-                            VectorValue::TT(vector_value) => {
-                                state.update_vector(context, &vector_value[start_row..end_row])?;
+                        TT, match physical_vec {
+                            VectorValue::TT(vec) => {
+                                state.update_vector(
+                                    context,
+                                    vec,
+                                    &logical_rows[start_logical_row..end_logical_row],
+                                )?;
                             },
                         }
                     }
@@ -428,50 +452,65 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 2);
-        assert_eq!(r.data.columns_len(), 5);
+        assert_eq!(&r.logical_rows, &[0, 1]);
+        assert_eq!(r.physical_columns.rows_len(), 2);
+        assert_eq!(r.physical_columns.columns_len(), 5);
         assert!(!r.is_drained.unwrap());
         // COUNT
-        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(1), Some(2)]);
+        assert_eq!(
+            r.physical_columns[0].decoded().as_int_slice(),
+            &[Some(1), Some(2)]
+        );
         // AVG_COUNT
-        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(0), Some(2)]);
+        assert_eq!(
+            r.physical_columns[1].decoded().as_int_slice(),
+            &[Some(0), Some(2)]
+        );
         // AVG_SUM
         assert_eq!(
-            r.data[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_slice(),
             &[None, Real::new(5.0).ok()]
         );
         // col_0
-        assert_eq!(r.data[3].decoded().as_bytes_slice(), &[None, None]);
+        assert_eq!(
+            r.physical_columns[3].decoded().as_bytes_slice(),
+            &[None, None]
+        );
         // col_1
         assert_eq!(
-            r.data[4].decoded().as_real_slice(),
+            r.physical_columns[4].decoded().as_real_slice(),
             &[None, Real::new(3.5).ok()]
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 1);
-        assert_eq!(r.data.columns_len(), 5);
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.rows_len(), 1);
+        assert_eq!(r.physical_columns.columns_len(), 5);
         assert!(r.is_drained.unwrap());
         // COUNT
-        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(5)]);
         // AVG_COUNT
-        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(5)]);
         // AVG_SUM
         assert_eq!(
-            r.data[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_slice(),
             &[Real::new(-20.0).ok()]
         );
         // col_0
         assert_eq!(
-            r.data[3].decoded().as_bytes_slice(),
+            r.physical_columns[3].decoded().as_bytes_slice(),
             &[Some(b"abc".to_vec())]
         );
         // col_1
-        assert_eq!(r.data[4].decoded().as_real_slice(), &[Real::new(-3.0).ok()]);
+        assert_eq!(
+            r.physical_columns[4].decoded().as_real_slice(),
+            &[Real::new(-3.0).ok()]
+        );
     }
 
     /// Only have GROUP BY columns but no Aggregate Functions.
@@ -493,32 +532,41 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 2);
-        assert_eq!(r.data.columns_len(), 2);
+        assert_eq!(&r.logical_rows, &[0, 1]);
+        assert_eq!(r.physical_columns.rows_len(), 2);
+        assert_eq!(r.physical_columns.columns_len(), 2);
         assert!(!r.is_drained.unwrap());
         // col_0
-        assert_eq!(r.data[0].decoded().as_bytes_slice(), &[None, None]);
+        assert_eq!(
+            r.physical_columns[0].decoded().as_bytes_slice(),
+            &[None, None]
+        );
         // col_1
         assert_eq!(
-            r.data[1].decoded().as_real_slice(),
+            r.physical_columns[1].decoded().as_real_slice(),
             &[None, Real::new(1.5).ok()]
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 1);
-        assert_eq!(r.data.columns_len(), 2);
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.rows_len(), 1);
+        assert_eq!(r.physical_columns.columns_len(), 2);
         assert!(r.is_drained.unwrap());
         // col_0
         assert_eq!(
-            r.data[0].decoded().as_bytes_slice(),
+            r.physical_columns[0].decoded().as_bytes_slice(),
             &[Some(b"abc".to_vec())]
         );
         // col_1
-        assert_eq!(r.data[1].decoded().as_real_slice(), &[Real::new(-5.0).ok()]);
+        assert_eq!(
+            r.physical_columns[1].decoded().as_real_slice(),
+            &[Real::new(-5.0).ok()]
+        );
     }
 
     /// Builds an executor that will return these data:
@@ -542,38 +590,45 @@ mod tests {
             vec![FieldTypeTp::VarString.into(), FieldTypeTp::Double.into()],
             vec![
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
+                    physical_columns: LazyBatchColumnVec::from(vec![
                         VectorValue::Bytes(vec![
-                            None,
-                            None,
+                            Some(b"foo".to_vec()),
                             None,
                             Some(b"abc".to_vec()),
+                            None,
+                            None,
+                            None,
                             Some(b"abc".to_vec()),
                         ]),
                         VectorValue::Real(vec![
-                            None,
-                            Real::new(1.5).ok(),
+                            Real::new(100.0).ok(),
                             Real::new(1.5).ok(),
                             Real::new(-5.0).ok(),
+                            None,
+                            Real::new(1.5).ok(),
+                            None,
                             Real::new(-5.0).ok(),
                         ]),
                     ]),
+                    logical_rows: vec![3, 1, 4, 2, 6],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Bytes(vec![Some(b"abc".to_vec())]),
-                        VectorValue::Real(vec![Real::new(-5.0).ok()]),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![None, None, Some(b"abc".to_vec())]),
+                        VectorValue::Real(vec![None, Real::new(100.0).ok(), Real::new(-5.0).ok()]),
                     ]),
+                    logical_rows: vec![2],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
+                    physical_columns: LazyBatchColumnVec::from(vec![
                         VectorValue::Bytes(vec![Some(b"abc".to_vec()), Some(b"abc".to_vec())]),
                         VectorValue::Real(vec![Real::new(-5.0).ok(), Real::new(-5.0).ok()]),
                     ]),
+                    logical_rows: (0..2).collect(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),
                 },
