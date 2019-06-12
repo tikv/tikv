@@ -38,7 +38,7 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
 use crate::storage::lock_manager::Config as PessimisticTxnConfig;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use engine::rocks::util::config::{self as rocks_config, CompressionType};
+use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
@@ -84,6 +84,7 @@ pub struct TitanCfConfig {
     pub discardable_ratio: f64,
     pub sample_ratio: f64,
     pub merge_small_file_threshold: ReadableSize,
+    pub blob_run_mode: BlobRunMode,
 }
 
 impl Default for TitanCfConfig {
@@ -97,6 +98,7 @@ impl Default for TitanCfConfig {
             discardable_ratio: 0.5,
             sample_ratio: 0.1,
             merge_small_file_threshold: ReadableSize::mb(8),
+            blob_run_mode: BlobRunMode::Normal,
         }
     }
 }
