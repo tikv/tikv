@@ -247,7 +247,7 @@ bitfield! {
     #[inline]
     pub bool, neg, set_neg: 63;
     #[inline]
-    bool, unused, _: 62;
+    bool, unused, set_unused: 62;
     #[inline]
     pub u32, hours, set_hours: 61, 48;
     #[inline]
@@ -614,10 +614,12 @@ impl std::hash::Hash for Duration {
 impl PartialOrd for Duration {
     fn partial_cmp(&self, dur: &Duration) -> Option<Ordering> {
         let mut a = *self;
-        a.set_fsp(0);
-
         let mut b = *dur;
+
+        a.set_fsp(0);
         b.set_fsp(0);
+        a.set_unused(false);
+        b.set_unused(false);
 
         Some(match (a.neg(), b.neg()) {
             (true, true) => b.abs().cmp(&a.abs()),
