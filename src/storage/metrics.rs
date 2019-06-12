@@ -227,6 +227,17 @@ lazy_static! {
         &["state"]
     )
     .unwrap();
+    pub static ref AUTO_GC_SAFE_POINT_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_gcworker_autogc_safe_point",
+        "Safe point used for auto gc"
+    )
+    .unwrap();
+    pub static ref AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_gcworker_autogc_processed_regions",
+        "Processed regions by auto gc",
+        &["type"]
+    )
+    .unwrap();
     pub static ref REQUEST_EXCEED_BOUND: IntCounter = register_int_counter!(
         "tikv_request_exceed_bound",
         "Counter of request exceed bound"
