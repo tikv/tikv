@@ -165,21 +165,30 @@ impl LazyBatchColumnVec {
         }
         self.assert_columns_equal_length();
     }
-}
 
-impl std::ops::Deref for LazyBatchColumnVec {
-    type Target = [LazyBatchColumn];
+    pub fn as_slice(&self) -> &[LazyBatchColumn] {
+        self.columns.as_slice()
+    }
 
-    #[inline]
-    fn deref(&self) -> &[LazyBatchColumn] {
-        self.columns.deref()
+    pub fn as_mut_slice(&mut self) -> &mut [LazyBatchColumn] {
+        self.columns.as_mut_slice()
     }
 }
 
-impl std::ops::DerefMut for LazyBatchColumnVec {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut [LazyBatchColumn] {
-        self.columns.deref_mut()
+// Do not implement Deref, since we want to forbid some misleading function calls like
+// `LazyBatchColumnVec.len()`.
+
+impl std::ops::Index<usize> for LazyBatchColumnVec {
+    type Output = LazyBatchColumn;
+
+    fn index(&self, index: usize) -> &LazyBatchColumn {
+        &self.columns[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for LazyBatchColumnVec {
+    fn index_mut(&mut self, index: usize) -> &mut LazyBatchColumn {
+        &mut self.columns[index]
     }
 }
 

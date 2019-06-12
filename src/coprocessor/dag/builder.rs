@@ -87,13 +87,13 @@ impl DAGBuilder {
                         ))
                     })?;
                 }
-                ExecType::TypeLimit => {} //                ExecType::TypeTopN => {
-                //                    let descriptor = ed.get_topN();
-                //                    BatchTopNExecutor::check_supported(&descriptor).map_err(|e| {
-                //                        Error::Other(box_err!("Unable to use BatchTopNExecutor: {}", e))
-                //                    })?;
-                //                }
-                _ => return Err(box_err!("Unsupported")),
+                ExecType::TypeLimit => {}
+                ExecType::TypeTopN => {
+                    let descriptor = ed.get_topN();
+                    BatchTopNExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchTopNExecutor: {}", e))
+                    })?;
+                }
             }
         }
 
@@ -246,29 +246,29 @@ impl DAGBuilder {
                             .with_summary_collector(C::new(summary_slot_index)),
                     )
                 }
-                //                ExecType::TypeTopN => {
-                //                    COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
-                //
-                //                    let mut d = ed.take_topN();
-                //                    let order_bys = d.get_order_by().len();
-                //                    let mut order_exprs_def = Vec::with_capacity(order_bys);
-                //                    let mut order_is_desc = Vec::with_capacity(order_bys);
-                //                    for mut item in d.take_order_by().into_iter() {
-                //                        order_exprs_def.push(item.take_expr());
-                //                        order_is_desc.push(item.get_desc());
-                //                    }
-                //
-                //                    Box::new(
-                //                        BatchTopNExecutor::new(
-                //                            config.clone(),
-                //                            executor,
-                //                            order_exprs_def,
-                //                            order_is_desc,
-                //                            d.get_limit() as usize,
-                //                        )?
-                //                        .with_summary_collector(C::new(summary_slot_index)),
-                //                    )
-                //                }
+                ExecType::TypeTopN => {
+                    COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
+
+                    let mut d = ed.take_topN();
+                    let order_bys = d.get_order_by().len();
+                    let mut order_exprs_def = Vec::with_capacity(order_bys);
+                    let mut order_is_desc = Vec::with_capacity(order_bys);
+                    for mut item in d.take_order_by().into_iter() {
+                        order_exprs_def.push(item.take_expr());
+                        order_is_desc.push(item.get_desc());
+                    }
+
+                    Box::new(
+                        BatchTopNExecutor::new(
+                            config.clone(),
+                            executor,
+                            order_exprs_def,
+                            order_is_desc,
+                            d.get_limit() as usize,
+                        )?
+                        .with_summary_collector(C::new(summary_slot_index)),
+                    )
+                }
                 _ => {
                     return Err(Error::Other(box_err!(
                         "Unexpected non-first executor {:?}",

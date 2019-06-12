@@ -11,6 +11,7 @@ use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
+use crate::coprocessor::dag::batch::executors::util::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
