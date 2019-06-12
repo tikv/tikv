@@ -2,6 +2,7 @@
 
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
+use super::util::extract_raw_key_from_process_result;
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
@@ -288,6 +289,7 @@ impl WaiterManager {
             .borrow_mut()
             .get_ready_waiters(lock_ts, hashes);
         ready_waiters.sort_unstable_by_key(|waiter| waiter.start_ts);
+
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             self.detector_scheduler
                 .clean_up_wait_for(waiter.start_ts, waiter.lock.clone());
@@ -318,12 +320,12 @@ impl WaiterManager {
             .remove_waiter(start_ts, lock)
             .and_then(|waiter| {
                 let pr = ProcessResult::Failed {
-                    err: StorageError::from(MvccError::Deadlock {
+                    err: StorageError::from(TxnError::from(MvccError::Deadlock {
                         start_ts,
                         lock_ts: waiter.lock.ts,
-                        key_hash: waiter.lock.hash,
+                        lock_key: extract_raw_key_from_process_result(&waiter.pr).to_vec(),
                         deadlock_key_hash,
-                    }),
+                    })),
                 };
                 execute_callback(waiter.cb, pr);
                 Some(())
