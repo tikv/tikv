@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use engine::rocks::util::config::CompressionType;
+use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
@@ -235,6 +235,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
+                blob_run_mode: BlobRunMode::ReadOnly,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -286,6 +287,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::Normal,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -337,6 +339,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::Normal,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -388,6 +391,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::Normal,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
