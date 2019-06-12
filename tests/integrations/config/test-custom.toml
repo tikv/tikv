@@ -224,6 +224,7 @@ max-gc-batch-size = "12MB"
 discardable-ratio = 0.00156
 sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
+blob-run-mode = "read-only"
 
 [rocksdb.writecf]
 block-size = "12KB"
