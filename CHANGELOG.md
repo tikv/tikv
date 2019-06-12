@@ -2,7 +2,7 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
-## [Unreleased]
+## [2.1.12]
 - More check for leader transferring during configuration changes [4799](https://github.com/tikv/tikv/pull/4799)
 - Synchronize all files and directories for received snapshots [#4853](https://github.com/tikv/tikv/pull/4853)
 
