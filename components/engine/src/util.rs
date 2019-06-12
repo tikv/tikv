@@ -80,6 +80,7 @@ pub fn delete_all_in_range_cf(
                 break;
             }
         }
+        it.status()?;
     }
 
     if wb.count() > 0 {
