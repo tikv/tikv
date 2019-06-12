@@ -968,25 +968,6 @@ impl Peer {
             self.send(ctx.trans, messages, &mut ctx.metrics.message);
         }
 
-        if let Some(snap) = self.get_pending_snapshot() {
-            if !self.ready_to_handle_pending_snap() {
-                debug!(
-                    "{} is not ready to apply snapshot, apply: {}, last_applying: {}",
-                    self.tag,
-                    self.get_store().applied_index(),
-                    self.last_applying_idx,
-                );
-                return;
-            }
-
-            let mut snap_data = RaftSnapshotData::new();
-            snap_data
-                .merge_from_bytes(snap.get_data())
-                .unwrap_or_else(|e| {
-                    warn!("{} failed to parse snap data: {:?}", self.tag, e);
-                });
-        }
-
         if !check_pending_snapshot {
             return;
         }
