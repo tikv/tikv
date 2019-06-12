@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
@@ -19,11 +8,14 @@ use kvproto::coprocessor::KeyRange;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use crate::util::codec::number;
-use crate::util::collections::HashSet;
+use tikv_util::codec::number;
+use tikv_util::collections::HashSet;
 
 use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
 use crate::coprocessor::codec::table::{self, RowColsDict};
+use crate::coprocessor::dag::exec_summary::{
+    ExecSummary, ExecSummaryCollector, WithSummaryCollector,
+};
 use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
 use crate::coprocessor::util;
 use crate::coprocessor::*;
@@ -33,7 +25,6 @@ mod aggregation;
 mod index_scan;
 mod limit;
 mod scan;
-pub mod scanner;
 mod selection;
 mod table_scan;
 mod topn;
@@ -46,7 +37,6 @@ pub use self::index_scan::IndexScanExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
 pub use self::scan::ScanExecutor;
-pub use self::scanner::{ScanOn, Scanner};
 pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;
@@ -77,9 +67,7 @@ impl ExprColumnRefVisitor {
             }
             self.cols_offset.insert(offset);
         } else {
-            for sub_expr in expr.get_children() {
-                self.visit(sub_expr)?;
-            }
+            self.batch_visit(expr.get_children())?;
         }
         Ok(())
     }
@@ -138,10 +126,12 @@ impl Row {
         Row::Agg(AggCols { suffix, value })
     }
 
-    pub fn take_origin(self) -> OriginCols {
+    pub fn take_origin(self) -> Result<OriginCols> {
         match self {
-            Row::Origin(row) => row,
-            _ => unreachable!(),
+            Row::Origin(row) => Ok(row),
+            _ => Err(box_err!(
+                "unexpected: aggregation columns cannot take origin"
+            )),
         }
     }
 
@@ -251,6 +241,7 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]);
     fn get_len_of_columns(&self) -> usize;
 
     /// Only executors with eval computation need to implement `take_eval_warnings`
@@ -268,23 +259,120 @@ pub trait Executor {
     fn stop_scan(&mut self) -> Option<KeyRange> {
         None
     }
+
+    fn with_summary_collector<C: ExecSummaryCollector>(
+        self,
+        summary_collector: C,
+    ) -> WithSummaryCollector<C, Self>
+    where
+        Self: Sized,
+    {
+        WithSummaryCollector {
+            summary_collector,
+            inner: self,
+        }
+    }
+}
+
+impl<C: ExecSummaryCollector, T: Executor> Executor for WithSummaryCollector<C, T> {
+    fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.summary_collector.on_start_iterate();
+        let ret = self.inner.next();
+        if let Ok(Some(_)) = ret {
+            self.summary_collector.on_finish_iterate(timer, 1);
+        } else {
+            self.summary_collector.on_finish_iterate(timer, 0);
+        }
+        ret
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.inner.collect_output_counts(counts);
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        self.inner.collect_metrics_into(metrics);
+    }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
+        self.summary_collector.collect_into(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.inner.get_len_of_columns()
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.inner.take_eval_warnings()
+    }
+
+    fn start_scan(&mut self) {
+        self.inner.start_scan();
+    }
+
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        self.inner.stop_scan()
+    }
+}
+
+impl<T: Executor + ?Sized> Executor for Box<T> {
+    #[inline]
+    fn next(&mut self) -> Result<Option<Row>> {
+        (**self).next()
+    }
+
+    #[inline]
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        (**self).collect_output_counts(counts)
+    }
+
+    #[inline]
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        (**self).collect_metrics_into(metrics)
+    }
+
+    #[inline]
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        (**self).collect_execution_summaries(target)
+    }
+
+    #[inline]
+    fn get_len_of_columns(&self) -> usize {
+        (**self).get_len_of_columns()
+    }
+
+    #[inline]
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        (**self).take_eval_warnings()
+    }
+
+    #[inline]
+    fn start_scan(&mut self) {
+        (**self).start_scan()
+    }
+
+    #[inline]
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        (**self).stop_scan()
+    }
 }
 
 #[cfg(test)]
 pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::coprocessor::codec::{table, Datum};
-    use crate::storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
+    use crate::storage::kv::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
     use crate::storage::{Key, Mutation, Options};
-    use crate::util::codec::number::NumberEncoder;
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::{
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
     use protobuf::RepeatedField;
+    use tikv_util::codec::number::NumberEncoder;
     use tipb::{
         executor::TableScan,
         expression::{Expr, ExprType},

@@ -1,25 +1,16 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::engine::IterOption;
-use crate::storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::raftstore::coprocessor::properties::MvccProperties;
+use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
-use crate::storage::{Key, Value, CF_LOCK, CF_WRITE};
-use crate::util::rocksdb_util::properties::MvccProperties;
+use crate::storage::{Key, Value};
+use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
+use tikv_util::keybuilder::KeyBuilder;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -195,8 +186,11 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     fn check_lock_impl(&self, key: &Key, ts: u64, lock: Lock) -> Result<u64> {
-        if lock.ts > ts || lock.lock_type == LockType::Lock {
-            // ignore lock when lock.ts > ts or lock's type is Lock
+        if lock.ts > ts
+            || lock.lock_type == LockType::Lock
+            || lock.lock_type == LockType::Pessimistic
+        {
+            // ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
             return Ok(ts);
         }
 
@@ -213,6 +207,7 @@ impl<S: Snapshot> MvccReader<S> {
             primary: lock.primary,
             ts: lock.ts,
             ttl: lock.ttl,
+            txn_size: lock.txn_size,
         })
     }
 
@@ -280,11 +275,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                self.fill_cache,
-            );
+            let iter_opt = self.gen_iter_opt();
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
@@ -293,11 +284,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                self.fill_cache,
-            );
+            let iter_opt = self.gen_iter_opt();
             let iter = self
                 .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
@@ -308,17 +295,30 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                true,
-            );
+            let mut iter_opt = self.gen_iter_opt();
+            iter_opt.fill_cache(true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
         Ok(())
+    }
+
+    fn gen_iter_opt(&self) -> IterOption {
+        let l_bound = if let Some(ref b) = self.lower_bound {
+            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
+            Some(builder)
+        } else {
+            None
+        };
+        let u_bound = if let Some(ref b) = self.upper_bound {
+            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
+            Some(builder)
+        } else {
+            None
+        };
+        IterOption::new(l_bound, u_bound, true)
     }
 
     // Return the first committed key which start_ts equals to ts
@@ -362,7 +362,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok((vec![], false));
         }
         let mut locks = Vec::with_capacity(limit);
-        while cursor.valid() {
+        while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
             if filter(&lock) {
@@ -489,18 +489,19 @@ impl<S: Snapshot> MvccReader<S> {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::properties::{
+        MvccProperties, MvccPropertiesCollectorFactory,
+    };
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
-    use crate::storage::engine::Modify;
-    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable, WriteBatch, DB};
+    use crate::storage::kv::Modify;
     use crate::storage::mvcc::write::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::rocksdb_util::{
-        self as rocksdb_util,
-        properties::{MvccProperties, MvccPropertiesCollectorFactory},
-        CFOptions,
-    };
+    use crate::storage::{Key, Mutation, Options};
+    use engine::rocks::util::CFOptions;
+    use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
+    use engine::rocks::{Writable, WriteBatch, DB};
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use std::sync::Arc;
@@ -545,6 +546,30 @@ mod tests {
             self.write(txn.into_modifies());
         }
 
+        fn prewrite_pessimistic_lock(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
+            let options = Options::default();
+            txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
+            self.write(txn.into_modifies());
+        }
+
+        fn acquire_pessimistic_lock(
+            &mut self,
+            k: Key,
+            pk: &[u8],
+            start_ts: u64,
+            for_update_ts: u64,
+        ) {
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
+            let mut options = Options::default();
+            options.for_update_ts = for_update_ts;
+            txn.acquire_pessimistic_lock(k, pk, false, &options)
+                .unwrap();
+            self.write(txn.into_modifies());
+        }
+
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
@@ -580,19 +605,19 @@ mod tests {
                 match rev {
                     Modify::Put(cf, k, v) => {
                         let k = keys::data_key(k.as_encoded());
-                        let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                        let handle = rocks::util::get_cf_handle(db, cf).unwrap();
                         wb.put_cf(handle, &k, &v).unwrap();
                     }
                     Modify::Delete(cf, k) => {
                         let k = keys::data_key(k.as_encoded());
-                        let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                        let handle = rocks::util::get_cf_handle(db, cf).unwrap();
                         wb.delete_cf(handle, &k).unwrap();
                     }
                     Modify::DeleteRange(cf, k1, k2, notify_only) => {
                         if !notify_only {
                             let k1 = keys::data_key(k1.as_encoded());
                             let k2 = keys::data_key(k2.as_encoded());
-                            let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                            let handle = rocks::util::get_cf_handle(db, cf).unwrap();
                             wb.delete_range_cf(handle, &k1, &k2).unwrap();
                         }
                     }
@@ -603,14 +628,14 @@ mod tests {
 
         fn flush(&mut self) {
             for cf in ALL_CFS {
-                let cf = rocksdb_util::get_cf_handle(&self.db, cf).unwrap();
+                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.flush_cf(cf, true).unwrap();
             }
         }
 
         fn compact(&mut self) {
             for cf in ALL_CFS {
-                let cf = rocksdb_util::get_cf_handle(&self.db, cf).unwrap();
+                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.compact_range_cf(cf, None, None);
             }
         }
@@ -630,7 +655,7 @@ mod tests {
             CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        Arc::new(rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
@@ -778,13 +803,22 @@ mod tests {
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);
+        engine.prewrite_pessimistic_lock(m, k, 45);
+        engine.commit(k, 45, 50);
+
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
-        // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
+        // Let's assume `45_40 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
-        // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        // Commit versions: [45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 45).unwrap().unwrap();
+        assert_eq!(commit_ts, 50);
+        assert_eq!(write_type, WriteType::Put);
+
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
         assert_eq!(commit_ts, 40);
         assert_eq!(write_type, WriteType::Put);
@@ -837,14 +871,19 @@ mod tests {
         engine.commit(k, 10, 11);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 12);
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 12, 12);
+        engine.prewrite_pessimistic_lock(m, k, 12);
+        engine.commit(k, 12, 13);
+
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 14);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
-        // Commit versions: [11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
+        // Commit versions: [13_12 PUT, 11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
         let write = reader.get_write(&key, 2).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
@@ -866,6 +905,10 @@ mod tests {
 
         let write = reader.get_write(&key, 13).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
-        assert_eq!(write.start_ts, 10);
+        assert_eq!(write.start_ts, 12);
+
+        let write = reader.get_write(&key, 15).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 12);
     }
 }

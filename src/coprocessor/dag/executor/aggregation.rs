@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 use std::mem;
@@ -18,9 +7,10 @@ use std::sync::Arc;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
 
-use crate::util::collections::{OrderMap, OrderMapEntry};
+use tikv_util::collections::{OrderMap, OrderMapEntry};
 
 use crate::coprocessor::codec::datum::{self, Datum};
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::*;
 
@@ -90,7 +80,7 @@ impl AggExecutor {
         aggr_func: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<AggExecutor> {
+    ) -> Result<Self> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&group_by)?;
@@ -109,7 +99,7 @@ impl AggExecutor {
 
     fn next(&mut self) -> Result<Option<Vec<Datum>>> {
         if let Some(row) = self.src.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)
                 .map(Some)
         } else {
@@ -150,6 +140,10 @@ impl AggExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
@@ -168,7 +162,7 @@ impl HashAggExecutor {
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<HashAggExecutor> {
+    ) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
         let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
@@ -252,12 +246,16 @@ impl Executor for HashAggExecutor {
         self.inner.collect_metrics_into(metrics)
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.inner.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.inner.take_eval_warnings()
     }
 }
 
@@ -300,12 +298,16 @@ impl Executor for StreamAggExecutor {
         self.inner.collect_metrics_into(metrics)
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.inner.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.inner.take_eval_warnings()
     }
 }
 
@@ -327,7 +329,7 @@ impl StreamAggExecutor {
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
         mut meta: Aggregation,
-    ) -> Result<StreamAggExecutor> {
+    ) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
         let group_len = group_bys.len();
@@ -404,17 +406,16 @@ mod tests {
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
+    use super::super::index_scan::tests::IndexTestWrapper;
+    use super::super::index_scan::IndexScanExecutor;
+    use super::super::tests::*;
+    use super::*;
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::coprocessor::codec::mysql::decimal::Decimal;
     use crate::coprocessor::codec::table;
+    use crate::coprocessor::dag::scanner::tests::Data;
     use crate::storage::SnapshotStore;
-    use crate::util::collections::HashMap;
-
-    use super::super::index_scan::tests::IndexTestWrapper;
-    use super::super::index_scan::IndexScanExecutor;
-    use super::super::scanner::tests::Data;
-    use super::super::tests::{build_expr, gen_table_scan_executor, get_range, new_col_info};
-    use super::*;
+    use tikv_util::collections::HashMap;
 
     fn build_group_by(col_ids: &[i64]) -> Vec<Expr> {
         let mut group_by = Vec::with_capacity(col_ids.len());

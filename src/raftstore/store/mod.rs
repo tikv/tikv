@@ -1,19 +1,7 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod cmd_resp;
 pub mod config;
-pub mod engine;
 pub mod fsm;
 pub mod keys;
 pub mod msg;
@@ -31,13 +19,12 @@ mod worker;
 
 pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,
-    prepare_bootstrap_cluster, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+    prepare_bootstrap_cluster,
 };
 pub use self::config::Config;
-pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
-    Callback, CasualMessage, PeerMsg, PeerTick, RaftCommand, ReadCallback, ReadResponse,
+    Callback, CasualMessage, PeerMsg, PeerTicks, RaftCommand, ReadCallback, ReadResponse,
     SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
@@ -46,7 +33,8 @@ pub use self::peer::{
 pub use self::peer_storage::{
     clear_meta, do_snapshot, init_apply_state, init_raft_state, maybe_upgrade_from_2_to_3,
     write_initial_apply_state, write_initial_raft_state, write_peer_state, CacheQueryStats,
-    PeerStorage, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
 };
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::snap::{
@@ -54,8 +42,7 @@ pub use self::snap::{
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::util::Engines;
-pub use self::worker::{KeyEntry, ReadTask, RegionTask};
+pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 
 // Only used in tests
 #[cfg(test)]

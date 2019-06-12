@@ -1,22 +1,11 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::super::types::Value;
 use super::lock::LockType;
 use super::{Error, Result};
 use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use crate::util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 use byteorder::ReadBytesExt;
+use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -32,11 +21,12 @@ const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
 impl WriteType {
-    pub fn from_lock_type(tp: LockType) -> WriteType {
+    pub fn from_lock_type(tp: LockType) -> Option<WriteType> {
         match tp {
-            LockType::Put => WriteType::Put,
-            LockType::Delete => WriteType::Delete,
-            LockType::Lock => WriteType::Lock,
+            LockType::Put => Some(WriteType::Put),
+            LockType::Delete => Some(WriteType::Delete),
+            LockType::Lock => Some(WriteType::Lock),
+            LockType::Pessimistic => None,
         }
     }
 
@@ -136,7 +126,7 @@ mod tests {
         ];
         for (i, (lock_type, write_type, flag)) in tests.drain(..).enumerate() {
             if lock_type.is_some() {
-                let wt = WriteType::from_lock_type(lock_type.unwrap());
+                let wt = WriteType::from_lock_type(lock_type.unwrap()).unwrap();
                 assert_eq!(
                     wt, write_type,
                     "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",

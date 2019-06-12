@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::WriteBytesExt;
 use num;
@@ -24,9 +13,9 @@ use std::{cmp, i32, i64, mem, u32, u64};
 use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
 use crate::coprocessor::dag::expr::EvalContext;
 
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
-use crate::util::escape;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
+use tikv_util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -543,9 +532,9 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     res
 }
 
-fn do_div_mod(
-    mut lhs: Decimal,
-    rhs: Decimal,
+fn do_div_mod_impl(
+    lhs: &Decimal,
+    rhs: &Decimal,
     mut frac_incr: u8,
     do_mod: bool,
 ) -> Option<Res<Decimal>> {
@@ -558,8 +547,7 @@ fn do_div_mod(
     let l_frac_cnt = word_cnt!(lhs.frac_cnt) * DIGITS_PER_WORD;
     let (l_idx, l_prec) = lhs.remove_leading_zeroes(lhs.int_cnt + l_frac_cnt);
     if l_prec == 0 {
-        lhs.reset_to_zero();
-        return Some(Res::Ok(lhs));
+        return Some(Res::Ok(Decimal::zero()));
     }
 
     frac_incr = frac_incr.saturating_sub(l_frac_cnt - lhs.frac_cnt + r_frac_cnt - rhs.frac_cnt);
@@ -698,14 +686,12 @@ fn do_div_mod(
 
         let mut frac_word_to = word_cnt!(res.frac_cnt);
         if int_word_to == 0 && frac_word_to == 0 {
-            lhs.reset_to_zero();
-            return Some(Res::Ok(lhs));
+            return Some(Res::Ok(Decimal::zero()));
         }
         let mut l_stop;
         if int_word_to <= 0 {
             if (-int_word_to) as u8 >= WORD_BUF_LEN {
-                lhs.reset_to_zero();
-                return Some(Res::Truncated(lhs));
+                return Some(Res::Truncated(Decimal::zero()));
             }
             l_stop = (l_idx as i8 + int_word_to + frac_word_to as i8) as u8;
             frac_word_to = (frac_word_to as i8 + int_word_to) as u8;
@@ -736,6 +722,10 @@ fn do_div_mod(
         dest.copy_from_slice(src);
     }
     Some(res)
+}
+
+fn do_div_mod(lhs: Decimal, rhs: Decimal, frac_incr: u8, do_mod: bool) -> Option<Res<Decimal>> {
+    do_div_mod_impl(&lhs, &rhs, frac_incr, do_mod)
 }
 
 /// `do_mul` multiplies two decimals.
@@ -929,6 +919,11 @@ impl Decimal {
         self.result_frac_cnt = 0;
         self.negative = false;
         self.word_buf[0] = 0;
+    }
+
+    /// Creates a new decimal which is zero.
+    pub fn zero() -> Decimal {
+        Decimal::new(1, 0, false)
     }
 
     /// Given a precision count 'prec', get:
@@ -2189,8 +2184,15 @@ impl Rem for Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn rem(self, rhs: Decimal) -> Option<Res<Decimal>> {
+        &self % &rhs
+    }
+}
+
+impl<'a, 'b> Rem<&'a Decimal> for &'b Decimal {
+    type Output = Option<Res<Decimal>>;
+    fn rem(self, rhs: &'a Decimal) -> Self::Output {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
-        let mut res = do_div_mod(self, rhs, 0, true);
+        let mut res = do_div_mod_impl(self, rhs, 0, true);
         if let Some(ref mut dec) = res {
             dec.result_frac_cnt = result_frac_cnt;
         }

@@ -1,48 +1,37 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use futures::Future;
 use tokio_core::reactor::Handle;
 
+use engine::rocks::util::*;
+use engine::rocks::DB;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use prometheus::local::LocalHistogram;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 
 use super::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
+use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
+use crate::raftstore::store::util::is_epoch_stale;
 use crate::raftstore::store::util::KeysInfoFormatter;
-use crate::raftstore::store::util::{
-    get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
-};
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
-use crate::storage::engine::DB;
 use crate::storage::FlowStatistics;
-use crate::util::collections::HashMap;
-use crate::util::escape;
-use crate::util::rocksdb_util::*;
-use crate::util::time::time_now_sec;
-use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
-use prometheus::local::LocalHistogram;
+use tikv_util::collections::HashMap;
+use tikv_util::escape;
+use tikv_util::time::time_now_sec;
+use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
@@ -197,6 +186,8 @@ pub struct Runner<T: PdClient> {
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
+    // Seconds between when a region is expected to send a heartbeat.
+    region_heartbeat_interval: u64,
 
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
@@ -211,6 +202,7 @@ impl<T: PdClient> Runner<T> {
         router: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
+        region_heartbeat_interval: u64,
     ) -> Runner<T> {
         Runner {
             store_id,
@@ -220,6 +212,7 @@ impl<T: PdClient> Runner<T> {
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
+            region_heartbeat_interval,
             scheduler,
         }
     }
@@ -517,7 +510,7 @@ impl<T: PdClient> Runner<T> {
                             return Ok(());
                         }
                         info!(
-                            "peer is still valid a memeber of region";
+                            "peer is still valid a member of region";
                             "region_id" => local_region.get_id(),
                             "peer_id" => peer.get_id(),
                             "pd_region" => ?pd_region
@@ -698,12 +691,16 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
                     let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
                     let written_keys_delta = written_keys - peer_stat.last_written_keys;
-                    let last_report_ts = peer_stat.last_report_ts;
+                    let mut last_report_ts = peer_stat.last_report_ts;
                     peer_stat.last_written_bytes = written_bytes;
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
                     peer_stat.last_report_ts = time_now_sec();
+                    last_report_ts = cmp::max(
+                        last_report_ts,
+                        peer_stat.last_report_ts - self.region_heartbeat_interval,
+                    );
                     (
                         read_bytes_delta,
                         read_keys_delta,

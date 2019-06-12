@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::i64;
 
@@ -43,7 +32,7 @@ impl ScalarFunc {
 mod tests {
     use crate::coprocessor::codec::mysql::Decimal;
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::ctx::Flag;
     use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::str::FromStr;
@@ -100,7 +89,7 @@ mod tests {
                 Datum::I64(37),
             ),
         ];
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         for (input, exp) in cases {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastStringAsInt, args);
@@ -134,7 +123,7 @@ mod tests {
                 Datum::I64(63),
             ),
         ];
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         for (input, exp) in cases {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, args);

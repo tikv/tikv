@@ -1,17 +1,8 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{EvalContext, Result, ScalarFunc};
+use crate::coprocessor::codec::data_type::Duration;
+use crate::coprocessor::codec::mysql::{Decimal, Json, Time};
 use crate::coprocessor::codec::Datum;
 use std::borrow::Cow;
 use std::convert::TryInto;
@@ -23,6 +14,68 @@ const IPV4_LENGTH: usize = 4;
 const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
 
 impl ScalarFunc {
+    pub fn int_any_value(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_int(ctx, row))
+    }
+
+    pub fn real_any_value(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_real(ctx, row))
+    }
+
+    pub fn string_any_value<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_string(ctx, row))
+    }
+
+    pub fn time_any_value<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_time(ctx, row))
+    }
+
+    pub fn decimal_any_value<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_decimal(ctx, row))
+    }
+
+    pub fn json_any_value<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Json>>> {
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_json(ctx, row))
+    }
+
+    pub fn duration_any_value<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Duration>>> {
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_duration(ctx, row))
+    }
+
     pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if Ipv4Addr::from_str(&input).is_ok() {
@@ -167,10 +220,140 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
+    use crate::coprocessor::codec::data_type::Duration;
+    use crate::coprocessor::codec::mysql::json::Json;
+    use crate::coprocessor::codec::mysql::Decimal;
+    use crate::coprocessor::codec::mysql::Time;
+    use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
+
+    macro_rules! test_any_value {
+        ($cases: expr, $case_type: ty, Datum::$type_of_datum: ident, $maker_for_case_ele: expr, ScalarFuncSig::$sig_of_scalar_func: ident) => {{
+            let cases: $case_type = $cases;
+
+            let mut ctx = EvalContext::default();
+            for (n1, n2, n3, n4, expected) in cases {
+                let input1 = datum_expr(Datum::$type_of_datum($maker_for_case_ele(n1)));
+                let input2 = datum_expr(Datum::$type_of_datum($maker_for_case_ele(n2)));
+                let input3 = datum_expr(Datum::$type_of_datum($maker_for_case_ele(n3)));
+                let input4 = datum_expr(Datum::$type_of_datum($maker_for_case_ele(n4)));
+
+                let op = scalar_func_expr(
+                    ScalarFuncSig::$sig_of_scalar_func,
+                    &[input1, input2, input3, input4],
+                );
+                let op = Expression::build(&ctx, op).unwrap();
+                let got = op.eval(&mut ctx, &[]).unwrap();
+                let exp = Datum::from($maker_for_case_ele(expected));
+                assert_eq!(got, exp);
+            }
+            let op = scalar_func_expr(ScalarFuncSig::$sig_of_scalar_func, &[]);
+            let op = Expression::build(&ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]);
+            match got {
+                Ok(x) => assert_eq!(x, Datum::Null),
+                _ => panic!("test failed, expect Ok(Datum::Null)"),
+            }
+        }};
+    }
+
+    #[test]
+    fn test_int_any_value() {
+        test_any_value!(
+            vec![(1i64, 2i64, 3i64, 4i64, 1i64)],
+            Vec<(i64, i64, i64, i64, i64)>,
+            Datum::I64,
+            |x| x,
+            ScalarFuncSig::IntAnyValue
+        );
+    }
+
+    #[test]
+    fn test_real_any_value() {
+        test_any_value!(
+            vec![(1.2f64, 2.3f64, 3f64, 4f64, 1.2f64)],
+            Vec<(f64, f64, f64, f64, f64)>,
+            Datum::F64,
+            |x| x,
+            ScalarFuncSig::RealAnyValue
+        );
+    }
+
+    #[test]
+    fn test_string_any_value() {
+        test_any_value!(
+            vec![("abc", "def", "ojk", "hij", "abc")],
+            Vec<(&str, &str, &str, &str, &str)>,
+            Datum::Bytes,
+            |x: &str| x.as_bytes().to_vec(),
+            ScalarFuncSig::StringAnyValue
+        );
+    }
+
+    #[test]
+    fn test_duration_any_value() {
+        test_any_value!(
+            vec![(
+                Duration::from_nanos(10, 0).unwrap(),
+                Duration::from_nanos(11, 0).unwrap(),
+                Duration::from_nanos(12, 0).unwrap(),
+                Duration::from_nanos(13, 0).unwrap(),
+                Duration::from_nanos(10, 0).unwrap(),
+            )],
+            Vec<(Duration, Duration, Duration, Duration, Duration)>,
+            Datum::Dur,
+            |x| x,
+            ScalarFuncSig::DurationAnyValue
+        );
+    }
+
+    #[test]
+    fn test_json_any_value() {
+        test_any_value!(
+            vec![(
+                Json::U64(1),
+                Json::U64(2),
+                Json::U64(3),
+                Json::U64(4),
+                Json::U64(1),
+            )],
+            Vec<(Json, Json, Json, Json, Json)>,
+            Datum::Json,
+            |x| x,
+            ScalarFuncSig::JSONAnyValue
+        );
+    }
+
+    #[test]
+    fn test_time_any_value() {
+        test_any_value!(
+            vec![(
+                Time::parse_datetime("1000-01-01 00:00:00", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime("1000-01-01 00:00:01", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime("1000-01-01 00:00:02", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime("1000-01-01 00:00:03", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime("1000-01-01 00:00:00", 0, &Tz::utc()).unwrap(),
+            )],
+            Vec<(Time, Time, Time, Time, Time)>,
+            Datum::Time,
+            |x| x,
+            ScalarFuncSig::TimeAnyValue
+        );
+    }
+
+    #[test]
+    fn test_decimal_any_value() {
+        test_any_value!(
+            vec![(10.into(), 20.into(), 30.into(), 40.into(), 10.into())],
+            Vec<(Decimal, Decimal, Decimal, Decimal, Decimal)>,
+            Datum::Dec,
+            |x| x,
+            ScalarFuncSig::DecimalAnyValue
+        );
+    }
 
     #[test]
     fn test_is_ipv4() {

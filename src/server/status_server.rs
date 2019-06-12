@@ -1,28 +1,63 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::future::{ok, FutureResult};
+use futures::future::{err, ok};
 use futures::sync::oneshot::{Receiver, Sender};
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, Body, Method, Request, Response, Server, StatusCode};
+use tempdir::TempDir;
 use tokio_threadpool::{Builder, ThreadPool};
 
 use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
-use crate::util::metrics::dump;
+use tikv_alloc::error::ProfError;
+use tikv_util::collections::HashMap;
+use tikv_util::metrics::dump;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+
+mod profiler_guard {
+    use tikv_alloc::error::ProfResult;
+    use tikv_alloc::{activate_prof, deactivate_prof};
+
+    use futures::{Future, Poll};
+    use futures_locks::{Mutex, MutexFut, MutexGuard};
+
+    lazy_static! {
+        static ref PROFILER_MUTEX: Mutex<u32> = Mutex::new(0);
+    }
+
+    pub struct ProfGuard(MutexGuard<u32>);
+
+    pub struct ProfLock(MutexFut<u32>);
+
+    impl ProfLock {
+        pub fn new() -> ProfResult<ProfLock> {
+            let guard = PROFILER_MUTEX.lock();
+            match activate_prof() {
+                Ok(_) => Ok(ProfLock(guard)),
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    impl Drop for ProfGuard {
+        fn drop(&mut self) {
+            match deactivate_prof() {
+                _ => {} // TODO: handle error here
+            }
+        }
+    }
+
+    impl Future for ProfLock {
+        type Item = ProfGuard;
+        type Error = ();
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            self.0.poll().map(|item| item.map(|guard| ProfGuard(guard)))
+        }
+    }
+}
 
 pub struct StatusServer {
     thread_pool: ThreadPool,
@@ -52,6 +87,100 @@ impl StatusServer {
         }
     }
 
+    pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
+        let lock = match profiler_guard::ProfLock::new() {
+            Err(e) => return Box::new(err(e)),
+            Ok(lock) => lock,
+        };
+        info!("start memory profiling {} seconds", seconds);
+
+        let timer = GLOBAL_TIMER_HANDLE.clone();
+        Box::new(lock.then(move |guard| {
+            timer
+                .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
+                .then(
+                    move |_| -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
+                        let tmp_dir = match TempDir::new("") {
+                            Ok(tmp_dir) => tmp_dir,
+                            Err(e) => return Box::new(err(e.into())),
+                        };
+                        let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
+                        let path = match os_path.into_string() {
+                            Ok(path) => path,
+                            Err(path) => return Box::new(err(ProfError::PathError(path))),
+                        };
+
+                        if let Err(e) = tikv_alloc::dump_prof(&path) {
+                            return Box::new(err(e));
+                        }
+                        drop(guard);
+                        Box::new(
+                            tokio_fs::file::File::open(path)
+                                .and_then(|file| {
+                                    let buf: Vec<u8> = Vec::new();
+                                    tokio_io::io::read_to_end(file, buf)
+                                })
+                                .and_then(move |(_, buf)| {
+                                    drop(tmp_dir);
+                                    ok(buf)
+                                })
+                                .map_err(|e| -> ProfError { e.into() }),
+                        )
+                    },
+                )
+        }))
+    }
+
+    pub fn dump_prof_to_resp(
+        req: Request<Body>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        let query = match req.uri().query() {
+            Some(query) => query,
+            None => {
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::empty())
+                    .unwrap();
+                return Box::new(ok(response));
+            }
+        };
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+        let seconds: u64 = match query_pairs.get("seconds") {
+            Some(val) => match val.parse() {
+                Ok(val) => val,
+                Err(_) => {
+                    let response = Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::empty())
+                        .unwrap();
+                    return Box::new(ok(response));
+                }
+            },
+            None => 10,
+        };
+
+        Box::new(
+            Self::dump_prof(seconds)
+                .and_then(|buf| {
+                    let response = Response::builder()
+                        .header("X-Content-Type-Options", "nosniff")
+                        .header("Content-Disposition", "attachment; filename=\"profile\"")
+                        .header("Content-Type", mime::APPLICATION_OCTET_STREAM.to_string())
+                        .header("Content-Length", buf.len())
+                        .body(buf.into())
+                        .unwrap();
+                    ok(response)
+                })
+                .or_else(|err| {
+                    let response = Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from(err.to_string()))
+                        .unwrap();
+                    ok(response)
+                }),
+        )
+    }
+
     pub fn start(&mut self, status_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
@@ -59,19 +188,24 @@ impl StatusServer {
         let builder = Server::try_bind(&addr)?;
 
         // Create a status service.
-        let service = |req: Request<Body>| -> FutureResult<Response<Body>, hyper::Error> {
-            let mut response = Response::new(Body::empty());
-
+        let service = |req: Request<Body>| -> Box<dyn Future<Item=Response<Body>, Error=hyper::Error> + Send> {
             match (req.method(), req.uri().path()) {
                 (&Method::GET, "/metrics") => {
-                    *response.body_mut() = Body::from(dump());
+                    let response = Response::builder().body(Body::from(dump())).unwrap();
+                    Box::new(ok(response))
                 }
-                (&Method::GET, "/status") => return ok(response),
+                (&Method::GET, "/pprof/profile") => {
+                    Self::dump_prof_to_resp(req)
+                }
+                (&Method::GET, "/status") => {
+                    let response = Response::builder().body(Body::empty()).unwrap();
+                    Box::new(ok(response))
+                },
                 _ => {
-                    *response.status_mut() = StatusCode::NOT_FOUND;
+                    let response = Response::builder().status(StatusCode::NOT_FOUND).body(Body::empty()).unwrap();
+                    Box::new(ok(response))
                 }
-            };
-            ok(response)
+            }
         };
 
         // Start to serve.

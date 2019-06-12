@@ -1,18 +1,7 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
@@ -21,29 +10,31 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempdir::TempDir;
 
+use engine::Engines;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::{Callback, Engines, SnapManager};
+use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
-use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
-use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
 use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
     ServerTransport,
 };
+
 use tikv::storage::{self, RaftKv};
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::security::SecurityManager;
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::security::SecurityManager;
+use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
+use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -67,7 +58,7 @@ pub struct ServerCluster {
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient,
+    raft_client: RaftClient<RaftStoreBlackHole>,
     _stats_pool: tokio_threadpool::ThreadPool,
 }
 
@@ -85,6 +76,7 @@ impl ServerCluster {
             env,
             Arc::new(Config::default()),
             security_mgr,
+            RaftStoreBlackHole,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
             stats_pool.sender().clone(),
         );
@@ -128,27 +120,27 @@ impl Simulator for ServerCluster {
             cfg.server.addr = addr.clone();
         }
 
-        // Create localreader.
-        let local_reader = Worker::new("test-local-reader");
-        let local_ch = local_reader.scheduler();
-
-        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router);
 
+        let raft_engine = RaftKv::new(sim_router.clone());
+
         // Create storage.
-        let pd_worker = FutureWorker::new("test-future-worker");
+        let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool =
-            ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-                storage::ReadPoolContext::new(pd_worker.scheduler())
-            });
+            storage::readpool_impl::build_read_pool_for_test(raft_engine.clone());
         let store = create_raft_storage(
-            sim_router.clone(),
+            RaftKv::new(sim_router.clone()),
             &cfg.storage,
             storage_read_pool,
             None,
             None,
+            None,
+            None,
         )?;
-        self.storages.insert(node_id, store.get_engine());
+        self.storages.insert(node_id, raft_engine);
 
         // Create import service.
         let importer = {
@@ -165,13 +157,11 @@ impl Simulator for ServerCluster {
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-            coprocessor::ReadPoolContext::new(pd_worker.scheduler())
-        });
-        let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
+        let cop_read_pool =
+            coprocessor::readpool_impl::build_read_pool_for_test(store.get_engine());
+        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {
             server = Some(Server::new(
@@ -184,6 +174,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 Some(engines.clone()),
                 Some(import_service.clone()),
+                None,
             ));
             match server {
                 Some(Ok(_)) => break,
@@ -226,7 +217,7 @@ impl Simulator for ServerCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
-            local_reader,
+            store_meta,
             coprocessor_host,
             importer,
         )?;

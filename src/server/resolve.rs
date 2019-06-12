@@ -1,17 +1,5 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
@@ -19,15 +7,15 @@ use std::time::Instant;
 use kvproto::metapb;
 
 use crate::pd::PdClient;
-use crate::util::collections::HashMap;
-use crate::util::worker::{Runnable, Scheduler, Worker};
+use tikv_util::collections::HashMap;
+use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
 use super::Result;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
-pub type Callback = Box<dyn FnBox(Result<String>) + Send>;
+pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
 
 /// A trait for resolving store addresses.
 pub trait StoreAddrResolver: Send + Clone {
@@ -103,7 +91,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
-        task.cb.call_box((resp,))
+        (task.cb)(resp)
     }
 }
 
@@ -156,10 +144,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::pd::{PdClient, PdFuture, RegionStat, Result};
-    use crate::util;
-    use crate::util::collections::HashMap;
     use kvproto::metapb;
     use kvproto::pdpb;
+    use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
@@ -188,7 +175,7 @@ mod tests {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
-            sock.set_port(util::time::duration_to_ms(self.start.elapsed()) as u16);
+            sock.set_port(tikv_util::time::duration_to_ms(self.start.elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
         }
@@ -236,6 +223,12 @@ mod tests {
         }
         fn get_gc_safe_point(&self) -> PdFuture<u64> {
             unimplemented!();
+        }
+        fn get_store_stats(&self, _: u64) -> Result<pdpb::StoreStats> {
+            unimplemented!()
+        }
+        fn get_operator(&self, _: u64) -> Result<pdpb::GetOperatorResponse> {
+            unimplemented!()
         }
     }
 

@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -19,12 +8,14 @@ make_static_metric! {
         prewrite_write_conflict,
         commit_lock_not_found,
         rollback_committed,
+        acquire_pessimistic_lock_conflict,
     }
 
     pub label_enum MvccDuplicateCommandKind {
         prewrite,
         commit,
         rollback,
+        acquire_pessimistic_lock,
     }
 
     pub struct MvccConflictCounterVec: IntCounter {

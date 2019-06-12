@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::ffi::CString;
 use std::i64;
@@ -20,19 +9,20 @@ use std::time::Instant;
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
-use crate::grpc::{
-    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
-};
-use crate::util::collections::{HashMap, HashMapEntry};
-use crate::util::mpsc::batch::{self, Sender as BatchSender};
-use crate::util::security::SecurityManager;
-use crate::util::timer::GLOBAL_TIMER_HANDLE;
+use crate::server::transport::RaftStoreRouter;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
+use grpcio::{
+    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
+};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
+use tikv_util::collections::{HashMap, HashMapEntry};
+use tikv_util::mpsc::batch::{self, Sender as BatchSender};
+use tikv_util::security::SecurityManager;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -49,8 +39,9 @@ struct Conn {
 }
 
 impl Conn {
-    fn new(
+    fn new<T: RaftStoreRouter + 'static>(
         env: Arc<Environment>,
+        router: T,
         addr: &str,
         cfg: &Config,
         security_mgr: &SecurityManager,
@@ -137,6 +128,7 @@ impl Conn {
                     REPORT_FAILURE_MSG_COUNTER
                         .with_label_values(&["unreachable", &*store_id.to_string()])
                         .inc();
+                    router.broadcast_unreachable(store_id);
                     warn!("batch_raft/raft RPC finally fail"; "to_addr" => addr, "err" => ?e);
                 })
                 .map(|_| ()),
@@ -150,8 +142,9 @@ impl Conn {
 }
 
 /// `RaftClient` is used for sending raft messages to other stores.
-pub struct RaftClient {
+pub struct RaftClient<T: 'static> {
     env: Arc<Environment>,
+    router: Mutex<T>,
     conns: HashMap<(String, usize), Conn>,
     pub addrs: HashMap<u64, String>,
     cfg: Arc<Config>,
@@ -165,16 +158,18 @@ pub struct RaftClient {
     timer: Handle,
 }
 
-impl RaftClient {
+impl<T: RaftStoreRouter> RaftClient<T> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
         security_mgr: Arc<SecurityManager>,
+        router: T,
         grpc_thread_load: Arc<ThreadLoad>,
         stats_pool: tokio_threadpool::Sender,
-    ) -> RaftClient {
+    ) -> RaftClient<T> {
         RaftClient {
             env,
+            router: Mutex::new(router),
             conns: HashMap::default(),
             addrs: HashMap::default(),
             cfg,
@@ -192,6 +187,7 @@ impl RaftClient {
             HashMapEntry::Vacant(e) => {
                 let conn = Conn::new(
                     Arc::clone(&self.env),
+                    self.router.lock().unwrap().clone(),
                     addr,
                     &self.cfg,
                     &self.security_mgr,

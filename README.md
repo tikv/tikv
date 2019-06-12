@@ -1,13 +1,13 @@
-![tikv_logo](images/tikv-logo.png)
+<img src="images/tikv-logo.png" alt="tikv_logo" width="300"/>
 
 [![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
 [![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
 ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
-TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical Key-Value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
-The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in the academia in recent years, such as the Raft consensus algorithm.
+The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
 
 ![cncf_logo](images/cncf.png)
 
@@ -16,10 +16,6 @@ TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io/) (CNC
 ---
 
 With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement auto-sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
-
-TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io) (CNCF). If you are a
-company that wants to help shape the evolution of cloud native technologies, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF
-[announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
 
 TiKV has the following key features:
 
@@ -166,7 +162,7 @@ To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https:
 
 ### Configuration
 
-Read our configuration guide to learn about various [configuration options](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
+Read our configuration guide to learn about various [configuration options](https://github.com/tikv/tikv/tree/master/docs/op-guide).
 
 ## Contributing
 
@@ -186,7 +182,7 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 
 ## Communication
 
-Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT). Here is an excerpt:
+Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT.md). Here is an excerpt:
 
 > In the interest of fostering an open and welcoming environment, we as
 contributors and maintainers pledge to making participation in our project and
@@ -195,7 +191,7 @@ size, disability, ethnicity, sex characteristics, gender identity and expression
 level of experience, education, socio-economic status, nationality, personal
 appearance, race, religion, or sexual identity and orientation.
 
-### Socia Media
+### Social Media
 
 - [Twitter](https://twitter.com/tikvproject)
 - [Blog](https://tikv.org/blog/)

@@ -1,21 +1,11 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
 
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
-use rand::{thread_rng, Rng, ThreadRng};
+use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
 
@@ -91,7 +81,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_cmsketch_width() as usize,
         );
         while let Some(row) = scanner.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
             hist.append(bytes);
             if let Some(c) = cms.as_mut() {
@@ -216,7 +206,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             self.col_len
         ];
         while let Some(row) = self.data.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let cols = row.get_binary_cols()?;
             let retrieve_len = cols.len();
             let mut cols_iter = cols.into_iter();

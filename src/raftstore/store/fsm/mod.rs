@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Generally peers are state machines that represent a replica of a region,
 //! and store is also a special state machine that handles all requests across
@@ -30,7 +19,7 @@ pub use self::apply::{
 pub use self::batch::{
     BatchRouter, BatchSystem, Fsm, HandlerBuilder, NormalScheduler, PollHandler,
 };
-pub use self::peer::DestroyPeerJob;
+pub use self::peer::{DestroyPeerJob, GroupState};
 pub use self::router::{BasicMailbox, Mailbox};
 pub use self::store::{
     create_raft_batch_system, new_compaction_listener, RaftBatchSystem, RaftPollerBuilder,

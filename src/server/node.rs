@@ -1,17 +1,6 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -20,20 +9,23 @@ use super::Result;
 use crate::import::SSTImporter;
 use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
+use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use crate::raftstore::store::{
-    self, initial_region, keys, Config as StoreConfig, Engines, Peekable, ReadTask, SnapManager,
-    Transport,
+    self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
 };
 use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
-use crate::storage::engine::DB;
-use crate::storage::{self, Config as StorageConfig, RaftKv, Storage};
-use crate::util::worker::{FutureWorker, Worker};
+use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
+use crate::storage::{Config as StorageConfig, RaftKv, Storage};
+use engine::rocks::DB;
+use engine::Engines;
+use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use protobuf::RepeatedField;
+use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -41,17 +33,26 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
 pub fn create_raft_storage<S>(
-    router: S,
+    engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pool: ReadPool<storage::ReadPoolContext>,
+    read_pool: ReadPool,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
+    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+    detector_scheduler: Option<DetectorScheduler>,
 ) -> Result<Storage<RaftKv<S>>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let engine = RaftKv::new(router);
-    let store = Storage::from_engine(engine, cfg, read_pool, local_storage, raft_store_router)?;
+    let store = Storage::from_engine(
+        engine,
+        cfg,
+        read_pool,
+        local_storage,
+        raft_store_router,
+        waiter_mgr_scheduler,
+        detector_scheduler,
+    )?;
     Ok(store)
 }
 
@@ -116,7 +117,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        local_read_worker: Worker<ReadTask>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()>
@@ -131,7 +132,10 @@ where
             )));
         }
         self.store.set_id(store_id);
-
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.store_id = Some(store_id);
+        }
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
             info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
@@ -150,7 +154,7 @@ where
             trans,
             snap_mgr,
             pd_worker,
-            local_read_worker,
+            store_meta,
             coprocessor_host,
             importer,
         )?;
@@ -316,7 +320,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        local_read_worker: Worker<ReadTask>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()>
@@ -340,7 +344,7 @@ where
             pd_client,
             snap_mgr,
             pd_worker,
-            local_read_worker,
+            store_meta,
             coprocessor_host,
             importer,
         )?;

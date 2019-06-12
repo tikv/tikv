@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod client;
 mod metrics;
@@ -116,7 +105,7 @@ pub trait PdClient: Send + Sync {
     fn get_store(&self, store_id: u64) -> Result<metapb::Store>;
 
     /// Gets all stores information.
-    fn get_all_stores(&self, _exlcude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+    fn get_all_stores(&self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
         unimplemented!();
     }
 
@@ -178,6 +167,12 @@ pub trait PdClient: Send + Sync {
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F) {}
 
     fn get_gc_safe_point(&self) -> PdFuture<u64>;
+
+    /// Gets store state if it is not a tombstone store.
+    fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats>;
+
+    /// Gets current operator of the region
+    fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse>;
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s

@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,8 +11,8 @@ use raft::eraftpb::{Message, MessageType};
 
 use test_raftstore::*;
 use tikv::raftstore::Result;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -423,6 +412,8 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_operator();
     cluster.run();
 
+    // In case of removing leader, let's transfer leader to some node first.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     pd_client.must_remove_peer(1, new_peer(4, 4));
 
     let (tx, rx) = mpsc::channel();

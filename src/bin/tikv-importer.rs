@@ -1,22 +1,11 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
 #[macro_use(
     slog_kv,
-    slog_error,
+    slog_crit,
     slog_info,
     slog_log,
     slog_record,
@@ -27,20 +16,17 @@ extern crate slog;
 #[macro_use]
 extern crate slog_global;
 
-#[cfg(unix)]
-#[macro_use]
-mod util;
 use crate::util::setup::*;
 use crate::util::signal_handler;
 
-use std::process;
-use std::sync::atomic::Ordering;
-
 use clap::{crate_authors, crate_version, App, Arg, ArgMatches};
 
+#[cfg(unix)]
+use tikv::binutil as util;
 use tikv::config::TiKvConfig;
+use tikv::fatal;
 use tikv::import::ImportKVServer;
-use tikv::util::{self as tikv_util, check_environment_variables};
+use tikv_util::{self as tikv_util, check_environment_variables};
 
 fn main() {
     let matches = App::new("TiKV Importer")

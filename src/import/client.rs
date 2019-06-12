@@ -1,34 +1,24 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::grpc::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use futures::future;
 use futures::{Async, Future, Poll, Stream};
+use grpcio::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 
+use engine::rocks::SequentialFile;
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
+use kvproto::pdpb::OperatorStatus;
 use kvproto::tikvpb_grpc::*;
 
-use crate::pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
-use crate::storage::engine::SequentialFile;
+use crate::pd::{Config as PdConfig, Error as PdError, PdClient, RegionInfo, RpcClient};
 use crate::storage::types::Key;
-use crate::util::collections::{HashMap, HashMapEntry};
-use crate::util::security::SecurityManager;
+use tikv_util::collections::{HashMap, HashMapEntry};
+use tikv_util::security::SecurityManager;
 
 use super::common::*;
 use super::{Error, Result};
@@ -57,19 +47,26 @@ pub trait ImportClient: Send + Sync + Clone + 'static {
     fn has_region_id(&self, _: u64) -> Result<bool> {
         unimplemented!()
     }
+
+    fn is_scatter_region_finished(&self, _: u64) -> Result<bool> {
+        unimplemented!()
+    }
+
+    fn is_space_enough(&self, _: u64, _: u64) -> Result<bool> {
+        unimplemented!()
+    }
 }
 
 pub struct Client {
     pd: Arc<RpcClient>,
     env: Arc<Environment>,
     channels: Mutex<HashMap<u64, Channel>>,
+    min_available_ratio: f64,
 }
 
 impl Client {
-    pub fn new(pd_addr: &str, cq_count: usize) -> Result<Client> {
-        let cfg = PdConfig {
-            endpoints: vec![pd_addr.to_owned()],
-        };
+    pub fn new(pd_addr: &str, cq_count: usize, min_available_ratio: f64) -> Result<Client> {
+        let cfg = PdConfig::new(vec![pd_addr.to_owned()]);
         let sec_mgr = SecurityManager::default();
         let rpc_client = RpcClient::new(&cfg, Arc::new(sec_mgr))?;
         let env = EnvBuilder::new()
@@ -80,6 +77,7 @@ impl Client {
             pd: Arc::new(rpc_client),
             env: Arc::new(env),
             channels: Mutex::new(HashMap::default()),
+            min_available_ratio,
         })
     }
 
@@ -173,6 +171,7 @@ impl Clone for Client {
             pd: Arc::clone(&self.pd),
             env: Arc::clone(&self.env),
             channels: Mutex::new(HashMap::default()),
+            min_available_ratio: self.min_available_ratio,
         }
     }
 }
@@ -217,6 +216,28 @@ impl ImportClient for Client {
 
     fn has_region_id(&self, id: u64) -> Result<bool> {
         Ok(self.pd.get_region_by_id(id).wait()?.is_some())
+    }
+
+    fn is_scatter_region_finished(&self, region_id: u64) -> Result<bool> {
+        match self.pd.get_operator(region_id) {
+            Ok(resp) => {
+                // If the current operator of region is not `scatter-region`, we could assume
+                // that `scatter-operator` has finished or timeout.
+                Ok(resp.desc != b"scatter-region" || resp.status != OperatorStatus::RUNNING)
+            }
+            Err(PdError::RegionNotFound(_)) => Ok(true), // heartbeat may not send to PD
+            Err(err) => {
+                error!("check scatter region operator result"; "region_id" => %region_id, "err" => %err);
+                Err(Error::from(err))
+            }
+        }
+    }
+
+    fn is_space_enough(&self, store_id: u64, size: u64) -> Result<bool> {
+        let stats = self.pd.get_store_stats(store_id)?;
+        let available_ratio = (stats.available - size) as f64 / stats.capacity as f64;
+        // Ensure target store have available disk space
+        Ok(available_ratio > self.min_available_ratio)
     }
 }
 
@@ -267,7 +288,7 @@ impl<R: Read> Stream for UploadStream<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{self, Rng};
+    use rand::RngCore;
 
     #[test]
     fn test_upload_stream() {

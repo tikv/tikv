@@ -1,43 +1,88 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::codec::number;
 use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
-use crate::coprocessor::codec::data_type::ScalarValue;
+use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use crate::coprocessor::codec::mysql::MAX_FSP;
 use crate::coprocessor::{Error, Result};
-use crate::util::codec::number;
 
 /// Helper to build an `RpnExpression`.
-///
-/// TODO: Deprecate it in Coprocessor V2 DAG interface.
-pub struct RpnExpressionBuilder;
+#[derive(Debug, Clone)]
+pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {
+    /// Checks whether the given expression definition tree is supported.
+    pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
+        // TODO: This logic relies on the correctness of the passed in GROUP BY eval type. However
+        // it can be different from the one we calculated (e.g. pass a column / fn with different
+        // type).
+        box_try!(EvalType::try_from(c.get_field_type().tp()));
+
+        match c.get_tp() {
+            ExprType::ScalarFunc => {
+                let sig = c.get_sig();
+                super::super::map_pb_sig_to_rpn_func(sig, c.get_children())?;
+                for n in c.get_children() {
+                    RpnExpressionBuilder::check_expr_tree_supported(n)?;
+                }
+            }
+            ExprType::Null => {}
+            ExprType::Int64 => {}
+            ExprType::Uint64 => {}
+            ExprType::String | ExprType::Bytes => {}
+            ExprType::Float32 | ExprType::Float64 => {}
+            ExprType::MysqlTime => {}
+            ExprType::MysqlDuration => {}
+            ExprType::MysqlDecimal => {}
+            ExprType::MysqlJson => {}
+            ExprType::ColumnRef => {}
+            _ => return Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+        }
+
+        Ok(())
+    }
+
+    /// Gets the result type when expression tree is converted to RPN expression and evaluated.
+    /// The result type will be either scalar or vector.
+    pub fn is_expr_eval_to_scalar(c: &Expr) -> Result<bool> {
+        match c.get_tp() {
+            ExprType::Null
+            | ExprType::Int64
+            | ExprType::Uint64
+            | ExprType::String
+            | ExprType::Bytes
+            | ExprType::Float32
+            | ExprType::Float64
+            | ExprType::MysqlTime
+            | ExprType::MysqlDuration
+            | ExprType::MysqlDecimal
+            | ExprType::MysqlJson => Ok(true),
+            ExprType::ScalarFunc => Ok(false),
+            ExprType::ColumnRef => Ok(false),
+            _ => Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+        }
+    }
+
     /// Builds the RPN expression node list from an expression definition tree.
-    pub fn build_from_expr_tree(tree_node: Expr, time_zone: &Tz) -> Result<RpnExpression> {
+    pub fn build_from_expr_tree(
+        tree_node: Expr,
+        time_zone: &Tz,
+        max_columns: usize,
+    ) -> Result<RpnExpression> {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
             tree_node,
             &mut expr_nodes,
             time_zone,
             super::super::map_pb_sig_to_rpn_func,
+            max_columns,
         )?;
         Ok(RpnExpression::from(expr_nodes))
     }
@@ -47,13 +92,92 @@ impl RpnExpressionBuilder {
     pub fn build_from_expr_tree_with_fn_mapper<F>(
         tree_node: Expr,
         fn_mapper: F,
+        max_columns: usize,
     ) -> Result<RpnExpression>
     where
-        F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+        F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
     {
         let mut expr_nodes = Vec::new();
-        append_rpn_nodes_recursively(tree_node, &mut expr_nodes, &Tz::utc(), fn_mapper)?;
+        append_rpn_nodes_recursively(
+            tree_node,
+            &mut expr_nodes,
+            &Tz::utc(),
+            fn_mapper,
+            max_columns,
+        )?;
         Ok(RpnExpression::from(expr_nodes))
+    }
+
+    /// Creates a new builder instance.
+    ///
+    /// Only used in tests. Normal logic should use `build_from_expr_tree`.
+    #[cfg(test)]
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Pushes a `FnCall` node.
+    #[cfg(test)]
+    pub fn push_fn_call(
+        mut self,
+        func: impl RpnFunction,
+        return_field_type: impl Into<FieldType>,
+    ) -> Self {
+        let node = RpnExpressionNode::FnCall {
+            func: Box::new(func),
+            field_type: return_field_type.into(),
+        };
+        self.0.push(node);
+        self
+    }
+
+    /// Pushes a `Constant` node. The field type will be auto inferred by choosing an arbitrary
+    /// field type that matches the field type of the given value.
+    #[cfg(test)]
+    pub fn push_constant(mut self, value: impl Into<ScalarValue>) -> Self {
+        let value = value.into();
+        let field_type = value
+            .eval_type()
+            .into_certain_field_type_tp_for_test()
+            .into();
+        let node = RpnExpressionNode::Constant { value, field_type };
+        self.0.push(node);
+        self
+    }
+
+    /// Pushes a `Constant` node.
+    #[cfg(test)]
+    pub fn push_constant_with_field_type(
+        mut self,
+        value: impl Into<ScalarValue>,
+        field_type: impl Into<FieldType>,
+    ) -> Self {
+        let node = RpnExpressionNode::Constant {
+            value: value.into(),
+            field_type: field_type.into(),
+        };
+        self.0.push(node);
+        self
+    }
+
+    /// Pushes a `ColumnRef` node.
+    #[cfg(test)]
+    pub fn push_column_ref(mut self, offset: usize) -> Self {
+        let node = RpnExpressionNode::ColumnRef { offset };
+        self.0.push(node);
+        self
+    }
+
+    /// Builds the `RpnExpression`.
+    #[cfg(test)]
+    pub fn build(self) -> RpnExpression {
+        RpnExpression::from(self.0)
+    }
+}
+
+impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
+    fn as_ref(&self) -> &[RpnExpressionNode] {
+        self.0.as_ref()
     }
 }
 
@@ -98,33 +222,44 @@ fn append_rpn_nodes_recursively<F>(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     time_zone: &Tz,
     fn_mapper: F,
+    max_columns: usize,
+    // TODO: Passing `max_columns` is only a workaround solution that works when we only check
+    // column offset. To totally check whether or not the expression is valid, we need to pass in
+    // the full schema instead.
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
 {
     // TODO: We should check whether node types match the function signature. Otherwise there
     // will be panics when the expression is evaluated.
 
     match tree_node.get_tp() {
-        ExprType::ScalarFunc => handle_node_fn_call(tree_node, rpn_nodes, time_zone, fn_mapper),
-        ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes),
+        ExprType::ScalarFunc => {
+            handle_node_fn_call(tree_node, rpn_nodes, time_zone, fn_mapper, max_columns)
+        }
+        ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes, max_columns),
         _ => handle_node_constant(tree_node, rpn_nodes, time_zone),
     }
 }
 
-/// TODO: Remove this helper function when we use Failure which can simplify the code.
 #[inline]
-fn get_eval_type(tree_node: &Expr) -> Result<EvalType> {
-    EvalType::try_from(tree_node.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))
-}
-
-#[inline]
-fn handle_node_column_ref(tree_node: Expr, rpn_nodes: &mut Vec<RpnExpressionNode>) -> Result<()> {
+fn handle_node_column_ref(
+    tree_node: Expr,
+    rpn_nodes: &mut Vec<RpnExpressionNode>,
+    max_columns: usize,
+) -> Result<()> {
     let offset = number::decode_i64(&mut tree_node.get_val()).map_err(|_| {
         Error::Other(box_err!(
             "Unable to decode column reference offset from the request"
         ))
     })? as usize;
+    if offset >= max_columns {
+        return Err(box_err!(
+            "Invalid column offset (schema has {} columns, access index {})",
+            max_columns,
+            offset
+        ));
+    }
     rpn_nodes.push(RpnExpressionNode::ColumnRef { offset });
     Ok(())
 }
@@ -135,12 +270,13 @@ fn handle_node_fn_call<F>(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     time_zone: &Tz,
     fn_mapper: F,
+    max_columns: usize,
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
 {
     // Map pb func to `RpnFunction`.
-    let func = fn_mapper(tree_node.get_sig())?;
+    let func = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
     let args = tree_node.take_children().into_vec();
     if func.args_len() != args.len() {
         return Err(box_err!(
@@ -151,7 +287,7 @@ where
     }
     // Visit children first, then push current node, so that it is a post-order traversal.
     for arg in args {
-        append_rpn_nodes_recursively(arg, rpn_nodes, time_zone, fn_mapper)?;
+        append_rpn_nodes_recursively(arg, rpn_nodes, time_zone, fn_mapper, max_columns)?;
     }
     rpn_nodes.push(RpnExpressionNode::FnCall {
         func,
@@ -166,7 +302,7 @@ fn handle_node_constant(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     time_zone: &Tz,
 ) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
+    let eval_type = box_try!(EvalType::try_from(tree_node.get_field_type().tp()));
 
     let scalar_value = match tree_node.get_tp() {
         ExprType::Null => get_scalar_value_null(eval_type),
@@ -213,14 +349,10 @@ fn handle_node_constant(
 
 #[inline]
 fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
-    match eval_type {
-        EvalType::Int => ScalarValue::Int(None),
-        EvalType::Real => ScalarValue::Real(None),
-        EvalType::Decimal => ScalarValue::Decimal(None),
-        EvalType::Bytes => ScalarValue::Bytes(None),
-        EvalType::DateTime => ScalarValue::DateTime(None),
-        EvalType::Duration => ScalarValue::Duration(None),
-        EvalType::Json => ScalarValue::Json(None),
+    match_template_evaluable! {
+        TT, match eval_type {
+            EvalType::TT => ScalarValue::TT(None),
+        }
     }
 }
 
@@ -247,7 +379,7 @@ fn extract_scalar_value_bytes(val: Vec<u8>) -> Result<ScalarValue> {
 fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_f64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode float from the request")))?;
-    Ok(ScalarValue::Real(Some(value)))
+    Ok(ScalarValue::Real(Real::new(value).ok()))
 }
 
 #[inline]
@@ -259,7 +391,7 @@ fn extract_scalar_value_date_time(
     let v = number::decode_u64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     let fsp = field_type.decimal() as i8;
-    let value = Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
+    let value = DateTime::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
@@ -293,50 +425,49 @@ mod tests {
 
     use super::super::RpnFnCallPayload;
 
+    use cop_codegen::RpnFunction;
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
 
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::Result;
+    use tikv_util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 1)]
     struct FnA;
-
-    impl_template_fn! { 1 arg @ FnA }
 
     impl FnA {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
             _v: &Option<i64>,
-        ) -> Result<Option<f64>> {
+        ) -> Result<Option<Real>> {
             unreachable!()
         }
     }
 
     /// An RPN function for test. It accepts 2 float arguments, returns int.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 2)]
     struct FnB;
-
-    impl_template_fn! { 2 arg @ FnB }
 
     impl FnB {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
-            _v1: &Option<f64>,
-            _v2: &Option<f64>,
+            _v1: &Option<Real>,
+            _v2: &Option<Real>,
         ) -> Result<Option<i64>> {
             unreachable!()
         }
     }
 
     /// An RPN function for test. It accepts 3 int arguments, returns int.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 3)]
     struct FnC;
-
-    impl_template_fn! { 3 arg @ FnC }
 
     impl FnC {
         fn call(
@@ -351,19 +482,18 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 3 float arguments, returns float.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 3)]
     struct FnD;
-
-    impl_template_fn! { 3 arg @ FnD }
 
     impl FnD {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
-            _v1: &Option<f64>,
-            _v2: &Option<f64>,
-            _v3: &Option<f64>,
-        ) -> Result<Option<f64>> {
+            _v1: &Option<Real>,
+            _v2: &Option<Real>,
+            _v3: &Option<Real>,
+        ) -> Result<Option<Real>> {
             unreachable!()
         }
     }
@@ -371,7 +501,7 @@ mod tests {
     /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
     /// cannot be modified by us in tests to support FnA ~ FnD. So let's just hard code some
     /// substitute.
-    fn fn_mapper(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>> {
+    fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<Box<dyn RpnFunction>> {
         // FnA: CastIntAsInt
         // FnB: CastIntAsReal
         // FnC: CastIntAsString
@@ -388,8 +518,6 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)]
     fn test_append_rpn_nodes_recursively() {
-        use crate::util::codec::number::NumberEncoder;
-
         // Input:
         // FnD(a, FnA(FnC(b, c, d)), FnA(FnB(e, f))
         //
@@ -520,7 +648,7 @@ mod tests {
         node_fn_d.mut_children().push(node_fn_a_2);
 
         let mut vec = vec![];
-        append_rpn_nodes_recursively(node_fn_d, &mut vec, &Tz::utc(), fn_mapper).unwrap();
+        append_rpn_nodes_recursively(node_fn_d, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
 
         let mut it = vec.into_iter();
 
@@ -579,7 +707,8 @@ mod tests {
                 .constant_value()
                 .unwrap()
                 .as_real()
-                .unwrap(),
+                .unwrap()
+                .into_inner(),
             -1.5
         );
 
@@ -590,7 +719,8 @@ mod tests {
                 .constant_value()
                 .unwrap()
                 .as_real()
-                .unwrap(),
+                .unwrap()
+                .into_inner(),
             100.12
         );
 
@@ -605,5 +735,79 @@ mod tests {
 
         // Finish
         assert!(it.next().is_none())
+    }
+
+    #[test]
+    fn test_max_columns_check() {
+        let mut vec = vec![];
+
+        // Col offset = 0. The minimum success max_columns is 1.
+        let mut node = Expr::new();
+        node.set_tp(ExprType::ColumnRef);
+        node.mut_val().encode_i64(0).unwrap();
+        assert!(
+            append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, 0).is_err()
+        );
+        for i in 1..10 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_ok()
+            );
+        }
+
+        // Col offset = 3. The minimum success max_columns is 4.
+        let mut node = Expr::new();
+        node.set_tp(ExprType::ColumnRef);
+        node.mut_val().encode_i64(3).unwrap();
+        for i in 0..=3 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_err()
+            );
+        }
+        for i in 4..10 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_ok()
+            );
+        }
+
+        // Col offset = 1, 2, 5. The minimum success max_columns is 6.
+        let mut node = Expr::new();
+        node.set_tp(ExprType::ScalarFunc);
+        node.set_sig(ScalarFuncSig::CastIntAsString); // FnC
+        node.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        node.mut_children().push({
+            let mut n = Expr::new();
+            n.set_tp(ExprType::ColumnRef);
+            n.mut_val().encode_i64(1).unwrap();
+            n
+        });
+        node.mut_children().push({
+            let mut n = Expr::new();
+            n.set_tp(ExprType::ColumnRef);
+            n.mut_val().encode_i64(2).unwrap();
+            n
+        });
+        node.mut_children().push({
+            let mut n = Expr::new();
+            n.set_tp(ExprType::ColumnRef);
+            n.mut_val().encode_i64(5).unwrap();
+            n
+        });
+        for i in 0..=5 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_err()
+            );
+        }
+        for i in 6..10 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_ok()
+            );
+        }
     }
 }

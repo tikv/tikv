@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -23,13 +12,13 @@ use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
+use engine::*;
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::storage::CF_RAFT;
-use tikv::util::config::ReadableDuration;
-use tikv::util::HandyRwLock;
+use tikv_util::config::ReadableDuration;
+use tikv_util::HandyRwLock;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -456,6 +445,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&cluster.get_engine(5), b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(6, 6));
     must_get_equal(&cluster.get_engine(6), b"k1", b"v1");
+    cluster.must_transfer_leader(r1, new_peer(6, 6));
     pd_client.must_remove_peer(r1, new_peer(2, 2));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
@@ -587,12 +577,26 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     // Test adding nodes.
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     pd_client.must_add_peer(region_id, new_peer(3, 3));
-    cluster.transfer_leader(region_id, new_peer(3, 3));
-    cluster.reset_leader_of_region(region_id);
-    assert_ne!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
+    // transfer to all followers
+    let mut leader_id = cluster.leader_of_region(region_id).unwrap().get_id();
+    for peer in cluster.get_region(b"").get_peers() {
+        if peer.get_id() == leader_id {
+            continue;
+        }
+        cluster.transfer_leader(region_id, peer.clone());
+        cluster.reset_leader_of_region(region_id);
+        assert_ne!(
+            cluster.leader_of_region(region_id).unwrap().get_id(),
+            peer.get_id()
+        );
+    }
 
     // Test transfer leader after a safe duration.
     thread::sleep(cfg.raft_store.raft_reject_transfer_leader_duration.into());
+    assert_eq!(
+        cluster.leader_of_region(region_id).unwrap().get_id(),
+        leader_id
+    );
     cluster.transfer_leader(region_id, new_peer(3, 3));
     // Retry for more stability
     for _ in 0..20 {
@@ -603,6 +607,21 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
         break;
     }
     assert_eq!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
+    leader_id = 3;
+
+    // Cannot transfer when removed peer
+    pd_client.must_remove_peer(region_id, new_peer(2, 2));
+    for peer in cluster.get_region(b"").get_peers() {
+        if peer.get_id() == leader_id {
+            continue;
+        }
+        cluster.transfer_leader(region_id, peer.clone());
+        cluster.reset_leader_of_region(region_id);
+        assert_ne!(
+            cluster.leader_of_region(region_id).unwrap().get_id(),
+            peer.get_id()
+        );
+    }
 }
 
 fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -631,7 +650,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     )
     .unwrap();
     let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"));
+    assert!(err_msg.contains("duplicated"), "{:?}", resp);
 
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
@@ -661,6 +680,9 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.region_leader_must_be(r1, new_peer(1, 1));
     // To avoid using stale leader.
     cluster.reset_leader_of_region(r1);
+    // Put a new kv to ensure leader has applied to newest log, so that to avoid
+    // false warning about pending conf change.
+    cluster.must_put(b"k4", b"v4");
 
     let mut add_peer = |peer: metapb::Peer| {
         let conf_type = if peer.get_is_learner() {
@@ -674,7 +696,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Add learner on store which already has peer.
     let resp = add_peer(new_learner_peer(4, 13));
     let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"));
+    assert!(err_msg.contains("duplicated"), "{:?}", err_msg);
     pd_client.must_have_peer(r1, new_peer(4, 12));
 
     // Add peer with different id on store which already has learner.
@@ -683,12 +705,12 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let resp = add_peer(new_learner_peer(4, 14));
     let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"));
+    assert!(err_msg.contains("duplicated"), "{:?}", resp);
     pd_client.must_none_peer(r1, new_learner_peer(4, 14));
 
     let resp = add_peer(new_peer(4, 15));
     let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"));
+    assert!(err_msg.contains("duplicated"), "{:?}", resp);
     pd_client.must_none_peer(r1, new_peer(4, 15));
 }
 
@@ -726,6 +748,9 @@ fn test_conf_change_remove_leader() {
 
     // Transfer leader to the first peer.
     cluster.must_transfer_leader(r1, new_peer(1, 1));
+    // Put a new kv to ensure leader has applied to newest log, so that to avoid
+    // false warning about pending conf change.
+    cluster.must_put(b"k1", b"v1");
 
     // Try to remove leader, which should be ignored.
     let res =
@@ -816,7 +841,7 @@ fn test_learner_with_slow_snapshot() {
     cluster.stop_node(3);
     pd_client.must_add_peer(r1, new_peer(3, 3));
     // Ensure raftstore will gc all applied raft logs.
-    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    (0..30).for_each(|_| cluster.must_put(b"k2", b"v2"));
 
     // peer 3 will be promoted by snapshot instead of normal proposal.
     count.store(0, Ordering::SeqCst);

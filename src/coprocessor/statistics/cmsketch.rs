@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
@@ -78,10 +67,12 @@ mod tests {
     use super::*;
     use crate::coprocessor::codec::datum;
     use crate::coprocessor::codec::datum::Datum;
-    use crate::util::as_slice;
-    use crate::util::collections::HashMap;
-    use rand::{Rng, SeedableRng, StdRng};
+    use rand::distributions::Distribution;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
     use std::cmp::min;
+    use tikv_util::as_slice;
+    use tikv_util::collections::HashMap;
     use zipf::ZipfDistribution;
 
     impl CMSketch {
@@ -111,11 +102,10 @@ mod tests {
     fn average_error(depth: usize, width: usize, total: u32, max_value: usize, s: f64) -> u64 {
         let mut c = CMSketch::new(depth, width).unwrap();
         let mut map: HashMap<u64, u32> = HashMap::default();
-        let seed: &[_] = &[1, 2, 3, 4];
-        let mut gen: ZipfDistribution<StdRng> =
-            ZipfDistribution::new(SeedableRng::from_seed(seed), max_value, s).unwrap();
+        let gen = ZipfDistribution::new(max_value, s).unwrap();
+        let mut rng = StdRng::seed_from_u64(0x01020304);
         for _ in 0..total {
-            let val = gen.next_u64();
+            let val = gen.sample(&mut rng) as u64;
             let bytes = datum::encode_value(as_slice(&Datum::U64(val))).unwrap();
             c.insert(&bytes);
             let counter = map.entry(val).or_insert(0);

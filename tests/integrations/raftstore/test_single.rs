@@ -1,20 +1,10 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::time::Duration;
 
+use engine::{CfName, CF_DEFAULT, CF_WRITE};
 use test_raftstore::*;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 // TODO add epoch not match test cases.
 
@@ -60,13 +50,9 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.run();
-
-    let cf = "default";
-
+fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
     for i in 1..1000 {
-        let (k, v) = (format!("key{}", i), format!("value{}", i));
+        let (k, v) = (format!("key{:08}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
         cluster.must_put_cf(cf, key, value);
@@ -75,19 +61,21 @@ fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     // delete_range request with notify_only set should not actually delete data.
-    cluster.must_notify_delete_range_cf(cf, b"key1", b"key9999");
+    cluster.must_notify_delete_range_cf(cf, b"", b"");
 
     for i in 1..1000 {
-        let key = format!("key{}", i).into_bytes();
+        let key = format!("key{:08}", i).into_bytes();
         let value = format!("value{}", i).into_bytes();
         assert_eq!(cluster.get_cf(cf, &key).unwrap(), value);
     }
 
-    cluster.must_delete_range_cf(cf, b"key1", b"key9999");
+    // Empty keys means the whole range.
+    cluster.must_delete_range_cf(cf, b"", b"");
 
     for i in 1..1000 {
-        let key = format!("key{}", i).into_bytes();
-        assert!(cluster.get_cf(cf, &key).is_none());
+        let k = format!("key{:08}", i);
+        let key = k.as_bytes();
+        assert!(cluster.get_cf(cf, key).is_none());
     }
 }
 
@@ -137,9 +125,23 @@ fn test_node_delete() {
 }
 
 #[test]
-fn test_node_delete_range() {
+fn test_node_use_delete_range() {
     let mut cluster = new_node_cluster(0, 1);
-    test_delete_range(&mut cluster);
+    cluster.cfg.raft_store.use_delete_range = true;
+    cluster.run();
+    test_delete_range(&mut cluster, CF_DEFAULT);
+    // Prefix bloom filter is always enabled in the Write CF.
+    test_delete_range(&mut cluster, CF_WRITE);
+}
+
+#[test]
+fn test_node_not_use_delete_range() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.use_delete_range = false;
+    cluster.run();
+    test_delete_range(&mut cluster, CF_DEFAULT);
+    // Prefix bloom filter is always enabled in the Write CF.
+    test_delete_range(&mut cluster, CF_WRITE);
 }
 
 #[test]
@@ -158,12 +160,6 @@ fn test_server_put() {
 fn test_server_delete() {
     let mut cluster = new_server_cluster(0, 1);
     test_delete(&mut cluster);
-}
-
-#[test]
-fn test_server_delete_range() {
-    let mut cluster = new_server_cluster(0, 1);
-    test_delete_range(&mut cluster);
 }
 
 #[test]
