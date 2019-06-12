@@ -789,8 +789,6 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             }
         };
 
-        AUTO_GC_SAFE_POINT_GAUGE.set(safe_point as i64);
-
         let updated = match safe_point.cmp(&self.safe_point) {
             Ordering::Less => {
                 panic!(
