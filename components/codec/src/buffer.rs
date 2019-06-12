@@ -42,26 +42,6 @@ impl<'a> BufferReader for &'a [u8] {
     }
 }
 
-impl<'a, T: BufferReader + ?Sized> BufferReader for &'a mut T {
-    fn bytes(&self) -> &[u8] {
-        (**self).bytes()
-    }
-
-    fn advance(&mut self, count: usize) {
-        (**self).advance(count)
-    }
-}
-
-impl<T: BufferReader + ?Sized> BufferReader for Box<T> {
-    fn bytes(&self) -> &[u8] {
-        (**self).bytes()
-    }
-
-    fn advance(&mut self, count: usize) {
-        (**self).advance(count)
-    }
-}
-
 /// A trait to provide sequential write over a fixed size
 /// or dynamic size memory buffer.
 ///
@@ -135,26 +115,6 @@ impl BufferWriter for Vec<u8> {
     unsafe fn advance_mut(&mut self, count: usize) {
         let len = self.len();
         self.set_len(len + count);
-    }
-}
-
-impl<'a, T: BufferWriter + ?Sized> BufferWriter for &'a mut T {
-    unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
-        (**self).bytes_mut(size)
-    }
-
-    unsafe fn advance_mut(&mut self, count: usize) {
-        (**self).advance_mut(count)
-    }
-}
-
-impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
-    unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
-        (**self).bytes_mut(size)
-    }
-
-    unsafe fn advance_mut(&mut self, count: usize) {
-        (**self).advance_mut(count)
     }
 }
 
