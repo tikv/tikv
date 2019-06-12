@@ -66,7 +66,7 @@ cat <<EOT >> ${output}
 COPY ${dir}/src ./src
 COPY ${dir}/components ./components
 
-RUN cargo build --no-default-features --release --features "jemalloc portable sse no-fail" 
+RUN make build
 
 # Strip debug info to reduce the docker size, may strip later?
 # RUN strip --strip-debug /tikv/target/release/tikv-server && \\
