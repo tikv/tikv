@@ -186,7 +186,7 @@ docker-tikv-server: docker-tikv
 docker-tikv-importer: docker-tikv
 	docker build -t tikv/tikv-importer -f docker/tikv-importer/Dockerfile .
 
-docker-tag-with-hash: docker
+docker-tag-with-hash:
 	docker tag tikv/tikv tikv/tikv:${TIKV_BUILD_GIT_HASH}
 	docker tag tikv/tikv-server tikv/tikv-server:${TIKV_BUILD_GIT_HASH}
 	docker tag tikv/tikv-importer tikv/tikv-importer:${TIKV_BUILD_GIT_HASH}
