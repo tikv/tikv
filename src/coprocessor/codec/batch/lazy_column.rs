@@ -238,6 +238,7 @@ mod tests {
 
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
+    /*
     #[test]
     fn test_lazy_batch_column_clone() {
         use cop_datatype::FieldTypeTp;
@@ -321,6 +322,7 @@ mod tests {
             assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
         }
     }
+    */
 }
 
 #[cfg(test)]

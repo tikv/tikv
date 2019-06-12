@@ -81,7 +81,6 @@ fn decode_date_time_from_uint(v: u64, time_zone: &Tz, field_type: &FieldType) ->
 // hot enough. However, currently we have a super large `Result`, which must be inlined to avoid
 // its cost.
 
-#[inline]
 pub fn decode_int_datum(mut raw_datum: &[u8]) -> Result<Option<Int>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
@@ -103,7 +102,6 @@ pub fn decode_int_datum(mut raw_datum: &[u8]) -> Result<Option<Int>> {
     }
 }
 
-#[inline]
 #[allow(clippy::cast_lossless)]
 pub fn decode_real_datum(mut raw_datum: &[u8], field_type: &FieldType) -> Result<Option<Real>> {
     if raw_datum.is_empty() {
@@ -130,7 +128,6 @@ pub fn decode_real_datum(mut raw_datum: &[u8], field_type: &FieldType) -> Result
     }
 }
 
-#[inline]
 pub fn decode_decimal_datum(mut raw_datum: &[u8]) -> Result<Option<Decimal>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
@@ -150,7 +147,6 @@ pub fn decode_decimal_datum(mut raw_datum: &[u8]) -> Result<Option<Decimal>> {
     }
 }
 
-#[inline]
 pub fn decode_bytes_datum(mut raw_datum: &[u8]) -> Result<Option<Bytes>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
@@ -172,7 +168,6 @@ pub fn decode_bytes_datum(mut raw_datum: &[u8]) -> Result<Option<Bytes>> {
     }
 }
 
-#[inline]
 pub fn decode_date_time_datum(
     mut raw_datum: &[u8],
     field_type: &FieldType,
@@ -206,7 +201,6 @@ pub fn decode_date_time_datum(
     }
 }
 
-#[inline]
 pub fn decode_duration_datum(mut raw_datum: &[u8]) -> Result<Option<Duration>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
@@ -236,7 +230,6 @@ pub fn decode_duration_datum(mut raw_datum: &[u8]) -> Result<Option<Duration>> {
     }
 }
 
-#[inline]
 pub fn decode_json_datum(mut raw_datum: &[u8]) -> Result<Option<Json>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
@@ -261,49 +254,42 @@ pub trait RawDatumDecoder<T> {
 }
 
 impl<'a> RawDatumDecoder<Int> for &'a [u8] {
-    #[inline]
     fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Int>> {
         decode_int_datum(self)
     }
 }
 
 impl<'a> RawDatumDecoder<Real> for &'a [u8] {
-    #[inline]
     fn decode(self, field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Real>> {
         decode_real_datum(self, field_type)
     }
 }
 
 impl<'a> RawDatumDecoder<Decimal> for &'a [u8] {
-    #[inline]
     fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Decimal>> {
         decode_decimal_datum(self)
     }
 }
 
 impl<'a> RawDatumDecoder<Bytes> for &'a [u8] {
-    #[inline]
     fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Bytes>> {
         decode_bytes_datum(self)
     }
 }
 
 impl<'a> RawDatumDecoder<DateTime> for &'a [u8] {
-    #[inline]
     fn decode(self, field_type: &FieldType, time_zone: &Tz) -> Result<Option<DateTime>> {
         decode_date_time_datum(self, field_type, time_zone)
     }
 }
 
 impl<'a> RawDatumDecoder<Duration> for &'a [u8] {
-    #[inline]
     fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Duration>> {
         decode_duration_datum(self)
     }
 }
 
 impl<'a> RawDatumDecoder<Json> for &'a [u8] {
-    #[inline]
     fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Json>> {
         decode_json_datum(self)
     }

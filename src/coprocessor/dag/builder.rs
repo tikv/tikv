@@ -46,12 +46,12 @@ impl DAGBuilder {
                         Error::Other(box_err!("Unable to use BatchIndexScanExecutor: {}", e))
                     })?;
                 }
-                //                ExecType::TypeSelection => {
-                //                    let descriptor = ed.get_selection();
-                //                    BatchSelectionExecutor::check_supported(&descriptor).map_err(|e| {
-                //                        Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
-                //                    })?;
-                //                }
+                ExecType::TypeSelection => {
+                    let descriptor = ed.get_selection();
+                    BatchSelectionExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
+                    })?;
+                }
                 //                ExecType::TypeAggregation | ExecType::TypeStreamAgg
                 //                    if ed.get_aggregation().get_group_by().is_empty() =>
                 //                {
@@ -162,18 +162,18 @@ impl DAGBuilder {
             summary_slot_index += 1;
 
             let new_executor: Box<dyn BatchExecutor> = match ed.get_tp() {
-                //                ExecType::TypeSelection => {
-                //                    COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
-                //
-                //                    Box::new(
-                //                        BatchSelectionExecutor::new(
-                //                            config.clone(),
-                //                            executor,
-                //                            ed.take_selection().take_conditions().into_vec(),
-                //                        )?
-                //                        .with_summary_collector(C::new(summary_slot_index)),
-                //                    )
-                //                }
+                ExecType::TypeSelection => {
+                    COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+
+                    Box::new(
+                        BatchSelectionExecutor::new(
+                            config.clone(),
+                            executor,
+                            ed.take_selection().take_conditions().into_vec(),
+                        )?
+                        .with_summary_collector(C::new(summary_slot_index)),
+                    )
+                }
                 //                ExecType::TypeAggregation | ExecType::TypeStreamAgg
                 //                    if ed.get_aggregation().get_group_by().is_empty() =>
                 //                {
