@@ -68,10 +68,10 @@ quick_error! {
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
                     start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
         }
-        Deadlock { start_ts: u64, lock_ts: u64, key_hash: u64, deadlock_key_hash: u64 } {
+        Deadlock { start_ts: u64, lock_ts: u64, lock_key: Vec<u8>, deadlock_key_hash: u64 } {
             description("deadlock")
-            display("deadlock occurs between txn:{} and txn:{}, key_hash:{}, deadlock_key_hash:{}",
-                    start_ts, lock_ts, key_hash, deadlock_key_hash)
+            display("deadlock occurs between txn:{} and txn:{}, lock_key:{:?}, deadlock_key_hash:{}",
+                    start_ts, lock_ts, escape(lock_key), deadlock_key_hash)
         }
         AlreadyExist { key: Vec<u8> } {
             description("already exists")
@@ -149,12 +149,12 @@ impl Error {
             Error::Deadlock {
                 start_ts,
                 lock_ts,
-                key_hash,
+                ref lock_key,
                 deadlock_key_hash,
             } => Some(Error::Deadlock {
                 start_ts,
                 lock_ts,
-                key_hash,
+                lock_key: lock_key.to_owned(),
                 deadlock_key_hash,
             }),
             Error::AlreadyExist { ref key } => Some(Error::AlreadyExist { key: key.clone() }),
@@ -437,12 +437,12 @@ pub mod tests {
         engine: &E,
         key: &[u8],
         pk: &[u8],
-        ts: u64,
+        start_ts: u64,
         for_update_ts: u64,
     ) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
         txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
@@ -457,16 +457,30 @@ pub mod tests {
         engine: &E,
         key: &[u8],
         pk: &[u8],
-        ts: u64,
+        start_ts: u64,
         for_update_ts: u64,
     ) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
         txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
             .unwrap_err();
+    }
+
+    pub fn must_pessimistic_rollback<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.pessimistic_rollback(Key::from_raw(key), for_update_ts)
+            .unwrap();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     pub fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -524,11 +538,17 @@ pub mod tests {
         assert_ne!(lock.lock_type, LockType::Pessimistic);
     }
 
-    pub fn must_pessimistic_locked<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+    pub fn must_pessimistic_locked<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
+        assert_eq!(lock.for_update_ts, for_update_ts);
         assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 

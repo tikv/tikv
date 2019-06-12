@@ -149,7 +149,7 @@ impl RpnExpression {
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
         self.ensure_columns_decoded(&context.cfg.tz, schema, columns)?;
-        self.eval_unchecked(context, rows, schema, columns)
+        self.eval_decoded(context, rows, schema, columns)
     }
 
     /// Evaluates the expression into a boolean vector.
@@ -202,10 +202,10 @@ impl RpnExpression {
         Ok(())
     }
 
-    /// Evaluates the expression into a vector.
+    /// Evaluates the expression into a vector. The input columns must be already decoded.
     ///
-    /// It differs from `eval` in that `eval_unchecked` needn't receive a mutable reference
-    /// to `LazyBatchColumnVec`. However, since `eval_unchecked` doesn't decode columns,
+    /// It differs from `eval` in that `eval_decoded` needn't receive a mutable reference
+    /// to `LazyBatchColumnVec`. However, since `eval_decoded` doesn't decode columns,
     /// it will panic if referred columns are not decoded.
     ///
     /// # Panics
@@ -215,7 +215,7 @@ impl RpnExpression {
     /// Panics if referred columns are not decoded.
     ///
     /// Panics when referenced column does not have equal length as specified in `rows`.
-    pub fn eval_unchecked<'a>(
+    pub fn eval_decoded<'a>(
         &'a self,
         context: &mut EvalContext,
         rows: usize,

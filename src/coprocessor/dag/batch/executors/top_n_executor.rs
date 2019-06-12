@@ -3,7 +3,6 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::ptr::NonNull;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use tikv_util::erase_lifetime;
@@ -57,6 +56,9 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     is_ended: bool,
 }
 
+/// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
+/// `BatchTopNExecutor` doesn't leak the pointers to other threads. Therefore, with those `NonNull`
+/// pointers, BatchTopNExecutor still remains `Send`.
 unsafe impl<Src: BatchExecutor + Send> Send for BatchTopNExecutor<Src> {}
 
 impl BatchTopNExecutor<Box<dyn BatchExecutor>> {
@@ -160,14 +162,14 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             expr.ensure_columns_decoded(&self.context.cfg.tz, src_schema_unbounded, &mut data)?;
         }
 
-        let data = Rc::new(data);
+        let data = servo_arc::Arc::new(data);
 
         let eval_offset = self.eval_columns_buffer_unsafe.len();
         let order_exprs_unbounded = unsafe { erase_lifetime(&*self.order_exprs) };
         let data_unbounded = unsafe { erase_lifetime(&*data) };
         for expr_unbounded in order_exprs_unbounded.iter() {
             self.eval_columns_buffer_unsafe
-                .push(expr_unbounded.eval_unchecked(
+                .push(expr_unbounded.eval_decoded(
                     &mut self.context,
                     data.rows_len(),
                     src_schema_unbounded,
@@ -304,19 +306,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
 struct HeapItemUnsafe {
     /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
     order_is_desc_ptr: NonNull<[bool]>,
+
     /// The source columns that evaluated column in this structure is referring to.
-    ///
-    /// Multiple `HeapItemUnsafe` may share the same source column. Thus source columns
-    /// are placed behind a reference counter. However, there won't be a place other than
-    /// `HeapItemUnsafe` holding this reference counter, so Rc won't break
-    /// `BatchTopNExecutor: Send`.
-    ///
-    /// WARN: Actually we cannot ensure that this is still `Send` in future, since `Rc` may
-    /// use something like thread local variables which does not break its API.
-    source_column_data: Rc<LazyBatchColumnVec>,
+    source_column_data: servo_arc::Arc<LazyBatchColumnVec>,
 
     /// A pointer to the `eval_columns_buffer` field in `BatchTopNExecutor`.
     eval_columns_buffer_ptr: NonNull<Vec<RpnStackNode<'static>>>,
+
     /// The begin offset of the evaluated columns stored in the buffer.
     ///
     /// The length of evaluated columns in the buffer is `order_is_desc.len()`.
