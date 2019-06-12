@@ -163,11 +163,11 @@ mod tests {
         assert_eq!(result[0].as_int_slice(), &[Some(6)]);
 
         state
-            .update_vector(&mut ctx, &[Some(1i64), None, Some(-1i64)])
+            .update_vector(&mut ctx, &[Some(1i64), None, Some(-1i64)], &[1, 2])
             .unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(8)]);
+        assert_eq!(result[0].as_int_slice(), &[Some(7)]);
     }
 }

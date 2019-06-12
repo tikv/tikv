@@ -348,7 +348,7 @@ pub mod tests {
         }
     }
 
-    /// Builds an executor that will return these data:
+    /// Builds an executor that will return these logical data:
     ///
     /// == Schema ==
     /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
@@ -372,39 +372,52 @@ pub mod tests {
             vec![
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None]),
                         VectorValue::Real(vec![
-                            Real::new(1.0).ok(),
-                            Real::new(2.0).ok(),
+                            None,
+                            None,
+                            None,
+                            Real::new(-5.0).ok(),
+                            Real::new(7.0).ok(),
+                        ]),
+                        VectorValue::Real(vec![
                             None,
                             Real::new(4.5).ok(),
+                            Real::new(1.0).ok(),
+                            None,
+                            Real::new(2.0).ok(),
                         ]),
                         VectorValue::Bytes(vec![
-                            Some(b"abc".to_vec()),
-                            None,
                             Some(vec![]),
                             Some(b"HelloWorld".to_vec()),
+                            Some(b"abc".to_vec()),
+                            None,
+                            None,
                         ]),
-                        VectorValue::Int(vec![Some(1), None, None, None]),
+                        VectorValue::Int(vec![None, None, Some(1), Some(10), None]),
                     ]),
-                    logical_rows: (0..4).collect(),
+                    logical_rows: vec![2, 4, 0, 1],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    physical_columns: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![None]),
+                        VectorValue::Real(vec![Real::new(-10.0).ok()]),
+                        VectorValue::Bytes(vec![Some(b"foo".to_vec())]),
+                        VectorValue::Int(vec![None]),
+                    ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![Real::new(1.5).ok()]),
-                        VectorValue::Real(vec![Real::new(4.5).ok()]),
-                        VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
-                        VectorValue::Int(vec![Some(5)]),
+                        VectorValue::Real(vec![Real::new(5.5).ok(), Real::new(1.5).ok()]),
+                        VectorValue::Real(vec![None, Real::new(4.5).ok()]),
+                        VectorValue::Bytes(vec![None, Some(b"aaaaa".to_vec())]),
+                        VectorValue::Int(vec![None, Some(5)]),
                     ]),
-                    logical_rows: Vec::new(),
+                    logical_rows: vec![1],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),
                 },

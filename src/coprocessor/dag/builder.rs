@@ -52,17 +52,17 @@ impl DAGBuilder {
                         Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
                     })?;
                 }
-                //                ExecType::TypeAggregation | ExecType::TypeStreamAgg
-                //                    if ed.get_aggregation().get_group_by().is_empty() =>
-                //                {
-                //                    let descriptor = ed.get_aggregation();
-                //                    BatchSimpleAggregationExecutor::check_supported(&descriptor).map_err(|e| {
-                //                        Error::Other(box_err!(
-                //                            "Unable to use BatchSimpleAggregationExecutor: {}",
-                //                            e
-                //                        ))
-                //                    })?;
-                //                }
+                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                    if ed.get_aggregation().get_group_by().is_empty() =>
+                {
+                    let descriptor = ed.get_aggregation();
+                    BatchSimpleAggregationExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!(
+                            "Unable to use BatchSimpleAggregationExecutor: {}",
+                            e
+                        ))
+                    })?;
+                }
                 //                ExecType::TypeAggregation => {
                 //                    let descriptor = ed.get_aggregation();
                 //                    if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
@@ -174,22 +174,22 @@ impl DAGBuilder {
                         .with_summary_collector(C::new(summary_slot_index)),
                     )
                 }
-                //                ExecType::TypeAggregation | ExecType::TypeStreamAgg
-                //                    if ed.get_aggregation().get_group_by().is_empty() =>
-                //                {
-                //                    COPR_EXECUTOR_COUNT
-                //                        .with_label_values(&["simple_aggregation"])
-                //                        .inc();
-                //
-                //                    Box::new(
-                //                        BatchSimpleAggregationExecutor::new(
-                //                            config.clone(),
-                //                            executor,
-                //                            ed.mut_aggregation().take_agg_func().into_vec(),
-                //                        )?
-                //                        .with_summary_collector(C::new(summary_slot_index)),
-                //                    )
-                //                }
+                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                    if ed.get_aggregation().get_group_by().is_empty() =>
+                {
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["simple_aggregation"])
+                        .inc();
+
+                    Box::new(
+                        BatchSimpleAggregationExecutor::new(
+                            config.clone(),
+                            executor,
+                            ed.mut_aggregation().take_agg_func().into_vec(),
+                        )?
+                        .with_summary_collector(C::new(summary_slot_index)),
+                    )
+                }
                 //                ExecType::TypeAggregation => {
                 //                    if BatchFastHashAggregationExecutor::check_supported(&ed.get_aggregation())
                 //                        .is_ok()
