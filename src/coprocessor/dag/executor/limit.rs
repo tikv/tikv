@@ -104,7 +104,7 @@ mod tests {
         let mut limit_ect = LimitExecutor::new(limit_meta, ts_ect);
         let mut limit_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = limit_ect.next().unwrap() {
-            limit_rows.push(row.take_origin());
+            limit_rows.push(row.take_origin().unwrap());
         }
         assert_eq!(limit_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 2, 3, 5, 6];
