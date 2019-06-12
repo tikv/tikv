@@ -14,6 +14,7 @@ use super::{check_fsp, Decimal};
 use bitfield::bitfield;
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
+pub const MICROS_PER_SEC: i64 = 1_000_000;
 pub const NANO_WIDTH: usize = 9;
 
 const SECS_PER_HOUR: u32 = 3600;
@@ -112,7 +113,7 @@ mod parser {
     /// FIXME: the fraction should not be round, it's incompatible with MySQL.
     fn read_int_with_fsp(input: &[u8], fsp: u8) -> IResult<&[u8], u32> {
         map!(input, digit1, |buf: &[u8]| -> u32 {
-            let fsp = fsp as usize;
+            let fsp = usize::from(fsp);
             let (fraction, len) = if fsp >= buf.len() {
                 (buf_to_int(buf), buf.len())
             } else {
@@ -244,15 +245,15 @@ bitfield! {
     pub struct Duration(u64);
     impl Debug;
     #[inline]
-    pub bool, neg, set_neg: 55;
+    pub bool, neg, set_neg: 63;
     #[inline]
-    bool, unused, _: 54;
+    bool, unused, _: 62;
     #[inline]
-    pub u32, hours, set_hours: 53, 44;
+    pub u32, hours, set_hours: 61, 48;
     #[inline]
-    pub u32, minutes, set_minutes: 43, 38;
+    pub u32, minutes, set_minutes: 47, 40;
     #[inline]
-    pub u32, secs, set_secs: 37, 32;
+    pub u32, secs, set_secs: 39, 32;
     #[inline]
     u32, micros, set_micros: 31, 8;
     #[inline]
@@ -260,29 +261,30 @@ bitfield! {
 }
 
 impl Duration {
-    /// return the identity element of `Duration`
+    /// Returns the identity element of `Duration`
     pub fn zero() -> Duration {
         Duration(0)
     }
 
+    /// Returns true if self is equal to the additive identity.
     pub fn is_zero(mut self) -> bool {
         self.set_neg(false);
         self.set_fsp(0);
         self.0 == 0
     }
 
-    /// Return the absolute value of `Duration`
+    /// Returns the absolute value of `Duration`
     pub fn abs(mut self) -> Self {
         self.set_neg(false);
         self
     }
 
-    /// return the fractional part of `Duration`, in whole nanoseconds.
+    /// Returns the fractional part of `Duration`, in whole nanoseconds.
     pub fn subsec_nanos(self) -> u32 {
         self.micros() * 1000
     }
 
-    /// return the fractional part of `Duration`, in whole microseconds.
+    /// Returns the fractional part of `Duration`, in whole microseconds.
     pub fn subsec_micros(self) -> u32 {
         self.micros()
     }
@@ -295,7 +297,7 @@ impl Duration {
     /// Returns the number of seconds contained by this Duration as f64.
     /// The returned value does include the fractional (nanosecond) part of the duration.
     pub fn as_secs_f64(self) -> f64 {
-        let res = f64::from(self.as_secs()) + f64::from(self.subsec_nanos()) * 10e-9;
+        let res = f64::from(self.as_secs()) + f64::from(self.subsec_nanos()) * 1e-9;
 
         if self.neg() {
             -res
@@ -304,6 +306,7 @@ impl Duration {
         }
     }
 
+    /// Returns the `Duration` in whole nanoseconds
     pub fn as_nanos(self) -> i64 {
         let nanos = i64::from(self.as_secs()) * NANOS_PER_SEC + i64::from(self.subsec_nanos());
 
@@ -314,6 +317,7 @@ impl Duration {
         }
     }
 
+    /// Constructs a `Duration` from `nanos` with `fsp`
     pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
         let neg = nanos < 0;
 
@@ -326,6 +330,7 @@ impl Duration {
         Duration::new(dur, neg, fsp)
     }
 
+    /// Constructs a `Duration` from `StdDuration` with `neg` and `fsp`
     pub fn new(duration: StdDuration, neg: bool, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
 
@@ -358,7 +363,7 @@ impl Duration {
         fsp: u8,
     ) -> Result<Duration> {
         // Truncate `fraction` with `fsp`
-        let mask = TEN_POW[NANO_WIDTH as usize - fsp as usize - 1];
+        let mask = TEN_POW[NANO_WIDTH - usize::from(fsp) - 1];
         let mut micros = ((nanos / mask + 5) / 10 * 10 * mask) / 1_000;
 
         if micros >= 1_000_000 {
@@ -417,7 +422,7 @@ impl Duration {
             neg = false;
         }
 
-        Duration::build(neg, hour, minute, second, fraction, fsp as u8)
+        Duration::build(neg, hour, minute, second, fraction, fsp)
     }
 
     // TODO: impl TryFrom/TryInto instead
@@ -435,9 +440,15 @@ impl Duration {
             self.secs()
         )?;
 
+        let fsp = usize::from(self.fsp());
         if self.fsp() > 0 {
             write!(buf, ".")?;
-            write!(buf, "{:06}", self.micros())?;
+            write!(
+                buf,
+                "{:0width$}",
+                self.micros() / TEN_POW[6 - fsp],
+                width = fsp
+            )?;
         }
 
         let d = unsafe { str::from_utf8_unchecked(&buf).parse()? };
@@ -492,9 +503,17 @@ impl Display for Duration {
             self.secs()
         )?;
 
+        let fsp = usize::from(self.fsp());
+
         if self.fsp() > 0 {
-            write!(formatter, ".{:06}", self.micros())?;
+            write!(
+                formatter,
+                ".{:0width$}",
+                self.micros() / TEN_POW[6 - fsp],
+                width = fsp
+            )?;
         }
+
         Ok(())
     }
 }
@@ -568,7 +587,6 @@ impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
 mod tests {
     use super::*;
     use crate::coprocessor::codec::mysql::MAX_FSP;
-    use tikv_util::escape;
 
     #[test]
     fn test_hours() {
@@ -669,8 +687,8 @@ mod tests {
             (b"1 12", 0, Some("36:00:00")),
             (b"1 10:11:12", 0, Some("34:11:12")),
             (b"1 10:11:12.123456", 0, Some("34:11:12")),
-            (b"1 10:11:12.123456", 4, Some("34:11:12.123500")),
-            (b"1 10:11:12.12", 4, Some("34:11:12.120000")),
+            (b"1 10:11:12.123456", 4, Some("34:11:12.1235")),
+            (b"1 10:11:12.12", 4, Some("34:11:12.1200")),
             (b"1 10:11:12.1234565", 6, Some("34:11:12.123457")),
             (b"1 10:11:12.9999995", 6, Some("34:11:13.000000")),
             (b"1 10:11:12.123456", 7, None),
@@ -691,26 +709,26 @@ mod tests {
             (b"232 10", 0, None),
             (b"-232 10", 0, None),
             (b"00:00:00.1", 0, Some("00:00:00")),
-            (b"00:00:00.1", 1, Some("00:00:00.100000")),
-            (b"00:00:00.777777", 2, Some("00:00:00.780000")),
+            (b"00:00:00.1", 1, Some("00:00:00.1")),
+            (b"00:00:00.777777", 2, Some("00:00:00.78")),
             (b"00:00:00.777777", 6, Some("00:00:00.777777")),
-            (b"00:00:00.001", 3, Some("00:00:00.001000")),
+            (b"00:00:00.001", 3, Some("00:00:00.001")),
             // NOTE: The following case is easy to fail.
             (b"- 1 ", 0, Some("-00:00:01")),
             (b"1:2:3", 0, Some("01:02:03")),
             (b"1 1:2:3", 0, Some("25:02:03")),
-            (b"-1 1:2:3.123", 3, Some("-25:02:03.123000")),
-            (b"-.123", 3, Some("-00:00:00.123000")),
+            (b"-1 1:2:3.123", 3, Some("-25:02:03.123")),
+            (b"-.123", 3, Some("-00:00:00.123")),
             (b"12345", 0, Some("01:23:45")),
             (b"-123", 0, Some("-00:01:23")),
             (b"-23", 0, Some("-00:00:23")),
             (b"- 1 1", 0, Some("-25:00:00")),
             (b"-1 1", 0, Some("-25:00:00")),
-            (b" - 1:2:3 .123 ", 3, Some("-01:02:03.123000")),
-            (b" - 1 :2 :3 .123 ", 3, Some("-01:02:03.123000")),
-            (b" - 1 : 2 :3 .123 ", 3, Some("-01:02:03.123000")),
-            (b" - 1 : 2 :  3 .123 ", 3, Some("-01:02:03.123000")),
-            (b" - 1 .123 ", 3, Some("-00:00:01.123000")),
+            (b" - 1:2:3 .123 ", 3, Some("-01:02:03.123")),
+            (b" - 1 :2 :3 .123 ", 3, Some("-01:02:03.123")),
+            (b" - 1 : 2 :3 .123 ", 3, Some("-01:02:03.123")),
+            (b" - 1 : 2 :  3 .123 ", 3, Some("-01:02:03.123")),
+            (b" - 1 .123 ", 3, Some("-00:00:01.123")),
             (b"-", 0, None),
             (b"", 0, None),
             (b"18446744073709551615:59:59", 0, None),
@@ -719,22 +737,25 @@ mod tests {
         ];
 
         for (input, fsp, expect) in cases {
-            let d = Duration::parse(input, fsp);
-            match expect {
-                Some(exp) => {
-                    let s = format!(
+            let got = Duration::parse(input, fsp);
+
+            if let Some(expect) = expect {
+                assert_eq!(
+                    expect,
+                    &format!(
                         "{}",
-                        d.unwrap_or_else(|e| panic!("{}: {:?}", escape(input), e))
-                    );
-                    if s != expect.unwrap() {
-                        panic!("expect parse {} to {}, got {}", escape(input), exp, s);
-                    }
-                }
-                None => {
-                    if d.is_ok() {
-                        panic!("{} should not be passed, got {:?}", escape(input), d);
-                    }
-                }
+                        got.unwrap_or_else(|_| panic!(str::from_utf8(input).unwrap().to_string()))
+                    )
+                );
+            } else {
+                assert!(
+                    got.is_err(),
+                    format!(
+                        "{} should not be passed, got {:?}",
+                        str::from_utf8(input).unwrap(),
+                        got
+                    )
+                );
             }
         }
     }
@@ -750,8 +771,8 @@ mod tests {
             ("11:30:45", 6, "113045.000000"),
             ("11:30:45.123", 6, "113045.123000"),
             ("11:30:45.123345", 0, "113045"),
-            ("11:30:45.123345", 3, "113045.123000"),
-            ("11:30:45.123345", 5, "113045.123350"),
+            ("11:30:45.123345", 3, "113045.123"),
+            ("11:30:45.123345", 5, "113045.12335"),
             ("11:30:45.123345", 6, "113045.123345"),
             ("11:30:45.1233456", 6, "113045.123346"),
             ("11:30:45.9233456", 0, "113046"),
@@ -768,14 +789,14 @@ mod tests {
     #[test]
     fn test_round_frac() {
         let cases = vec![
-            ("11:30:45.123456", 4, "11:30:45.123500"),
+            ("11:30:45.123456", 4, "11:30:45.1235"),
             ("11:30:45.123456", 6, "11:30:45.123456"),
             ("11:30:45.123456", 0, "11:30:45"),
-            ("11:59:59.999999", 3, "12:00:00.000000"),
-            ("1 11:30:45.123456", 1, "35:30:45.100000"),
-            ("1 11:30:45.999999", 4, "35:30:46.000000"),
+            ("11:59:59.999999", 3, "12:00:00.000"),
+            ("1 11:30:45.123456", 1, "35:30:45.1"),
+            ("1 11:30:45.999999", 4, "35:30:46.0000"),
             ("-1 11:30:45.999999", 0, "-35:30:46"),
-            ("-1 11:59:59.9999", 2, "-36:00:00.000000"),
+            ("-1 11:59:59.9999", 2, "-36:00:00.00"),
         ];
         for (input, fsp, exp) in cases {
             let t = Duration::parse(input.as_bytes(), MAX_FSP)
@@ -841,5 +862,116 @@ mod tests {
         let lhs = Duration::parse(b"-00:00:01", 6).unwrap();
         let rhs = Duration::from_nanos(MAX_TIME_IN_SECS * NANOS_PER_SEC, 6).unwrap();
         assert_eq!(lhs.checked_sub(rhs), None);
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+    use crate::coprocessor::codec::mysql::MAX_FSP;
+
+    #[bench]
+    fn bench_parse(b: &mut test::Bencher) {
+        let cases = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("10:20:30.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23:12.1234567", 6),
+        ];
+
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for &(s, fsp) in cases {
+                let _ = test::black_box(Duration::parse(s.as_bytes(), fsp).unwrap());
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_hours(b: &mut test::Bencher) {
+        let cases = &(3600..=7200)
+            .map(|second| Duration::new(StdDuration::from_secs(second), false, MAX_FSP).unwrap())
+            .collect::<Vec<Duration>>();
+
+        b.iter(|| {
+            for duration in cases {
+                let duration = test::black_box(duration);
+                let _ = test::black_box(duration.hours());
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_to_decimal(b: &mut test::Bencher) {
+        let duration = Duration::parse(b"-12:34:56.123456", 6).unwrap();
+        b.iter(|| {
+            let duration = test::black_box(duration);
+            let _ = test::black_box(duration.to_decimal().unwrap());
+        })
+    }
+
+    #[bench]
+    fn bench_round_frac(b: &mut test::Bencher) {
+        let (duration, fsp) = (Duration::parse(b"12:34:56.789", 3).unwrap(), 2);
+        b.iter(|| {
+            let (duration, fsp) = (test::black_box(duration), test::black_box(fsp));
+            let _ = test::black_box(duration.round_frac(fsp).unwrap());
+        })
+    }
+
+    #[bench]
+    fn bench_codec(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("10:20:30.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for &duration in cases {
+                let t = test::black_box(duration);
+                let mut buf = vec![];
+                buf.encode_duration(t).unwrap();
+                let got = test::black_box(Duration::decode(&mut buf.as_slice()).unwrap());
+                assert_eq!(t, got);
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_check_add_and_sub_duration(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("11:30:45.123456", "00:00:14.876545"),
+            ("11:30:45.123456", "00:30:00"),
+            ("11:30:45.123456", "12:30:00"),
+            ("11:30:45.123456", "1 12:30:00"),
+        ]
+        .into_iter()
+        .map(|(lhs, rhs)| {
+            (
+                Duration::parse(lhs.as_bytes(), MAX_FSP).unwrap(),
+                Duration::parse(rhs.as_bytes(), MAX_FSP).unwrap(),
+            )
+        })
+        .collect();
+
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for &(lhs, rhs) in cases {
+                let _ = test::black_box(lhs.checked_add(rhs).unwrap());
+                let _ = test::black_box(lhs.checked_sub(rhs).unwrap());
+            }
+        })
     }
 }
