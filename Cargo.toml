@@ -46,10 +46,10 @@ name = "raftstore"
 harness = false
 path = "benches/raftstore/mod.rs"
 
-#[[bench]]
-#name = "coprocessor_executors"
-#harness = false
-#path = "benches/coprocessor_executors/mod.rs"
+[[bench]]
+name = "coprocessor_executors"
+harness = false
+path = "benches/coprocessor_executors/mod.rs"
 
 [[bench]]
 name = "hierarchy"
