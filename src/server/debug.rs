@@ -344,6 +344,39 @@ impl Debugger {
         Ok(errors)
     }
 
+    pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) -> Result<Vec<(u64, Error)>> {
+        let db = &self.engines.kv;
+        let wb = WriteBatch::new();
+        let mut errors = Vec::with_capacity(regions.len());
+        for region_id in regions {
+            let key = keys::region_state_key(region_id);
+            let region_state = match db.get_msg_cf::<RegionLocalState>(CF_RAFT, &key) {
+                Ok(Some(state)) => state,
+                Ok(None) => {
+                    let error = box_err!("{} region local state not exists", region_id);
+                    errors.push((region_id, error));
+                    continue;
+                }
+                Err(_) => {
+                    let error = box_err!("{} gets region local state fail", region_id);
+                    errors.push((region_id, error));
+                    continue;
+                }
+            };
+            if region_state.get_state() == PeerState::Tombstone {
+                v1!("skip because it's already tombstone");
+                continue;
+            }
+            let region = &region_state.get_region();
+            write_peer_state(db, &wb, region, PeerState::Tombstone, None).unwrap();
+        }
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        db.write_opt(&wb, &write_opts).unwrap();
+        Ok(errors)
+    }
+
     pub fn recover_regions(
         &self,
         regions: Vec<Region>,
@@ -461,6 +494,12 @@ impl Debugger {
             let apply_state = box_try!(init_apply_state(&self.engines, region));
             if raft_state.get_last_index() < apply_state.get_applied_index() {
                 return Err(Error::Other("last index < applied index".into()));
+            }
+            if raft_state.get_hard_state().get_commit() < apply_state.get_applied_index() {
+                return Err(Error::Other("commit index < applied index".into()));
+            }
+            if raft_state.get_last_index() < raft_state.get_hard_state().get_commit() {
+                return Err(Error::Other("last index < commit index".into()));
             }
 
             let tag = format!("[region {}] {}", region.get_id(), peer_id);
@@ -1807,6 +1846,32 @@ mod tests {
             let state = get_region_state(engine, region_id).get_state();
             assert_eq!(state, PeerState::Tombstone);
         }
+    }
+
+    #[test]
+    fn test_tombstone_regions_by_id() {
+        let debugger = new_debugger();
+        debugger.set_store_id(11);
+        let engine = debugger.engines.kv.as_ref();
+
+        // tombstone region 1 which currently not exists.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(!errors.is_empty());
+
+        // region 1 with peers at stores 11, 12, 13.
+        init_region_state(engine, 1, &[11, 12, 13]);
+        let mut expected_state = get_region_state(engine, 1);
+        expected_state.set_state(PeerState::Tombstone);
+
+        // tombstone region 1.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(get_region_state(engine, 1), expected_state);
+
+        // tombstone region 1 again.
+        let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(get_region_state(engine, 1), expected_state);
     }
 
     #[test]
