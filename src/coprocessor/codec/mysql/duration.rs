@@ -479,14 +479,92 @@ impl Duration {
 
     /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
     pub fn checked_add(self, rhs: Duration) -> Option<Duration> {
-        let add = self.as_nanos().checked_add(rhs.as_nanos())?;
-        Duration::from_nanos(add, self.fsp().max(rhs.fsp()) as i8).ok()
+        match (self.neg(), rhs.neg()) {
+            (false, true) => self.checked_sub(rhs.abs()),
+            (true, false) => rhs.checked_sub(self.abs()),
+            (true, true) => {
+                let mut result = self.abs().checked_add(rhs.abs())?;
+                result.set_neg(true);
+                Some(result)
+            }
+            (false, false) => {
+                let mut micros = self.micros() + rhs.micros();
+                let mut secs = self.secs() + rhs.secs();
+                let mut minutes = self.minutes() + rhs.minutes();
+                let mut hours = self.hours() + rhs.hours();
+
+                if i64::from(micros) >= MICROS_PER_SEC {
+                    micros -= MICROS_PER_SEC as u32;
+                    secs += 1;
+                }
+                if secs >= 60 {
+                    secs -= 60;
+                    minutes += 1;
+                }
+                if minutes >= 60 {
+                    minutes -= 60;
+                    hours += 1;
+                }
+                hours = check_hour(hours).ok()?;
+
+                Duration::build(
+                    false,
+                    hours,
+                    minutes,
+                    secs,
+                    micros * 1000,
+                    self.fsp().max(rhs.fsp()),
+                )
+                .ok()
+            }
+        }
     }
 
     /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
     pub fn checked_sub(self, rhs: Duration) -> Option<Duration> {
-        let sub = self.as_nanos().checked_sub(rhs.as_nanos())?;
-        Duration::from_nanos(sub, self.fsp().max(rhs.fsp()) as i8).ok()
+        match (self.neg(), rhs.neg()) {
+            (false, true) => self.checked_add(rhs.abs()),
+            (true, false) => self.abs().checked_add(rhs.abs()).map(|mut res| {
+                res.set_neg(true);
+                res
+            }),
+            (true, true) => rhs.abs().checked_sub(self.abs()),
+            (false, false) => {
+                let sign = self < rhs;
+
+                let (l, r) = if sign { (rhs, self) } else { (self, rhs) };
+
+                let mut micros = l.micros() as i32 - r.micros() as i32;
+                let mut secs = l.secs() as i32 - r.secs() as i32;
+                let mut minutes = l.minutes() as i32 - r.minutes() as i32;
+                let mut hours = l.hours() as i32 - r.hours() as i32;
+
+                if micros < 0 {
+                    micros += MICROS_PER_SEC as i32;
+                    secs -= 1;
+                }
+
+                if secs < 0 {
+                    secs += 60;
+                    minutes -= 1;
+                }
+
+                if minutes < 0 {
+                    minutes += 60;
+                    hours -= 1;
+                }
+
+                Duration::build(
+                    sign,
+                    hours as u32,
+                    minutes as u32,
+                    secs as u32,
+                    (micros * 1000) as u32,
+                    self.fsp().max(rhs.fsp()),
+                )
+                .ok()
+            }
+        }
     }
 }
 
@@ -950,7 +1028,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_check_add_and_sub_duration(b: &mut test::Bencher) {
+    fn bench_checked_add_and_sub_duration(b: &mut test::Bencher) {
         let cases: Vec<_> = vec![
             ("11:30:45.123456", "00:00:14.876545"),
             ("11:30:45.123456", "00:30:00"),
