@@ -95,6 +95,12 @@ impl AsRef<[RpnExpressionNode]> for RpnExpression {
     }
 }
 
+impl AsMut<[RpnExpressionNode]> for RpnExpression {
+    fn as_mut(&mut self) -> &mut [RpnExpressionNode] {
+        self.0.as_mut()
+    }
+}
+
 impl RpnExpression {
     /// Gets the field type of the return value.
     pub fn ret_field_type<'a>(&'a self, schema: &'a [FieldType]) -> &'a FieldType {

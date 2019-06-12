@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::boxed::FnBox;
 use std::fmt;
 use std::time::Instant;
 
@@ -31,8 +30,8 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-pub type ReadCallback = Box<dyn FnBox(ReadResponse) + Send>;
-pub type WriteCallback = Box<dyn FnBox(WriteResponse) + Send>;
+pub type ReadCallback = Box<dyn FnOnce(ReadResponse) + Send>;
+pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -70,6 +69,13 @@ impl Callback {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
+        }
+    }
+
+    pub fn is_none(&self) -> bool {
+        match self {
+            Callback::None => true,
+            _ => false,
         }
     }
 }
@@ -201,6 +207,8 @@ pub enum CasualMessage {
     },
     /// Clear region size cache.
     ClearRegionSize,
+    /// Indicate a target region is overlapped.
+    RegionOverlapped,
 }
 
 impl fmt::Debug for CasualMessage {
@@ -239,6 +247,7 @@ impl fmt::Debug for CasualMessage {
                 fmt,
                 "clear region size"
             },
+            CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
         }
     }
 }
@@ -287,6 +296,8 @@ pub enum PeerMsg {
     Noop,
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage),
+    /// Ask region to report a heartbeat to PD.
+    HeartbeatPd,
 }
 
 impl fmt::Debug for PeerMsg {
@@ -304,6 +315,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
+            PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
         }
     }
 }

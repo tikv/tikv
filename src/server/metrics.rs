@@ -9,6 +9,8 @@ make_static_metric! {
         kv_get,
         kv_scan,
         kv_prewrite,
+        kv_pessimistic_lock,
+        kv_pessimistic_rollback,
         kv_commit,
         kv_cleanup,
         kv_batch_get,
@@ -32,6 +34,7 @@ make_static_metric! {
         mvcc_get_by_key,
         mvcc_get_by_start_ts,
         split_region,
+        read_index,
     }
     pub struct GrpcMsgHistogramVec: Histogram {
         "type" => GrpcTypeKind,

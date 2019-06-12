@@ -84,6 +84,7 @@ impl RocksEngine {
         path: &str,
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions<'_>>>,
+        shared_block_cache: bool,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -97,7 +98,7 @@ impl RocksEngine {
         let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(db.clone(), db);
+        let engines = Engines::new(db.clone(), db, shared_block_cache);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -186,7 +187,7 @@ impl TestEngineBuilder {
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
-        RocksEngine::new(&path, &cfs, Some(cfs_opts))
+        RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
     }
 }
 
