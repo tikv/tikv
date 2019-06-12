@@ -2572,7 +2572,7 @@ mod tests {
         storage
             .async_pause(
                 Context::new(),
-                vec![],
+                vec![Key::from_raw(b"y")],
                 1000,
                 expect_ok_callback(tx.clone(), 3),
             )
