@@ -14,6 +14,9 @@ RUN sed -i '/fuzz/d' Cargo.toml && \
     sed -i '/test\_/d' Cargo.toml && \
     sed -i '/profiler/d' Cargo.toml
 
+# Use Makefile to build
+COPY Makefile ./
+
 # Add components Cargo files
 # Notice: every time we add a new component, we must regenerate the dockerfile
 COPY ./components/codec/Cargo.toml ./components/codec/Cargo.toml
@@ -44,7 +47,7 @@ RUN mkdir -p ./src/bin && \
     mkdir ./components/tikv_alloc/src && echo '' > ./components/tikv_alloc/src/lib.rs && \
     mkdir ./components/tikv_util/src && echo '' > ./components/tikv_util/src/lib.rs && \
     mkdir ./components/tipb_helper/src && echo '' > ./components/tipb_helper/src/lib.rs && \
-    cargo build --no-default-features --release --features "jemalloc portable sse no-fail" && \
+    make build_release && \
     rm -rf ./target/release/.fingerprint/codec-* && \
     rm -rf ./target/release/.fingerprint/cop_codegen-* && \
     rm -rf ./target/release/.fingerprint/cop_datatype-* && \
@@ -61,7 +64,7 @@ RUN mkdir -p ./src/bin && \
 COPY ./src ./src
 COPY ./components ./components
 
-RUN make build
+RUN make build_release
 
 # Strip debug info to reduce the docker size, may strip later?
 # RUN strip --strip-debug /tikv/target/release/tikv-server && \
