@@ -604,6 +604,12 @@ impl PendingSnapshot {
             self.tasks.shrink_to_fit();
         }
     }
+
+    fn has_ready_snap(&self, applied_index: u64) -> bool {
+        self.tasks
+            .front()
+            .map_or(false, |task| task.commit_index() <= applied_index)
+    }
 }
 
 /// The apply delegate of a Region which is responsible for handling committed
@@ -2640,43 +2646,48 @@ impl ApplyFsm {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        let applied_index = self.delegate.apply_state.get_applied_index();
         if let Some(task) = snap_task {
             self.delegate.pending_snaps.tasks.push_back(task);
         }
+        let applied_index = self.delegate.apply_state.get_applied_index();
+        if !self.delegate.pending_snaps.has_ready_snap(applied_index) {
+            return;
+        }
+
+        let mut need_sync = apply_ctx
+            .apply_res
+            .iter()
+            .any(|res| res.region_id == self.delegate.region_id())
+            && self.delegate.last_sync_apply_index != applied_index;
+        (|| {
+            fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
+        })();
+        if need_sync {
+            if apply_ctx.timer.is_none() {
+                apply_ctx.timer = Some(SlowTimer::new());
+            }
+            if apply_ctx.kv_wb.is_none() {
+                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            }
+            self.delegate
+                .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+            fail_point!(
+                "apply_on_handle_snapshot_finish_1_1",
+                self.delegate.id == 1 && self.delegate.region_id() == 1,
+                |_| unimplemented!()
+            );
+
+            apply_ctx.flush();
+            // For now, it's more like last_flush_apply_index.
+            // TODO: Update it only when `flush()` returns true.
+            self.delegate.last_sync_apply_index = applied_index;
+        }
+
         while let Some(task) = self.delegate.pending_snaps.tasks.pop_front() {
             // Handle the task if its commit index has been applied.
             if task.commit_index() > applied_index {
                 self.delegate.pending_snaps.tasks.push_front(task);
                 break;
-            }
-            let mut need_sync = apply_ctx
-                .apply_res
-                .iter()
-                .any(|res| res.region_id == self.delegate.region_id())
-                && self.delegate.last_sync_apply_index != applied_index;
-            (|| {
-                fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
-            })();
-            if need_sync {
-                if apply_ctx.timer.is_none() {
-                    apply_ctx.timer = Some(SlowTimer::new());
-                }
-                if apply_ctx.kv_wb.is_none() {
-                    apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
-                }
-                self.delegate
-                    .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
-                fail_point!(
-                    "apply_on_handle_snapshot_finish_1_1",
-                    self.delegate.id == 1 && self.delegate.region_id() == 1,
-                    |_| unimplemented!()
-                );
-
-                apply_ctx.flush();
-                // For now, it's more like last_flush_apply_index.
-                // TODO: Update it only when `flush()` returns true.
-                self.delegate.last_sync_apply_index = applied_index;
             }
 
             if let Err(e) =
