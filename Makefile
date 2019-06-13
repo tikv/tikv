@@ -194,6 +194,7 @@ docker-tag-with-hash:
 
 docker-extract-binaries:
 	mkdir -p bin
+	docker rm -f tikv-binary-extraction-dummy || true
 	docker create --name tikv-binary-extraction-dummy tikv/tikv
 	docker cp tikv-binary-extraction-dummy:/tikv-server bin/tikv-server
 	docker cp tikv-binary-extraction-dummy:/tikv-importer bin/tikv-importer
