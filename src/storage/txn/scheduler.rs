@@ -112,6 +112,10 @@ impl TaskContext {
     fn new(task: Task, latches: &Latches, cb: StorageCb) -> TaskContext {
         let tag = task.cmd().tag();
         let lock = gen_command_lock(latches, task.cmd());
+        // Write command should acquire write lock.
+        if !task.cmd().readonly() && !lock.is_write_lock() {
+            panic!("write lock is expected for command {:?}", task.cmd());
+        }
         let write_bytes = if lock.is_write_lock() {
             task.cmd().write_bytes()
         } else {
