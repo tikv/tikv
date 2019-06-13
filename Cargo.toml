@@ -78,6 +78,7 @@ toml = "0.4"
 libc = "0.2"
 crc = "1.8"
 fs2 = "0.4"
+spin = "0.5"
 protobuf = "~2.0"
 nix = "0.11"
 utime = "0.2"
@@ -139,6 +140,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
+farmhash = "1.1.5"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
