@@ -17,23 +17,29 @@ impl HashAggregationHelper {
     /// in a single vector and the states of each row should be specified by an offset vector.
     pub fn update_each_row_states_by_offset<Src: BatchExecutor>(
         entities: &mut Entities<Src>,
-        input: &mut LazyBatchColumnVec,
+        input_physical_columns: &mut LazyBatchColumnVec,
+        input_logical_rows: &[usize],
         states: &mut [Box<dyn AggrFunctionState>],
-        states_offset_each_row: &[usize],
+        states_offset_each_logical_row: &[usize],
     ) -> Result<()> {
-        let rows_len = input.rows_len();
+        let logical_rows_len = input_logical_rows.len();
         let src_schema = entities.src.schema();
 
         for idx in 0..entities.each_aggr_fn.len() {
             let aggr_expr = &entities.each_aggr_exprs[idx];
-            let aggr_expr_result =
-                aggr_expr.eval(&mut entities.context, rows_len, src_schema, input)?;
+            let aggr_expr_result = aggr_expr.eval(
+                &mut entities.context,
+                src_schema,
+                input_physical_columns,
+                input_logical_rows,
+                logical_rows_len,
+            )?;
             match aggr_expr_result {
                 RpnStackNode::Scalar { value, .. } => {
                     match_template_evaluable! {
                         TT, match value {
                             ScalarValue::TT(scalar_value) => {
-                                for offset in states_offset_each_row {
+                                for offset in states_offset_each_logical_row {
                                     let aggr_fn_state = &mut states[*offset + idx];
                                     aggr_fn_state.update(&mut entities.context, scalar_value)?;
                                 }
@@ -42,12 +48,14 @@ impl HashAggregationHelper {
                     }
                 }
                 RpnStackNode::Vector { value, .. } => {
+                    let physical_vec = value.as_ref();
+                    let logical_rows = value.logical_rows();
                     match_template_evaluable! {
-                        TT, match &*value {
-                            VectorValue::TT(vector_value) => {
-                                for (row_index, offset) in states_offset_each_row.iter().enumerate() {
+                        TT, match physical_vec {
+                            VectorValue::TT(vec) => {
+                                for (logical_row_index, offset) in states_offset_each_logical_row.iter().enumerate() {
                                     let aggr_fn_state = &mut states[*offset + idx];
-                                    aggr_fn_state.update(&mut entities.context, &vector_value[row_index])?;
+                                    aggr_fn_state.update(&mut entities.context, &vec[logical_rows[logical_row_index]])?;
                                 }
                             }
                         }

@@ -5,7 +5,6 @@
 
 mod scalar;
 mod vector;
-mod vector_like;
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
@@ -16,7 +15,6 @@ pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as Date
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
-pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
 
 use cop_datatype::EvalType;
 
@@ -74,13 +72,6 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type.
     fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>];
 
-    /// Borrows a specialized reference from a `VectorLikeValueRef`. The specialized reference is
-    /// also vector-like but contains the concrete type information, which doesn't need type
-    /// checks (but needs vector/scalar checks) when accessing.
-    fn borrow_vector_like_specialized(
-        v: VectorLikeValueRef<'_>,
-    ) -> VectorLikeValueRefSpecialized<'_, Self>;
-
     /// Converts a vector of this concrete type into a `VectorValue` in the same type.
     fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
 }
@@ -98,13 +89,6 @@ macro_rules! impl_evaluable_type {
             #[inline]
             fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>] {
                 v.as_ref()
-            }
-
-            #[inline]
-            fn borrow_vector_like_specialized(
-                v: VectorLikeValueRef<'_>,
-            ) -> VectorLikeValueRefSpecialized<'_, Self> {
-                v.into()
             }
 
             #[inline]
