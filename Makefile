@@ -192,7 +192,8 @@ docker-tag-with-hash:
 	docker tag tikv/tikv-importer tikv/tikv-importer:${TIKV_BUILD_GIT_HASH}
 	docker tag tikv/tikv-ctl tikv/tikv-ctl:${TIKV_BUILD_GIT_HASH}
 
-docker-extract-binaries: 
+docker-extract-binaries:
+	mkdir -p bin
 	docker create --name tikv-binary-extraction-dummy tikv/tikv
 	docker cp tikv-binary-extraction-dummy:/tikv-server bin/tikv-server
 	docker cp tikv-binary-extraction-dummy:/tikv-importer bin/tikv-importer
