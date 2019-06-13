@@ -43,6 +43,7 @@ impl Client {
         }
     }
 
+    #[allow(unused)]
     pub fn get_wait_for_entries(&self) -> DeadlockFuture<WaitForEntriesResponse> {
         match self
             .client
