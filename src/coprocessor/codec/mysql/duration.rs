@@ -23,6 +23,7 @@ const SECS_PER_MINUTE: u32 = 60;
 const MAX_HOURS: u32 = 838;
 const MAX_MINUTES: u32 = 59;
 const MAX_SECONDS: u32 = 59;
+const MAX_MICROS: u32 = 999_999;
 
 #[inline]
 fn check_hour(hour: u32) -> Result<u32> {
@@ -60,6 +61,19 @@ fn check_second(second: u32) -> Result<u32> {
         ))
     } else {
         Ok(second)
+    }
+}
+
+#[inline]
+fn check_micros(micros: u32) -> Result<u32> {
+    if micros > MAX_MICROS {
+        Err(invalid_type!(
+            "invalid fractional value: {} larger than {}",
+            micros,
+            MAX_MICROS
+        ))
+    } else {
+        Ok(micros)
     }
 }
 
@@ -247,7 +261,7 @@ bitfield! {
     #[inline]
     pub bool, neg, set_neg: 63;
     #[inline]
-    bool, unused, set_unused: 62;
+    bool, used, set_used: 62;
     #[inline]
     pub u32, hours, set_hours: 61, 48;
     #[inline]
@@ -261,6 +275,24 @@ bitfield! {
 }
 
 impl Duration {
+    /// Raw transmutation to u64.
+    pub fn to_bits(self) -> u64 {
+        self.0
+    }
+
+    /// Raw transmutation from u64.
+    pub fn from_bits(v: u64) -> Result<Duration> {
+        let mut duration = Duration(v);
+
+        check_micros(duration.micros())?;
+        check_second(duration.secs())?;
+        check_minute(duration.minutes())?;
+        check_hour(duration.hours())?;
+
+        duration.set_used(false);
+        Ok(duration)
+    }
+
     /// Returns the identity element of `Duration`
     pub fn zero() -> Duration {
         Duration(0)
@@ -618,8 +650,6 @@ impl PartialOrd for Duration {
 
         a.set_fsp(0);
         b.set_fsp(0);
-        a.set_unused(false);
-        b.set_unused(false);
 
         Some(match (a.neg(), b.neg()) {
             (true, true) => b.abs().cmp(&a.abs()),
@@ -641,15 +671,14 @@ impl Ord for Duration {
 impl<T: Write> DurationEncoder for T {}
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: Duration) -> Result<()> {
-        self.encode_u64(v.0).map_err(From::from)
+        self.encode_u64(v.to_bits()).map_err(From::from)
     }
 }
 
 impl Duration {
     /// `decode` decodes duration encoded by `encode_duration`.
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Duration> {
-        let inner = number::decode_u64(data)?;
-        Ok(Duration(inner))
+        Duration::from_bits(number::decode_u64(data)?)
     }
 }
 
