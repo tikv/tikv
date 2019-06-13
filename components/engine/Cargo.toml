@@ -9,7 +9,7 @@ portable = ["engine_rocksdb/portable"]
 sse = ["engine_rocksdb/sse"]
 
 [dependencies]
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", rev = "3989027cb1ea74a513205d84adbce69d7e46b97d" }
 protobuf = "~2.0"
 raft = "0.4"
 quick-error = "1.2.2"

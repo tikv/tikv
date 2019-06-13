@@ -721,7 +721,6 @@ pub mod tests {
     use engine::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
     use tikv_util::codec::bytes;
-    use tikv_util::escape;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
@@ -799,7 +798,7 @@ pub mod tests {
             cursor
                 .near_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
-            escape(key)
+            hex::encode_upper(key)
         );
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
         assert_eq!(cursor.value(&mut statistics), pair.1);
@@ -815,7 +814,7 @@ pub mod tests {
             cursor
                 .near_reverse_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
-            escape(key)
+            hex::encode_upper(key)
         );
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
         assert_eq!(cursor.value(&mut statistics), pair.1);

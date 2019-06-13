@@ -5,7 +5,6 @@ use byteorder::{BigEndian, ByteOrder};
 use crate::raftstore::Result;
 use kvproto::metapb::Region;
 use std::mem;
-use tikv_util::escape;
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];
@@ -100,7 +99,10 @@ pub fn raft_log_index(key: &[u8]) -> Result<u64> {
         + mem::size_of::<u8>()
         + mem::size_of::<u64>();
     if key.len() != expect_key_len {
-        return Err(box_err!("key {} is not a valid raft log key", escape(key)));
+        return Err(box_err!(
+            "key {} is not a valid raft log key",
+            hex::encode_upper(key)
+        ));
     }
     Ok(BigEndian::read_u64(
         &key[expect_key_len - mem::size_of::<u64>()..],
@@ -115,7 +117,10 @@ pub fn decode_raft_log_key(key: &[u8]) -> Result<(u64, u64)> {
         || !key.starts_with(REGION_RAFT_PREFIX_KEY)
         || key[suffix_idx] != RAFT_LOG_SUFFIX
     {
-        return Err(box_err!("key {} is not a valid raft log key", escape(key)));
+        return Err(box_err!(
+            "key {} is not a valid raft log key",
+            hex::encode_upper(key)
+        ));
     }
     let region_id = BigEndian::read_u64(&key[REGION_RAFT_PREFIX_KEY.len()..suffix_idx]);
     let index = BigEndian::read_u64(&key[suffix_idx + mem::size_of::<u8>()..]);
@@ -146,7 +151,7 @@ fn decode_region_key(prefix: &[u8], key: &[u8], category: &str) -> Result<(u64, 
         return Err(box_err!(
             "invalid region {} key length for key {}",
             category,
-            escape(key)
+            hex::encode_upper(key)
         ));
     }
 
@@ -154,7 +159,7 @@ fn decode_region_key(prefix: &[u8], key: &[u8], category: &str) -> Result<(u64, 
         return Err(box_err!(
             "invalid region {} prefix for key {}",
             category,
-            escape(key)
+            hex::encode_upper(key)
         ));
     }
 
@@ -191,7 +196,11 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
 }
 
 pub fn origin_key(key: &[u8]) -> &[u8] {
-    assert!(validate_data_key(key), "invalid data key {:?}", escape(key));
+    assert!(
+        validate_data_key(key),
+        "invalid data key {}",
+        hex::encode_upper(key)
+    );
     &key[DATA_PREFIX_KEY.len()..]
 }
 

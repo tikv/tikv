@@ -39,13 +39,15 @@ use crate::raftstore::store::msg::{Callback, PeerMsg};
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
+use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
+use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
-use tikv_util::{escape, MustConsumeVec};
+use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
 use super::{
@@ -1156,7 +1158,7 @@ impl ApplyDelegate {
                     panic!(
                         "{} failed to write ({}, {}) to cf {}: {:?}",
                         self.tag,
-                        escape(&key),
+                        hex::encode_upper(&key),
                         escape(value),
                         cf,
                         e
@@ -1167,7 +1169,7 @@ impl ApplyDelegate {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    escape(&key),
+                    hex::encode_upper(&key),
                     escape(value),
                     e
                 );
@@ -1191,7 +1193,12 @@ impl ApplyDelegate {
             rocks::util::get_cf_handle(&ctx.engines.kv, cf)
                 .and_then(|handle| ctx.kv_wb().delete_cf(handle, &key).map_err(Into::into))
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                    panic!(
+                        "{} failed to delete {}: {}",
+                        self.tag,
+                        hex::encode_upper(&key),
+                        e
+                    )
                 });
 
             if cf == CF_LOCK {
@@ -1202,7 +1209,12 @@ impl ApplyDelegate {
             }
         } else {
             ctx.kv_wb().delete(&key).unwrap_or_else(|e| {
-                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                panic!(
+                    "{} failed to delete {}: {}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    e
+                )
             });
             self.metrics.delete_keys_hint += 1;
         }
@@ -1254,8 +1266,8 @@ impl ApplyDelegate {
                 panic!(
                     "{} failed to delete files in range [{}, {}): {:?}",
                     self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
                     e
                 )
             });
@@ -1272,8 +1284,8 @@ impl ApplyDelegate {
             panic!(
                 "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                 self.tag,
-                escape(&start_key),
-                escape(&end_key),
+                hex::encode_upper(&start_key),
+                hex::encode_upper(&end_key),
                 cf,
                 e
             );
@@ -1593,7 +1605,7 @@ impl ApplyDelegate {
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "region" => ?derived,
-            "keys" => ?keys
+            "keys" => %KeysInfoFormatter(keys.iter()),
         );
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);

@@ -213,9 +213,11 @@ impl fmt::Debug for CasualMessage {
                 index,
                 escape(hash)
             ),
-            CasualMessage::SplitRegion { ref split_keys, .. } => {
-                write!(fmt, "Split region with {}", KeysInfoFormatter(&split_keys))
-            }
+            CasualMessage::SplitRegion { ref split_keys, .. } => write!(
+                fmt,
+                "Split region with {}",
+                KeysInfoFormatter(split_keys.iter())
+            ),
             CasualMessage::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
             }
