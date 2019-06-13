@@ -20,11 +20,12 @@ use kvproto::deadlock_grpc::create_deadlock;
 
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
+use crate::pd::PdTask;
 use crate::raftstore::store::SnapManager;
 use crate::storage::{Engine, Storage};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{FutureScheduler, Worker};
 use tikv_util::Either;
 
 use super::load_statistics::*;
@@ -37,6 +38,7 @@ use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
+const PD_STATISTICS_INTERVAL: Duration = Duration::from_secs(60);
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
@@ -177,7 +179,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     }
 
     /// Starts the TiKV server.
-    pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
+    pub fn start(
+        &mut self,
+        cfg: Arc<Config>,
+        security_mgr: Arc<SecurityManager>,
+        pd_sender: Option<FutureScheduler<PdTask>>,
+    ) -> Result<()> {
         let snap_runner = SnapHandler::new(
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
@@ -208,6 +215,23 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 }),
         );
 
+        if let Some(pd_sender) = pd_sender {
+            self.stats_pool.as_ref().unwrap().spawn(
+                self.timer
+                    .interval(Instant::now(), PD_STATISTICS_INTERVAL)
+                    .map_err(|_| ())
+                    .for_each(move |_i| {
+                        let task = PdTask::ReportReadStats {};
+                        if let Err(e) = pd_sender.schedule(task) {
+                            error!(
+                                "failed to report read stats to pd";
+                                "err" => ?e,
+                            );
+                        }
+                        Ok(())
+                    }),
+            );
+        }
         info!("TiKV is ready to serve");
         Ok(())
     }
@@ -354,7 +378,7 @@ mod tests {
         )
         .unwrap();
 
-        server.start(cfg, security_mgr).unwrap();
+        server.start(cfg, security_mgr, None).unwrap();
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::new());

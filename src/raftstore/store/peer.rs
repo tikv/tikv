@@ -2158,8 +2158,8 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.peer_stat.written_bytes,
-            written_keys: self.peer_stat.written_keys,
+            total_written_bytes: self.peer_stat.written_bytes,
+            total_written_keys: self.peer_stat.written_keys,
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
         };

@@ -336,7 +336,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Run server.
     server
-        .start(server_cfg, security_mgr)
+        .start(server_cfg, security_mgr, Some(pd_sender.clone()))
         .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
 
     let server_cfg = cfg.server.clone();

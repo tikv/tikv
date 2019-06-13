@@ -227,7 +227,7 @@ impl Simulator for ServerCluster {
             self.snap_paths.insert(node_id, tmp);
         }
 
-        server.start(server_cfg, security_mgr).unwrap();
+        server.start(server_cfg, security_mgr, None).unwrap();
 
         self.metas.insert(
             node_id,
