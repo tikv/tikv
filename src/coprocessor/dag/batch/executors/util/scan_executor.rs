@@ -193,7 +193,9 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     use std::convert::TryFrom;
 
     for column in columns_info {
-        box_try!(EvalType::try_from(column.tp()));
+        if column.has_pk_handle() {
+            box_try!(EvalType::try_from(column.tp()));
+        }
     }
     Ok(())
 }
