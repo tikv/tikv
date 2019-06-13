@@ -594,6 +594,18 @@ struct PendingSnapshot {
     pending_count: Arc<AtomicUsize>,
 }
 
+impl PendingSnapshot {
+    const SHRINK_TASKS_CAPACITY: usize = 3;
+
+    fn gc(&mut self) {
+        if self.tasks.capacity() > Self::SHRINK_TASKS_CAPACITY
+            && self.tasks.len() < Self::SHRINK_TASKS_CAPACITY
+        {
+            self.tasks.shrink_to_fit();
+        }
+    }
+}
+
 /// The apply delegate of a Region which is responsible for handling committed
 /// raft log entries of a Region.
 ///
@@ -2687,10 +2699,12 @@ impl ApplyFsm {
                 |_| unimplemented!()
             );
         }
+        self.delegate.pending_snaps.gc();
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
         let mut channel_timer = None;
+        let mut snap_task = None;
         let mut drainer = msgs.drain(..);
         loop {
             match drainer.next() {
@@ -2709,16 +2723,15 @@ impl ApplyFsm {
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
                 Some(Msg::LogsUpToDate(_)) => {}
-                Some(Msg::Snapshot(snap_task)) => {
-                    self.maybe_handle_snapshot(apply_ctx, Some(snap_task))
+                Some(Msg::Snapshot(task)) => {
+                    snap_task = Some(task);
                 }
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f(&self.delegate),
                 None => break,
             }
         }
-        // Try handle snapshot again.
-        self.maybe_handle_snapshot(apply_ctx, None);
+        self.maybe_handle_snapshot(apply_ctx, snap_task);
         if let Some(timer) = channel_timer {
             let elapsed = duration_to_sec(timer.elapsed());
             APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
