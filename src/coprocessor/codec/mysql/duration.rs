@@ -312,7 +312,7 @@ impl Duration {
     }
 
     /// Returns the fractional part of `Duration`, in whole nanoseconds.
-    fn subsec_nanos(self) -> u32 {
+    pub fn subsec_nanos(self) -> u32 {
         self.micros() * 1000
     }
 
