@@ -49,6 +49,15 @@ impl LazyBatchColumn {
         LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
     }
 
+    /// Creates a new empty `LazyBatchColumn` with the same schema.
+    #[inline]
+    pub fn clone_empty(&self, capacity: usize) -> Self {
+        match self {
+            LazyBatchColumn::Raw(_) => Self::raw_with_capacity(capacity),
+            LazyBatchColumn::Decoded(v) => LazyBatchColumn::Decoded(v.clone_empty(capacity)),
+        }
+    }
+
     #[inline]
     pub fn is_raw(&self) -> bool {
         match self {
