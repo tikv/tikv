@@ -69,8 +69,8 @@ quick_error! {
         }
         Deadlock { start_ts: u64, lock_ts: u64, lock_key: Vec<u8>, deadlock_key_hash: u64 } {
             description("deadlock")
-            display("deadlock occurs between txn:{} and txn:{}, lock_key:{:?}, deadlock_key_hash:{}",
-                    start_ts, lock_ts, escape(lock_key), deadlock_key_hash)
+            display("deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
+                    start_ts, lock_ts, hex::encode_upper(lock_key), deadlock_key_hash)
         }
         AlreadyExist { key: Vec<u8> } {
             description("already exists")
