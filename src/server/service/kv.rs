@@ -319,9 +319,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let mut options = Options::default();
         options.lock_ttl = req.get_ttl();
         options.txn_size = req.get_txn_size();
-        let res = self
-            .storage
-            .async_refresh_lock(req.take_context(), req.take_key(), req.get_start_version(), options, cb);
+        let res = self.storage.async_refresh_lock(
+            req.take_context(),
+            req.take_key(),
+            req.get_start_version(),
+            options,
+            cb,
+        );
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(move |v| {
                 let mut resp = RefreshLockResponse::new();

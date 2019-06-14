@@ -431,8 +431,7 @@ impl Command {
                     bytes += k.as_encoded().len();
                 }
             }
-            Command::RefreshLock { ref key, .. }
-            | Command::Cleanup { ref key, .. } => {
+            Command::RefreshLock { ref key, .. } | Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
             }
             _ => {}
