@@ -309,14 +309,14 @@ x-test: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-test: export X_CARGO_RELEASE=0
 x-test: export X_CARGO_CONFIG_FILE=${TEST_CONFIG}
 x-test:
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 x-bench: export X_CARGO_CMD=bench
 x-bench: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-bench: export X_CARGO_RELEASE=0
 x-bench: export X_CARGO_CONFIG_FILE=${BENCH_CONFIG}
 x-bench:
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 # Devs might want to use the config files but not the makefiles.
 # These are rules to put each config file in place.
