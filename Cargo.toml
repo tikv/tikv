@@ -199,7 +199,7 @@ members = [
 
 [profile.dev]
 opt-level = 0
-debug = false
+debug = true
 codegen-units = 4
 lto = false
 incremental = true
@@ -222,7 +222,7 @@ rpath = false
 
 [profile.test]
 opt-level = 0
-debug = 1 # enable line numbers by default for easy test debugging
+debug = true
 codegen-units = 16
 lto = false
 incremental = true
@@ -233,7 +233,7 @@ rpath = false
 # The benchmark profile is identical to release, except that lto = false
 [profile.bench]
 opt-level = 3
-debug = false
+debug = true
 codegen-units = 1
 lto = 'thin'
 incremental = false
