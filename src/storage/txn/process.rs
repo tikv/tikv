@@ -804,8 +804,9 @@ fn process_write_impl<S: Snapshot>(
             options,
         } => {
 
+            // start_ts + 1 because we want to read a lock with ts = start_ts
             let mut txn =
-                MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+                MvccTxn::new(snapshot.clone(), start_ts + 1, !ctx.get_not_fill_cache())?;
             // may be possible to refresh multiple locks later?
             let mut locks = vec![];
             match txn.refresh_lock(key, &options) {

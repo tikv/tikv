@@ -110,6 +110,7 @@ trait MockKvService {
     );
     unary_call!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
+    unary_call!(kv_refresh_lock, RefreshLockRequest, RefreshLockResponse);
     unary_call!(kv_gc, GCRequest, GCResponse);
     unary_call!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
     unary_call!(raw_get, RawGetRequest, RawGetResponse);
@@ -175,6 +176,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call_dispatch!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call_dispatch!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
+    unary_call_dispatch!(kv_refresh_lock, RefreshLockRequest, RefreshLockResponse);
     unary_call_dispatch!(kv_gc, GCRequest, GCResponse);
     unary_call_dispatch!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
     unary_call_dispatch!(raw_get, RawGetRequest, RawGetResponse);
