@@ -309,7 +309,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
     fn kv_refresh_lock(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         mut req: RefreshLockRequest,
         sink: UnarySink<RefreshLockResponse>,
     ) {

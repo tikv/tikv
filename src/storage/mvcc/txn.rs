@@ -528,6 +528,12 @@ impl<S: Snapshot> MvccTxn<S> {
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 // locked by another transaction
+                info!(
+                    "locked by another transaction!";
+                    "previous" => self.start_ts,
+                    "current" => lock.ts,
+                );
+
                 return Err(Error::KeyIsLocked {
                     key: key.to_raw()?,
                     primary: lock.primary,
@@ -549,6 +555,10 @@ impl<S: Snapshot> MvccTxn<S> {
             Ok(options.lock_ttl)
         } else {
             // the lock is outdated, should abort txn by client.
+            warn!(
+                "lock not found for key";
+                "start_ts" => self.start_ts,
+            );
             return Err(Error::TxnLockNotFound {
                 start_ts: self.start_ts,
                 commit_ts: u64::max_value(),
