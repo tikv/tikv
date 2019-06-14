@@ -1241,7 +1241,7 @@ impl Peer {
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
             // Check whether there is a pending generate snapshot task, the task
-            // needs to be sent the apply system.
+            // needs to be sent to the apply system.
             // Always sending snapshot task behind apply task, so it gets latest
             // snapshot.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {

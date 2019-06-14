@@ -2633,7 +2633,7 @@ impl ApplyFsm {
             self.delegate
                 .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
             fail_point!(
-                "apply_on_handle_snapshot_finish_1_1",
+                "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
                 |_| unimplemented!()
             );
