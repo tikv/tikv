@@ -435,7 +435,7 @@ mod tests {
             Datum::Dur(d) => {
                 expr.set_tp(ExprType::MysqlDuration);
                 let mut buf = Vec::with_capacity(number::I64_SIZE);
-                buf.encode_i64(d.as_nanos()).unwrap();
+                buf.encode_i64(d.to_nanos()).unwrap();
                 expr.set_val(buf);
             }
             Datum::Dec(d) => {

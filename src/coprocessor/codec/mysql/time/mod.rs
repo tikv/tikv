@@ -471,7 +471,7 @@ impl Time {
     }
 
     pub fn from_duration(tz: &Tz, time_type: TimeType, d: MyDuration) -> Result<Time> {
-        let dur = Duration::nanoseconds(d.as_nanos());
+        let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
             .with_timezone(tz)
             .date()
@@ -728,7 +728,7 @@ impl Time {
     pub fn checked_add(self, rhs: MyDuration) -> Option<Time> {
         if let Some(add) = self
             .time
-            .checked_add_signed(Duration::nanoseconds(rhs.as_nanos()))
+            .checked_add_signed(Duration::nanoseconds(rhs.to_nanos()))
         {
             if add.year() > 9999 {
                 return None;
@@ -745,7 +745,7 @@ impl Time {
     pub fn checked_sub(self, rhs: MyDuration) -> Option<Time> {
         if let Some(sub) = self
             .time
-            .checked_sub_signed(Duration::nanoseconds(rhs.as_nanos()))
+            .checked_sub_signed(Duration::nanoseconds(rhs.to_nanos()))
         {
             if sub.year() < 0 {
                 return None;
@@ -1443,7 +1443,7 @@ mod tests {
             let get = Time::from_duration(&tz, TimeType::DateTime, d).unwrap();
             let get_today = get
                 .time
-                .checked_sub_signed(Duration::nanoseconds(d.as_nanos()))
+                .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
                 .unwrap();
             let now = Utc::now();
             assert_eq!(get_today.year(), now.year());

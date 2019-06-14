@@ -465,7 +465,7 @@ impl ScalarFunc {
     ) -> Result<Option<MyDuration>> {
         let d0 = try_opt!(self.children[0].eval_duration(ctx, row));
         let d1 = try_opt!(self.children[1].eval_duration(ctx, row));
-        let diff = match d0.as_nanos().checked_sub(d1.as_nanos()) {
+        let diff = match d0.to_nanos().checked_sub(d1.to_nanos()) {
             Some(result) => result,
             None => return Err(Error::overflow("DURATION", &format!("({} - {})", &d0, &d1))),
         };

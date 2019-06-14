@@ -173,7 +173,7 @@ impl Datum {
                 cmp_f64(ff, f)
             }
             Datum::Dur(ref d) => {
-                let ff = d.as_secs_f64();
+                let ff = d.to_secs_f64();
                 cmp_f64(ff, f)
             }
             Datum::Time(ref t) => {
@@ -232,7 +232,7 @@ impl Datum {
                 let d2 = Duration::parse(bs, MAX_FSP)?;
                 Ok(d2.cmp(&d))
             }
-            _ => self.cmp_f64(ctx, d.as_secs_f64()),
+            _ => self.cmp_f64(ctx, d.to_secs_f64()),
         }
     }
 
@@ -386,7 +386,7 @@ impl Datum {
             Datum::I64(i) => i,
             Datum::U64(u) => u as i64,
             Datum::F64(f) => f.to_bits() as i64,
-            Datum::Dur(ref d) => d.as_nanos(),
+            Datum::Dur(ref d) => d.to_nanos(),
             Datum::Time(_)
             | Datum::Bytes(_)
             | Datum::Dec(_)
@@ -904,7 +904,7 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
                 }
                 Datum::Dur(ref d) => {
                     self.write_u8(DURATION_FLAG)?;
-                    self.encode_i64(d.as_nanos())?;
+                    self.encode_i64(d.to_nanos())?;
                 }
                 Datum::Dec(ref d) => {
                     self.write_u8(DECIMAL_FLAG)?;

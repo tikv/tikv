@@ -212,7 +212,7 @@ fn fuzz_duration(
     let _ = t.secs();
     let _ = t.subsec_micros();
     let _ = t.subsec_nanos();
-    let _ = t.as_secs_f64();
+    let _ = t.to_secs_f64();
     let _ = t.is_zero();
     let _ = t.to_decimal();
     let u = t;
