@@ -706,7 +706,7 @@ fn test_debug_region_size() {
 }
 
 #[test]
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 fn test_debug_fail_point() {
     let (_cluster, debug_client, _) = must_new_cluster_and_debug_client();
 
