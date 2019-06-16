@@ -186,3 +186,21 @@ fn test_tick_after_destroy() {
 
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 }
+
+#[test]
+fn test_stale_peer_cache() {
+    let _guard = crate::setup();
+    // 3 nodes cluster.
+    let mut cluster = new_node_cluster(0, 3);
+
+    cluster.run();
+    // Now region 1 only has peer (1, 1);
+    let (key, value) = (b"k1", b"v1");
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+    let engine_3 = cluster.get_engine(3);
+    must_get_equal(&engine_3, b"k1", b"v1");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    fail::cfg("stale_peer_cache_2", "return").unwrap();
+    cluster.must_put(b"k2", b"v2");
+}
