@@ -25,6 +25,7 @@ pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
 
 #[derive(Default, Clone)]
 pub struct RegionStat {
+    pub term: u64,
     pub down_peers: Vec<pdpb::PeerStats>,
     pub pending_peers: Vec<metapb::Peer>,
     pub written_bytes: u64,

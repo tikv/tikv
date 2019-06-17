@@ -54,6 +54,7 @@ pub enum Task {
     Heartbeat {
         region: metapb::Region,
         peer: metapb::Peer,
+        term: u64,
         down_peers: Vec<pdpb::PeerStats>,
         pending_peers: Vec<metapb::Peer>,
         total_written_bytes: u64,
@@ -76,7 +77,7 @@ pub enum Task {
     ReadStats {
         read_stats: HashMap<u64, FlowStatistics>,
     },
-    ReportReadStats {},
+    ReportActiveRegions {},
     DestroyPeer {
         region_id: u64,
     },
@@ -116,13 +117,14 @@ impl Default for StoreStat {
 pub struct RegionCollection {
     region: metapb::Region,
     peer: metapb::Peer,
+    term: u64,
     down_peers: Vec<pdpb::PeerStats>,
     pending_peers: Vec<metapb::Peer>,
     approximate_size: u64,
     approximate_keys: u64,
 
-    pub read_bytes: u64,
-    pub read_keys: u64,
+    pub read_bytes_delta: u64,
+    pub read_keys_delta: u64,
     pub written_bytes_delta: u64,
     pub written_keys_delta: u64,
 
@@ -145,28 +147,29 @@ impl RegionCollection {
             self.last_report_ts - self.region_heartbeat_interval,
         );
         let region_stat = RegionStat {
+            term: self.term,
             down_peers: self.down_peers.clone(),
             pending_peers: self.pending_peers.clone(),
             written_bytes: self.written_bytes_delta,
             written_keys: self.written_keys_delta,
-            read_bytes: self.read_bytes,
-            read_keys: self.read_keys,
+            read_bytes: self.read_bytes_delta,
+            read_keys: self.read_keys_delta,
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
             last_report_ts,
         };
 
-        self.read_bytes = 0;
-        self.read_keys = 0;
+        self.read_bytes_delta = 0;
+        self.read_keys_delta = 0;
         self.written_bytes_delta = 0;
         self.written_keys_delta = 0;
 
         Some((self.region.clone(), self.peer.clone(), region_stat))
     }
 
-    fn report_read_stats(&mut self) -> Option<(metapb::Region, metapb::Peer, RegionStat)> {
+    fn heartbeat_active(&mut self) -> Option<(metapb::Region, metapb::Peer, RegionStat)> {
         // Somthing have changed, send the heartbeat to PD.
-        if self.read_bytes == 0 && self.read_keys == 0 {
+        if self.read_bytes_delta == 0 && self.read_keys_delta == 0 {
             return None;
         }
         self.heartbeat()
@@ -174,10 +177,10 @@ impl RegionCollection {
 
     fn merge_flow_statistics(&mut self, stats: FlowStatistics) {
         if stats.read_bytes > 0 {
-            self.read_bytes += stats.read_bytes as u64;
+            self.read_bytes_delta += stats.read_bytes as u64;
         }
         if stats.read_keys > 0 {
-            self.read_keys += stats.read_keys as u64;
+            self.read_keys_delta += stats.read_keys as u64;
         }
     }
 
@@ -187,6 +190,7 @@ impl RegionCollection {
                 region,
                 peer,
                 down_peers,
+                term,
                 pending_peers,
                 total_written_bytes,
                 total_written_keys,
@@ -206,6 +210,7 @@ impl RegionCollection {
                 self.peer = peer;
                 self.down_peers = down_peers;
                 self.pending_peers = pending_peers;
+                self.term = term;
 
                 if self.last_written_bytes < total_written_bytes {
                     self.written_bytes_delta += total_written_bytes - self.last_written_bytes;
@@ -271,11 +276,20 @@ impl Display for Task {
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
-            Task::ReportReadStats {} => write!(f, "report the read statistics to PD"),
+            Task::ReportActiveRegions {} => {
+                write!(f, "report the active regions' statistics to PD")
+            }
             Task::DestroyPeer { ref region_id } => {
                 write!(f, "destroy peer of region {}", region_id)
             }
         }
+    }
+}
+
+impl RegionCollection {
+    pub fn with_hearbeat_interval(mut self, interval: u64) -> RegionCollection {
+        self.region_heartbeat_interval = interval;
+        self
     }
 }
 
@@ -438,10 +452,10 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_heartbeat(&mut self, handle: &Handle, region_id: u64, hb_task: Task) {
-        let collection = self
-            .region_collections
-            .entry(region_id)
-            .or_insert_with(RegionCollection::default);
+        let heartbeat_interval = self.region_heartbeat_interval;
+        let collection = self.region_collections.entry(region_id).or_insert_with(|| {
+            RegionCollection::default().with_hearbeat_interval(heartbeat_interval)
+        });
         collection.merge_heartbeat(&self.db, hb_task);
         if let Some((region, peer, region_stat)) = collection.heartbeat() {
             self.store_stat
@@ -712,20 +726,20 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
+        let heartbeat_interval = self.region_heartbeat_interval;
         for (region_id, stats) in read_stats {
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
-            let region_collection = self
-                .region_collections
-                .entry(region_id)
-                .or_insert_with(RegionCollection::default);
+            let region_collection = self.region_collections.entry(region_id).or_insert_with(|| {
+                RegionCollection::default().with_hearbeat_interval(heartbeat_interval)
+            });
             region_collection.merge_flow_statistics(stats);
         }
     }
 
-    fn report_active_read_stats(&mut self, handle: &Handle) {
+    fn report_active_regions(&mut self, handle: &Handle) {
         for (_region_id, stats) in &mut self.region_collections {
-            if let Some((region, peer, region_stat)) = stats.report_read_stats() {
+            if let Some((region, peer, region_stat)) = stats.heartbeat_active() {
                 self.store_stat
                     .region_bytes_written
                     .observe(region_stat.written_bytes as f64);
@@ -795,6 +809,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::Heartbeat {
                 region,
                 peer,
+                term,
                 down_peers,
                 pending_peers,
                 total_written_bytes,
@@ -809,6 +824,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     Task::Heartbeat {
                         region,
                         peer,
+                        term,
                         down_peers,
                         pending_peers,
                         total_written_bytes,
@@ -828,7 +844,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 merge_source,
             } => self.handle_validate_peer(handle, region, peer, merge_source),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
-            Task::ReportReadStats {} => self.report_active_read_stats(handle),
+            Task::ReportActiveRegions {} => self.report_active_regions(handle),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
         };
     }

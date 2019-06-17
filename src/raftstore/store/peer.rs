@@ -2156,6 +2156,7 @@ impl Peer {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
+            term: self.term(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
             pending_peers: self.collect_pending_peers(),
             total_written_bytes: self.peer_stat.written_bytes,

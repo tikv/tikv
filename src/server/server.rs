@@ -221,7 +221,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                     .interval(Instant::now(), PD_STATISTICS_INTERVAL)
                     .map_err(|_| ())
                     .for_each(move |_i| {
-                        let task = PdTask::ReportReadStats {};
+                        let task = PdTask::ReportActiveRegions {};
                         if let Err(e) = pd_sender.schedule(task) {
                             error!(
                                 "failed to report read stats to pd";
