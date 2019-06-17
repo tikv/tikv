@@ -51,13 +51,11 @@ impl RpnFunctionOpts {
                 #[inline]
                 fn eval(
                     &self,
-                    rows: usize,
                     context: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload<'_>,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue>
                 {
                     crate::coprocessor::dag::rpn_expr::function::Helper::#helper_fn_ident(
-                        rows,
                         Self::call,
                         context,
                         payload,

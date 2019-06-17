@@ -41,11 +41,6 @@ impl ScalarValue {
     }
 
     #[inline]
-    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
-        VectorLikeValueRef::Scalar(self)
-    }
-
-    #[inline]
     pub fn as_scalar_value_ref(&self) -> ScalarValueRef<'_> {
         match_template_evaluable! {
             TT, match self {
