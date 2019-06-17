@@ -53,9 +53,12 @@ impl HashAggregationHelper {
                     match_template_evaluable! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
-                                for (logical_row_index, offset) in states_offset_each_logical_row.iter().enumerate() {
-                                    let aggr_fn_state = &mut states[*offset + idx];
-                                    aggr_fn_state.update(&mut entities.context, &vec[logical_rows[logical_row_index]])?;
+                                for (states_offset, physical_idx) in states_offset_each_logical_row
+                                    .iter()
+                                    .zip(logical_rows)
+                                {
+                                    let aggr_fn_state = &mut states[*states_offset + idx];
+                                    aggr_fn_state.update(&mut entities.context, &vec[*physical_idx])?;
                                 }
                             }
                         }
