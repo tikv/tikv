@@ -30,16 +30,13 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::{erase_lifetime, erase_lifetime_mut};
 use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::Result;
 
@@ -58,7 +55,8 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
-        input: LazyBatchColumnVec,
+        input_physical_columns: LazyBatchColumnVec,
+        input_logical_rows: &[usize],
     ) -> Result<()>;
 
     /// Returns the current number of groups.
@@ -204,9 +202,12 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
 
         // Consume all data from the underlying executor. We directly return when there are errors
         // for the same reason as above.
-        if src_result.data.rows_len() > 0 {
-            self.imp
-                .process_batch_input(&mut self.entities, src_result.data)?;
+        if !src_result.logical_rows.is_empty() {
+            self.imp.process_batch_input(
+                &mut self.entities,
+                src_result.physical_columns,
+                &src_result.logical_rows,
+            )?;
         }
 
         // aggregate result is always available when source is drained
@@ -284,16 +285,19 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
                 // When there are error, we can just return empty data.
                 self.is_ended = true;
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
                     warnings: self.entities.context.take_warnings(),
                     is_drained: Err(e),
                 }
             }
             Ok((data, src_is_drained)) => {
                 self.is_ended = src_is_drained;
-                let data = data.unwrap_or_else(LazyBatchColumnVec::empty);
+                let logical_columns = data.unwrap_or_else(LazyBatchColumnVec::empty);
+                let logical_rows = (0..logical_columns.rows_len()).collect();
                 BatchExecuteResult {
-                    data,
+                    physical_columns: logical_columns,
+                    logical_rows,
                     warnings: self.entities.context.take_warnings(),
                     is_drained: Ok(src_is_drained),
                 }
@@ -305,39 +309,6 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.entities.src.collect_statistics(destination);
     }
-}
-
-/// Decodes all columns that are not decoded.
-pub fn ensure_columns_decoded(
-    tz: &Tz,
-    exprs: &[RpnExpression],
-    schema: &[FieldType],
-    input: &mut LazyBatchColumnVec,
-) -> Result<()> {
-    for expr in exprs {
-        expr.ensure_columns_decoded(tz, schema, input)?;
-    }
-    Ok(())
-}
-
-/// Evaluates expressions and outputs the result into the given Vec. Lifetime of the expressions
-/// are erased.
-pub unsafe fn eval_exprs_no_lifetime<'a>(
-    context: &mut EvalContext,
-    exprs: &[RpnExpression],
-    schema: &[FieldType],
-    input: &LazyBatchColumnVec,
-    output: &mut Vec<RpnStackNode<'a>>,
-) -> Result<()> {
-    for expr in exprs {
-        output.push(erase_lifetime(expr).eval_decoded(
-            erase_lifetime_mut(context),
-            input.rows_len(),
-            erase_lifetime(schema),
-            erase_lifetime(input),
-        )?)
-    }
-    Ok(())
 }
 
 /// Shared test facilities for different aggregation executors.
@@ -377,7 +348,7 @@ pub mod tests {
         }
     }
 
-    /// Builds an executor that will return these data:
+    /// Builds an executor that will return these logical data:
     ///
     /// == Schema ==
     /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
@@ -400,37 +371,53 @@ pub mod tests {
             ],
             vec![
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None]),
+                    physical_columns: LazyBatchColumnVec::from(vec![
                         VectorValue::Real(vec![
-                            Real::new(1.0).ok(),
-                            Real::new(2.0).ok(),
+                            None,
+                            None,
+                            None,
+                            Real::new(-5.0).ok(),
+                            Real::new(7.0).ok(),
+                        ]),
+                        VectorValue::Real(vec![
                             None,
                             Real::new(4.5).ok(),
+                            Real::new(1.0).ok(),
+                            None,
+                            Real::new(2.0).ok(),
                         ]),
                         VectorValue::Bytes(vec![
-                            Some(b"abc".to_vec()),
-                            None,
                             Some(vec![]),
                             Some(b"HelloWorld".to_vec()),
+                            Some(b"abc".to_vec()),
+                            None,
+                            None,
                         ]),
-                        VectorValue::Int(vec![Some(1), None, None, None]),
+                        VectorValue::Int(vec![None, None, Some(1), Some(10), None]),
                     ]),
+                    logical_rows: vec![2, 4, 0, 1],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![None]),
+                        VectorValue::Real(vec![Real::new(-10.0).ok()]),
+                        VectorValue::Bytes(vec![Some(b"foo".to_vec())]),
+                        VectorValue::Int(vec![None]),
+                    ]),
+                    logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![Real::new(1.5).ok()]),
-                        VectorValue::Real(vec![Real::new(4.5).ok()]),
-                        VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
-                        VectorValue::Int(vec![Some(5)]),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![Real::new(5.5).ok(), Real::new(1.5).ok()]),
+                        VectorValue::Real(vec![None, Real::new(4.5).ok()]),
+                        VectorValue::Bytes(vec![None, Some(b"aaaaa".to_vec())]),
+                        VectorValue::Int(vec![None, Some(5)]),
                     ]),
+                    logical_rows: vec![1],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),
                 },
