@@ -71,7 +71,7 @@ mod tests {
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::IfNullInt)
                 .unwrap();
-            assert_eq!(output, expected, "lhs={}, rhs={}", lhs, rhs);
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
 }
