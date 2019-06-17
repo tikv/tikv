@@ -79,10 +79,6 @@ fn decode_date_time_from_uint(v: u64, time_zone: &Tz, field_type: &FieldType) ->
     DateTime::from_packed_u64(v, time_type, fsp, time_zone)
 }
 
-// TODO: Ideally we should not mark these functions as inline, since they are neither small, nor
-// hot enough. However, currently we have a super large `Result`, which must be inlined to avoid
-// its cost.
-
 pub fn decode_int_datum(mut raw_datum: &[u8]) -> Result<Option<Int>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
