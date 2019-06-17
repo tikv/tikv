@@ -210,4 +210,17 @@ lazy_static! {
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
+
+    pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
+        register_histogram!(
+            "tikv_raftstore_read_index_pending_duration",
+            "Duration of pending read index",
+            exponential_buckets(0.001, 2.0, 20).unwrap() // max 1000s
+        ).unwrap();
+
+    pub static ref RAFT_READ_INDEX_PENDING_COUNT: IntGauge =
+        register_int_gauge!(
+            "tikv_raftstore_read_index_pending",
+            "pending read index count"
+        ).unwrap();
 }
