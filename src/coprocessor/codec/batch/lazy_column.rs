@@ -166,7 +166,7 @@ impl LazyBatchColumn {
         let raw_vec = self.raw();
         let raw_vec_len = raw_vec.len();
 
-        let mut decoded_column = VectorValue::with_capacity(raw_vec.capacity(), eval_type);
+        let mut decoded_column = VectorValue::with_capacity(raw_vec_len, eval_type);
 
         match_template_evaluable! {
             TT, match &mut decoded_column {
@@ -238,7 +238,7 @@ mod tests {
             let col = col.clone();
             assert!(col.is_raw());
             assert_eq!(col.len(), 0);
-            assert_eq!(col.capacity(), 5);
+            assert_eq!(col.capacity(), 0);
             assert_eq!(col.raw().len(), 0);
         }
         {
@@ -248,14 +248,14 @@ mod tests {
                 .unwrap();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
-            assert_eq!(col.capacity(), 5);
+            assert_eq!(col.capacity(), 0);
             assert_eq!(col.decoded().as_int_slice(), &[]);
             {
                 // Clone empty decoded LazyBatchColumn.
                 let col = col.clone();
                 assert!(col.is_decoded());
                 assert_eq!(col.len(), 0);
-                assert_eq!(col.capacity(), 5);
+                assert_eq!(col.capacity(), 0);
                 assert_eq!(col.decoded().as_int_slice(), &[]);
             }
         }
@@ -284,7 +284,7 @@ mod tests {
             let col = col.clone();
             assert!(col.is_raw());
             assert_eq!(col.len(), 3);
-            assert_eq!(col.capacity(), 5);
+            assert_eq!(col.capacity(), 3);
             assert_eq!(col.raw().len(), 3);
             assert_eq!(&col.raw()[0], datum_raw_1.as_slice());
             assert_eq!(&col.raw()[1], datum_raw_2.as_slice());
@@ -296,7 +296,7 @@ mod tests {
             .unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 3);
-        assert_eq!(col.capacity(), 5);
+        assert_eq!(col.capacity(), 3);
         // Element 1 is None because it is not referred in `logical_rows` and we don't decode it.
         assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
 
@@ -305,7 +305,7 @@ mod tests {
             let col = col.clone();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 3);
-            assert_eq!(col.capacity(), 5);
+            assert_eq!(col.capacity(), 3);
             assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
         }
 
@@ -314,7 +314,7 @@ mod tests {
             .unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 3);
-        assert_eq!(col.capacity(), 5);
+        assert_eq!(col.capacity(), 3);
         assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
     }
 }

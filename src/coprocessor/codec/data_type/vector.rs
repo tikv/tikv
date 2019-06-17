@@ -12,7 +12,7 @@ use crate::coprocessor::codec::Result;
 ///
 /// The inner concrete value is immutable. However it is allowed to push and remove values from
 /// this vector container.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum VectorValue {
     Int(Vec<Option<Int>>),
     Real(Vec<Option<Real>>),
@@ -22,18 +22,6 @@ pub enum VectorValue {
     DateTime(Vec<Option<DateTime>>),
     Duration(Vec<Option<Duration>>),
     Json(Vec<Option<Json>>),
-}
-
-impl Clone for VectorValue {
-    #[inline]
-    fn clone(&self) -> Self {
-        // Implement `Clone` manually so that capacity can be preserved after clone.
-        match_template_evaluable! {
-            TT, match self {
-                VectorValue::TT(vec) => VectorValue::TT(tikv_util::vec_clone_with_capacity(vec)),
-            }
-        }
-    }
 }
 
 impl VectorValue {
@@ -491,7 +479,7 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(column.is_empty());
         assert_eq!(column.as_real_slice(), &[]);
-        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().capacity(), 0);
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(Real::new(1.0).ok());
@@ -499,7 +487,7 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok()]);
-        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().capacity(), 1);
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(None);
@@ -507,7 +495,7 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
-        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().capacity(), 2);
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(Real::new(4.5).ok());
@@ -518,7 +506,7 @@ mod tests {
             column.as_real_slice(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok()]
         );
-        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().capacity(), 3);
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(None);
@@ -529,7 +517,6 @@ mod tests {
             column.as_real_slice(),
             &[Real::new(1.0).ok(), None, Real::new(4.5).ok(), None]
         );
-        assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.truncate(2);
@@ -537,7 +524,6 @@ mod tests {
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
-        assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         let column = VectorValue::with_capacity(10, EvalType::DateTime);
@@ -546,7 +532,6 @@ mod tests {
         assert_eq!(column.capacity(), 10);
         assert!(column.is_empty());
         assert_eq!(column.as_date_time_slice(), &[]);
-        assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(
             column.clone().as_date_time_slice(),
             column.as_date_time_slice()
