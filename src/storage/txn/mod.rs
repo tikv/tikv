@@ -11,8 +11,7 @@ use std::io::Error as IoError;
 
 pub use self::process::{execute_callback, ProcessResult, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::scheduler::{Msg, Scheduler};
-pub use self::store::{FixtureStore, FixtureStoreScanner};
-pub use self::store::{Scanner, SnapshotStore, Store};
+pub use self::store::*;
 use tikv_util::escape;
 
 quick_error! {
