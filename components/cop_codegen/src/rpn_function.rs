@@ -129,7 +129,6 @@ impl RpnFnGenerator {
             trait #fn_trait_ident #impl_generics #where_clause {
                 fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut #ctx_type,
                     payload: #payload_type,
                 ) -> #result_type ;
@@ -152,7 +151,6 @@ impl RpnFnGenerator {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp_ident #where_clause {
                 default fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut #ctx_type,
                     payload: #payload_type,
                 ) -> #result_type {
@@ -192,11 +190,11 @@ impl RpnFnGenerator {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
                 default fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut #ctx_type,
                     payload: #payload_type,
                 ) -> #result_type {
                     let arg = &self;
+                    let rows = payload.output_rows();
                     let mut result = Vec::with_capacity(rows);
                     for row in 0..rows {
                         #(let (#extract, arg) = arg.extract(row));*;
@@ -227,11 +225,10 @@ impl RpnFnGenerator {
                 fn eval(
                     self,
                     def: impl crate::coprocessor::dag::rpn_expr::function::ArgDef,
-                    rows: usize,
                     ctx: &mut #ctx_type,
                     payload: #payload_type,
                 ) -> #result_type {
-                    #fn_trait_ident #ty_generics_turbofish::eval(def, rows, ctx, payload)
+                    #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, payload)
                 }
             }
         }
@@ -258,12 +255,11 @@ impl RpnFnGenerator {
             -> #rpn_fn_type #where_clause {
                 #[inline]
                 fn run #impl_generics (
-                    rows: usize,
                     ctx: &mut #ctx_type,
                     payload: #payload_type,
                 ) -> #result_type #where_clause {
                     use crate::coprocessor::dag::rpn_expr::function::{ArgConstructor, Evaluator, Null};
-                    #evaluator.eval(Null, rows, ctx, payload)
+                    #evaluator.eval(Null, ctx, payload)
                 }
                 #rpn_fn_type {
                     name: #fn_name,
@@ -351,7 +347,6 @@ mod tests {
             trait Foo_Fn {
                 fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> ;
@@ -369,7 +364,6 @@ mod tests {
             impl<D_: crate::coprocessor::dag::rpn_expr::function::ArgDef> Foo_Fn for D_ {
                 default fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
@@ -402,11 +396,11 @@ mod tests {
             > {
                 default fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     let arg = &self;
+                    let rows = payload.output_rows();
                     let mut result = Vec::with_capacity(rows);
                     for row in 0..rows {
                         let (arg0, arg) = arg.extract(row);
@@ -436,11 +430,10 @@ mod tests {
                 fn eval(
                     self,
                     def: impl crate::coprocessor::dag::rpn_expr::function::ArgDef,
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
-                    Foo_Fn :: eval(def, rows, ctx, payload)
+                    Foo_Fn :: eval(def, ctx, payload)
                 }
             }
         "#
@@ -456,7 +449,6 @@ mod tests {
             pub const fn foo_fn() -> crate::coprocessor::dag::rpn_expr::function::RpnFn {
                 #[inline]
                 fn run(
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
@@ -467,7 +459,7 @@ mod tests {
                             0usize,
                             Foo_Evaluator(std::marker::PhantomData)
                         )
-                    ).eval(Null, rows, ctx, payload)
+                    ).eval(Null, ctx, payload)
                 }
                 crate::coprocessor::dag::rpn_expr::function::RpnFn {
                     name: "foo",
@@ -502,7 +494,6 @@ mod tests {
             where B: N<M> {
                 fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> ;
@@ -525,7 +516,6 @@ mod tests {
             where B: N<M> {
                 default fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
@@ -556,11 +546,11 @@ mod tests {
             > where B: N<M> {
                 default fn eval(
                     self,
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     let arg = &self;
+                    let rows = payload.output_rows();
                     let mut result = Vec::with_capacity(rows);
                     for row in 0..rows {
                         let (arg0, arg) = arg.extract(row);
@@ -591,11 +581,10 @@ mod tests {
                 fn eval(
                     self,
                     def: impl crate::coprocessor::dag::rpn_expr::function::ArgDef,
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
-                    Foo_Fn :: <A, B> :: eval(def, rows, ctx, payload)
+                    Foo_Fn :: <A, B> :: eval(def, ctx, payload)
                 }
             }
         "#
@@ -612,7 +601,6 @@ mod tests {
             where B: N<M> {
                 #[inline]
                 fn run <A: M, B> (
-                    rows: usize,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
                     payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue>
@@ -621,7 +609,7 @@ mod tests {
                     ArgConstructor::new(
                         0usize, 
                         Foo_Evaluator :: < A , B > (std::marker::PhantomData)
-                    ).eval(Null, rows, ctx, payload)
+                    ).eval(Null, ctx, payload)
                 }
                 crate::coprocessor::dag::rpn_expr::function::RpnFn {
                     name: "foo",

@@ -32,14 +32,9 @@ impl<C: Comparer> RpnFunction for RpnFnCompare<C> {
         2
     }
 
-    fn eval(
-        &self,
-        rows: usize,
-        ctx: &mut EvalContext,
-        payload: RpnFnCallPayload<'_>,
-    ) -> Result<VectorValue> {
+    fn eval(&self, ctx: &mut EvalContext, payload: RpnFnCallPayload<'_>) -> Result<VectorValue> {
         let rpn_fn = compare_fn::<C>();
-        (rpn_fn.fn_ptr)(rows, ctx, payload)
+        (rpn_fn.fn_ptr)(ctx, payload)
     }
 
     fn box_clone(&self) -> Box<dyn RpnFunction> {

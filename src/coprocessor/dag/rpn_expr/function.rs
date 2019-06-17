@@ -445,10 +445,9 @@ pub struct RpnFn {
 
     /// The function receiving raw argument.
     ///
-    /// The first parameter is the number of rows.
-    /// The second and the third are the evaluation context and the payload containing the
-    /// argument value and the argument field type.
-    pub fn_ptr: fn(usize, &mut EvalContext, RpnFnCallPayload<'_>) -> Result<VectorValue>,
+    /// The first parameter is the evaluation context and the second one is the payload containing
+    /// the output rows count, the argument value and the argument field type.
+    pub fn_ptr: fn(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<VectorValue>,
 }
 
 impl std::fmt::Debug for RpnFn {
@@ -481,14 +480,17 @@ impl<'a, T: Evaluable> RpnFnArg for ScalarArg<'a, T> {
 
 /// Represents an RPN function argument of a `VectorValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct VectorArg<'a, T: Evaluable>(&'a [Option<T>]);
+pub struct VectorArg<'a, T: Evaluable> {
+    physical_col: &'a [Option<T>],
+    logical_rows: &'a [usize],
+}
 
 impl<'a, T: Evaluable> RpnFnArg for VectorArg<'a, T> {
     type Type = &'a Option<T>;
 
     #[inline]
     fn get(&self, row: usize) -> &'a Option<T> {
-        &self.0[row]
+        &self.physical_col[self.logical_rows[row]]
     }
 }
 
@@ -544,7 +546,6 @@ pub trait Evaluator {
     fn eval(
         self,
         def: impl ArgDef,
-        rows: usize,
         context: &mut EvalContext,
         payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>;
@@ -566,7 +567,6 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
     fn eval(
         self,
         def: impl ArgDef,
-        rows: usize,
         context: &mut EvalContext,
         payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue> {
@@ -579,20 +579,24 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
                                 arg: ScalarArg(v),
                                 rem: def,
                             };
-                            self.inner.eval(new_def, rows, context, payload)
+                            self.inner.eval(new_def, context, payload)
                         }
                     }
                 }
             }
             RpnStackNode::Vector { value, .. } => {
+                let logical_rows = value.logical_rows();
                 match_template_evaluable! {
-                    TT, match **value {
+                    TT, match value.as_ref() {
                         VectorValue::TT(ref v) => {
                             let new_def = Arg {
-                                arg: VectorArg(v),
+                                arg: VectorArg {
+                                    physical_col: v,
+                                    logical_rows,
+                                },
                                 rem: def,
                             };
-                            self.inner.eval(new_def, rows, context, payload)
+                            self.inner.eval(new_def, context, payload)
                         }
                     }
                 }
