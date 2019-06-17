@@ -299,6 +299,16 @@ fn handle_fail_points_request(
             Box::new(ok(Response::new(body.into())))
         }
         (Method::GET, _) => {
+            // In this scope the path must be like /fail...(/...), which starts with FAIL_POINTS_REQUEST_PATH and may or may not have a sub path
+            // Now we return 404 when path is neither /fail nor /fail/
+            if path != FAIL_POINTS_REQUEST_PATH && path != fail_path {
+                return Box::new(ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::empty())
+                    .unwrap()));
+            }
+
+            // From here path is either /fail or /fail/, return lists of fail points
             let list: Vec<String> = fail::list()
                 .into_iter()
                 .map(move |(name, actions)| format!("{}={}", name, actions))
