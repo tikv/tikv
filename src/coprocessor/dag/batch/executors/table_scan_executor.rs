@@ -311,7 +311,6 @@ mod tests {
     use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::batch::interface::BatchExecutor;
     use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
@@ -541,7 +540,7 @@ mod tests {
                 } else {
                     assert!(columns[id].is_raw());
                     columns[id]
-                        .ensure_decoded(&Tz::utc(), self.get_field_type(col_idx))
+                        .ensure_all_decoded(&Tz::utc(), self.get_field_type(col_idx))
                         .unwrap();
                 }
                 assert_eq!(columns[id].decoded(), &values[col_idx]);
@@ -581,12 +580,12 @@ mod tests {
                     col_idxs,
                     start_row,
                     total_rows - start_row,
-                    result.data,
+                    result.physical_columns,
                 );
                 return;
             }
             // we should get expect_rows in this case.
-            helper.expect_table_values(col_idxs, start_row, expect_rows, result.data);
+            helper.expect_table_values(col_idxs, start_row, expect_rows, result.physical_columns);
             start_row += expect_rows;
         }
     }
@@ -781,20 +780,29 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.data.columns_len(), 3);
-            assert_eq!(result.data.rows_len(), 2);
-            assert!(result.data[0].is_decoded());
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0), Some(1)]);
-            assert!(result.data[1].is_raw());
-            result.data[1]
-                .ensure_decoded(&Tz::utc(), &schema[1])
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 2);
+            assert!(result.physical_columns[0].is_decoded());
+            assert_eq!(
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(0), Some(1)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
                 .unwrap();
-            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), None]);
-            assert!(result.data[2].is_raw());
-            result.data[2]
-                .ensure_decoded(&Tz::utc(), &schema[2])
+            assert_eq!(
+                result.physical_columns[1].decoded().as_int_slice(),
+                &[Some(5), None]
+            );
+            assert!(result.physical_columns[2].is_raw());
+            result.physical_columns[2]
+                .ensure_all_decoded(&Tz::utc(), &schema[2])
                 .unwrap();
-            assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(7), None]);
+            assert_eq!(
+                result.physical_columns[2].decoded().as_int_slice(),
+                &[Some(7), None]
+            );
         }
     }
 
@@ -880,15 +888,21 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.data.columns_len(), 2);
-            assert_eq!(result.data.rows_len(), 1);
-            assert!(result.data[0].is_decoded());
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0)]);
-            assert!(result.data[1].is_raw());
-            result.data[1]
-                .ensure_decoded(&Tz::utc(), &schema[1])
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 1);
+            assert!(result.physical_columns[0].is_decoded());
+            assert_eq!(
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(0)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
                 .unwrap();
-            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(7)]);
+            assert_eq!(
+                result.physical_columns[1].decoded().as_int_slice(),
+                &[Some(7)]
+            );
         }
 
         // Let's also repeat case 1 for smaller batch size
@@ -908,20 +922,26 @@ mod tests {
 
             let mut result = executor.next_batch(1);
             assert!(!result.is_drained.is_err());
-            assert_eq!(result.data.columns_len(), 2);
-            assert_eq!(result.data.rows_len(), 1);
-            assert!(result.data[0].is_decoded());
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0)]);
-            assert!(result.data[1].is_raw());
-            result.data[1]
-                .ensure_decoded(&Tz::utc(), &schema[1])
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 1);
+            assert!(result.physical_columns[0].is_decoded());
+            assert_eq!(
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(0)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
                 .unwrap();
-            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(7)]);
+            assert_eq!(
+                result.physical_columns[1].decoded().as_int_slice(),
+                &[Some(7)]
+            );
 
             let result = executor.next_batch(1);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.data.columns_len(), 2);
-            assert_eq!(result.data.rows_len(), 0);
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 0);
         }
 
         // Case 2: row 1 + row 2
@@ -938,8 +958,8 @@ mod tests {
 
             let result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.data.columns_len(), 2);
-            assert_eq!(result.data.rows_len(), 0);
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 0);
         }
 
         // Case 3: row 2 + row 0
@@ -956,15 +976,21 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(!result.is_drained.is_err());
-            assert_eq!(result.data.columns_len(), 2);
-            assert_eq!(result.data.rows_len(), 2);
-            assert!(result.data[0].is_decoded());
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(2), Some(0)]);
-            assert!(result.data[1].is_raw());
-            result.data[1]
-                .ensure_decoded(&Tz::utc(), &schema[1])
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 2);
+            assert!(result.physical_columns[0].is_decoded());
+            assert_eq!(
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(2), Some(0)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
                 .unwrap();
-            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), Some(7)]);
+            assert_eq!(
+                result.physical_columns[1].decoded().as_int_slice(),
+                &[Some(5), Some(7)]
+            );
         }
 
         // Case 4: row 1
@@ -981,8 +1007,8 @@ mod tests {
 
             let result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.data.columns_len(), 2);
-            assert_eq!(result.data.rows_len(), 0);
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 0);
         }
     }
 }
