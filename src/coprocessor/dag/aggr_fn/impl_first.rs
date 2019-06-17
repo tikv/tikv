@@ -119,9 +119,14 @@ where
     }
 
     #[inline]
-    fn update_vector(&mut self, ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()> {
-        if let Some(v) = values.first() {
-            self.update(ctx, v)?;
+    fn update_vector(
+        &mut self,
+        ctx: &mut EvalContext,
+        physical_values: &[Option<T>],
+        logical_rows: &[usize],
+    ) -> Result<()> {
+        if let Some(physical_index) = logical_rows.first() {
+            self.update(ctx, &physical_values[*physical_index])?;
         }
         Ok(())
     }
@@ -154,7 +159,8 @@ where
     default fn update_vector(
         &mut self,
         _ctx: &mut EvalContext,
-        _values: &[Option<T1>],
+        _physical_values: &[Option<T1>],
+        _logical_rows: &[usize],
     ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
@@ -225,16 +231,35 @@ mod tests {
         let mut state = function.create_state();
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
-        state.update_vector(&mut ctx, &[Some(0); 0]).unwrap();
+        state.update_vector(&mut ctx, &[Some(0); 0], &[]).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[None]);
 
-        state.update_vector(&mut ctx, &[None, Some(2)]).unwrap();
+        result[0].clear();
+        state.update_vector(&mut ctx, &[Some(1)], &[]).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None, None]);
+        assert_eq!(result[0].as_int_slice(), &[None]);
 
-        state.update_vector(&mut ctx, &[Some(1)]).unwrap();
+        result[0].clear();
+        state
+            .update_vector(&mut ctx, &[None, Some(2)], &[0, 1])
+            .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[None, None, None]);
+        assert_eq!(result[0].as_int_slice(), &[None]);
+
+        result[0].clear();
+        state.update_vector(&mut ctx, &[Some(1)], &[0]).unwrap();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].as_int_slice(), &[None]);
+
+        // Reset state
+        let mut state = function.create_state();
+
+        result[0].clear();
+        state
+            .update_vector(&mut ctx, &[None, Some(2)], &[1, 0])
+            .unwrap();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].as_int_slice(), &[Some(2)]);
     }
 }
