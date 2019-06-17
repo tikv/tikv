@@ -1073,15 +1073,6 @@ impl Peer {
             }
         }
 
-        // Check whether there is a pending generate snapshot task, the task
-        // needs to be sent the apply system.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-        }
-
         if !self
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
@@ -1248,6 +1239,16 @@ impl Peer {
                 let apply = Apply::new(self.region_id, self.term(), committed_entries);
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
+            }
+            // Check whether there is a pending generate snapshot task, the task
+            // needs to be sent to the apply system.
+            // Always sending snapshot task behind apply task, so it gets latest
+            // snapshot.
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
             }
         }
 
