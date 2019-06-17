@@ -67,6 +67,28 @@ impl ReadIndexRequest {
             slice::from_raw_parts(id, 8)
         }
     }
+
+    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        self.cmds.push((req, cb));
+    }
+
+    fn with_command(
+        id: u64,
+        req: RaftCmdRequest,
+        cb: Callback,
+        renew_lease_time: Timespec,
+    ) -> Self {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
+        cmds.push((req, cb));
+        ReadIndexRequest {
+            id,
+            cmds,
+            renew_lease_time,
+            read_index: None,
+        }
+    }
 }
 
 impl Drop for ReadIndexRequest {
@@ -1818,8 +1840,7 @@ impl Peer {
                     if let Some(read) = self.pending_reads.reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
-                            read.cmds.push((req, cb));
-                            RAFT_READ_INDEX_PENDING_COUNT.inc();
+                            read.push_command(req, cb);
                             return false;
                         }
                     }
@@ -1851,15 +1872,9 @@ impl Peer {
             return false;
         }
 
-        RAFT_READ_INDEX_PENDING_COUNT.inc();
-        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
-        cmds.push((req, cb));
-        self.pending_reads.reads.push_back(ReadIndexRequest {
-            id,
-            cmds,
-            renew_lease_time,
-            read_index: None,
-        });
+        let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        self.pending_reads.reads.push_back(read_proposal);
+
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
