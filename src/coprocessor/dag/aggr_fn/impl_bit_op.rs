@@ -205,7 +205,7 @@ mod tests {
         // 7 & 1 == 1
         state.update(&mut ctx, &Some(7i64)).unwrap();
         state
-            .update_vector(&mut ctx, &[Some(1i64), None, Some(1i64)])
+            .update_vector(&mut ctx, &[Some(1i64), None, Some(1i64)], &[0, 1, 2])
             .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -257,7 +257,7 @@ mod tests {
         // 13 | 2 == 15
         state.update(&mut ctx, &Some(2i64)).unwrap();
         state
-            .update_vector(&mut ctx, &[Some(2i64), None, Some(1i64)])
+            .update_vector(&mut ctx, &[Some(2i64), None, Some(1i64)], &[0, 1, 2])
             .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -325,7 +325,7 @@ mod tests {
         // 1 ^ 5 ^ 8 ^ ^ 2 ^ 2 ^ 1 == 13
         state.update(&mut ctx, &Some(2i64)).unwrap();
         state
-            .update_vector(&mut ctx, &[Some(2i64), None, Some(1i64)])
+            .update_vector(&mut ctx, &[Some(2i64), None, Some(1i64)], &[0, 1, 2])
             .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -372,14 +372,17 @@ mod tests {
         let src_schema = [FieldTypeTp::LongLong.into()];
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
+            col.mut_decoded().push_int(Some(1000));
             col.mut_decoded().push_int(Some(1));
             col.mut_decoded().push_int(Some(23));
             col.mut_decoded().push_int(Some(42));
             col.mut_decoded().push_int(None);
             col.mut_decoded().push_int(Some(99));
             col.mut_decoded().push_int(Some(-1));
+            col.mut_decoded().push_int(Some(1000));
             col
         }]);
+        let logical_rows = vec![6, 3, 4, 5, 1, 2];
 
         let mut schema = vec![];
         let mut exp = vec![];
@@ -414,11 +417,13 @@ mod tests {
 
         // bit and
         {
-            let bit_and_result = exp[0].eval(&mut ctx, 6, &src_schema, &mut columns).unwrap();
-            assert!(bit_and_result.is_vector());
-            let bit_and_slice: &[Option<Int>] = bit_and_result.vector_value().unwrap().as_ref();
+            let bit_and_result = exp[0]
+                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+                .unwrap();
+            let bit_and_result = bit_and_result.vector_value().unwrap();
+            let bit_and_slice: &[Option<Int>] = bit_and_result.as_ref().as_ref();
             bit_and_state
-                .update_vector(&mut ctx, bit_and_slice)
+                .update_vector(&mut ctx, bit_and_slice, bit_and_result.logical_rows())
                 .unwrap();
             bit_and_state
                 .push_result(&mut ctx, &mut aggr_result)
@@ -427,10 +432,14 @@ mod tests {
 
         // bit or
         {
-            let bit_or_result = exp[1].eval(&mut ctx, 6, &src_schema, &mut columns).unwrap();
-            assert!(bit_or_result.is_vector());
-            let bit_or_slice: &[Option<Int>] = bit_or_result.vector_value().unwrap().as_ref();
-            bit_or_state.update_vector(&mut ctx, bit_or_slice).unwrap();
+            let bit_or_result = exp[1]
+                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+                .unwrap();
+            let bit_or_result = bit_or_result.vector_value().unwrap();
+            let bit_or_slice: &[Option<Int>] = bit_or_result.as_ref().as_ref();
+            bit_or_state
+                .update_vector(&mut ctx, bit_or_slice, bit_or_result.logical_rows())
+                .unwrap();
             bit_or_state
                 .push_result(&mut ctx, &mut aggr_result)
                 .unwrap();
@@ -438,11 +447,13 @@ mod tests {
 
         // bit xor
         {
-            let bit_xor_result = exp[2].eval(&mut ctx, 6, &src_schema, &mut columns).unwrap();
-            assert!(bit_xor_result.is_vector());
-            let bit_xor_slice: &[Option<Int>] = bit_xor_result.vector_value().unwrap().as_ref();
+            let bit_xor_result = exp[2]
+                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+                .unwrap();
+            let bit_xor_result = bit_xor_result.vector_value().unwrap();
+            let bit_xor_slice: &[Option<Int>] = bit_xor_result.as_ref().as_ref();
             bit_xor_state
-                .update_vector(&mut ctx, bit_xor_slice)
+                .update_vector(&mut ctx, bit_xor_slice, bit_xor_result.logical_rows())
                 .unwrap();
             bit_xor_state
                 .push_result(&mut ctx, &mut aggr_result)
