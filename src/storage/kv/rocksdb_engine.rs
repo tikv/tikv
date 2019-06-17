@@ -72,6 +72,7 @@ impl Drop for RocksEngineCore {
     }
 }
 
+/// **Test functionality:** The RocksEngine is based on `RocksDB`.
 #[derive(Clone)]
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,

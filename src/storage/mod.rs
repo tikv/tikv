@@ -1,5 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Interact with persistent storage.
+//!
+//! The [`Storage`](storage::Storage) structure provides KV APIs on a given [`Engine`](storage::kv::Engine).
+//!
+//! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](storage::kv::raftkv::RaftKv)
+//! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and [`RocksEngine`](storage::RocksEngine) are used for testing only.
+
 pub mod config;
 pub mod gc_worker;
 pub mod kv;
@@ -58,12 +65,17 @@ pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
 }
 
+/// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
+    /// Put `Value` into `Key`, overwriting any existing value.
     Put((Key, Value)),
+    /// Delete `Key`.
     Delete(Key),
+    /// Set a lock on `Key`.
     Lock(Key),
-    Insert((Key, Value)), // has a constraint that key should not exist.
+    /// Put `Value` into `Key` if `Key` does not yet exist.
+    Insert((Key, Value)),
 }
 
 #[allow(clippy::match_same_arms)]
@@ -86,80 +98,165 @@ pub enum StorageCb {
     Locks(Callback<Vec<LockInfo>>),
 }
 
+/// Store Transaction scheduler commands.
+///
+/// Learn more about our transaction system at
+/// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/deep-dive/distributed-transaction/)
+///
+/// These are typically scheduled and used through the [`Storage`](Storage) with functions like
+/// [`Storage::async_prewrite`](Storage::async_prewrite) trait and are executed asyncronously.
+// Logic related to these can be found in the `src/storage/txn/procecss.rs::process_write_impl` function.
 pub enum Command {
+    /// The prewrite phase of a transaction. The first phase of 2PC.
+    ///
+    /// This prepares the system to commit the transaction. Later a [`Commit`](Command::Commit)
+    /// or a [`Rollback`](Command::Rollback) should follow.
+    ///
+    /// If `options.for_update_ts` is `0`, the transaction is optimistic. Else it is pessimistic.
     Prewrite {
         ctx: Context,
+        /// The set of mutations to apply.
         mutations: Vec<Mutation>,
+        /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
         primary: Vec<u8>,
+        /// The transaction timestamp.
         start_ts: u64,
         options: Options,
     },
+    /// Acquire a Pessimistic lock on the keys.
+    ///
+    /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock {
         ctx: Context,
+        /// The set of keys to lock.
         keys: Vec<(Key, bool)>,
+        /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
         primary: Vec<u8>,
+        /// The transaction timestamp.
         start_ts: u64,
         options: Options,
     },
+    /// Commit the transaction that started at `lock_ts`.
+    ///
+    /// This should be following a [`Prewrite`](Command::Prewrite) or [`AcquirePessimisticLock`](Command::AcquirePessimisticLock).
     Commit {
         ctx: Context,
+        /// The keys affected.
         keys: Vec<Key>,
+        /// The lock timestamp.
         lock_ts: u64,
+        /// The commit timestamp.
         commit_ts: u64,
     },
+    /// Rollback mutations on a single key.
+    ///
+    /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Cleanup {
         ctx: Context,
         key: Key,
+        /// The transaction timestamp.
         start_ts: u64,
     },
+    /// Rollback from the transaction that was started at `start_ts`.
+    ///
+    /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Rollback {
         ctx: Context,
         keys: Vec<Key>,
+        /// The transaction timestamp.
         start_ts: u64,
     },
+    /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
+    ///
+    /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
     PessimisticRollback {
         ctx: Context,
+        /// The keys to be rolled back.
         keys: Vec<Key>,
+        /// The transaction timestamp.
         start_ts: u64,
         for_update_ts: u64,
     },
+    /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock {
         ctx: Context,
+        /// The maximum transaction timestamp to scan.
         max_ts: u64,
+        /// The key to start from. (`None` means start from the very beginning.)
         start_key: Option<Key>,
+        /// The result limit.
         limit: usize,
     },
+    /// Resolve locks according to `txn_status`.
+    ///
+    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
+    /// before safe point.
+    ///
     ResolveLock {
         ctx: Context,
+        /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
+        ///
+        /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
+        /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
+        /// start_ts is 102 was rolled back. If there are these keys in the db:
+        ///
+        /// * "k1", lock_ts = 100
+        /// * "k2", lock_ts = 102
+        /// * "k3", lock_ts = 104
+        /// * "k4", no lock
+        ///
+        /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
+        /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
+        /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
+        /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
+        /// version.
         txn_status: HashMap<u64, u64>,
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
     },
+    /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
+    ///
+    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
+    /// before safe point.
     ResolveLockLite {
         ctx: Context,
+        /// The transaction timestamp.
         start_ts: u64,
+        /// The transaction commit timestamp.
         commit_ts: u64,
+        /// The keys to resolve.
         resolve_keys: Vec<Key>,
     },
+    /// Delete all keys in the range [`start_key`, `end_key`).
+    ///
+    /// **This is an unsafe action.**
+    /// 
+    /// All keys in the range will be deleted permanently regardless of their timestamps.
+    /// That means, you are even unable to get deleted keys by specifying an older timestamp.
     DeleteRange {
         ctx: Context,
+        /// The inclusive start key.
         start_key: Key,
+        /// The exclusive end key.
         end_key: Key,
     },
-    // only for test, keep the latches of keys for a while
+    /// **Testing functionality:** Latch the given keys for given duration.
+    ///
+    /// This means other write operations that involve these keys will be blocked.
     Pause {
         ctx: Context,
+        /// The keys to hold latches on.
         keys: Vec<Key>,
+        /// The amount of time in milliseconds to latch for.
         duration: u64,
     },
+    /// Retrieve MVCC information for the given key.
     MvccByKey {
         ctx: Context,
-        key: Key,
+        key: Key
     },
-    MvccByStartTs {
-        ctx: Context,
-        start_ts: u64,
-    },
+    /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
+    MvccByStartTs { ctx: Context, start_ts: u64 },
 }
 
 impl Display for Command {
@@ -561,20 +658,21 @@ impl<E: Engine> TestStorageBuilder<E> {
     }
 }
 
-/// `Storage` implements transactional KV APIs and raw KV APIs on a given `Engine`. An `Engine`
-/// provides low level KV functionality. `Engine` has multiple implementations. When a TiKV server
-/// is running, a `RaftKv` will be the underlying `Engine` of `Storage`. The other two types of
+/// [`Storage`] implements transactional KV APIs and raw KV APIs on a given [`Engine`]. An [`Engine`]
+/// provides low level KV functionality. [`Engine`] has multiple implementations. When a TiKV server
+/// is running, a [`RaftKv`] will be the underlying [`Engine`] of [`Storage`]. The other two types of
 /// engines are for test purpose.
 ///
-/// `Storage` is reference counted and cloning `Storage` will just increase the reference counter.
+///[`Storage`] is reference counted and cloning [`Storage`] will just increase the reference counter.
 /// Storage resources (i.e. threads, engine) will be released when all references are dropped.
 ///
 /// Notice that read and write methods may not be performed over full data in most cases, i.e. when
-/// underlying engine is `RaftKv`, which limits data access in the range of a single region
-/// according to specified `ctx` parameter. However, `async_unsafe_destroy_range` is the only
-/// exception. It's always performed on the whole TiKV.
+/// underlying engine is [`RaftKv`], which limits data access in the range of a single region
+/// according to specified `ctx` parameter. However,
+/// [`async_unsafe_destroy_range`](Storage::async_unsafe_destroy_range) is the only exception. It's
+/// always performed on the whole TiKV.
 ///
-/// Operations of `Storage` can be divided into two types: MVCC operations and raw operations.
+/// Operations of [`Storage`] can be divided into two types: MVCC operations and raw operations.
 /// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
 /// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
 /// to it, so that multiple versions can be saved at the same time.
@@ -723,8 +821,9 @@ impl<E: Engine> Storage<E> {
             .map_err(Error::from)
     }
 
-    /// Get value of the given key from a snapshot. Only writes that are committed before `start_ts`
-    /// is visible.
+    /// Get value of the given key from a snapshot.
+    ///
+    /// Only writes that are committed before `start_ts` are visible.
     pub fn async_get(
         &self,
         ctx: Context,
@@ -776,8 +875,9 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Get values of a set of keys in a batch from the snapshot. Only writes that are committed
-    /// before `start_ts` is visible.
+    /// Get values of a set of keys in a batch from the snapshot.
+    ///
+    /// Only writes that are committed before `start_ts` are visible.
     pub fn async_batch_get(
         &self,
         ctx: Context,
@@ -835,9 +935,11 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot. If `end_key` is
-    /// `None`, it means the upper bound is unbounded. Only writes committed before `start_ts` is
-    /// visible.
+    /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot.
+    ///
+    /// If `end_key` is `None`, it means the upper bound is unbounded.
+    ///
+    /// Only writes committed before `start_ts` are visible.
     pub fn async_scan(
         &self,
         ctx: Context,
@@ -908,8 +1010,9 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Latch the given keys for given duration, so other write operations that involve these keys
-    /// will be blocked. Only used for tests purpose.
+    /// **Testing functionality:** Latch the given keys for given duration.
+    ///
+    /// This means other write operations that involve these keys will be blocked.
     pub fn async_pause(
         &self,
         ctx: Context,
@@ -927,8 +1030,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Prewrite some mutations to the storage. It's the first phase of 2PC. The transaction model
-    /// comes from [Google Percolator](https://ai.google/research/pubs/pub36726).
+    /// The prewrite phase of a transaction. The first phase of 2PC.
+    ///
+    /// Schedules a [`Command::Prewrite`].
     pub fn async_prewrite(
         &self,
         ctx: Context,
@@ -957,6 +1061,8 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Acquire a Pessimistic lock on the keys.
+    /// Schedules a [`Command::AcquirePessimisticLock`].
     pub fn async_acquire_pessimistic_lock(
         &self,
         ctx: Context,
@@ -991,6 +1097,8 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Commit the transaction that started at `lock_ts`.
+    ///
+    /// Schedules a [`Command::Commit`].
     pub fn async_commit(
         &self,
         ctx: Context,
@@ -1011,8 +1119,11 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Delete all keys in the range [`start_key`, `end_key`).
+    ///
     /// All keys in the range will be deleted permanently regardless of their timestamps.
     /// That means, you are even unable to get deleted keys by specifying an older timestamp.
+    ///
+    /// Schedules a [`Command::DeleteRange`].
     pub fn async_delete_range(
         &self,
         ctx: Context,
@@ -1034,6 +1145,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Rollback mutations on a single key.
+    ///
+    /// Schedules a [`Command::Cleanup`].
     pub fn async_cleanup(
         &self,
         ctx: Context,
@@ -1047,7 +1161,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Roll back the transaction that was started at `start_ts`.
+    /// Rollback from the transaction that was started at `start_ts`.
+    ///
+    /// Schedules a [`Command::Rollback`].
     pub fn async_rollback(
         &self,
         ctx: Context,
@@ -1065,7 +1181,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Roll back pessimistic locks identified by `start_ts` and `for_update_ts`
+    /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
+    ///
+    /// Schedules a [`Command::PessimisticRollback`].
     pub fn async_pessimistic_rollback(
         &self,
         ctx: Context,
@@ -1091,6 +1209,8 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
+    ///
+    /// Schedules a [`Command::ScanLock`].
     pub fn async_scan_locks(
         &self,
         ctx: Context,
@@ -1114,25 +1234,15 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Resolve locks according to `txn_status`. During the GC operation, this will be called by
-    /// TiDB to clean up stale locks whose timestamp is before safe point.
+    /// Resolve locks according to `txn_status`.
+    ///
+    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
+    /// before safe point.
     ///
     /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
+    /// For an example, check the [`Command::ResolveLock`] docs.
     ///
-    /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
-    /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
-    /// start_ts is 102 was rolled back. If there are these keys in the db:
-    ///
-    /// * "k1", lock_ts = 100
-    /// * "k2", lock_ts = 102
-    /// * "k3", lock_ts = 104
-    /// * "k4", no lock
-    ///
-    /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
-    /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
-    /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
-    /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
-    /// version.
+    /// Schedules a [`Command::ResolveLock`].
     pub fn async_resolve_lock(
         &self,
         ctx: Context,
@@ -1150,6 +1260,12 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
+    ///
+    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
+    /// before safe point.
+    ///
+    /// Schedules a [`Command::ResolveLockLite`].
     pub fn async_resolve_lock_lite(
         &self,
         ctx: Context,
@@ -1169,7 +1285,8 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Does garbage collection, which means cleaning up old MVCC keys.
+    /// Do garbage collection, which means cleaning up old MVCC keys.
+    ///
     /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
     /// during and after the GC operation.
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
@@ -1179,6 +1296,7 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Delete all data in the range.
+    ///
     /// This function is **VERY DANGEROUS**. It's not only running on one single region, but it can
     /// delete a large range that spans over many regions, bypassing the Raft layer. This is
     /// designed for TiDB to quickly free up disk space while doing GC after

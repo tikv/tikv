@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Storage Transaction functionality.
+
 mod latch;
 mod process;
 pub mod sched_pool;

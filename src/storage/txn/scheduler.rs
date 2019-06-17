@@ -334,7 +334,7 @@ impl<E: Engine> Scheduler<E> {
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
-    /// the method initiates a get snapshot operation for furthur processing.
+    /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
         if self.inner.acquire_lock(cid) {
             self.get_snapshot(cid);

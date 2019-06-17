@@ -321,7 +321,7 @@ impl<S: Snapshot> MvccReader<S> {
         IterOption::new(l_bound, u_bound, true)
     }
 
-    // Return the first committed key which start_ts equals to ts
+    /// Return the first committed key which start_ts equals to ts
     pub fn seek_ts(&mut self, ts: u64) -> Result<Option<Key>> {
         assert!(self.scan_mode.is_some());
         self.create_write_cursor()?;
