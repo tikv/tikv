@@ -3,14 +3,15 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::ptr::NonNull;
-use std::sync::Arc;
 
-use tikv_util::erase_lifetime;
+use servo_arc::Arc;
+
 use tipb::executor::TopN;
 use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::dag::batch::executors::util::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
@@ -101,7 +102,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
 impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     pub fn new(
-        config: Arc<EvalConfig>,
+        config: std::sync::Arc<EvalConfig>,
         src: Src,
         order_exprs_def: Vec<Expr>,
         order_is_desc: Vec<bool>,
@@ -145,8 +146,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
         let src_is_drained = src_result.is_drained?;
 
-        if src_result.data.rows_len() > 0 {
-            self.process_batch_input(src_result.data)?;
+        if !src_result.logical_rows.is_empty() {
+            self.process_batch_input(src_result.physical_columns, src_result.logical_rows)?;
         }
 
         if src_is_drained {
@@ -156,34 +157,45 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         }
     }
 
-    fn process_batch_input(&mut self, mut data: LazyBatchColumnVec) -> Result<()> {
-        let src_schema_unbounded = unsafe { erase_lifetime(self.src.schema()) };
-        for expr in self.order_exprs.iter() {
-            expr.ensure_columns_decoded(&self.context.cfg.tz, src_schema_unbounded, &mut data)?;
-        }
+    fn process_batch_input(
+        &mut self,
+        mut physical_columns: LazyBatchColumnVec,
+        logical_rows: Vec<usize>,
+    ) -> Result<()> {
+        ensure_columns_decoded(
+            &self.context.cfg.tz,
+            &self.order_exprs,
+            self.src.schema(),
+            &mut physical_columns,
+            &logical_rows,
+        )?;
 
-        let data = servo_arc::Arc::new(data);
+        // Pin data behind an Arc, so that they won't be dropped as long as this `pinned_data`
+        // is kept somewhere.
+        let pinned_source_data = Arc::new(HeapItemSourceData {
+            physical_columns,
+            logical_rows,
+        });
 
         let eval_offset = self.eval_columns_buffer_unsafe.len();
-        let order_exprs_unbounded = unsafe { erase_lifetime(&*self.order_exprs) };
-        let data_unbounded = unsafe { erase_lifetime(&*data) };
-        for expr_unbounded in order_exprs_unbounded.iter() {
-            self.eval_columns_buffer_unsafe
-                .push(expr_unbounded.eval_unchecked(
-                    &mut self.context,
-                    data.rows_len(),
-                    src_schema_unbounded,
-                    data_unbounded,
-                )?);
+        unsafe {
+            eval_exprs_decoded_no_lifetime(
+                &mut self.context,
+                &self.order_exprs,
+                self.src.schema(),
+                &pinned_source_data.physical_columns,
+                &pinned_source_data.logical_rows,
+                &mut self.eval_columns_buffer_unsafe,
+            )?;
         }
 
-        for row_index in 0..data.rows_len() {
+        for logical_row_index in 0..pinned_source_data.logical_rows.len() {
             let row = HeapItemUnsafe {
                 order_is_desc_ptr: (&*self.order_is_desc).into(),
-                source_column_data: data.clone(),
+                source_data: pinned_source_data.clone(),
                 eval_columns_buffer_ptr: (&*self.eval_columns_buffer_unsafe).into(),
                 eval_columns_offset: eval_offset,
-                row_index,
+                logical_row_index,
             };
             self.heap_add_row(row);
         }
@@ -213,15 +225,17 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         }
 
         let mut result = sorted_items[0]
-            .source_column_data
+            .source_data
+            .physical_columns
             .clone_empty(sorted_items.len());
 
-        for (column_index, result_column) in result.iter_mut().enumerate() {
+        for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
             match result_column {
                 LazyBatchColumn::Raw(dest_column) => {
                     for item in &sorted_items {
-                        let src = item.source_column_data[column_index].raw();
-                        dest_column.push(&src[item.row_index]);
+                        let src = item.source_data.physical_columns[column_index].raw();
+                        dest_column
+                            .push(&src[item.source_data.logical_rows[item.logical_row_index]]);
                     }
                 }
                 LazyBatchColumn::Decoded(dest_vector_value) => {
@@ -229,10 +243,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                         TT, match dest_vector_value {
                             VectorValue::TT(dest_column) => {
                                 for item in &sorted_items {
-                                    let src = item.source_column_data[column_index].decoded();
+                                    let src = item.source_data.physical_columns[column_index].decoded();
                                     let src: &[Option<TT>] = src.as_ref();
                                     // TODO: This clone is not necessary.
-                                    dest_column.push(src[item.row_index].clone());
+                                    dest_column.push(src[item.source_data.logical_rows[item.logical_row_index]].clone());
                                 }
                             },
                         }
@@ -259,7 +273,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
         if self.n == 0 {
             self.is_ended = true;
             return BatchExecuteResult {
-                data: LazyBatchColumnVec::empty(),
+                physical_columns: LazyBatchColumnVec::empty(),
+                logical_rows: Vec::new(),
                 warnings: EvalWarnings::default(),
                 is_drained: Ok(true),
             };
@@ -272,21 +287,25 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
                 // When there are error, we can just return empty data.
                 self.is_ended = true;
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
                     warnings: self.context.take_warnings(),
                     is_drained: Err(e),
                 }
             }
-            Ok(Some(data)) => {
+            Ok(Some(logical_columns)) => {
                 self.is_ended = true;
+                let logical_rows = (0..logical_columns.rows_len()).collect();
                 BatchExecuteResult {
-                    data,
+                    physical_columns: logical_columns,
+                    logical_rows,
                     warnings: self.context.take_warnings(),
                     is_drained: Ok(true),
                 }
             }
             Ok(None) => BatchExecuteResult {
-                data: LazyBatchColumnVec::empty(),
+                physical_columns: LazyBatchColumnVec::empty(),
+                logical_rows: Vec::new(),
                 warnings: self.context.take_warnings(),
                 is_drained: Ok(false),
             },
@@ -299,6 +318,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 }
 
+struct HeapItemSourceData {
+    physical_columns: LazyBatchColumnVec,
+    logical_rows: Vec<usize>,
+}
+
 /// The item in the heap of `BatchTopNExecutor`.
 ///
 /// WARN: The content of this structure is valid only if `BatchTopNExecutor` is valid (i.e.
@@ -307,8 +331,8 @@ struct HeapItemUnsafe {
     /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
     order_is_desc_ptr: NonNull<[bool]>,
 
-    /// The source columns that evaluated column in this structure is referring to.
-    source_column_data: servo_arc::Arc<LazyBatchColumnVec>,
+    /// The source data that evaluated column in this structure is using.
+    source_data: Arc<HeapItemSourceData>,
 
     /// A pointer to the `eval_columns_buffer` field in `BatchTopNExecutor`.
     eval_columns_buffer_ptr: NonNull<Vec<RpnStackNode<'static>>>,
@@ -318,8 +342,8 @@ struct HeapItemUnsafe {
     /// The length of evaluated columns in the buffer is `order_is_desc.len()`.
     eval_columns_offset: usize,
 
-    /// Which row in the evaluated columns this heap item is representing.
-    row_index: usize,
+    /// Which logical row in the evaluated columns this heap item is representing.
+    logical_row_index: usize,
 }
 
 impl HeapItemUnsafe {
@@ -348,8 +372,8 @@ impl Ord for HeapItemUnsafe {
         for column_idx in 0..columns_len {
             let lhs_node = &eval_columns_lhs[column_idx];
             let rhs_node = &eval_columns_rhs[column_idx];
-            let lhs = lhs_node.get_scalar_ref(self.row_index);
-            let rhs = rhs_node.get_scalar_ref(other.row_index);
+            let lhs = lhs_node.get_logical_scalar_ref(self.logical_row_index);
+            let rhs = rhs_node.get_logical_scalar_ref(other.logical_row_index);
 
             // There is panic inside, but will never panic, since the data type of corresponding
             // column should be consistent for each `HeapItemUnsafe`.
@@ -398,12 +422,13 @@ mod tests {
         let src_exec = MockExecutor::new(
             vec![FieldTypeTp::Double.into()],
             vec![BatchExecuteResult {
-                data: LazyBatchColumnVec::from(vec![VectorValue::Real(vec![
+                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Real(vec![
                     None,
                     Real::new(7.0).ok(),
                     None,
                     None,
                 ])]),
+                logical_rows: (0..1).collect(),
                 warnings: EvalWarnings::default(),
                 is_drained: Ok(true),
             }],
@@ -417,7 +442,7 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(r.is_drained.unwrap());
     }
 
@@ -427,12 +452,16 @@ mod tests {
             vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![Some(
+                        5,
+                    )])]),
+                    logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),
                 },
@@ -447,11 +476,11 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(r.is_drained.unwrap());
     }
 
@@ -479,34 +508,51 @@ mod tests {
             ],
             vec![
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![None, None, None]),
-                        VectorValue::Int(vec![Some(-1), None, Some(1)]),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Int(vec![None, None, Some(5), None]),
+                        VectorValue::Int(vec![None, Some(1), None, Some(-1)]),
                         VectorValue::Real(vec![
-                            Real::new(-1.0).ok(),
                             Real::new(2.0).ok(),
                             Real::new(4.0).ok(),
+                            None,
+                            Real::new(-1.0).ok(),
                         ]),
                     ]),
+                    logical_rows: vec![3, 0, 1],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Int(vec![Some(0)]),
+                        VectorValue::Int(vec![Some(10)]),
+                        VectorValue::Real(vec![Real::new(10.0).ok()]),
+                    ]),
+                    logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Int(vec![Some(-1), Some(-10), Some(-10), Some(-10)]),
-                        VectorValue::Int(vec![None, Some(10), None, Some(-10)]),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Int(vec![
+                            Some(-10),
+                            Some(-1),
+                            Some(-10),
+                            None,
+                            Some(-10),
+                            None,
+                        ]),
+                        VectorValue::Int(vec![None, None, Some(10), Some(-9), Some(-10), None]),
                         VectorValue::Real(vec![
+                            Real::new(-5.0).ok(),
                             None,
                             Real::new(3.0).ok(),
-                            Real::new(-5.0).ok(),
+                            None,
                             Real::new(0.0).ok(),
+                            Real::new(9.9).ok(),
                         ]),
                     ]),
+                    logical_rows: vec![1, 2, 0, 4],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),
                 },
@@ -544,26 +590,29 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 7);
-        assert_eq!(r.data.columns_len(), 3);
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(r.physical_columns.rows_len(), 7);
+        assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.data[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().as_int_slice(),
             &[Some(-1), Some(-10), None, Some(-10), None, Some(-10), None]
         );
         assert_eq!(
-            r.data[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().as_int_slice(),
             &[None, None, Some(-1), Some(-10), None, Some(10), Some(1)]
         );
         assert_eq!(
-            r.data[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_slice(),
             &[
                 None,
                 Real::new(-5.0).ok(),
@@ -607,26 +656,29 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 7);
-        assert_eq!(r.data.columns_len(), 3);
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(r.physical_columns.rows_len(), 7);
+        assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.data[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().as_int_slice(),
             &[Some(-1), Some(-10), Some(-10), Some(-10), None, None, None]
         );
         assert_eq!(
-            r.data[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().as_int_slice(),
             &[None, None, Some(-10), Some(10), None, Some(-1), Some(1)]
         );
         assert_eq!(
-            r.data[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_slice(),
             &[
                 None,
                 Real::new(-5.0).ok(),
@@ -679,26 +731,29 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 5);
-        assert_eq!(r.data.columns_len(), 3);
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+        assert_eq!(r.physical_columns.rows_len(), 5);
+        assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(
-            r.data[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().as_int_slice(),
             &[Some(-10), Some(-10), Some(-10), Some(-1), None]
         );
         assert_eq!(
-            r.data[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().as_int_slice(),
             &[Some(10), Some(-10), None, None, Some(1)]
         );
         assert_eq!(
-            r.data[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_slice(),
             &[
                 Real::new(3.0).ok(),
                 Real::new(0.0).ok(),
