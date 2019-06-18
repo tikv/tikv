@@ -691,10 +691,10 @@ impl Time {
                 write!(output, "{:02}", w).unwrap();
             }
             'a' => {
-                write!(output, "{}", self.time.weekday().name_abbr()).unwrap();
+                output.push_str(self.time.weekday().name_abbr());
             }
             'W' => {
-                write!(output, "{}", self.time.weekday().name()).unwrap();
+                output.push_str(self.time.weekday().name());
             }
             'w' => {
                 write!(output, "{}", self.time.weekday().num_days_from_sunday()).unwrap();
@@ -719,8 +719,7 @@ impl Time {
                 write!(output, "{:04}", self.time.year()).unwrap();
             }
             'y' => {
-                let year_str = format!("{:04}", self.time.year());
-                write!(output, "{}", &year_str[2..]).unwrap();
+                write!(output, "{:02}", self.time.year() % 100).unwrap();
             }
             _ => output.push(b),
         }
