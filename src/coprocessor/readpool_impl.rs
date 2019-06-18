@@ -116,7 +116,12 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
     });
 }
 
-pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: ExecutorMetrics) {
+pub fn tls_collect_executor_metrics(
+    region_id: u64,
+    term: u64,
+    type_str: &str,
+    metrics: ExecutorMetrics,
+) {
     let stats = &metrics.cf_stats;
     // cf statistics group by type
     for (cf, details) in stats.details() {
@@ -130,7 +135,7 @@ pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: Exe
         }
     }
     // flow statistics group by region
-    tls_collect_read_flow(region_id, stats);
+    tls_collect_read_flow(region_id, term, stats);
 
     // scan count
     let scan_counter = metrics.scan_counter;
@@ -143,7 +148,7 @@ pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: Exe
 }
 
 #[inline]
-pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
+pub fn tls_collect_read_flow(region_id: u64, term: u64, statistics: &crate::storage::Statistics) {
     TLS_COP_METRICS.with(|m| {
         let map = &mut m.borrow_mut().local_cop_flow_stats;
         let flow_stats = map
@@ -151,5 +156,6 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statis
             .or_insert_with(crate::storage::FlowStatistics::default);
         flow_stats.add(&statistics.write.flow_stats);
         flow_stats.add(&statistics.data.flow_stats);
+        flow_stats.set_term(term);
     });
 }

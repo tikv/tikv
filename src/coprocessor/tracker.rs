@@ -223,6 +223,7 @@ impl Tracker {
 
         tls_collect_executor_metrics(
             self.req_ctx.context.get_region_id(),
+            self.req_ctx.context.get_term(),
             self.req_ctx.tag,
             total_exec_metrics,
         );

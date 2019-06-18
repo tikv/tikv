@@ -135,13 +135,17 @@ pub struct RegionCollection {
     pub last_report_ts: u64,
 
     pub region_heartbeat_interval: u64,
+    pub is_leader_changed: bool,
 }
 
 impl RegionCollection {
     fn heartbeat(&mut self) -> Option<(metapb::Region, metapb::Peer, RegionStat)> {
-        // Somthing have changed, send the heartbeat to PD.
         let mut last_report_ts = self.last_report_ts;
         self.last_report_ts = time_now_sec();
+        if self.is_leader_changed {
+            self.is_leader_changed = false;
+            return None;
+        }
         last_report_ts = cmp::max(
             last_report_ts,
             self.last_report_ts - self.region_heartbeat_interval,
@@ -182,6 +186,15 @@ impl RegionCollection {
         if stats.read_keys > 0 {
             self.read_keys_delta += stats.read_keys as u64;
         }
+
+        self.update_term(stats.term);
+    }
+
+    fn update_term(&mut self, term: u64) {
+        if self.term != term {
+            self.term = term;
+            self.is_leader_changed = true;
+        }
     }
 
     fn merge_heartbeat(&mut self, db: &DB, hb_task: Task) {
@@ -210,7 +223,6 @@ impl RegionCollection {
                 self.peer = peer;
                 self.down_peers = down_peers;
                 self.pending_peers = pending_peers;
-                self.term = term;
 
                 if self.last_written_bytes < total_written_bytes {
                     self.written_bytes_delta += total_written_bytes - self.last_written_bytes;
@@ -221,6 +233,8 @@ impl RegionCollection {
                     self.written_keys_delta += total_written_keys - self.last_written_keys;
                     self.last_written_keys = total_written_keys;
                 }
+
+                self.update_term(term);
             }
             _ => unreachable!(),
         }

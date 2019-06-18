@@ -195,12 +195,16 @@ pub struct CFStatistics {
 pub struct FlowStatistics {
     pub read_keys: usize,
     pub read_bytes: usize,
+    pub term: u64,
 }
 
 impl FlowStatistics {
     pub fn add(&mut self, other: &Self) {
         self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
         self.read_keys = self.read_keys.saturating_add(other.read_keys);
+    }
+    pub fn set_term(&mut self, term: u64) {
+        self.term = term;
     }
 }
 
