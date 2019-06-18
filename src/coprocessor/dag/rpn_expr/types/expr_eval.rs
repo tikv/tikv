@@ -288,11 +288,15 @@ mod tests {
     use tipb::expression::FieldType;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
-    use crate::coprocessor::codec::data_type::Real;
+    use crate::coprocessor::codec::data_type::{Int, Real};
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
     use crate::coprocessor::dag::expr::EvalContext;
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::*;
+    use crate::coprocessor::dag::rpn_expr::impl_compare::*;
+    use crate::coprocessor::dag::rpn_expr::impl_op::*;
     use crate::coprocessor::dag::rpn_expr::{RpnExpressionBuilder, RpnFn};
     use crate::coprocessor::Result;
+    use test::Bencher;
 
     /// Single constant node
     #[test]
@@ -1100,5 +1104,82 @@ mod tests {
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+    }
+
+    #[bench]
+    fn bench_eval_plus(b: &mut Bencher) {
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Int);
+            for i in 0..1024 {
+                col.mut_decoded().push_int(Some(i));
+            }
+            col
+        }]);
+        let schema = &[FieldTypeTp::LongLong.into()];
+
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_column_ref(0)
+            .push_fn_call(arithmetic_fn::<IntIntPlus>(), FieldTypeTp::LongLong)
+            .build();
+        let mut ctx = EvalContext::default();
+        let logical_rows: Vec<_> = (0..1024).collect();
+
+        b.iter(|| {
+            let result = exp.eval(&mut ctx, schema, &mut columns, &logical_rows, 1024);
+            assert!(result.is_ok());
+        })
+    }
+
+    #[bench]
+    fn bench_eval_compare(b: &mut Bencher) {
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Int);
+            for i in 0..1024 {
+                col.mut_decoded().push_int(Some(i));
+            }
+            col
+        }]);
+        let schema = &[FieldTypeTp::LongLong.into()];
+
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_column_ref(0)
+            .push_fn_call(
+                compare_fn::<BasicComparer<Int, CmpOpLE>>(),
+                FieldTypeTp::LongLong,
+            )
+            .build();
+        let mut ctx = EvalContext::default();
+        let logical_rows: Vec<_> = (0..1024).collect();
+
+        b.iter(|| {
+            let result = exp.eval(&mut ctx, schema, &mut columns, &logical_rows, 1024);
+            assert!(result.is_ok());
+        })
+    }
+
+    #[bench]
+    fn bench_eval_is_null(b: &mut Bencher) {
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Int);
+            for i in 0..1024 {
+                col.mut_decoded().push_int(Some(i));
+            }
+            col
+        }]);
+        let schema = &[FieldTypeTp::LongLong.into()];
+
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_fn_call(is_null_fn::<Int>(), FieldTypeTp::LongLong)
+            .build();
+        let mut ctx = EvalContext::default();
+        let logical_rows: Vec<_> = (0..1024).collect();
+
+        b.iter(|| {
+            let result = exp.eval(&mut ctx, schema, &mut columns, &logical_rows, 1024);
+            assert!(result.is_ok());
+        })
     }
 }
