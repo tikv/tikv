@@ -4,7 +4,7 @@
 //! understand how `Evaluator` and `RpnDef` work. There's a procedure macro called `rpn_fn`
 //! helping you create RPN functions. For example:
 //!
-//! ```
+//! ```ignore
 //! use cop_codegen::rpn_fn;
 //!
 //! #[rpn_fn]
@@ -20,7 +20,7 @@
 //! If you needs `EvalContext` or the raw `RpnFnCallPayload`, just put it ahead of the function
 //! parameters, and add `ctx` or `payload` argument to the attribute. For example:
 //!
-//! ```
+//! ```ignore
 //! // This generates `with_context_fn() -> RpnFn`
 //! #[rpn_fn(ctx)]
 //! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
@@ -43,7 +43,7 @@
 //! arguments, the regex and the string to match. You want to build the regex only once if the
 //! first argument is a scalar. The code may look like:
 //!
-//! ```
+//! ```ignore
 //! fn regex_match_impl(regex: &Regex, text: &Option<Bytes>) -> Result<Option<i32>> {
 //!     // match text
 //! }
