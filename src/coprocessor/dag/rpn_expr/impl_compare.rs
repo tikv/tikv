@@ -2,15 +2,14 @@
 
 use std::cmp::Ordering;
 
-use cop_codegen::RpnFunction;
+use cop_codegen::rpn_fn;
 
+use super::function::*;
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
-#[derive(RpnFunction)]
-#[rpn_function(args = 2)]
 pub struct RpnFnCompare<C: Comparer> {
     _phantom: std::marker::PhantomData<C>,
 }
@@ -22,15 +21,24 @@ impl<C: Comparer> RpnFnCompare<C> {
             _phantom: std::marker::PhantomData,
         }
     }
+}
 
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        lhs: &Option<C::T>,
-        rhs: &Option<C::T>,
-    ) -> Result<Option<i64>> {
-        C::compare(lhs, rhs)
+impl<C: Comparer> RpnFunction for RpnFnCompare<C> {
+    fn name(&self) -> &'static str {
+        "RpnFnCompare"
+    }
+
+    fn args_len(&self) -> usize {
+        2
+    }
+
+    fn eval(&self, ctx: &mut EvalContext, payload: RpnFnCallPayload<'_>) -> Result<VectorValue> {
+        let rpn_fn = compare_fn::<C>();
+        (rpn_fn.fn_ptr)(ctx, payload)
+    }
+
+    fn box_clone(&self) -> Box<dyn RpnFunction> {
+        Box::new(*self)
     }
 }
 
@@ -53,6 +61,12 @@ impl<C: Comparer> Clone for RpnFnCompare<C> {
 }
 
 // ======
+
+#[rpn_fn]
+#[inline]
+pub fn compare<C: Comparer>(lhs: &Option<C::T>, rhs: &Option<C::T>) -> Result<Option<i64>> {
+    C::compare(lhs, rhs)
+}
 
 pub trait Comparer: 'static + Send + Sync {
     type T: Evaluable;
