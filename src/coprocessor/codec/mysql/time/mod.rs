@@ -6,8 +6,8 @@ pub mod weekmode;
 
 use std::cmp::{min, Ordering};
 use std::convert::{TryFrom, TryInto};
+use std::fmt::Write;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::{mem, str};
 
 use byteorder::WriteBytesExt;
@@ -90,16 +90,10 @@ fn ymd_hms_nanos<T: TimeZone>(
         .and_then(|t| t.checked_add_signed(Duration::nanoseconds(i64::from(nanos))))
         .and_then(|datetime| tz.from_local_datetime(&datetime).earliest())
         .ok_or_else(|| {
-            box_err!(
-                "'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime in specified time zone",
-                year,
-                month,
-                day,
-                hour,
-                min,
-                secs,
-                nanos
-            )
+            Error::incorrect_datetime_value(&format!(
+                "{}-{}-{} {}:{}:{}.{:09}",
+                year, month, day, hour, min, secs, nanos
+            ))
         })
 }
 
@@ -400,7 +394,7 @@ impl Time {
                     box_try!(sec.parse()),
                 )
             }
-            _ => return Err(box_err!("invalid datetime: {}", s)),
+            _ => return Err(Error::incorrect_datetime_value(s)),
         };
 
         if need_adjust || parts[0].len() == 2 {
@@ -549,151 +543,196 @@ impl Time {
         }
     }
 
-    fn convert_date_format(&self, b: char) -> Result<String> {
+    fn write_date_format_segment(&self, b: char, output: &mut String) -> Result<()> {
         match b {
             'b' => {
                 let m = self.time.month();
                 if m == 0 || m > 12 {
-                    Err(box_err!("invalid time format"))
+                    return Err(box_err!("invalid time format"));
                 } else {
-                    Ok(MONTH_NAMES_ABBR[(m - 1) as usize].to_string())
+                    write!(output, "{}", MONTH_NAMES_ABBR[(m - 1) as usize]).unwrap();
                 }
             }
             'M' => {
                 let m = self.time.month();
                 if m == 0 || m > 12 {
-                    Err(box_err!("invalid time format"))
+                    return Err(box_err!("invalid time format"));
                 } else {
-                    Ok(MONTH_NAMES[(m - 1) as usize].to_string())
+                    write!(output, "{}", MONTH_NAMES[(m - 1) as usize]).unwrap();
                 }
             }
-            'm' => Ok(format!("{:02}", self.time.month())),
-            'c' => Ok(format!("{}", self.time.month())),
-            'D' => Ok(format!(
-                "{}{}",
-                self.time.day(),
-                self.time.abbr_day_of_month()
-            )),
-            'd' => Ok(format!("{:02}", self.time.day())),
-            'e' => Ok(format!("{}", self.time.day())),
-            'j' => Ok(format!("{:03}", self.time.days())),
-            'H' => Ok(format!("{:02}", self.time.hour())),
-            'k' => Ok(format!("{}", self.time.hour())),
+            'm' => {
+                write!(output, "{:02}", self.time.month()).unwrap();
+            }
+            'c' => {
+                write!(output, "{}", self.time.month()).unwrap();
+            }
+            'D' => {
+                write!(
+                    output,
+                    "{}{}",
+                    self.time.day(),
+                    self.time.abbr_day_of_month()
+                )
+                .unwrap();
+            }
+            'd' => {
+                write!(output, "{:02}", self.time.day()).unwrap();
+            }
+            'e' => {
+                write!(output, "{}", self.time.day()).unwrap();
+            }
+            'j' => {
+                write!(output, "{:03}", self.time.days()).unwrap();
+            }
+            'H' => {
+                write!(output, "{:02}", self.time.hour()).unwrap();
+            }
+            'k' => {
+                write!(output, "{}", self.time.hour()).unwrap();
+            }
             'h' | 'I' => {
                 let t = self.time.hour();
                 if t == 0 || t == 12 {
-                    Ok("12".to_string())
+                    output.push_str("12");
                 } else {
-                    Ok(format!("{:02}", t % 12))
+                    write!(output, "{:02}", t % 12).unwrap();
                 }
             }
             'l' => {
                 let t = self.time.hour();
                 if t == 0 || t == 12 {
-                    Ok("12".to_string())
+                    output.push_str("12");
                 } else {
-                    Ok(format!("{}", t % 12))
+                    write!(output, "{}", t % 12).unwrap();
                 }
             }
-            'i' => Ok(format!("{:02}", self.time.minute())),
+            'i' => {
+                write!(output, "{:02}", self.time.minute()).unwrap();
+            }
             'p' => {
                 let hour = self.time.hour();
                 if (hour / 12) % 2 == 0 {
-                    Ok("AM".to_string())
+                    output.push_str("AM")
                 } else {
-                    Ok("PM".to_string())
+                    output.push_str("PM")
                 }
             }
             'r' => {
                 let h = self.time.hour();
                 if h == 0 {
-                    Ok(format!(
+                    write!(
+                        output,
                         "{:02}:{:02}:{:02} AM",
                         12,
                         self.time.minute(),
                         self.time.second()
-                    ))
+                    )
+                    .unwrap();
                 } else if h == 12 {
-                    Ok(format!(
+                    write!(
+                        output,
                         "{:02}:{:02}:{:02} PM",
                         12,
                         self.time.minute(),
                         self.time.second()
-                    ))
+                    )
+                    .unwrap();
                 } else if h < 12 {
-                    Ok(format!(
+                    write!(
+                        output,
                         "{:02}:{:02}:{:02} AM",
                         h,
                         self.time.minute(),
                         self.time.second()
-                    ))
+                    )
+                    .unwrap();
                 } else {
-                    Ok(format!(
+                    write!(
+                        output,
                         "{:02}:{:02}:{:02} PM",
                         h - 12,
                         self.time.minute(),
                         self.time.second()
-                    ))
+                    )
+                    .unwrap();
                 }
             }
-            'T' => Ok(format!(
-                "{:02}:{:02}:{:02}",
-                self.time.hour(),
-                self.time.minute(),
-                self.time.second()
-            )),
-            'S' | 's' => Ok(format!("{:02}", self.time.second())),
-            'f' => Ok(format!("{:06}", self.time.nanosecond() / 1000)),
+            'T' => {
+                write!(
+                    output,
+                    "{:02}:{:02}:{:02}",
+                    self.time.hour(),
+                    self.time.minute(),
+                    self.time.second()
+                )
+                .unwrap();
+            }
+            'S' | 's' => {
+                write!(output, "{:02}", self.time.second()).unwrap();
+            }
+            'f' => {
+                write!(output, "{:06}", self.time.nanosecond() / 1000).unwrap();
+            }
             'U' => {
                 let w = self.time.week(WeekMode::from_bits_truncate(0));
-                Ok(format!("{:02}", w))
+                write!(output, "{:02}", w).unwrap();
             }
             'u' => {
                 let w = self.time.week(WeekMode::from_bits_truncate(1));
-                Ok(format!("{:02}", w))
+                write!(output, "{:02}", w).unwrap();
             }
             'V' => {
                 let w = self.time.week(WeekMode::from_bits_truncate(2));
-                Ok(format!("{:02}", w))
+                write!(output, "{:02}", w).unwrap();
             }
             'v' => {
                 let (_, w) = self.time.year_week(WeekMode::from_bits_truncate(3));
-                Ok(format!("{:02}", w))
+                write!(output, "{:02}", w).unwrap();
             }
-            'a' => Ok(self.time.weekday().name_abbr().to_string()),
-            'W' => Ok(self.time.weekday().name().to_string()),
-            'w' => Ok(format!("{}", self.time.weekday().num_days_from_sunday())),
+            'a' => {
+                write!(output, "{}", self.time.weekday().name_abbr()).unwrap();
+            }
+            'W' => {
+                write!(output, "{}", self.time.weekday().name()).unwrap();
+            }
+            'w' => {
+                write!(output, "{}", self.time.weekday().num_days_from_sunday()).unwrap();
+            }
             'X' => {
                 let (year, _) = self.time.year_week(WeekMode::from_bits_truncate(2));
                 if year < 0 {
-                    Ok(u32::max_value().to_string())
+                    write!(output, "{}", u32::max_value()).unwrap();
                 } else {
-                    Ok(format!("{:04}", year))
+                    write!(output, "{:04}", year).unwrap();
                 }
             }
             'x' => {
                 let (year, _) = self.time.year_week(WeekMode::from_bits_truncate(3));
                 if year < 0 {
-                    Ok(u32::max_value().to_string())
+                    write!(output, "{}", u32::max_value()).unwrap();
                 } else {
-                    Ok(format!("{:04}", year))
+                    write!(output, "{:04}", year).unwrap();
                 }
             }
-            'Y' => Ok(format!("{:04}", self.time.year())),
+            'Y' => {
+                write!(output, "{:04}", self.time.year()).unwrap();
+            }
             'y' => {
                 let year_str = format!("{:04}", self.time.year());
-                Ok(year_str[2..].to_string())
+                write!(output, "{}", &year_str[2..]).unwrap();
             }
-            _ => Ok(b.to_string()),
+            _ => output.push(b),
         }
+        Ok(())
     }
 
-    pub fn date_format(&self, layout: String) -> Result<String> {
+    pub fn date_format(&self, layout: &str) -> Result<String> {
         let mut ret = String::new();
         let mut pattern_match = false;
         for b in layout.chars() {
             if pattern_match {
-                ret.push_str(&self.convert_date_format(b)?);
+                self.write_date_format_segment(b, &mut ret)?;
                 pattern_match = false;
                 continue;
             }
@@ -811,7 +850,7 @@ impl Display for Time {
     }
 }
 
-impl<T: Write> TimeEncoder for T {}
+impl<T: std::io::Write> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
@@ -1517,7 +1556,7 @@ mod tests {
         ];
         for (s, layout, expect) in cases {
             let t = Time::parse_utc_datetime(s, 6).unwrap();
-            let get = t.date_format(layout.to_string()).unwrap();
+            let get = t.date_format(layout).unwrap();
             assert_eq!(get, expect);
         }
     }
