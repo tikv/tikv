@@ -539,6 +539,15 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, MyDuration>>> {
         Ok(None)
     }
+
+    #[inline]
+    pub fn add_time_string_null<'a>(
+        &self,
+        _ctx: &mut EvalContext,
+        _row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        Ok(None)
+    }
 }
 
 #[inline]
@@ -1737,5 +1746,11 @@ mod tests {
         let mut ctx = EvalContext::default();
         test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::AddTimeDurationNull, Datum::Null);
         test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::SubTimeDurationNull, Datum::Null);
+    }
+
+    #[test]
+    fn test_add_sub_time_string_null() {
+        let mut ctx = EvalContext::default();
+        test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::AddTimeStringNull, Datum::Null);
     }
 }
