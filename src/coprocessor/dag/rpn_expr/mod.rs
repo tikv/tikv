@@ -7,6 +7,7 @@ pub mod types;
 pub mod impl_arithmetic;
 pub mod impl_cast;
 pub mod impl_compare;
+pub mod impl_control;
 pub mod impl_like;
 pub mod impl_op;
 
@@ -18,6 +19,7 @@ use tipb::expression::{Expr, ScalarFuncSig};
 
 use self::impl_arithmetic::*;
 use self::impl_compare::*;
+use self::impl_control::*;
 use self::impl_like::*;
 use self::impl_op::*;
 use crate::coprocessor::codec::data_type::*;
@@ -161,6 +163,13 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::ModDecimal => arithmetic_fn::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
         ScalarFuncSig::LikeSig => like_fn(),
+        ScalarFuncSig::IfNullInt => Box::new(if_null_fn::<Int>()),
+        ScalarFuncSig::IfNullReal => Box::new(if_null_fn::<Real>()),
+        ScalarFuncSig::IfNullString => Box::new(if_null_fn::<Bytes>()),
+        ScalarFuncSig::IfNullDecimal => Box::new(if_null_fn::<Decimal>()),
+        ScalarFuncSig::IfNullTime => Box::new(if_null_fn::<DateTime>()),
+        ScalarFuncSig::IfNullDuration => Box::new(if_null_fn::<Duration>()),
+        ScalarFuncSig::IfNullJson => Box::new(if_null_fn::<Json>()),
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
