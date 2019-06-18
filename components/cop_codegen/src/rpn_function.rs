@@ -363,7 +363,7 @@ mod tests {
         let gen = no_generic_fn();
         let expected: TokenStream = r#"
             pub struct Foo_Evaluator ( std::marker::PhantomData <()> ) ;
-            
+
             impl crate::coprocessor::dag::rpn_expr::function::Evaluator for Foo_Evaluator {
                 #[inline]
                 fn eval(
