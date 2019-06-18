@@ -76,7 +76,7 @@
 //! ```
 //!
 //! If you are curious about what code the macro will generate, check the test code
-//! in `components/cop_codegen/rpn_functions.rs`.
+//! in `components/cop_codegen/src/rpn_function.rs`.
 
 use super::types::{ConcreteLogicalVectorView, LogicalVectorView, RpnFnCallPayload, RpnStackNode};
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
