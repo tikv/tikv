@@ -333,11 +333,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             .start(detector_runner)
             .unwrap_or_else(|e| fatal!("failed to start deadlock detector: {}", e));
     }
-
-    let mut report_active_regions = None;
-    if cfg.raft_store.hibernate_regions {
-        report_active_regions = Some(pd_sender.clone());
-    }
+    let report_active_regions = if cfg.raft_store.hibernate_regions {
+        Some(pd_sender.clone())
+    } else {
+        None
+    };
 
     // Run server.
     server
