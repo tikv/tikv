@@ -49,7 +49,8 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
-pub const PESSIMISTIC_TXN: u8 = b'p';
+pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
+pub const TXN_SIZE_PREFIX: u8 = b't';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
@@ -98,7 +99,6 @@ pub enum Command {
         keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: u64,
-        for_update_ts: u64,
         options: Options,
     },
     Commit {
@@ -117,6 +117,12 @@ pub enum Command {
         keys: Vec<Key>,
         start_ts: u64,
     },
+    PessimisticRollback {
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
+    },
     ScanLock {
         ctx: Context,
         max_ts: u64,
@@ -128,6 +134,12 @@ pub enum Command {
         txn_status: HashMap<u64, u64>,
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
+    },
+    ResolveLockLite {
+        ctx: Context,
+        start_ts: u64,
+        commit_ts: u64,
+        resolve_keys: Vec<Key>,
     },
     DeleteRange {
         ctx: Context,
@@ -169,14 +181,14 @@ impl Display for Command {
                 ref ctx,
                 ref keys,
                 start_ts,
-                for_update_ts,
+                ref options,
                 ..
             } => write!(
                 f,
-                "kv::command::acquirepessimisticlock keys({}) @ {},{} | {:?}",
+                "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
                 keys.len(),
                 start_ts,
-                for_update_ts,
+                options.for_update_ts,
                 ctx
             ),
             Command::Commit {
@@ -211,6 +223,19 @@ impl Display for Command {
                 start_ts,
                 ctx
             ),
+            Command::PessimisticRollback {
+                ref ctx,
+                ref keys,
+                start_ts,
+                for_update_ts,
+            } => write!(
+                f,
+                "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}",
+                keys.len(),
+                start_ts,
+                for_update_ts,
+                ctx
+            ),
             Command::ScanLock {
                 ref ctx,
                 max_ts,
@@ -223,6 +248,7 @@ impl Display for Command {
                 start_key, limit, max_ts, ctx
             ),
             Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
+            Command::ResolveLockLite { .. } => write!(f, "kv::resolve_lock_lite"),
             Command::DeleteRange {
                 ref ctx,
                 ref start_key,
@@ -284,16 +310,18 @@ impl Command {
 
     pub fn is_sys_cmd(&self) -> bool {
         match *self {
-            Command::ScanLock { .. } | Command::ResolveLock { .. } => true,
+            Command::ScanLock { .. }
+            | Command::ResolveLock { .. }
+            | Command::ResolveLockLite { .. } => true,
             _ => false,
         }
     }
 
-    pub fn priority_tag(&self) -> &'static str {
+    pub fn priority_tag(&self) -> CommandPriority {
         match self.get_context().get_priority() {
-            CommandPri::Low => "low",
-            CommandPri::Normal => "normal",
-            CommandPri::High => "high",
+            CommandPri::Low => CommandPriority::low,
+            CommandPri::Normal => CommandPriority::normal,
+            CommandPri::High => CommandPriority::high,
         }
     }
 
@@ -301,19 +329,21 @@ impl Command {
         !self.readonly() && self.priority() != CommandPri::High
     }
 
-    pub fn tag(&self) -> &'static str {
+    pub fn tag(&self) -> CommandKind {
         match *self {
-            Command::Prewrite { .. } => "prewrite",
-            Command::AcquirePessimisticLock { .. } => "pessimistic_lock",
-            Command::Commit { .. } => "commit",
-            Command::Cleanup { .. } => "cleanup",
-            Command::Rollback { .. } => "rollback",
-            Command::ScanLock { .. } => "scan_lock",
-            Command::ResolveLock { .. } => "resolve_lock",
-            Command::DeleteRange { .. } => "delete_range",
-            Command::Pause { .. } => "pause",
-            Command::MvccByKey { .. } => "key_mvcc",
-            Command::MvccByStartTs { .. } => "start_ts_mvcc",
+            Command::Prewrite { .. } => CommandKind::prewrite,
+            Command::AcquirePessimisticLock { .. } => CommandKind::acquire_pessimistic_lock,
+            Command::Commit { .. } => CommandKind::commit,
+            Command::Cleanup { .. } => CommandKind::cleanup,
+            Command::Rollback { .. } => CommandKind::rollback,
+            Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
+            Command::ScanLock { .. } => CommandKind::scan_lock,
+            Command::ResolveLock { .. } => CommandKind::resolve_lock,
+            Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
+            Command::DeleteRange { .. } => CommandKind::delete_range,
+            Command::Pause { .. } => CommandKind::pause,
+            Command::MvccByKey { .. } => CommandKind::key_mvcc,
+            Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
         }
     }
 
@@ -323,9 +353,11 @@ impl Command {
             | Command::AcquirePessimisticLock { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
+            | Command::PessimisticRollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
+            Command::ResolveLockLite { start_ts, .. } => start_ts,
             Command::ResolveLock { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
@@ -340,8 +372,10 @@ impl Command {
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
+            | Command::PessimisticRollback { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
+            | Command::ResolveLockLite { ref ctx, .. }
             | Command::DeleteRange { ref ctx, .. }
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
@@ -356,8 +390,10 @@ impl Command {
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
+            | Command::PessimisticRollback { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
+            | Command::ResolveLockLite { ref mut ctx, .. }
             | Command::DeleteRange { ref mut ctx, .. }
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
@@ -389,6 +425,7 @@ impl Command {
             }
             Command::Commit { ref keys, .. }
             | Command::Rollback { ref keys, .. }
+            | Command::PessimisticRollback { ref keys, .. }
             | Command::Pause { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
@@ -397,6 +434,13 @@ impl Command {
             Command::ResolveLock { ref key_locks, .. } => {
                 for lock in key_locks {
                     bytes += lock.0.as_encoded().len();
+                }
+            }
+            Command::ResolveLockLite {
+                ref resolve_keys, ..
+            } => {
+                for k in resolve_keys {
+                    bytes += k.as_encoded().len();
                 }
             }
             Command::Cleanup { ref key, .. } => {
@@ -415,7 +459,10 @@ pub struct Options {
     pub key_only: bool,
     pub reverse_scan: bool,
     pub is_first_lock: bool,
+    pub for_update_ts: u64,
     pub is_pessimistic_lock: Vec<bool>,
+    // How many keys this transaction involved.
+    pub txn_size: u64,
 }
 
 impl Options {
@@ -426,7 +473,9 @@ impl Options {
             key_only,
             reverse_scan: false,
             is_first_lock: false,
+            for_update_ts: 0,
             is_pessimistic_lock: vec![],
+            txn_size: 0,
         }
     }
 
@@ -914,7 +963,6 @@ impl<E: Engine> Storage<E> {
         keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: u64,
-        for_update_ts: u64,
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
@@ -935,11 +983,10 @@ impl<E: Engine> Storage<E> {
             keys,
             primary,
             start_ts,
-            for_update_ts,
             options,
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_lock.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
         Ok(())
     }
 
@@ -1018,6 +1065,31 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Roll back pessimistic locks identified by `start_ts` and `for_update_ts`
+    pub fn async_pessimistic_rollback(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
+        callback: Callback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
+        let cmd = Command::PessimisticRollback {
+            ctx,
+            keys,
+            start_ts,
+            for_update_ts,
+        };
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
+        Ok(())
+    }
+
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     pub fn async_scan_locks(
         &self,
@@ -1075,6 +1147,25 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
+        Ok(())
+    }
+
+    pub fn async_resolve_lock_lite(
+        &self,
+        ctx: Context,
+        start_ts: u64,
+        commit_ts: u64,
+        resolve_keys: Vec<Key>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cmd = Command::ResolveLockLite {
+            ctx,
+            start_ts,
+            commit_ts,
+            resolve_keys,
+        };
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
         Ok(())
     }
 
@@ -2481,7 +2572,7 @@ mod tests {
         storage
             .async_pause(
                 Context::new(),
-                vec![],
+                vec![Key::from_raw(b"y")],
                 1000,
                 expect_ok_callback(tx.clone(), 3),
             )
@@ -3837,5 +3928,119 @@ mod tests {
                 ts += 10;
             }
         }
+    }
+
+    #[test]
+    fn test_resolve_lock_lite() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                99,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Rollback key 'b' and key 'c' and left key 'a' still locked.
+        let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                99,
+                0,
+                resolve_keys,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Check lock for key 'a'.
+        let lock_a = {
+            let mut lock = LockInfo::new();
+            lock.set_primary_lock(b"c".to_vec());
+            lock.set_lock_version(99);
+            lock.set_key(b"a".to_vec());
+            lock
+        };
+        storage
+            .async_scan_locks(
+                Context::new(),
+                99,
+                vec![],
+                0,
+                expect_value_callback(tx.clone(), 0, vec![lock_a]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Resolve lock for key 'a'.
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                99,
+                0,
+                vec![Key::from_raw(b"a")],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                101,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Commit key 'b' and key 'c' and left key 'a' still locked.
+        let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                101,
+                102,
+                resolve_keys,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Check lock for key 'a'.
+        let lock_a = {
+            let mut lock = LockInfo::new();
+            lock.set_primary_lock(b"c".to_vec());
+            lock.set_lock_version(101);
+            lock.set_key(b"a".to_vec());
+            lock
+        };
+        storage
+            .async_scan_locks(
+                Context::new(),
+                101,
+                vec![],
+                0,
+                expect_value_callback(tx.clone(), 0, vec![lock_a]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
     }
 }

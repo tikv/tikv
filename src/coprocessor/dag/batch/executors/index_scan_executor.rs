@@ -180,7 +180,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
 
         for i in 0..self.columns_len_without_handle {
             let (val, remaining) = datum::split_datum(key_payload, false)?;
-            columns[i].push_raw(val);
+            columns[i].mut_raw().push(val);
             key_payload = remaining;
         }
 
@@ -333,18 +333,22 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.data.columns_len(), 2);
-            assert_eq!(result.data.rows_len(), 3);
-            assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 3);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
-                result.data[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().as_int_slice(),
                 &[Some(5), Some(5), Some(-5)]
             );
-            assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
-                result.data[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().as_real_slice(),
                 &[
                     Real::new(10.5).ok(),
                     Real::new(5.1).ok(),
@@ -383,19 +387,29 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.data.columns_len(), 3);
-            assert_eq!(result.data.rows_len(), 2);
-            assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5), Some(5)]);
-            assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 2);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
-                result.data[1].decoded().as_real_slice(),
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(5), Some(5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
-            assert!(result.data[2].is_decoded());
-            assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5), Some(2)]);
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().as_int_slice(),
+                &[Some(5), Some(2)]
+            );
         }
 
         // Case 2. Unique index.
@@ -449,19 +463,29 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.data.columns_len(), 3);
-            assert_eq!(result.data.rows_len(), 2);
-            assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5), Some(5)]);
-            assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 2);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
-                result.data[1].decoded().as_real_slice(),
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(5), Some(5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
-            assert!(result.data[2].is_decoded());
-            assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5), Some(2)]);
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().as_int_slice(),
+                &[Some(5), Some(2)]
+            );
         }
 
         {
@@ -493,19 +517,29 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.data.columns_len(), 3);
-            assert_eq!(result.data.rows_len(), 1);
-            assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5)]);
-            assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 1);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
-                result.data[1].decoded().as_real_slice(),
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok()]
             );
-            assert!(result.data[2].is_decoded());
-            assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5)]);
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().as_int_slice(),
+                &[Some(5)]
+            );
         }
     }
 }

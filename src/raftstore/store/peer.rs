@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice, u64};
@@ -67,6 +67,37 @@ impl ReadIndexRequest {
             slice::from_raw_parts(id, 8)
         }
     }
+
+    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        self.cmds.push((req, cb));
+    }
+
+    fn with_command(
+        id: u64,
+        req: RaftCmdRequest,
+        cb: Callback,
+        renew_lease_time: Timespec,
+    ) -> Self {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
+        cmds.push((req, cb));
+        ReadIndexRequest {
+            id,
+            cmds,
+            renew_lease_time,
+            read_index: None,
+        }
+    }
+}
+
+impl Drop for ReadIndexRequest {
+    fn drop(&mut self) {
+        let dur = (monotonic_raw_now() - self.renew_lease_time)
+            .to_std()
+            .unwrap();
+        RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
+    }
 }
 
 #[derive(Default)]
@@ -84,6 +115,7 @@ impl ReadIndexQueue {
 
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
@@ -287,6 +319,8 @@ pub struct Peer {
     /// The state for consistency check.
     pub consistency_state: ConsistencyState,
 
+    /// The counter records pending snapshot requests.
+    pub pending_request_snapshot_count: Arc<AtomicUsize>,
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     /// The index of last compacted raft log. It is used for the next compact log task.
@@ -366,6 +400,7 @@ impl Peer {
             leader_unreachable: false,
             pending_remove: false,
             pending_merge_state: None,
+            pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag,
@@ -492,6 +527,7 @@ impl Peer {
         }
 
         for mut read in self.pending_reads.reads.drain(..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_req_region_removed(region.get_id(), cb);
             }
@@ -666,14 +702,14 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
+    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            self.send_raft_message(msg, trans)?;
+            self.send_raft_message(msg, trans);
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
@@ -709,7 +745,6 @@ impl Peer {
                 | MessageType::MsgReadIndexResp => {}
             }
         }
-        Ok(())
     }
 
     /// Steps the raft message.
@@ -911,6 +946,16 @@ impl Peer {
                         "peer_id" => self.peer.get_id(),
                         "lease" => ?self.leader_lease,
                     );
+                    // If the predecessor reads index during transferring leader and receives
+                    // quorum's heartbeat response after that, it may wait for applying to
+                    // current term to apply the read. So broadcast eargerly to avoid unexpected
+                    // latency.
+                    //
+                    // TODO: Maybe the predecessor should just drop all the read requests directly?
+                    // All the requests need to be redirected in the end anyway and executing
+                    // prewrites or commits will be just a waste.
+                    self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
+                    self.raft_group.skip_bcast_commit(false);
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -931,6 +976,11 @@ impl Peer {
         // the snapshot, and send remaining log entries, which may increase committed_index.
         // TODO: add more test
         self.last_applying_idx == self.get_store().applied_index()
+        // Requesting snapshots also triggers apply workers to write
+        // apply states even if there is no pending committed entry.
+        // TODO: Instead of sharing the counter, we should apply snapshots
+        //       in apply workers.
+        && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
     }
 
     #[inline]
@@ -995,25 +1045,19 @@ impl Peer {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
             ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message)
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "failed to clear snapshot pending messages";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
+            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
 
         if let Some(snap) = self.get_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
+                let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
-                    "is not ready to apply snapshot";
+                    "not ready to apply snapshot";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "apply_index" => self.get_store().applied_index(),
                     "last_applying_index" => self.last_applying_idx,
+                    "pending_request_snapshot_count" => count,
                 );
                 return None;
             }
@@ -1062,13 +1106,6 @@ impl Peer {
             }
         }
 
-        // Check whether there is a pending generate snapshot task, the task
-        // needs to be sent the apply system.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-        }
-
         if !self
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
@@ -1094,16 +1131,7 @@ impl Peer {
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message)
-                .unwrap_or_else(|e| {
-                    // We don't care that the message is sent failed, so here just log this error.
-                    warn!(
-                       "leader failed to send messages";
-                       "region_id" => self.region_id,
-                       "peer_id" => self.peer.get_id(),
-                       "err" => ?e,
-                    );
-                });
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
@@ -1160,15 +1188,7 @@ impl Peer {
                     &mut ctx.trans,
                     ready.messages.drain(..),
                     &mut ctx.raft_metrics.message,
-                )
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "follower failed to send messages";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
+                );
                 ctx.need_flush_trans = true;
             }
         }
@@ -1253,6 +1273,16 @@ impl Peer {
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
+            // Check whether there is a pending generate snapshot task, the task
+            // needs to be sent to the apply system.
+            // Always sending snapshot task behind apply task, so it gets latest
+            // snapshot.
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
         }
 
         self.apply_reads(ctx, &ready);
@@ -1271,6 +1301,8 @@ impl Peer {
         if self.pending_reads.ready_cnt > 0 {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
+                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+
                 let is_read_index_request = read.cmds.len() == 1
                     && read.cmds[0].0.get_requests().len() == 1
                     && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
@@ -1298,18 +1330,18 @@ impl Peer {
         // update the `read_index` of read request that before this successful
         // `ready`.
         if !self.is_leader() && !ready.read_states.is_empty() {
+            // NOTE: there could still be some read requests following, which will be cleared in
+            // `clear_uncommitted` later.
             for state in &ready.read_states {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
                 self.post_pending_read_index_on_replica(ctx);
             }
-            return;
-        }
-
-        if self.ready_to_handle_read() {
+        } else if self.ready_to_handle_read() {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                 for (req, cb) in read.cmds.drain(..) {
                     cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
                 }
@@ -1381,6 +1413,7 @@ impl Peer {
             if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
                 for _ in 0..self.pending_reads.ready_cnt {
                     let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                     }
@@ -1550,17 +1583,29 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: None,
                 };
-                self.post_propose(meta, is_conf_change, cb);
+                self.post_propose(ctx, meta, is_conf_change, cb);
                 true
             }
         }
     }
 
-    fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
+    fn post_propose<T, C>(
+        &mut self,
+        poll_ctx: &mut PollContext<T, C>,
+        mut meta: ProposalMeta,
+        is_conf_change: bool,
+        cb: Callback,
+    ) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(monotonic_raw_now());
-        let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
-        self.apply_proposals.push(p);
+        if poll_ctx.lease_time.is_none() {
+            poll_ctx.lease_time = Some(monotonic_raw_now());
+        }
+        meta.renew_lease_time = poll_ctx.lease_time;
+
+        if !cb.is_none() {
+            let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
+            self.apply_proposals.push(p);
+        }
 
         self.proposals.push(meta);
     }
@@ -1713,8 +1758,11 @@ impl Peer {
         }
 
         // Checks if safe to transfer leader.
-        if duration_to_sec(self.recent_conf_change_time.elapsed())
-            < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
+        // Check `has_pending_conf` is necessary because `recent_conf_change_time` is updated
+        // on applied. TODO: fix the transfer leader issue in Raft.
+        if self.raft_group.raft.has_pending_conf()
+            || duration_to_sec(self.recent_conf_change_time.elapsed())
+                < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
         {
             debug!(
                 "reject transfer leader due to the region was config changed recently";
@@ -1793,7 +1841,7 @@ impl Peer {
                     if let Some(read) = self.pending_reads.reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
-                            read.cmds.push((req, cb));
+                            read.push_command(req, cb);
                             return false;
                         }
                     }
@@ -1825,14 +1873,9 @@ impl Peer {
             return false;
         }
 
-        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
-        cmds.push((req, cb));
-        self.pending_reads.reads.push_back(ReadIndexRequest {
-            id,
-            cmds,
-            renew_lease_time,
-            read_index: None,
-        });
+        let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        self.pending_reads.reads.push_back(read_proposal);
+
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
@@ -1843,7 +1886,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(meta, false, Callback::None);
+                self.post_propose(poll_ctx, meta, false, Callback::None);
             }
         }
 
@@ -2108,6 +2151,7 @@ impl Peer {
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
         for mut read in self.pending_reads.reads.drain(..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             read.cmds.clear();
         }
     }
@@ -2123,6 +2167,10 @@ impl Peer {
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        if peer_id == 0 {
+            return None;
+        }
+        fail_point!("stale_peer_cache_2", peer_id == 2, |_| None);
         if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
             return Some(peer.clone());
         }
@@ -2159,11 +2207,7 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(
-        &mut self,
-        msg: eraftpb::Message,
-        trans: &mut T,
-    ) -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // set current epoch
@@ -2173,11 +2217,13 @@ impl Peer {
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {
-                return Err(box_err!(
-                    "failed to look up recipient peer {} in region {}",
-                    msg.get_to(),
-                    self.region_id
-                ));
+                warn!(
+                    "failed to look up recipient peer";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "to_peer" => msg.get_to(),
+                );
+                return;
             }
         };
 
@@ -2231,8 +2277,6 @@ impl Peer {
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
         }
-
-        Ok(())
     }
 }
 

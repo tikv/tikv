@@ -1,13 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use tipb::expression::FieldType;
 
 use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
-use super::RpnFnCallPayload;
+use super::{LogicalVectorView, RpnFnCallPayload};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-use crate::coprocessor::codec::data_type::VectorLikeValueRef;
-use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
+use crate::coprocessor::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
+use crate::coprocessor::codec::mysql::time::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
@@ -21,20 +23,31 @@ use crate::coprocessor::Result;
 /// When nodes comes from an evaluated result, it is an owned node.
 #[derive(Debug)]
 pub enum RpnStackNodeVectorValue<'a> {
-    /// There can be frequent stack push & pops, so we wrap this field in a `Box` to reduce move
-    /// cost.
-    // TODO: Check whether it is more efficient to just remove the box.
-    Owned(Box<VectorValue>),
-    Ref(&'a VectorValue),
+    Generated {
+        // TODO: Maybe box it can be faster.
+        physical_value: VectorValue,
+        logical_rows: Arc<[usize]>,
+    },
+    Ref {
+        physical_value: &'a VectorValue,
+        logical_rows: &'a [usize],
+    },
 }
 
-impl<'a> std::ops::Deref for RpnStackNodeVectorValue<'a> {
-    type Target = VectorValue;
-
-    fn deref(&self) -> &Self::Target {
+impl<'a> RpnStackNodeVectorValue<'a> {
+    /// Gets a reference to the inner physical vector value.
+    pub fn as_ref(&self) -> &VectorValue {
         match self {
-            RpnStackNodeVectorValue::Owned(value) => &value,
-            RpnStackNodeVectorValue::Ref(value) => *value,
+            RpnStackNodeVectorValue::Generated { physical_value, .. } => &physical_value,
+            RpnStackNodeVectorValue::Ref { physical_value, .. } => *physical_value,
+        }
+    }
+
+    /// Gets a reference to the logical rows.
+    pub fn logical_rows(&self) -> &[usize] {
+        match self {
+            RpnStackNodeVectorValue::Generated { logical_rows, .. } => &logical_rows,
+            RpnStackNodeVectorValue::Ref { logical_rows, .. } => logical_rows,
         }
     }
 }
@@ -61,8 +74,8 @@ impl<'a> RpnStackNode<'a> {
     #[inline]
     pub fn field_type(&self) -> &FieldType {
         match self {
-            RpnStackNode::Scalar { ref field_type, .. } => field_type,
-            RpnStackNode::Vector { ref field_type, .. } => field_type,
+            RpnStackNode::Scalar { field_type, .. } => field_type,
+            RpnStackNode::Vector { field_type, .. } => field_type,
         }
     }
 
@@ -70,26 +83,28 @@ impl<'a> RpnStackNode<'a> {
     #[inline]
     pub fn scalar_value(&self) -> Option<&ScalarValue> {
         match self {
-            RpnStackNode::Scalar { ref value, .. } => Some(*value),
+            RpnStackNode::Scalar { value, .. } => Some(*value),
             RpnStackNode::Vector { .. } => None,
         }
     }
 
     /// Borrows the inner vector value for `Vector` variant.
     #[inline]
-    pub fn vector_value(&self) -> Option<&VectorValue> {
+    pub fn vector_value(&self) -> Option<&RpnStackNodeVectorValue<'_>> {
         match self {
             RpnStackNode::Scalar { .. } => None,
-            RpnStackNode::Vector { ref value, .. } => Some(&value),
+            RpnStackNode::Vector { value, .. } => Some(&value),
         }
     }
 
-    /// Borrows the inner scalar or vector value as a vector like value.
+    /// Creates a vector view from the inner value.
     #[inline]
-    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
+    pub fn as_vector_view(&self) -> LogicalVectorView<'_> {
         match self {
-            RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
-            RpnStackNode::Vector { ref value, .. } => value.as_vector_like(),
+            RpnStackNode::Scalar { value, .. } => LogicalVectorView::from_scalar(value),
+            RpnStackNode::Vector { value, .. } => {
+                LogicalVectorView::from_physical_vector(value.as_ref(), value.logical_rows())
+            }
         }
     }
 
@@ -110,6 +125,25 @@ impl<'a> RpnStackNode<'a> {
             _ => false,
         }
     }
+
+    /// Gets a reference of the element by logical index.
+    ///
+    /// If this is a `Scalar` variant, the returned reference will be the same for any index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if index is out of range and this is a `Vector` variant.
+    #[inline]
+    pub fn get_logical_scalar_ref(&self, logical_index: usize) -> ScalarValueRef<'_> {
+        match self {
+            RpnStackNode::Vector { value, .. } => {
+                let physical_vector = value.as_ref();
+                let logical_rows = value.logical_rows();
+                physical_vector.get_scalar_ref(logical_rows[logical_index])
+            }
+            RpnStackNode::Scalar { value, .. } => value.as_scalar_value_ref(),
+        }
+    }
 }
 
 impl RpnExpression {
@@ -125,23 +159,77 @@ impl RpnExpression {
     pub fn eval<'a>(
         &'a self,
         context: &mut EvalContext,
-        rows: usize,
         schema: &'a [FieldType],
-        columns: &'a mut LazyBatchColumnVec,
+        input_physical_columns: &'a mut LazyBatchColumnVec,
+        input_logical_rows: &'a [usize],
+        output_rows: usize,
     ) -> Result<RpnStackNode<'a>> {
-        assert!(rows > 0);
-
-        let mut stack = Vec::with_capacity(self.len());
-
         // We iterate two times. The first time we decode all referred columns. The second time
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
+        self.ensure_columns_decoded(
+            &context.cfg.tz,
+            schema,
+            input_physical_columns,
+            input_logical_rows,
+        )?;
+        self.eval_decoded(
+            context,
+            schema,
+            input_physical_columns,
+            input_logical_rows,
+            output_rows,
+        )
+    }
 
+    /// Decodes all referred columns which are not decoded. Then we ensure
+    /// all referred columns are decoded.
+    pub fn ensure_columns_decoded<'a>(
+        &'a self,
+        tz: &Tz,
+        schema: &'a [FieldType],
+        input_physical_columns: &'a mut LazyBatchColumnVec,
+        input_logical_rows: &[usize],
+    ) -> Result<()> {
         for node in self.as_ref() {
-            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
-                columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
+            if let RpnExpressionNode::ColumnRef { offset, .. } = node {
+                input_physical_columns[*offset].ensure_decoded(
+                    tz,
+                    &schema[*offset],
+                    input_logical_rows,
+                )?;
             }
         }
+        Ok(())
+    }
+
+    /// Evaluates the expression into a vector. The input columns must be already decoded.
+    ///
+    /// It differs from `eval` in that `eval_decoded` needn't receive a mutable reference
+    /// to `LazyBatchColumnVec`. However, since `eval_decoded` doesn't decode columns,
+    /// it will panic if referred columns are not decoded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the expression is not valid.
+    ///
+    /// Panics if referred columns are not decoded.
+    ///
+    /// Panics when referenced column does not have equal length as specified in `rows`.
+    pub fn eval_decoded<'a>(
+        &'a self,
+        context: &mut EvalContext,
+        schema: &'a [FieldType],
+        input_physical_columns: &'a LazyBatchColumnVec,
+        input_logical_rows: &'a [usize],
+        output_rows: usize,
+    ) -> Result<RpnStackNode<'a>> {
+        assert!(output_rows > 0);
+        let mut stack = Vec::with_capacity(self.len());
+        // Logical rows for generated columns
+        // TODO: Eliminate allocation
+        let identity_logical_rows: Vec<_> = (0..output_rows).collect();
+        let identity_logical_rows = Arc::from(identity_logical_rows);
 
         for node in self.as_ref() {
             match node {
@@ -154,12 +242,15 @@ impl RpnExpression {
                         field_type,
                     });
                 }
-                RpnExpressionNode::ColumnRef { ref offset } => {
+                RpnExpressionNode::ColumnRef { offset } => {
                     let field_type = &schema[*offset];
-                    let decoded_column = columns[*offset].decoded();
-                    assert_eq!(decoded_column.len(), rows);
+                    let decoded_physical_column = input_physical_columns[*offset].decoded();
+                    assert_eq!(input_logical_rows.len(), output_rows);
                     stack.push(RpnStackNode::Vector {
-                        value: RpnStackNodeVectorValue::Ref(&decoded_column),
+                        value: RpnStackNodeVectorValue::Ref {
+                            physical_value: &decoded_physical_column,
+                            logical_rows: input_logical_rows,
+                        },
                         field_type,
                     });
                 }
@@ -176,13 +267,17 @@ impl RpnExpression {
                     let stack_slice_begin = stack.len() - func.args_len();
                     let stack_slice = &stack[stack_slice_begin..];
                     let call_info = RpnFnCallPayload {
+                        output_rows,
                         raw_args: stack_slice,
                         ret_field_type: field_type,
                     };
-                    let ret = func.eval(rows, context, call_info)?;
+                    let ret = func.eval(context, call_info)?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
-                        value: RpnStackNodeVectorValue::Owned(Box::new(ret)),
+                        value: RpnStackNodeVectorValue::Generated {
+                            physical_value: ret,
+                            logical_rows: Arc::clone(&identity_logical_rows),
+                        },
                         field_type,
                     });
                 }
@@ -191,40 +286,6 @@ impl RpnExpression {
 
         assert_eq!(stack.len(), 1);
         Ok(stack.into_iter().next().unwrap())
-    }
-
-    /// Evaluates the expression into a boolean vector.
-    ///
-    /// # Panics
-    ///
-    /// Panics if referenced columns are not decoded.
-    ///
-    /// Panics if the boolean vector output buffer is not large enough to contain all values.
-    pub fn eval_as_mysql_bools(
-        &self,
-        context: &mut EvalContext,
-        rows: usize,
-        schema: &[FieldType],
-        columns: &mut LazyBatchColumnVec,
-        outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
-    ) -> Result<()> {
-        use crate::coprocessor::codec::data_type::AsMySQLBool;
-
-        assert!(outputs.len() >= rows);
-        let values = self.eval(context, rows, schema, columns)?;
-        match values {
-            RpnStackNode::Scalar { value, .. } => {
-                let b = value.as_mysql_bool(context)?;
-                for i in 0..rows {
-                    outputs[i] = b;
-                }
-            }
-            RpnStackNode::Vector { value, .. } => {
-                assert_eq!(value.len(), rows);
-                value.eval_as_mysql_bools(context, outputs)?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -253,7 +314,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new().push_constant(1.5f64).build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, 10, &[], &mut columns);
+        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 10);
         let val = result.unwrap();
         assert!(val.is_scalar());
         assert_eq!(*val.scalar_value().unwrap().as_real(), Real::new(1.5).ok());
@@ -261,8 +322,8 @@ mod tests {
     }
 
     /// Creates fixture to be used in `test_eval_single_column_node_xxx`.
-    fn new_single_column_node_fixture() -> (LazyBatchColumnVec, [FieldType; 2]) {
-        let columns = LazyBatchColumnVec::from(vec![
+    fn new_single_column_node_fixture() -> (LazyBatchColumnVec, Vec<usize>, [FieldType; 2]) {
+        let physical_columns = LazyBatchColumnVec::from(vec![
             {
                 // this column is not referenced
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(5, EvalType::Real);
@@ -284,35 +345,58 @@ mod tests {
             },
         ]);
         let schema = [FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
-        (columns, schema)
+        let logical_rows = (0..5).collect();
+        (physical_columns, logical_rows, schema)
     }
 
     /// Single column node
     #[test]
     fn test_eval_single_column_node_normal() {
-        let (columns, schema) = new_single_column_node_fixture();
+        let (columns, logical_rows, schema) = new_single_column_node_fixture();
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 5, &schema, &mut c);
+        let result = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 5);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_int_slice(),
+            val.vector_value().unwrap().as_ref().as_int_slice(),
             [Some(1), Some(5), None, None, Some(42)]
         );
+        assert_eq!(
+            val.vector_value().unwrap().logical_rows(),
+            logical_rows.as_slice()
+        );
+        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+
+        let mut c = columns.clone();
+        let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
+        let mut ctx = EvalContext::default();
+        let result = exp.eval(&mut ctx, &schema, &mut c, &[2, 0, 1], 3);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        // Physical column is unchanged
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [Some(1), Some(5), None, None, Some(42)]
+        );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[2, 0, 1]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 5, &schema, &mut c);
+        let result = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 5);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_real_slice(),
+            val.vector_value().unwrap().as_ref().as_real_slice(),
             [Real::new(1.0).ok(), None, Real::new(7.5).ok(), None, None]
+        );
+        assert_eq!(
+            val.vector_value().unwrap().logical_rows(),
+            logical_rows.as_slice()
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -320,14 +404,14 @@ mod tests {
     /// Single column node but row numbers in `eval()` does not match column length, should panic.
     #[test]
     fn test_eval_single_column_node_mismatch_rows() {
-        let (columns, schema) = new_single_column_node_fixture();
+        let (columns, logical_rows, schema) = new_single_column_node_fixture();
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             // smaller row number
-            let _ = exp.eval(&mut ctx, 4, &schema, &mut c);
+            let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 4);
         });
         assert!(hooked_eval.is_err());
 
@@ -336,7 +420,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             // larger row number
-            let _ = exp.eval(&mut ctx, 6, &schema, &mut c);
+            let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 6);
         });
         assert!(hooked_eval.is_err());
     }
@@ -359,13 +443,14 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, 4, &[], &mut columns);
+        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 4);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_int_slice(),
+            val.vector_value().unwrap().as_ref().as_int_slice(),
             [Some(42), Some(42), Some(42), Some(42)]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2, 3]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 
@@ -393,17 +478,18 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, 3, &[], &mut columns);
+        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_real_slice(),
+            val.vector_value().unwrap().as_ref().as_real_slice(),
             [
                 Real::new(3.0).ok(),
                 Real::new(3.0).ok(),
                 Real::new(3.0).ok()
             ]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
@@ -439,13 +525,14 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_int_slice(),
-            [Some(6), Some(10), None]
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [None, Some(6)]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 
@@ -472,15 +559,15 @@ mod tests {
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             col
         }]);
@@ -491,13 +578,14 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0, 1], 3);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_int_slice(),
-            [Some(0), Some(-2), Some(8)]
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [Some(8), Some(0), Some(-2)]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 
@@ -527,17 +615,18 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, 3, &[], &mut columns);
+        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_real_slice(),
+            val.vector_value().unwrap().as_ref().as_real_slice(),
             [
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok()
             ]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
@@ -575,17 +664,17 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_real_slice(),
+            val.vector_value().unwrap().as_ref().as_real_slice(),
             [
-                Real::new(-0.5).ok(),
-                Real::new(4.0).ok(),
-                Real::new(-5.8).ok()
+                Real::new(-5.8).ok(), // original row 2
+                Real::new(-0.5).ok(), // original row 0
             ]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
@@ -623,17 +712,17 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 2], 2);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_real_slice(),
+            val.vector_value().unwrap().as_ref().as_real_slice(),
             [
-                Real::new(0.5).ok(),
-                Real::new(-3.5).ok(),
-                Real::new(5.5).ok()
+                Real::new(-3.5).ok(), // original row 1
+                Real::new(5.5).ok(),  // original row 2
             ]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
@@ -683,13 +772,18 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[0, 2, 1], 3);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_int_slice(),
-            [Some(-2), Some(-17), Some(22)]
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [
+                Some(-2),  // original row 0
+                Some(22),  // original row 2
+                Some(-17), // original row 1
+            ]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 
@@ -718,15 +812,15 @@ mod tests {
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             col
         }]);
@@ -738,13 +832,14 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[1], 1);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_int_slice(),
-            [Some(25), Some(49), Some(9)]
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [Some(49)]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 
@@ -784,13 +879,14 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 0, 2], 3);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_int_slice(),
-            [Some(-2), Some(-10), Some(8)]
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [Some(-10), Some(-2), Some(8)]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 
@@ -911,17 +1007,14 @@ mod tests {
         //      => [25.0, 3.8, 146.0]
 
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_real_slice(),
-            [
-                Real::new(25.0).ok(),
-                Real::new(3.8).ok(),
-                Real::new(146.0).ok()
-            ]
+            val.vector_value().unwrap().as_ref().as_real_slice(),
+            [Real::new(146.0).ok(), Real::new(25.0).ok(),]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
@@ -948,7 +1041,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
+            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
         assert!(hooked_eval.is_err());
     }
@@ -982,7 +1075,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
+            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
         assert!(hooked_eval.is_err());
     }
@@ -1014,7 +1107,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
+            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
         assert!(hooked_eval.is_err());
     }
@@ -1192,9 +1285,9 @@ mod tests {
         let mut columns = LazyBatchColumnVec::from(vec![
             {
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Int);
-                col.mut_decoded().push_int(Some(1));
+                col.mut_decoded().push_int(Some(1)); // row 1
                 col.mut_decoded().push_int(Some(5));
-                col.mut_decoded().push_int(Some(-4));
+                col.mut_decoded().push_int(Some(-4)); // row 0
                 col
             },
             {
@@ -1208,13 +1301,14 @@ mod tests {
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_int_slice(),
-            [Some(-13), Some(27), Some(574)]
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [Some(574), Some(-13)]
         );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 }

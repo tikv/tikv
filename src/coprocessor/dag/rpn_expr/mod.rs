@@ -5,7 +5,10 @@ pub mod function;
 pub mod types;
 
 pub mod impl_arithmetic;
+pub mod impl_cast;
 pub mod impl_compare;
+pub mod impl_control;
+pub mod impl_like;
 pub mod impl_op;
 
 pub use self::function::RpnFunction;
@@ -16,6 +19,8 @@ use tipb::expression::{Expr, ScalarFuncSig};
 
 use self::impl_arithmetic::*;
 use self::impl_compare::*;
+use self::impl_control::*;
+use self::impl_like::*;
 use self::impl_op::*;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::Result;
@@ -150,15 +155,25 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Box
         ScalarFuncSig::DecimalIsFalse => Box::new(RpnFnDecimalIsFalse),
         ScalarFuncSig::LogicalAnd => Box::new(RpnFnLogicalAnd),
         ScalarFuncSig::LogicalOr => Box::new(RpnFnLogicalOr),
+        ScalarFuncSig::UnaryNot => Box::new(RpnFnUnaryNot),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => Box::new(RpnFnArithmetic::<RealPlus>::new()),
         ScalarFuncSig::PlusDecimal => Box::new(RpnFnArithmetic::<DecimalPlus>::new()),
         ScalarFuncSig::MinusInt => map_int_sig(value, children, minus_mapper)?,
         ScalarFuncSig::MinusReal => Box::new(RpnFnArithmetic::<RealMinus>::new()),
         ScalarFuncSig::MinusDecimal => Box::new(RpnFnArithmetic::<DecimalMinus>::new()),
+        ScalarFuncSig::MultiplyDecimal => Box::new(RpnFnArithmetic::<DecimalMultiply>::new()),
         ScalarFuncSig::ModReal => Box::new(RpnFnArithmetic::<RealMod>::new()),
         ScalarFuncSig::ModDecimal => Box::new(RpnFnArithmetic::<DecimalMod>::new()),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
+        ScalarFuncSig::LikeSig => Box::new(RpnFnLike),
+        ScalarFuncSig::IfNullInt => Box::new(RpnFnIfNull::<Int>::new()),
+        ScalarFuncSig::IfNullReal => Box::new(RpnFnIfNull::<Real>::new()),
+        ScalarFuncSig::IfNullString => Box::new(RpnFnIfNull::<Bytes>::new()),
+        ScalarFuncSig::IfNullDecimal => Box::new(RpnFnIfNull::<Decimal>::new()),
+        ScalarFuncSig::IfNullTime => Box::new(RpnFnIfNull::<DateTime>::new()),
+        ScalarFuncSig::IfNullDuration => Box::new(RpnFnIfNull::<Duration>::new()),
+        ScalarFuncSig::IfNullJson => Box::new(RpnFnIfNull::<Json>::new()),
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

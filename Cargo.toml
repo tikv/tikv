@@ -78,6 +78,7 @@ toml = "0.4"
 libc = "0.2"
 crc = "1.8"
 fs2 = "0.4"
+spin = "0.5"
 protobuf = "~2.0"
 nix = "0.11"
 utime = "0.2"
@@ -88,10 +89,11 @@ backtrace = "0.2.3"
 clap = "2.32"
 url = "1.7.2"
 regex = "1.0"
-sys-info = "0.5.1"
+sys-info = "0.5.7"
 indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
 futures-cpupool = "0.1"
+futures-locks = "0.1"
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }
 tokio-core = "0.1"
 tokio-timer = "0.2"
@@ -118,13 +120,19 @@ flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 tokio-threadpool = "0.1.13"
+tokio-fs = "0.1.6"
+tokio-io = "0.1.12"
 vlog = "0.1.4"
 twoway = "0.2.0"
 ordered-float = "1.0"
+nom = "5.0.0-beta1"
+servo_arc = "0.1.1"
 profiler = { path = "components/profiler" }
+mime = "0.3.13"
 match_template = { path = "components/match_template" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
+codec = { path = "components/codec" }
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 # TODO: use master branch after the next version is released.
@@ -132,6 +140,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
+farmhash = "1.1.5"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -189,23 +198,45 @@ members = [
 ]
 
 [profile.dev]
-opt-level = 0  # Controls the --opt-level the compiler builds with
-debug = true   # Controls whether the compiler passes `-g`
+opt-level = 0
+debug = false
 codegen-units = 4
+lto = false
+incremental = true
 panic = 'abort'
+debug-assertions = false
+overflow-checks = false
+rpath = false
 
 # The release profile, used for `cargo build --release`
 [profile.release]
-lto = true
 opt-level = 3
 debug = true
-# TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
-codegen-units = 1
+codegen-units = 1 # TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
+lto = true
+incremental = false
 panic = 'abort'
+debug-assertions = false
+overflow-checks = false
+rpath = false
+
+[profile.test]
+opt-level = 0
+debug = 1 # enable line numbers by default for easy test debugging
+codegen-units = 16
+lto = false
+incremental = true
+debug-assertions = true
+overflow-checks = true
+rpath = false
 
 # The benchmark profile is identical to release, except that lto = false
 [profile.bench]
-lto = false
 opt-level = 3
-debug = true
+debug = false
 codegen-units = 1
+lto = 'thin'
+incremental = false
+debug-assertions = false
+overflow-checks = false
+rpath = false

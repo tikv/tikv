@@ -207,6 +207,7 @@ impl<S: Snapshot> MvccReader<S> {
             primary: lock.primary,
             ts: lock.ts,
             ttl: lock.ttl,
+            txn_size: lock.txn_size,
         })
     }
 
@@ -562,7 +563,9 @@ mod tests {
         ) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
-            txn.acquire_pessimistic_lock(k, pk, for_update_ts, false, &Options::default())
+            let mut options = Options::default();
+            options.for_update_ts = for_update_ts;
+            txn.acquire_pessimistic_lock(k, pk, false, &options)
                 .unwrap();
             self.write(txn.into_modifies());
         }

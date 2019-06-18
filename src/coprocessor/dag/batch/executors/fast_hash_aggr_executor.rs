@@ -145,7 +145,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             groups,
             group_by_exp,
             group_by_field_type: Some(group_by_field_type),
-            states_offset_each_row: Vec::with_capacity(
+            states_offset_each_logical_row: Vec::with_capacity(
                 crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE,
             ),
         };
@@ -198,7 +198,7 @@ pub struct FastHashAggregationImpl {
     groups: Groups,
     group_by_exp: RpnExpression,
     group_by_field_type: Option<FieldType>,
-    states_offset_each_row: Vec<usize>,
+    states_offset_each_logical_row: Vec<usize>,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImpl {
@@ -213,29 +213,35 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
-        mut input: LazyBatchColumnVec,
+        mut input_physical_columns: LazyBatchColumnVec,
+        input_logical_rows: &[usize],
     ) -> Result<()> {
         // 1. Calculate which group each src row belongs to.
-        self.states_offset_each_row.clear();
+        self.states_offset_each_logical_row.clear();
 
         let group_by_result = self.group_by_exp.eval(
             &mut entities.context,
-            input.rows_len(),
             entities.src.schema(),
-            &mut input,
+            &mut input_physical_columns,
+            input_logical_rows,
+            input_logical_rows.len(),
         )?;
         // Unwrap is fine because we have verified the group by expression before.
-        let group_by_vector = group_by_result.vector_value().unwrap();
+        let group_by_value = group_by_result.vector_value().unwrap();
+        let group_by_physical_vec = group_by_value.as_ref();
+        let group_by_logical_rows = group_by_value.logical_rows();
+
         match_template_hashable! {
-            TT, match group_by_vector {
+            TT, match group_by_physical_vec {
                 VectorValue::TT(v) => {
                     if let Groups::TT(group) = &mut self.groups {
                         calc_groups_each_row(
                             v,
+                            group_by_logical_rows,
                             &entities.each_aggr_fn,
                             group,
                             &mut self.states,
-                            &mut self.states_offset_each_row
+                            &mut self.states_offset_each_logical_row
                         );
                     } else {
                         panic!();
@@ -248,9 +254,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(
             entities,
-            &mut input,
+            &mut input_physical_columns,
+            input_logical_rows,
             &mut self.states,
-            &self.states_offset_each_row,
+            &self.states_offset_each_logical_row,
         )?;
 
         Ok(())
@@ -262,11 +269,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
+
         let aggr_fns_len = entities.each_aggr_fn.len();
         let mut group_by_column = LazyBatchColumn::decoded_with_capacity_and_tp(
             self.groups.len(),
@@ -290,26 +300,35 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
 
         Ok(vec![group_by_column])
     }
+
+    /// Fast hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
+    }
 }
 
 fn calc_groups_each_row<T: Evaluable + Eq + std::hash::Hash>(
-    rows: &[Option<T>],
+    physical_column: &[Option<T>],
+    logical_rows: &[usize],
     aggr_fns: &[Box<dyn AggrFunction>],
     group: &mut HashMap<Option<T>, usize>,
     states: &mut Vec<Box<dyn AggrFunctionState>>,
-    states_offset_each_row: &mut Vec<usize>,
+    states_offset_each_logical_row: &mut Vec<usize>,
 ) {
-    for val in rows {
+    for physical_idx in logical_rows {
+        let val = &physical_column[*physical_idx];
+
         // Not using the entry API so that when entry exists there is no clone.
         match group.get(val) {
             Some(offset) => {
                 // Group exists, use the offset of existing group.
-                states_offset_each_row.push(*offset);
+                states_offset_each_logical_row.push(*offset);
             }
             None => {
                 // Group does not exist, prepare groups.
                 let offset = states.len();
-                states_offset_each_row.push(offset);
+                states_offset_each_logical_row.push(offset);
                 group.insert(val.clone(), offset);
                 for aggr_fn in aggr_fns {
                     states.push(aggr_fn.create_state());
@@ -396,24 +415,29 @@ mod tests {
             let mut exec = exec_builder(src_exec);
 
             let r = exec.next_batch(1);
-            assert_eq!(r.data.rows_len(), 0);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
             let r = exec.next_batch(1);
-            assert_eq!(r.data.rows_len(), 0);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
             let mut r = exec.next_batch(1);
             // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three groups.
-            assert_eq!(r.data.rows_len(), 3);
-            assert_eq!(r.data.columns_len(), 5); // 4 result column, 1 group by column
+            assert_eq!(&r.logical_rows, &[0, 1, 2]);
+            assert_eq!(r.physical_columns.rows_len(), 3);
+            assert_eq!(r.physical_columns.columns_len(), 5); // 4 result column, 1 group by column
 
             // Let's check group by column first. Group by column is decoded in fast hash agg,
             // but not decoded in slow hash agg. So decode it anyway.
-            r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+            r.physical_columns[4]
+                .ensure_all_decoded(&Tz::utc(), &exec.schema()[4])
+                .unwrap();
 
             // The row order is not defined. Let's sort it by the group by column before asserting.
-            let mut sort_column: Vec<(usize, _)> = r.data[4]
+            let mut sort_column: Vec<(usize, _)> = r.physical_columns[4]
                 .decoded()
                 .as_real_slice()
                 .iter()
@@ -430,7 +454,7 @@ mod tests {
             // Use the order of the sorted column to sort other columns
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.data[4].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[4].decoded().as_real_slice()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -438,22 +462,22 @@ mod tests {
             );
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.data[0].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[0].decoded().as_int_slice()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(3)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.data[1].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[1].decoded().as_int_slice()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.data[2].decoded().as_int_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[2].decoded().as_int_slice()[*idx])
                 .collect();
             assert_eq!(&ordered_column, &[Some(1), Some(1), Some(0)]);
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.data[3].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[3].decoded().as_real_slice()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,
@@ -475,7 +499,7 @@ mod tests {
                 &self,
                 _aggr_def: Expr,
                 _time_zone: &Tz,
-                _max_columns: usize,
+                _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {
@@ -511,12 +535,14 @@ mod tests {
                 vec![FieldTypeTp::LongLong.into()],
                 vec![
                     BatchExecuteResult {
-                        data: LazyBatchColumnVec::empty(),
+                        physical_columns: LazyBatchColumnVec::empty(),
+                        logical_rows: Vec::new(),
                         warnings: EvalWarnings::default(),
                         is_drained: Ok(false),
                     },
                     BatchExecuteResult {
-                        data: LazyBatchColumnVec::empty(),
+                        physical_columns: LazyBatchColumnVec::empty(),
+                        logical_rows: Vec::new(),
                         warnings: EvalWarnings::default(),
                         is_drained: Ok(true),
                     },
@@ -525,11 +551,13 @@ mod tests {
             let mut exec = exec_builder(src_exec);
 
             let r = exec.next_batch(1);
-            assert_eq!(r.data.rows_len(), 0);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
             let r = exec.next_batch(1);
-            assert_eq!(r.data.rows_len(), 0);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(r.is_drained.unwrap());
         }
     }
@@ -567,18 +595,23 @@ mod tests {
             let mut exec = exec_builder(src_exec);
 
             let r = exec.next_batch(1);
-            assert_eq!(r.data.rows_len(), 0);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
             let r = exec.next_batch(1);
-            assert_eq!(r.data.rows_len(), 0);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
             let mut r = exec.next_batch(1);
-            assert_eq!(r.data.rows_len(), 3);
-            assert_eq!(r.data.columns_len(), 1); // 0 result column, 1 group by column
-            r.data[0].decode(&Tz::utc(), &exec.schema()[0]).unwrap();
-            let mut sort_column: Vec<(usize, _)> = r.data[0]
+            assert_eq!(&r.logical_rows, &[0, 1, 2]);
+            assert_eq!(r.physical_columns.rows_len(), 3);
+            assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
+            r.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &exec.schema()[0])
+                .unwrap();
+            let mut sort_column: Vec<(usize, _)> = r.physical_columns[0]
                 .decoded()
                 .as_real_slice()
                 .iter()
@@ -593,7 +626,7 @@ mod tests {
             sort_column.sort_by(|a, b| a.1.cmp(&b.1));
             let ordered_column: Vec<_> = sort_column
                 .iter()
-                .map(|(idx, _)| r.data[0].decoded().as_real_slice()[*idx])
+                .map(|(idx, _)| r.physical_columns[0].decoded().as_real_slice()[*idx])
                 .collect();
             assert_eq!(
                 &ordered_column,

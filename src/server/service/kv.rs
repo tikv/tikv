@@ -165,13 +165,24 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     fn kv_pessimistic_rollback(
         &mut self,
         ctx: RpcContext<'_>,
-        _req: PessimisticRollbackRequest,
+        req: PessimisticRollbackRequest,
         sink: UnarySink<PessimisticRollbackResponse>,
     ) {
-        let f = sink
-            .fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
-            .map_err(|e| error!("kv_pessimistic_rollback error"; "err" => %e));
-        ctx.spawn(f);
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .kv_pessimistic_rollback
+            .start_coarse_timer();
+        let future = future_pessimistic_rollback(&self.storage, req)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "kv_pessimistic_rollback",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn kv_commit(
@@ -1241,7 +1252,17 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticRollback(_)) => unimplemented!(),
+        Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticRollback(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC
+                .kv_pessimistic_rollback
+                .start_coarse_timer();
+            let resp = future_pessimistic_rollback(&storage, req)
+                .map(oneof!(
+                    BatchCommandsResponse_Response_oneof_cmd::PessimisticRollback
+                ))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
     }
 }
 
@@ -1322,7 +1343,9 @@ fn future_prewrite<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
+    options.for_update_ts = req.get_for_update_ts();
     options.is_pessimistic_lock = req.take_is_pessimistic_lock();
+    options.txn_size = req.get_txn_size();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_prewrite(
@@ -1363,6 +1386,7 @@ fn future_acquire_pessimistic_lock<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.is_first_lock = req.get_is_first_lock();
+    options.for_update_ts = req.get_for_update_ts();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_acquire_pessimistic_lock(
@@ -1370,13 +1394,37 @@ fn future_acquire_pessimistic_lock<E: Engine>(
         keys,
         req.take_primary_lock(),
         req.get_start_version(),
-        req.get_for_update_ts(),
         options,
         cb,
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PessimisticLockResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+        }
+        resp
+    })
+}
+
+fn future_pessimistic_rollback<E: Engine>(
+    storage: &Storage<E>,
+    mut req: PessimisticRollbackRequest,
+) -> impl Future<Item = PessimisticRollbackResponse, Error = Error> {
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_pessimistic_rollback(
+        req.take_context(),
+        keys,
+        req.get_start_version(),
+        req.get_for_update_ts(),
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = PessimisticRollbackResponse::new();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
@@ -1507,6 +1555,11 @@ fn future_resolve_lock<E: Engine>(
     storage: &Storage<E>,
     mut req: ResolveLockRequest,
 ) -> impl Future<Item = ResolveLockResponse, Error = Error> {
+    let resolve_keys: Vec<Key> = req
+        .get_keys()
+        .iter()
+        .map(|key| Key::from_raw(key))
+        .collect();
     let txn_status = if req.get_start_version() > 0 {
         HashMap::from_iter(iter::once((
             req.get_start_version(),
@@ -1521,7 +1574,14 @@ fn future_resolve_lock<E: Engine>(
     };
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_resolve_lock(req.take_context(), txn_status, cb);
+    let res = if !resolve_keys.is_empty() {
+        let start_ts = req.get_start_version();
+        assert!(start_ts > 0);
+        let commit_ts = req.get_commit_version();
+        storage.async_resolve_lock_lite(req.take_context(), start_ts, commit_ts, resolve_keys, cb)
+    } else {
+        storage.async_resolve_lock(req.take_context(), txn_status, cb)
+    };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = ResolveLockResponse::new();
@@ -1830,12 +1890,14 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ref primary,
             ts,
             ttl,
+            txn_size,
         })) => {
             let mut lock_info = LockInfo::new();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
             lock_info.set_lock_version(ts);
             lock_info.set_lock_ttl(ttl);
+            lock_info.set_txn_size(txn_size);
             key_error.set_locked(lock_info);
         }
         // failed in prewrite or pessimistic lock
@@ -1866,6 +1928,19 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
+        }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
+            lock_ts,
+            ref lock_key,
+            deadlock_key_hash,
+            ..
+        })) => {
+            warn!("txn deadlocks"; "err" => ?err);
+            let mut deadlock = Deadlock::new();
+            deadlock.set_lock_ts(lock_ts);
+            deadlock.set_lock_key(lock_key.to_owned());
+            deadlock.set_deadlock_key_hash(deadlock_key_hash);
+            key_error.set_deadlock(deadlock);
         }
         _ => {
             error!("txn aborts"; "err" => ?err);
