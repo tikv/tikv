@@ -69,7 +69,7 @@ impl RpnFnGenerator {
                 fn eval(
                     self,
                     ctx: &mut #ctx_type,
-                    payload: #payload_type,
+                    payload: &#payload_type,
                 ) -> #result_type ;
             }
         }
@@ -91,7 +91,7 @@ impl RpnFnGenerator {
                 default fn eval(
                     self,
                     ctx: &mut #ctx_type,
-                    payload: #payload_type,
+                    payload: &#payload_type,
                 ) -> #result_type {
                     panic!("Cannot apply {} on {:?}", #fn_name, self)
                 }
@@ -130,7 +130,7 @@ impl RpnFnGenerator {
                 default fn eval(
                     self,
                     ctx: &mut #ctx_type,
-                    payload: #payload_type,
+                    payload: &#payload_type,
                 ) -> #result_type {
                     let arg = &self;
                     let rows = payload.output_rows();
@@ -165,7 +165,7 @@ impl RpnFnGenerator {
                     self,
                     def: impl crate::coprocessor::dag::rpn_expr::function::ArgDef,
                     ctx: &mut #ctx_type,
-                    payload: #payload_type,
+                    payload: &#payload_type,
                 ) -> #result_type {
                     #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, payload)
                 }
@@ -195,7 +195,7 @@ impl RpnFnGenerator {
                 #[inline]
                 fn run #impl_generics (
                     ctx: &mut #ctx_type,
-                    payload: #payload_type,
+                    payload: &#payload_type,
                 ) -> #result_type #where_clause {
                     use crate::coprocessor::dag::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     #evaluator.eval(Null, ctx, payload)
@@ -287,7 +287,7 @@ mod tests {
                 fn eval(
                     self,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> ;
             }
         "#
@@ -304,7 +304,7 @@ mod tests {
                 default fn eval(
                     self,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     panic!("Cannot apply {} on {:?}", "foo", self)
                 }
@@ -336,7 +336,7 @@ mod tests {
                 default fn eval(
                     self,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     let arg = &self;
                     let rows = payload.output_rows();
@@ -370,7 +370,7 @@ mod tests {
                     self,
                     def: impl crate::coprocessor::dag::rpn_expr::function::ArgDef,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     Foo_Fn :: eval(def, ctx, payload)
                 }
@@ -389,7 +389,7 @@ mod tests {
                 #[inline]
                 fn run(
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     use crate::coprocessor::dag::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     ArgConstructor::new(
@@ -434,7 +434,7 @@ mod tests {
                 fn eval(
                     self,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> ;
             }
         "#
@@ -456,7 +456,7 @@ mod tests {
                 default fn eval(
                     self,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     panic!("Cannot apply {} on {:?}", "foo", self)
                 }
@@ -486,7 +486,7 @@ mod tests {
                 default fn eval(
                     self,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     let arg = &self;
                     let rows = payload.output_rows();
@@ -522,7 +522,7 @@ mod tests {
                     self,
                     def: impl crate::coprocessor::dag::rpn_expr::function::ArgDef,
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     Foo_Fn :: <A, B> :: eval(def, ctx, payload)
                 }
@@ -542,7 +542,7 @@ mod tests {
                 #[inline]
                 fn run <A: M, B> (
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
-                    payload: crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                    payload: &crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue>
                 where B: N<M> {
                     use crate::coprocessor::dag::rpn_expr::function::{ArgConstructor, Evaluator, Null};

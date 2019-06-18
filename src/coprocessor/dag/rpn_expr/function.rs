@@ -31,7 +31,7 @@
 //! #[rpn_fn(ctx, payload)]
 //! fn with_ctx_and_payload(
 //!     ctx: &mut EvalContext,
-//!     payload: RpnFnCallPayload<'_>
+//!     payload: &RpnFnCallPayload<'_>
 //! ) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }
@@ -60,7 +60,7 @@
 //!     fn eval(
 //!         self,
 //!         ctx: &mut EvalContext,
-//!         payload: RpnFnCallPayload<'_>,
+//!         payload: &RpnFnCallPayload<'_>,
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
@@ -98,7 +98,7 @@ pub struct RpnFn {
     ///
     /// The first parameter is the evaluation context and the second one is the payload containing
     /// the output rows count, the argument value and the argument field type.
-    pub fn_ptr: fn(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<VectorValue>,
+    pub fn_ptr: fn(&mut EvalContext, &RpnFnCallPayload<'_>) -> Result<VectorValue>,
 }
 
 impl std::fmt::Debug for RpnFn {
@@ -198,7 +198,7 @@ pub trait Evaluator {
         self,
         def: impl ArgDef,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload<'_>,
+        payload: &RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>;
 }
 
@@ -219,7 +219,7 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
         self,
         def: impl ArgDef,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload<'_>,
+        payload: &RpnFnCallPayload<'_>,
     ) -> Result<VectorValue> {
         match payload.raw_arg_at(self.arg_index) {
             RpnStackNode::Scalar { value, .. } => {

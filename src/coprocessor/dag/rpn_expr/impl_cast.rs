@@ -61,7 +61,7 @@ fn produce_dec_with_specified_tp(
 #[inline]
 pub fn cast_uint_as_decimal(
     ctx: &mut EvalContext,
-    payload: RpnFnCallPayload<'_>,
+    payload: &RpnFnCallPayload<'_>,
     val: &Option<i64>,
 ) -> Result<Option<Decimal>> {
     match val {
@@ -82,7 +82,7 @@ pub fn cast_uint_as_decimal(
 #[inline]
 pub fn cast_int_as_decimal(
     ctx: &mut EvalContext,
-    payload: RpnFnCallPayload<'_>,
+    payload: &RpnFnCallPayload<'_>,
     val: &Option<i64>,
 ) -> Result<Option<Decimal>> {
     match val {

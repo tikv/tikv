@@ -259,7 +259,7 @@ impl RpnExpression {
                         raw_args: stack_slice,
                         ret_field_type: field_type,
                     };
-                    let ret = (func.fn_ptr)(context, call_info)?;
+                    let ret = (func.fn_ptr)(context, &call_info)?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {
