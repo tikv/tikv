@@ -5,7 +5,7 @@
 
 [profile.dev]
 opt-level = 0
-debug = false
+debug = 1 # enable line numbers by default for easy test debugging
 rpath = false
 lto = false
 debug-assertions = true

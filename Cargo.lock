@@ -1075,7 +1075,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#5adf5b847e13cea2a59a1b4921aa5bf38591d1a3"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#5515f2c081ff3baca6c6d02e4d84a3a098574232"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1091,7 +1091,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#5adf5b847e13cea2a59a1b4921aa5bf38591d1a3"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#5515f2c081ff3baca6c6d02e4d84a3a098574232"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1859,7 +1859,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#5adf5b847e13cea2a59a1b4921aa5bf38591d1a3"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#5515f2c081ff3baca6c6d02e4d84a3a098574232"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2058,7 +2058,7 @@ dependencies = [
 [[package]]
 name = "snappy-sys"
 version = "0.1.0"
-source = "git+https://github.com/busyjay/rust-snappy.git?branch=static-link#be02178330bb17648d6ac605af249eba18b32b71"
+source = "git+https://github.com/busyjay/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
 dependencies = [
  "cmake 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
