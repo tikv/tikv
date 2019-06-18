@@ -8,6 +8,7 @@ use crate::coprocessor::Result;
 use std::fmt::Debug;
 
 #[rpn_fn]
+#[inline]
 pub fn arithmetic<A: ArithmeticOp>(
     arg0: &Option<A::T>,
     arg1: &Option<A::T>,
