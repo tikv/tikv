@@ -4,19 +4,10 @@ use std::iter::*;
 
 /// A vector like container storing multiple buffers. Each buffer is a `[u8]` slice in
 /// arbitrary length.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct BufferVec {
     data: Vec<u8>,
     offsets: Vec<usize>,
-}
-
-impl Clone for BufferVec {
-    fn clone(&self) -> Self {
-        Self {
-            data: tikv_util::vec_clone_with_capacity(&self.data),
-            offsets: tikv_util::vec_clone_with_capacity(&self.offsets),
-        }
-    }
 }
 
 impl std::fmt::Debug for BufferVec {
@@ -255,7 +246,6 @@ impl<A: AsRef<[u8]>> Extend<A> for BufferVec {
 impl std::ops::Index<usize> for BufferVec {
     type Output = [u8];
 
-    #[inline]
     fn index(&self, index: usize) -> &[u8] {
         assert!(index < self.offsets.len());
         let start = self.offsets[index];

@@ -22,6 +22,15 @@ pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
 pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
 
+pub const ROCKSDB_TITANDB_LIVE_BLOB_SIZE: &str = "rocksdb.titandb.live-blob-size";
+pub const ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE: &str = "rocksdb.titandb.num-live-blob-file";
+pub const ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE: &str = "rocksdb.titandb.\
+                                                          num-obsolete-blob-file";
+pub const ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
+                                                       live-blob-file-size";
+pub const ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
+                                                           obsolete-blob-file-size";
+
 pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheMiss,
     TickerType::BlockCacheHit,
@@ -966,6 +975,43 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
                 .with_label_values(&[name, cf])
                 .set(v as i64);
         }
+
+        // Titan live blob size
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE) {
+            STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        // Titan num live blob file
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
+            STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        // Titan num obsolete blob file
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
+        {
+            STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        // Titan live blob file size
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE) {
+            STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        // Titan obsolete blob file size
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+        {
+            STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
     }
 
     // For snapshot
@@ -1258,6 +1304,36 @@ lazy_static! {
         "tikv_engine_stall_conditions_changed",
         "Stall conditions changed of each column family",
         &["db", "cf", "type"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_live_blob_size",
+        "Total blob value size referenced by LSM tree",
+        &["db", "cf"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_num_live_blob_file",
+        "Number of live blob file",
+        &["db", "cf"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_num_obsolete_blob_file",
+        "Number of obsolete blob file",
+        &["db", "cf"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_live_blob_file_size",
+        "Size of live blob file",
+        &["db", "cf"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_obsolete_blob_file_size",
+        "Size of obsolete blob file",
+        &["db", "cf"]
     ).unwrap();
 }
 

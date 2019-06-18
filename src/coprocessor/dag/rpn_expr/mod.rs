@@ -7,6 +7,7 @@ pub mod types;
 pub mod impl_arithmetic;
 pub mod impl_cast;
 pub mod impl_compare;
+pub mod impl_like;
 pub mod impl_op;
 
 pub use self::function::RpnFn;
@@ -17,6 +18,7 @@ use tipb::expression::{Expr, ScalarFuncSig};
 
 use self::impl_arithmetic::*;
 use self::impl_compare::*;
+use self::impl_like::*;
 use self::impl_op::*;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::Result;
@@ -158,6 +160,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::ModReal => arithmetic_fn::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_fn::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
+        ScalarFuncSig::LikeSig => like_fn(),
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
