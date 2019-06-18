@@ -61,6 +61,7 @@
 //!         self,
 //!         ctx: &mut EvalContext,
 //!         payload: &RpnFnCallPayload<'_>,
+
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
