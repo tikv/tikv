@@ -162,6 +162,20 @@
 ## PD endpoints.
 # endpoints = []
 
+## The interval at which to retry a PD connection initialization.
+## Default is 300ms.
+# retry-interval = "300ms"
+
+## If the client observes an error, it can can skip reporting it except every `n` times.
+## Set to 1 to disable this feature.
+## Default is 10.
+# retry-log-every = 10
+
+## The maximum number of times to retry a PD connection initialization.
+## Set to 0 to disable retry.
+## Default is -1, meaning isize::MAX times.
+# retry-max-count = -1
+
 [raftstore]
 ## Whether to force to flush logs.
 ## Set to `true` (default) for best reliability, which prevents data loss when there is a power
@@ -607,6 +621,16 @@
 ## the blob file will be merge.
 # default: 8MB
 # merge-small-file-threshold = "8MB"
+
+## The mode used to process blob files. In read-only mode Titan
+## stops writing value into blob log. In fallback mode Titan
+## converts blob index into real value on flush and compaction.
+## This option is especially useful for downgrading Titan.
+##   default:   kNormal
+##   read-only: kReadOnly
+##   fallback:  kFallback
+# default: normal
+# blob-run-mode = "normal"
 
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]

@@ -190,5 +190,5 @@ where
         }
     }
 
-    Ok(())
+    it.status().map_err(From::from)
 }

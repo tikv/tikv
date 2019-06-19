@@ -5,10 +5,12 @@ mod expr_builder;
 mod expr_eval;
 #[cfg(test)]
 pub mod test_util;
+mod vector_view;
 
 pub use self::expr::{RpnExpression, RpnExpressionNode};
 pub use self::expr_builder::RpnExpressionBuilder;
 pub use self::expr_eval::RpnStackNode;
+pub use self::vector_view::{ConcreteLogicalVectorView, LogicalVectorView};
 
 use tipb::expression::FieldType;
 
@@ -21,6 +23,7 @@ use tipb::expression::FieldType;
 /// (i.e. Copy), instead of by reference, for **EACH** function invocation.
 #[derive(Clone, Copy)]
 pub struct RpnFnCallPayload<'a> {
+    output_rows: usize,
     raw_args: &'a [RpnStackNode<'a>],
     ret_field_type: &'a FieldType,
 }
@@ -48,5 +51,11 @@ impl<'a> RpnFnCallPayload<'a> {
     #[inline]
     pub fn return_field_type(&'a self) -> &'a FieldType {
         self.ret_field_type
+    }
+
+    /// Gets expected rows of output.
+    #[inline]
+    pub fn output_rows(&'a self) -> usize {
+        self.output_rows
     }
 }
