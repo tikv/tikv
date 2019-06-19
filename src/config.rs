@@ -166,8 +166,10 @@ macro_rules! cf_config {
             fn validate(&self) -> Result<(), Box<dyn Error>> {
                 if self.block_size.0 as usize > MAX_BLOCK_SIZE {
                     return Err(format!(
-                        "invalid block-size {}, exceed max size {}",
-                        self.block_size.0, MAX_BLOCK_SIZE
+                        "invalid block-size {} for {}, exceed max size {}",
+                        self.block_size.0,
+                        stringify!($name),
+                        MAX_BLOCK_SIZE
                     )
                     .into());
                 }
