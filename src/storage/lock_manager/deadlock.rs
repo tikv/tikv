@@ -244,7 +244,7 @@ impl Inner {
                 } else {
                     self.become_leader();
                 }
-                self.leader_info = Some((leader_id, leader_addr));
+                self.leader_info.replace((leader_id, leader_addr));
             }
         }
     }
@@ -283,8 +283,9 @@ impl Inner {
                 resp.get_deadlock_key_hash(),
             )
         }));
-        handle.spawn(send.map_err(|e| error!("detect request sender failed"; "err" => ?e)));
-        handle.spawn(recv.map_err(|e| error!("detect response receiver failed"; "err" => ?e)));
+        handle.spawn(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
+        // No need to log it again.
+        handle.spawn(recv.map_err(|_| ()));
         self.leader_client = Some(leader_client);
         info!("reconnect leader succeeded"; "leader_id" => self.leader_id());
     }
@@ -466,6 +467,13 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         let s = stream
             .map_err(Error::Grpc)
             .and_then(move |mut req| {
+                // It's possible the leader changes after registering this handler.
+                let mut inner = inner.borrow_mut();
+                if !inner.is_leader() {
+                    ERROR_COUNTER_VEC.not_leader.inc();
+                    return Err(Error::Other(box_err!("leader changed")));
+                }
+
                 let WaitForEntry {
                     txn,
                     wait_for_txn,
@@ -473,10 +481,8 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                     ..
                 } = req.get_entry();
 
-                let mut inner = inner.borrow_mut();
                 inner.update_max_ts_if_needed(*txn);
                 let mut detect_table = inner.detect_table.borrow_mut();
-
                 let res = match req.get_tp() {
                     DeadlockRequestType::Detect => {
                         if let Some(deadlock_key_hash) =
