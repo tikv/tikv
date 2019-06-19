@@ -55,6 +55,7 @@ const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -111,6 +112,20 @@ macro_rules! cf_config {
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+        }
+
+        impl $name {
+            fn validate(&self) -> Result<(), Box<dyn Error>> {
+                if self.block_size.0 as usize > MAX_BLOCK_SIZE {
+                    return Err(format!(
+                        "invalid block-size {} for {}, exceed max size {}",
+                        self.block_size.0,
+                        stringify!($name),
+                        MAX_BLOCK_SIZE
+                    ).into());
+                }
+                Ok(())
+            }
         }
     };
 }
@@ -497,6 +512,10 @@ impl DbConfig {
     }
 
     fn validate(&mut self) -> Result<(), Box<Error>> {
+        self.defaultcf.validate()?;
+        self.lockcf.validate()?;
+        self.writecf.validate()?;
+        self.raftcf.validate()?;
         Ok(())
     }
 }
@@ -665,6 +684,11 @@ impl RaftDbConfig {
 
     pub fn build_cf_opts(&self) -> Vec<CFOptions> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
+    }
+
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.defaultcf.validate()?;
+        Ok(())
     }
 }
 
@@ -982,6 +1006,7 @@ impl TiKvConfig {
         }
 
         self.rocksdb.validate()?;
+        self.raftdb.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
         self.pd.validate()?;
@@ -1251,6 +1276,24 @@ mod test {
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
+        tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_block_size() {
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.pd.endpoints = vec!["".to_owned()];
+        tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::gb(10);
+        assert!(tikv_cfg.validate().is_err());
+        tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.writecf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.validate().unwrap();
     }
 
