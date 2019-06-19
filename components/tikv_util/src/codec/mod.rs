@@ -33,14 +33,6 @@ quick_error! {
 }
 
 impl Error {
-    pub fn maybe_clone(&self) -> Option<Error> {
-        match *self {
-            Error::KeyLength => Some(Error::KeyLength),
-            Error::KeyPadding => Some(Error::KeyPadding),
-            Error::KeyNotFound => Some(Error::KeyNotFound),
-            Error::Io(_) => None,
-        }
-    }
     pub fn unexpected_eof() -> Error {
         Error::Io(io::Error::new(ErrorKind::UnexpectedEof, "eof"))
     }

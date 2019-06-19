@@ -669,17 +669,6 @@ impl From<engine::Error> for Error {
     }
 }
 
-impl Error {
-    pub fn maybe_clone(&self) -> Option<Error> {
-        match *self {
-            Error::Request(ref e) => Some(Error::Request(e.clone())),
-            Error::Timeout(d) => Some(Error::Timeout(d)),
-            Error::EmptyRequest => Some(Error::EmptyRequest),
-            Error::Other(_) => None,
-        }
-    }
-}
-
 pub type Result<T> = result::Result<T, Error>;
 
 thread_local! {

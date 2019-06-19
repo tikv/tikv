@@ -69,33 +69,4 @@ quick_error! {
     }
 }
 
-impl Error {
-    pub fn maybe_clone(&self) -> Option<Error> {
-        match *self {
-            Error::Engine(ref e) => e.maybe_clone().map(Error::Engine),
-            Error::Codec(ref e) => e.maybe_clone().map(Error::Codec),
-            Error::Mvcc(ref e) => e.maybe_clone().map(Error::Mvcc),
-            Error::InvalidTxnTso {
-                start_ts,
-                commit_ts,
-            } => Some(Error::InvalidTxnTso {
-                start_ts,
-                commit_ts,
-            }),
-            Error::InvalidReqRange {
-                ref start,
-                ref end,
-                ref lower_bound,
-                ref upper_bound,
-            } => Some(Error::InvalidReqRange {
-                start: start.clone(),
-                end: end.clone(),
-                lower_bound: lower_bound.clone(),
-                upper_bound: upper_bound.clone(),
-            }),
-            Error::Other(_) | Error::ProtoBuf(_) | Error::Io(_) => None,
-        }
-    }
-}
-
 pub type Result<T> = std::result::Result<T, Error>;
