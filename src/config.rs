@@ -1590,6 +1590,7 @@ mod tests {
     #[test]
     fn test_block_size() {
         let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.pd.endpoints = vec!["".to_owned()];
         tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
