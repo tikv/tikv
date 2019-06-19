@@ -293,7 +293,6 @@ mod tests {
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::dag::rpn_expr::impl_arithmetic::*;
     use crate::coprocessor::dag::rpn_expr::impl_compare::*;
-    use crate::coprocessor::dag::rpn_expr::impl_op::*;
     use crate::coprocessor::dag::rpn_expr::{RpnExpressionBuilder, RpnFn};
     use crate::coprocessor::Result;
     use test::Bencher;
