@@ -181,7 +181,7 @@ mod fixture {
 
     use crate::storage::{Key, Statistics};
 
-    use super::{Result, Error, Store, Scanner};
+    use super::{Error, Result, Scanner, Store};
     use crate::storage::mvcc::Error as MvccError;
 
     quick_error! {
@@ -263,9 +263,10 @@ mod fixture {
 
     impl FixtureStore {
         pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
-            let data = data.into_iter().map(|(k, v)| {
-                (k, v.map_err(FixtureError::from))
-            }).collect();
+            let data = data
+                .into_iter()
+                .map(|(k, v)| (k, v.map_err(FixtureError::from)))
+                .collect();
             FixtureStore { data }
         }
     }
@@ -284,7 +285,11 @@ mod fixture {
         }
 
         #[inline]
-        fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Vec<u8>>>> {
+        fn batch_get(
+            &self,
+            keys: &[Key],
+            statistics: &mut Statistics,
+        ) -> Vec<Result<Option<Vec<u8>>>> {
             keys.iter().map(|key| self.get(key, statistics)).collect()
         }
 

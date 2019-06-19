@@ -31,7 +31,9 @@ pub struct DAGBuilder;
 impl DAGBuilder {
     /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn check_build_batch<S: Store + 'static>(exec_descriptors: &[executor::Executor]) -> Result<()> {
+    pub fn check_build_batch<S: Store + 'static>(
+        exec_descriptors: &[executor::Executor],
+    ) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
