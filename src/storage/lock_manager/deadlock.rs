@@ -37,7 +37,7 @@ struct DetectTable {
 impl DetectTable {
     /// Return deadlock key hash if deadlocked
     pub fn detect(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> Option<u64> {
-        let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
+        let _timer = DETECTOR_HISTOGRAM_VEC.detect.start_coarse_timer();
         TASK_COUNTER_VEC.detect.inc();
 
         if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
@@ -328,6 +328,9 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         resolver: &S,
         inner: &Rc<RefCell<Inner>>,
     ) -> Result<()> {
+        let _timer = DETECTOR_HISTOGRAM_VEC
+            .monitor_membership_change
+            .start_coarse_timer();
         let (_, leader) = pd_client.get_region_and_leader(b"")?;
         if let Some(leader) = leader {
             let leader_id = leader.get_store_id();
@@ -345,6 +348,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             };
         }
         warn!("leader not found");
+        ERROR_COUNTER_VEC.leader_not_found.inc();
         Ok(())
     }
 
@@ -360,6 +364,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         .for_each(move |_| {
             if let Err(e) = Self::monitor_membership_change(&pd_client, &resolver, &inner) {
                 error!("monitor membership change failed"; "err" => ?e);
+                ERROR_COUNTER_VEC.monitor_membership_change.inc();
             }
             Ok(())
         })
