@@ -8,7 +8,7 @@ use tipb::executor::TableScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Store};
+use crate::storage::Store;
 use tikv_util::collections::HashMap;
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
@@ -25,7 +25,7 @@ pub struct BatchTableScanExecutor<S: Store>(
     >,
 );
 
-impl BatchTableScanExecutor<FixtureStore> {
+impl<S: Store> BatchTableScanExecutor<S> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {

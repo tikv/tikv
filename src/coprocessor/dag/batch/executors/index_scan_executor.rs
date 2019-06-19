@@ -8,7 +8,7 @@ use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Store};
+use crate::storage::Store;
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
@@ -24,7 +24,7 @@ pub struct BatchIndexScanExecutor<S: Store>(
     >,
 );
 
-impl BatchIndexScanExecutor<FixtureStore> {
+impl<S: Store> BatchIndexScanExecutor<S> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {

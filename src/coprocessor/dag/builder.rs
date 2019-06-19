@@ -31,18 +31,18 @@ pub struct DAGBuilder;
 impl DAGBuilder {
     /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn check_build_batch(exec_descriptors: &[executor::Executor]) -> Result<()> {
+    pub fn check_build_batch<S: Store + 'static>(exec_descriptors: &[executor::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    BatchTableScanExecutor::check_supported(&descriptor).map_err(|e| {
+                    BatchTableScanExecutor::<S>::check_supported(&descriptor).map_err(|e| {
                         Error::Other(box_err!("Unable to use BatchTableScanExecutor: {}", e))
                     })?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    BatchIndexScanExecutor::check_supported(&descriptor).map_err(|e| {
+                    BatchIndexScanExecutor::<S>::check_supported(&descriptor).map_err(|e| {
                         Error::Other(box_err!("Unable to use BatchIndexScanExecutor: {}", e))
                     })?;
                 }
@@ -496,7 +496,7 @@ impl DAGBuilder {
         let mut is_batch = false;
         if enable_batch_if_possible && !is_streaming {
             let build_batch_result =
-                super::builder::DAGBuilder::check_build_batch(req.get_executors());
+                super::builder::DAGBuilder::check_build_batch::<S>(req.get_executors());
             if let Err(e) = build_batch_result {
                 info!("Coprocessor request cannot be batched"; "start_ts" => req.get_start_ts(), "reason" => %e);
             } else {
