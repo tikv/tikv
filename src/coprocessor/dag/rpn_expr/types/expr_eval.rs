@@ -1107,7 +1107,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_eval_plus(b: &mut Bencher) {
+    fn bench_eval_plus_1024_rows(b: &mut Bencher) {
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Int);
             for i in 0..1024 {
@@ -1132,7 +1132,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_eval_compare(b: &mut Bencher) {
+    fn bench_eval_compare_1024_rows(b: &mut Bencher) {
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Int);
             for i in 0..1024 {
@@ -1160,10 +1160,10 @@ mod tests {
     }
 
     #[bench]
-    fn bench_eval_is_null(b: &mut Bencher) {
+    fn bench_eval_compare_5_rows(b: &mut Bencher) {
         let mut columns = LazyBatchColumnVec::from(vec![{
-            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1024, EvalType::Int);
-            for i in 0..1024 {
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(5, EvalType::Int);
+            for i in 0..5 {
                 col.mut_decoded().push_int(Some(i));
             }
             col
@@ -1172,13 +1172,17 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(is_null_fn::<Int>(), FieldTypeTp::LongLong)
+            .push_column_ref(0)
+            .push_fn_call(
+                compare_fn::<BasicComparer<Int, CmpOpLE>>(),
+                FieldTypeTp::LongLong,
+            )
             .build();
         let mut ctx = EvalContext::default();
-        let logical_rows: Vec<_> = (0..1024).collect();
+        let logical_rows: Vec<_> = (0..5).collect();
 
         b.iter(|| {
-            let result = exp.eval(&mut ctx, schema, &mut columns, &logical_rows, 1024);
+            let result = exp.eval(&mut ctx, schema, &mut columns, &logical_rows, 5);
             assert!(result.is_ok());
         })
     }
