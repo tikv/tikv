@@ -1125,10 +1125,18 @@ mod tests {
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..1024).collect();
 
+        profiler::start("bench_eval_plus_1024_rows.profile");
         b.iter(|| {
-            let result = exp.eval(&mut ctx, schema, &mut columns, &logical_rows, 1024);
+            let result = black_box(&exp).eval(
+                black_box(&mut ctx),
+                black_box(schema),
+                black_box(&mut columns),
+                black_box(&logical_rows),
+                black_box(1024),
+            );
             assert!(result.is_ok());
-        })
+        });
+        profiler::stop();
     }
 
     #[bench]
@@ -1156,11 +1164,11 @@ mod tests {
         profiler::start("eval_compare_1024_rows.profile");
         b.iter(|| {
             let result = black_box(&exp).eval(
-                &mut ctx,
-                schema,
+                black_box(&mut ctx),
+                black_box(schema),
                 black_box(&mut columns),
                 black_box(&logical_rows),
-                1024,
+                black_box(1024),
             );
             assert!(result.is_ok());
         });
@@ -1189,9 +1197,17 @@ mod tests {
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..5).collect();
 
+        profiler::start("bench_eval_compare_5_rows.profile");
         b.iter(|| {
-            let result = exp.eval(&mut ctx, schema, &mut columns, &logical_rows, 5);
+            let result = black_box(&exp).eval(
+                black_box(&mut ctx),
+                black_box(schema),
+                black_box(&mut columns),
+                black_box(&logical_rows),
+                black_box(5),
+            );
             assert!(result.is_ok());
-        })
+        });
+        profiler::stop();
     }
 }
