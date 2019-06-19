@@ -8,7 +8,7 @@ use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::function::RpnFn;
+use crate::coprocessor::dag::rpn_expr::function::RpnFnMeta;
 use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
 use crate::coprocessor::Result;
 
@@ -16,7 +16,7 @@ use crate::coprocessor::Result;
 ///
 /// TODO: This function supports some internal casts performed by TiKV. However it would be better
 /// to be done in TiDB.
-pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Result<RpnFn> {
+pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Result<RpnFnMeta> {
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
     Ok(match (from, to) {
@@ -30,15 +30,15 @@ pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Re
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
             {
-                cast_int_as_decimal_fn()
+                cast_int_as_decimal_fn_meta()
             } else {
-                cast_uint_as_decimal_fn()
+                cast_uint_as_decimal_fn_meta()
             }
         }
-        (EvalType::Bytes, EvalType::Real) => cast_string_as_real_fn(),
-        (EvalType::DateTime, EvalType::Real) => cast_time_as_real_fn(),
-        (EvalType::Duration, EvalType::Real) => cast_duration_as_real_fn(),
-        (EvalType::Json, EvalType::Real) => cast_json_as_real_fn(),
+        (EvalType::Bytes, EvalType::Real) => cast_string_as_real_fn_meta(),
+        (EvalType::DateTime, EvalType::Real) => cast_time_as_real_fn_meta(),
+        (EvalType::Duration, EvalType::Real) => cast_duration_as_real_fn_meta(),
+        (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
     })
 }

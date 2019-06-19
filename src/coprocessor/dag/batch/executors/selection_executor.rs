@@ -234,7 +234,7 @@ mod tests {
         let mut exec = BatchSelectionExecutor::new_for_test(
             src_exec,
             vec![RpnExpressionBuilder::new()
-                .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
+                .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
                 .build()],
         );
 
@@ -448,7 +448,7 @@ mod tests {
 
         let predicate = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(is_even_fn(), FieldTypeTp::LongLong)
+            .push_fn_call(is_even_fn_meta(), FieldTypeTp::LongLong)
             .build();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
@@ -473,7 +473,7 @@ mod tests {
 
         let predicate = RpnExpressionBuilder::new()
             .push_column_ref(1)
-            .push_fn_call(is_even_fn(), FieldTypeTp::LongLong)
+            .push_fn_call(is_even_fn_meta(), FieldTypeTp::LongLong)
             .build();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
@@ -500,7 +500,7 @@ mod tests {
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(is_even_fn(), FieldTypeTp::LongLong)
+                    .push_fn_call(is_even_fn_meta(), FieldTypeTp::LongLong)
                     .build()
             })
             .collect();
@@ -533,7 +533,7 @@ mod tests {
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(is_even_fn(), FieldTypeTp::LongLong)
+                    .push_fn_call(is_even_fn_meta(), FieldTypeTp::LongLong)
                     .build()
             })
             .collect();
@@ -623,7 +623,7 @@ mod tests {
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(foo_fn(), FieldTypeTp::LongLong)
+                    .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
                     .build()
             })
             .collect();

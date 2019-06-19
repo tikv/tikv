@@ -350,7 +350,7 @@ mod tests {
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
-    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{arithmetic_fn, RealPlus};
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
     use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 
     // Test cases also cover BatchSlowHashAggregationExecutor.
@@ -370,7 +370,7 @@ mod tests {
         let group_by_exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
             .push_column_ref(1)
-            .push_fn_call(arithmetic_fn::<RealPlus>(), FieldTypeTp::Double)
+            .push_fn_call(arithmetic_fn_meta::<RealPlus>(), FieldTypeTp::Double)
             .build();
 
         let aggr_definitions = vec![

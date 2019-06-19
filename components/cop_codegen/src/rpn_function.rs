@@ -174,8 +174,10 @@ impl RpnFnGenerator {
     }
 
     fn generate_constructor(&self) -> TokenStream {
-        let constructor_ident =
-            Ident::new(&format!("{}_fn", &self.item_fn.ident), Span::call_site());
+        let constructor_ident = Ident::new(
+            &format!("{}_fn_meta", &self.item_fn.ident),
+            Span::call_site(),
+        );
         let (impl_generics, ty_generics, where_clause) =
             self.item_fn.decl.generics.split_for_impl();
         let ty_generics_turbofish = ty_generics.as_turbofish();
@@ -188,7 +190,7 @@ impl RpnFnGenerator {
         }
         let fn_name = self.item_fn.ident.to_string();
         let (ctx_type, payload_type, result_type) = common_types();
-        let rpn_fn_type = quote! { crate::coprocessor::dag::rpn_expr::function::RpnFn };
+        let rpn_fn_type = quote! { crate::coprocessor::dag::rpn_expr::function::RpnFnMeta };
         quote! {
             pub const fn #constructor_ident #impl_generics ()
             -> #rpn_fn_type #where_clause {
@@ -385,7 +387,7 @@ mod tests {
     fn test_no_generic_generate_constructor() {
         let gen = no_generic_fn();
         let expected: TokenStream = r#"
-            pub const fn foo_fn() -> crate::coprocessor::dag::rpn_expr::function::RpnFn {
+            pub const fn foo_fn_meta() -> crate::coprocessor::dag::rpn_expr::function::RpnFnMeta {
                 #[inline]
                 fn run(
                     ctx: &mut crate::coprocessor::dag::expr::EvalContext,
@@ -400,7 +402,7 @@ mod tests {
                         )
                     ).eval(Null, ctx, payload)
                 }
-                crate::coprocessor::dag::rpn_expr::function::RpnFn {
+                crate::coprocessor::dag::rpn_expr::function::RpnFnMeta {
                     name: "foo",
                     args_len: 2usize,
                     fn_ptr: run,

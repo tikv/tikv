@@ -6,7 +6,7 @@ use cop_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::codec::number;
 use tipb::expression::{Expr, ExprType, FieldType};
 
-use super::super::function::RpnFn;
+use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
@@ -95,7 +95,7 @@ impl RpnExpressionBuilder {
         max_columns: usize,
     ) -> Result<RpnExpression>
     where
-        F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFn> + Copy,
+        F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
     {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
@@ -118,7 +118,11 @@ impl RpnExpressionBuilder {
 
     /// Pushes a `FnCall` node.
     #[cfg(test)]
-    pub fn push_fn_call(mut self, func: RpnFn, return_field_type: impl Into<FieldType>) -> Self {
+    pub fn push_fn_call(
+        mut self,
+        func: RpnFnMeta,
+        return_field_type: impl Into<FieldType>,
+    ) -> Self {
         let node = RpnExpressionNode::FnCall {
             func,
             field_type: return_field_type.into(),
@@ -224,7 +228,7 @@ fn append_rpn_nodes_recursively<F>(
     // the full schema instead.
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFn> + Copy,
+    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
     // TODO: We should check whether node types match the function signature. Otherwise there
     // will be panics when the expression is evaluated.
@@ -269,9 +273,9 @@ fn handle_node_fn_call<F>(
     max_columns: usize,
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFn> + Copy,
+    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
-    // Map pb func to `RpnFn`.
+    // Map pb func to `RpnFnMeta`.
     let func = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
     let args = tree_node.take_children().into_vec();
     if func.args_len != args.len() {
@@ -453,16 +457,16 @@ mod tests {
     /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
     /// cannot be modified by us in tests to support fn_a ~ fn_d. So let's just hard code some
     /// substitute.
-    fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<RpnFn> {
+    fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<RpnFnMeta> {
         // fn_a: CastIntAsInt
         // fn_b: CastIntAsReal
         // fn_c: CastIntAsString
         // fn_d: CastIntAsDecimal
         Ok(match value {
-            ScalarFuncSig::CastIntAsInt => fn_a_fn(),
-            ScalarFuncSig::CastIntAsReal => fn_b_fn(),
-            ScalarFuncSig::CastIntAsString => fn_c_fn(),
-            ScalarFuncSig::CastIntAsDecimal => fn_d_fn(),
+            ScalarFuncSig::CastIntAsInt => fn_a_fn_meta(),
+            ScalarFuncSig::CastIntAsReal => fn_b_fn_meta(),
+            ScalarFuncSig::CastIntAsString => fn_c_fn_meta(),
+            ScalarFuncSig::CastIntAsDecimal => fn_d_fn_meta(),
             _ => unreachable!(),
         })
     }

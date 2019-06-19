@@ -14,20 +14,20 @@
 //! ```
 //!
 //! You can still call the `foo` function as what it looks. The macro doesn't change the function
-//! itself. Instead, it creates a `foo_fn()` function (simply add `_fn` to the original function
-//! name) that generates an `RpnFn` struct.
+//! itself. Instead, it creates a `foo_fn_meta()` function (simply add `_fn_meta` to the original
+//! function name) that generates an `RpnFnMeta` struct.
 //!
 //! If you needs `EvalContext` or the raw `RpnFnCallPayload`, just put it ahead of the function
 //! parameters, and add `ctx` or `payload` argument to the attribute. For example:
 //!
 //! ```ignore
-//! // This generates `with_context_fn() -> RpnFn`
+//! // This generates `with_context_fn_meta() -> RpnFnMeta`
 //! #[rpn_fn(ctx)]
 //! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }
 //!
-//! // This generates `with_ctx_and_payload_fn() -> RpnFn`
+//! // This generates `with_ctx_and_payload_fn_meta() -> RpnFnMeta`
 //! #[rpn_fn(ctx, payload)]
 //! fn with_ctx_and_payload(
 //!     ctx: &mut EvalContext,
@@ -85,8 +85,8 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
 #[derive(Clone, Copy)]
-/// An RPN function
-pub struct RpnFn {
+/// Metadata of an RPN function
+pub struct RpnFnMeta {
     /// The display name of the function.
     pub name: &'static str,
 
@@ -102,7 +102,7 @@ pub struct RpnFn {
     pub fn_ptr: fn(&mut EvalContext, &RpnFnCallPayload<'_>) -> Result<VectorValue>,
 }
 
-impl std::fmt::Debug for RpnFn {
+impl std::fmt::Debug for RpnFnMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}({} args)", self.name, self.args_len)
     }
