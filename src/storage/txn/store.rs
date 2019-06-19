@@ -160,128 +160,141 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 }
 
-/// A Store that reads on fixtures.
-pub struct FixtureStore {
-    data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
-}
+// The below FixtureStore is for testing only. Unfortunately it can't be under
+// cfg(test) because the test_coprocessor crate imports it.
 
-impl Clone for FixtureStore {
-    fn clone(&self) -> Self {
-        let data = self
-            .data
-            .iter()
-            .map(|(k, v)| {
-                let owned_k = k.clone();
-                let owned_v = match v {
-                    Ok(v) => Ok(v.clone()),
-                    Err(e) => Err(e.maybe_clone().unwrap()),
-                };
-                (owned_k, owned_v)
-            })
-            .collect();
-        Self { data }
-    }
-}
+pub use fixture::{FixtureStore, FixtureStoreScanner};
 
-impl FixtureStore {
-    pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
-        FixtureStore { data }
-    }
-}
+mod fixture {
 
-impl Store for FixtureStore {
-    type Scanner = FixtureStoreScanner;
+    use crate::storage::{Key, Statistics};
 
-    #[inline]
-    fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>> {
-        let r = self.data.get(key);
-        match r {
-            None => Ok(None),
-            Some(Ok(v)) => Ok(Some(v.clone())),
-            Some(Err(e)) => Err(e.maybe_clone().unwrap()),
-        }
+    use super::{Result};
+    use super::{Store, Scanner};
+
+    /// A Store for testing
+    pub struct FixtureStore {
+        data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
     }
 
-    #[inline]
-    fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Vec<u8>>>> {
-        keys.iter().map(|key| self.get(key, statistics)).collect()
-    }
-
-    #[inline]
-    fn scanner(
-        &self,
-        desc: bool,
-        key_only: bool,
-        lower_bound: Option<Key>,
-        upper_bound: Option<Key>,
-    ) -> Result<FixtureStoreScanner> {
-        use std::ops::Bound;
-
-        let lower = lower_bound.as_ref().map_or(Bound::Unbounded, |v| {
-            if !desc {
-                Bound::Included(v)
-            } else {
-                Bound::Excluded(v)
-            }
-        });
-        let upper = upper_bound.as_ref().map_or(Bound::Unbounded, |v| {
-            if desc {
-                Bound::Included(v)
-            } else {
-                Bound::Excluded(v)
-            }
-        });
-
-        let mut vec: Vec<_> = self
-            .data
-            .range((lower, upper))
-            .map(|(k, v)| {
-                let owned_k = k.clone();
-                let owned_v = if key_only {
-                    match v {
-                        Ok(_v) => Ok(vec![]),
-                        Err(e) => Err(e.maybe_clone().unwrap()),
-                    }
-                } else {
-                    match v {
+    impl Clone for FixtureStore {
+        fn clone(&self) -> Self {
+            let data = self
+                .data
+                .iter()
+                .map(|(k, v)| {
+                    let owned_k = k.clone();
+                    let owned_v = match v {
                         Ok(v) => Ok(v.clone()),
                         Err(e) => Err(e.maybe_clone().unwrap()),
-                    }
-                };
-                (owned_k, owned_v)
+                    };
+                    (owned_k, owned_v)
+                })
+                .collect();
+            Self { data }
+        }
+    }
+
+    impl FixtureStore {
+        pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
+            FixtureStore { data }
+        }
+    }
+
+    impl Store for FixtureStore {
+        type Scanner = FixtureStoreScanner;
+
+        #[inline]
+        fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>> {
+            let r = self.data.get(key);
+            match r {
+                None => Ok(None),
+                Some(Ok(v)) => Ok(Some(v.clone())),
+                Some(Err(e)) => Err(e.maybe_clone().unwrap()),
+            }
+        }
+
+        #[inline]
+        fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Vec<u8>>>> {
+            keys.iter().map(|key| self.get(key, statistics)).collect()
+        }
+
+        #[inline]
+        fn scanner(
+            &self,
+            desc: bool,
+            key_only: bool,
+            lower_bound: Option<Key>,
+            upper_bound: Option<Key>,
+        ) -> Result<FixtureStoreScanner> {
+            use std::ops::Bound;
+
+            let lower = lower_bound.as_ref().map_or(Bound::Unbounded, |v| {
+                if !desc {
+                    Bound::Included(v)
+                } else {
+                    Bound::Excluded(v)
+                }
+            });
+            let upper = upper_bound.as_ref().map_or(Bound::Unbounded, |v| {
+                if desc {
+                    Bound::Included(v)
+                } else {
+                    Bound::Excluded(v)
+                }
+            });
+
+            let mut vec: Vec<_> = self
+                .data
+                .range((lower, upper))
+                .map(|(k, v)| {
+                    let owned_k = k.clone();
+                    let owned_v = if key_only {
+                        match v {
+                            Ok(_v) => Ok(vec![]),
+                            Err(e) => Err(e.maybe_clone().unwrap()),
+                        }
+                    } else {
+                        match v {
+                            Ok(v) => Ok(v.clone()),
+                            Err(e) => Err(e.maybe_clone().unwrap()),
+                        }
+                    };
+                    (owned_k, owned_v)
+                })
+                .collect();
+
+            if desc {
+                vec.reverse();
+            }
+
+            Ok(FixtureStoreScanner {
+                // TODO: Remove clone when GATs is available. See rust-lang/rfcs#1598.
+                data: vec.into_iter(),
             })
-            .collect();
-
-        if desc {
-            vec.reverse();
-        }
-
-        Ok(FixtureStoreScanner {
-            // TODO: Remove clone when GATs is available. See rust-lang/rfcs#1598.
-            data: vec.into_iter(),
-        })
-    }
-}
-
-/// A Scanner that scans on fixtures.
-pub struct FixtureStoreScanner {
-    data: std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
-}
-
-impl Scanner for FixtureStoreScanner {
-    #[inline]
-    fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
-        let value = self.data.next();
-        match value {
-            None => Ok(None),
-            Some((k, Ok(v))) => Ok(Some((k, v))),
-            Some((_k, Err(e))) => Err(e),
         }
     }
 
-    #[inline]
-    fn take_statistics(&mut self) -> Statistics {
-        Statistics::default()
+    /// A Scanner for FixtureStore
+    pub struct FixtureStoreScanner {
+        data: std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
+    }
+
+    impl Scanner for FixtureStoreScanner {
+        #[inline]
+        fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
+            let value = self.data.next();
+            match value {
+                None => Ok(None),
+                Some((k, Ok(v))) => Ok(Some((k, v))),
+                Some((_k, Err(e))) => Err(e),
+            }
+        }
+
+        #[inline]
+        fn take_statistics(&mut self) -> Statistics {
+            Statistics::default()
+        }
     }
 }
 
