@@ -538,7 +538,7 @@ You can check whether the TiKV cluster has been successfully deployed using the 
 curl 172.16.10.1:2379/pd/api/v1/stores
 ```
 
-If you want to try the Go client, see [Try Two Types of APIs](../..reference/clients/go-client-api.md).
+If you want to try the Go client, see [Try Two Types of APIs](../../reference/clients/go-client-api.md).
 
 ## Stop the TiKV cluster
 
