@@ -1155,7 +1155,7 @@ mod tests {
 
         profiler::start("eval_compare_1024_rows.profile");
         b.iter(|| {
-            let result = black_box(exp).eval(
+            let result = black_box(&exp).eval(
                 &mut ctx,
                 schema,
                 black_box(&mut columns),
