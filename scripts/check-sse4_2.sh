@@ -17,6 +17,11 @@ if [[ "`uname`" != "Linux" ]]; then
     exit 0
 fi
 
+if [[ "$ROCKSDB_SYS_SSE" == "0" ]]; then
+	echo "skipping sse4.2 check - sse4.2 disabled"
+	exit 0
+fi
+
 echo "checking bins for sse4.2"
 
 for dir in $dirs; do
