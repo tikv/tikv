@@ -1621,6 +1621,7 @@ fn future_delete_range<E: Engine>(
         req.take_context(),
         Key::from_raw(req.get_start_key()),
         Key::from_raw(req.get_end_key()),
+        req.get_notify_only(),
         cb,
     );
 
