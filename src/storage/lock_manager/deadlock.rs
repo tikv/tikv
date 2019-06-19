@@ -112,6 +112,7 @@ pub enum DetectType {
 }
 
 pub enum Task {
+    Initialize,
     Detect {
         tp: DetectType,
         txn_ts: u64,
@@ -126,6 +127,7 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Task::Initialize => write!(f, "initialize"),
             Task::Detect { tp, txn_ts, lock } => write!(
                 f,
                 "Detect {{ tp: {:?}, txn_ts: {:?}, lock: {:?} }}",
@@ -148,6 +150,10 @@ impl Scheduler {
         if let Err(Stopped(task)) = self.0.schedule(task) {
             error!("failed to send task to deadlock_detector"; "task" => %task);
         }
+    }
+
+    pub fn initialize(&self) {
+        self.notify_scheduler(Task::Initialize);
     }
 
     pub fn detect(&self, txn_ts: u64, lock: Lock) {
@@ -257,8 +263,8 @@ impl Inner {
     }
 
     fn reconnect_leader(&mut self, handle: &Handle) {
-        ERROR_COUNTER_VEC.reconnect_leader.inc();
         assert!(self.leader_client.is_none());
+        ERROR_COUNTER_VEC.reconnect_leader.inc();
         let mut leader_client = Client::new(Arc::clone(&self.security_mgr), self.leader_addr());
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
@@ -377,7 +383,8 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         handle.spawn(timer);
     }
 
-    fn init(&mut self, handle: &Handle) {
+    fn initialize(&mut self, handle: &Handle) {
+        assert!(!self.is_initialized);
         self.schedule_membership_change_monitor(handle);
         self.schedule_detect_table_expiration(handle);
         self.is_initialized = true;
@@ -503,17 +510,15 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
 impl<S: StoreAddrResolver + 'static> FutureRunnable<Task> for Detector<S> {
     fn run(&mut self, task: Task, handle: &Handle) {
-        if !self.is_initialized {
-            self.init(handle);
-        }
-
         match task {
-            Task::DetectRpc { stream, sink } => {
-                self.handle_detect_rpc(handle, stream, sink);
+            Task::Initialize => {
+                self.initialize(handle);
             }
-
             Task::Detect { tp, txn_ts, lock } => {
                 self.handle_detect(handle, tp, txn_ts, lock);
+            }
+            Task::DetectRpc { stream, sink } => {
+                self.handle_detect_rpc(handle, stream, sink);
             }
         }
     }
@@ -535,6 +540,7 @@ impl Service {
 }
 
 impl deadlock_grpc::Deadlock for Service {
+    // TODO: remove it
     fn get_wait_for_entries(
         &mut self,
         ctx: RpcContext<'_>,

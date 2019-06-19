@@ -43,6 +43,7 @@ impl Client {
         }
     }
 
+    // TODO: remove it
     #[allow(unused)]
     pub fn get_wait_for_entries(&self) -> DeadlockFuture<WaitForEntriesResponse> {
         match self
@@ -88,6 +89,6 @@ impl Client {
             .as_ref()
             .unwrap()
             .unbounded_send(req)
-            .map_err(|e| Error::Other(Box::new(e)))
+            .map_err(|e| Error::Other(box_err!(e)))
     }
 }
