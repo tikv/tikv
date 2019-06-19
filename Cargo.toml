@@ -131,7 +131,7 @@ codec = { path = "components/codec" }
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 # TODO: use master branch after the next version is released.
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="release-3.0" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
