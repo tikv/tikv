@@ -1013,16 +1013,25 @@ impl<E: Engine> Storage<E> {
     /// Delete all keys in the range [`start_key`, `end_key`).
     /// All keys in the range will be deleted permanently regardless of their timestamps.
     /// That means, you are even unable to get deleted keys by specifying an older timestamp.
+    /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
+    /// still be replicated via Raft. This is used to notify that the data will be deleted by
+    /// `unsafe_destroy_range` soon.
     pub fn async_delete_range(
         &self,
         ctx: Context,
         start_key: Key,
         end_key: Key,
+        notify_only: bool,
         callback: Callback<()>,
     ) -> Result<()> {
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
-            modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
+            modifies.push(Modify::DeleteRange(
+                cf,
+                start_key.clone(),
+                end_key.clone(),
+                notify_only,
+            ));
         }
 
         self.engine.async_write(
@@ -1410,7 +1419,7 @@ impl<E: Engine> Storage<E> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(cf, start_key, end_key)],
+            vec![Modify::DeleteRange(cf, start_key, end_key, false)],
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
@@ -2646,6 +2655,7 @@ mod tests {
                 Context::new(),
                 Key::from_raw(b"x"),
                 Key::from_raw(b"z"),
+                false,
                 expect_ok_callback(tx.clone(), 5),
             )
             .unwrap();
@@ -2672,6 +2682,7 @@ mod tests {
                 Context::new(),
                 Key::from_raw(b""),
                 Key::from_raw(&[255]),
+                false,
                 expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();

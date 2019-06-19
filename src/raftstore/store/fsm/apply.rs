@@ -1230,6 +1230,7 @@ impl ApplyDelegate {
     ) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
+        let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
                 "invalid delete range command, start_key: {:?}, end_key: {:?}",
@@ -1258,38 +1259,43 @@ impl ApplyDelegate {
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        ctx.engines
-            .kv
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
+        if !notify_only {
+            ctx.engines
+                .kv
+                .delete_files_in_range_cf(
+                    handle, &start_key, &end_key, /* include_end */ false,
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete files in range [{}, {}): {:?}",
+                        self.tag,
+                        escape(&start_key),
+                        escape(&end_key),
+                        e
+                    )
+                });
+
+            // Delete all remaining keys.
+            engine_util::delete_all_in_range_cf(
+                &ctx.engines.kv,
+                cf,
+                &start_key,
+                &end_key,
+                use_delete_range,
+            )
             .unwrap_or_else(|e| {
                 panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                     self.tag,
                     escape(&start_key),
                     escape(&end_key),
+                    cf,
                     e
-                )
+                );
             });
+        }
 
-        // Delete all remaining keys.
-        engine_util::delete_all_in_range_cf(
-            &ctx.engines.kv,
-            cf,
-            &start_key,
-            &end_key,
-            use_delete_range,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                self.tag,
-                escape(&start_key),
-                escape(&end_key),
-                cf,
-                e
-            );
-        });
-
+        // TODO: Should this be executed when `notify_only` is set?
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
