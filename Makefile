@@ -43,6 +43,12 @@ export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 
+# Turn on cargo pipelining to add more build parallelism. This has shown decent
+# speedups in TiKV.
+#
+# https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199/68
+export CARGO_BUILD_PIPELINING=true
+
 default: release
 
 .PHONY: all
@@ -101,7 +107,7 @@ fail_release:
 # Individual developers should only need to use the `dist_` rules when working
 # on the CI/CD system.
 dist_release:
-	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
+	make build_release
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
@@ -118,6 +124,10 @@ dist_prof_release:
 # This is used for schrodinger chaos testing.
 dist_fail_release:
 	FAIL_POINT=1 make release
+
+# Build with release flag
+build_release:
+	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
@@ -305,14 +315,14 @@ x-test: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-test: export X_CARGO_RELEASE=0
 x-test: export X_CARGO_CONFIG_FILE=${TEST_CONFIG}
 x-test:
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 x-bench: export X_CARGO_CMD=bench
 x-bench: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-bench: export X_CARGO_RELEASE=0
 x-bench: export X_CARGO_CONFIG_FILE=${BENCH_CONFIG}
 x-bench:
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 # Devs might want to use the config files but not the makefiles.
 # These are rules to put each config file in place.
