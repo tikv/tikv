@@ -432,16 +432,17 @@ impl Helper {
     }
 }
 
+/// `fn() -> (&'static str, usize)` will be formatted as
+/// `fn() -> (&'static str, usize) -> (&'static str, usize)` which is illegal.
+/// See: https://github.com/rust-lang/rustfmt/issues/3635
+/// TODO: Embed the signature into `RpnFn` directly after rustfmt fixed
+type RpnFnMeta = (&'static str, usize);
+
 #[derive(Clone, Copy)]
 /// An RPN function
 pub struct RpnFn {
-    /// The display name of the function.
-    pub name: &'static str,
-
-    /// The accepted argument length of this RPN function.
-    ///
-    /// Currently we do not support variable arguments.
-    pub args_len: usize,
+    /// The meta info retriever
+    pub meta_fn_ptr: fn() -> RpnFnMeta,
 
     /// The function receiving raw argument.
     ///
@@ -450,9 +451,30 @@ pub struct RpnFn {
     pub fn_ptr: fn(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<VectorValue>,
 }
 
+impl RpnFn {
+    #[inline]
+    pub fn meta(&self) -> (&'static str, usize) {
+        (self.meta_fn_ptr)()
+    }
+
+    /// Returns the name of the function.
+    #[inline]
+    pub fn name(&self) -> &'static str {
+        self.meta().0
+    }
+
+    /// Returns argument length of this RPN function.
+    ///
+    /// Currently we do not support variable arguments.
+    #[inline]
+    pub fn args_len(&self) -> usize {
+        self.meta().1
+    }
+}
+
 impl std::fmt::Debug for RpnFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({} args)", self.name, self.args_len)
+        write!(f, "{}({} args)", self.name(), self.args_len())
     }
 }
 
@@ -602,5 +624,25 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cop_codegen::rpn_fn;
+
+    use super::*;
+    use crate::coprocessor::codec::data_type::Int;
+
+    #[rpn_fn]
+    fn foo(_lhs: &Option<Int>, _rhs: &Option<Int>) -> Result<Option<Int>> {
+        unreachable!();
+    }
+
+    #[test]
+    fn test_rpn_fn_name() {
+        let f = foo_fn();
+        assert_eq!(f.name(), "foo");
+        assert_eq!(f.args_len(), 2usize);
     }
 }
