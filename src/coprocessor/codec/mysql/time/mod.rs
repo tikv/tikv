@@ -550,7 +550,7 @@ impl Time {
                 if m == 0 || m > 12 {
                     return Err(box_err!("invalid time format"));
                 } else {
-                    write!(output, "{}", MONTH_NAMES_ABBR[(m - 1) as usize]).unwrap();
+                    output.push_str(MONTH_NAMES_ABBR[(m - 1) as usize]);
                 }
             }
             'M' => {
@@ -558,7 +558,7 @@ impl Time {
                 if m == 0 || m > 12 {
                     return Err(box_err!("invalid time format"));
                 } else {
-                    write!(output, "{}", MONTH_NAMES[(m - 1) as usize]).unwrap();
+                    output.push_str(MONTH_NAMES[(m - 1) as usize]);
                 }
             }
             'm' => {
