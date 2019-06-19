@@ -1,7 +1,7 @@
 ---
 title: Software and Hardware Requirements
 summary: Learn the software and hardware requirements for deploying and running TiKV.
-category: operations
+category: how-to
 ---
 
 # Software and Hardware Requirements

@@ -1,7 +1,7 @@
 ---
 title: Scale a TiKV Cluster Using TiDB-Ansible
 summary: Use TiDB-Ansible to scale out or scale in a TiKV cluster.
-category: operations
+category: how-to
 ---
 
 # Scale a TiKV Cluster Using TiDB-Ansible

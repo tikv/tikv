@@ -1,7 +1,7 @@
 ---
 title: Scale a TiKV Cluster
 summary: Learn how to scale out or scale in a TiKV cluster.
-category: operations
+category: how-to
 ---
 
 # Scale a TiKV Cluster
@@ -27,7 +27,7 @@ Get the information about the existing PD nodes through `pd-ctl`:
 >> member
 ```
 
-For the usage of `pd-ctl`, see [PD Control User Guide](../tools/pd-control.md).
+For the usage of `pd-ctl`, see [PD Control User Guide](../../reference/tools/pd-control.md).
 
 ### Add a PD node dynamically
 

@@ -1,7 +1,7 @@
 ---
 title: PD Scheduler Configuration
 summary: Learn how to configure PD Scheduler.
-category: operations
+category: reference
 ---
 
 # PD Scheduler Configuration

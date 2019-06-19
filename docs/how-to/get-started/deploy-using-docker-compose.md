@@ -1,14 +1,14 @@
 ---
 title: Install and Deploy TiKV Using Docker Compose
 summary: Use Docker Compose to quickly deploy a TiKV testing cluster on a single machine.
-category: operations
+category: how-to
 ---
 
 # Install and Deploy TiKV Using Docker Compose
 
 This guide describes how to quickly deploy a TiKV testing cluster using [Docker Compose](https://github.com/pingcap/tidb-docker-compose/) on a single machine. Currently, this installation method only supports the Linux system.
 
-> **Warning:** Do not use Docker Compose to deploy the TiKV cluster in the production environment. For production, [use Ansible to deploy the TiKV cluster](deploy-tikv-using-ansible.md).
+> **Warning:** Do not use Docker Compose to deploy the TiKV cluster in the production environment. For production, [use Ansible to deploy the TiKV cluster](../deploy/using-ansible.md).
 
 ## Prerequisites
 
@@ -80,9 +80,9 @@ services:
     restart: on-failure
 ```
 
-All the following example docker compose config file will contain this base config.
+All the following example docker compose config files must contain this base configuration.
 
-## Example
+## Examples
 
 ### Run [YCSB](https://github.com/pingcap/go-ycsb) to connect to the TiKV cluster:
 
@@ -122,7 +122,7 @@ All the following example docker compose config file will contain this base conf
     field0="0"
     ```
 
-### Use [Titan](https://github.com/meitu/titan) to connect to the TiKV cluster via the Redis protocol:
+### ### Use [Titan](https://github.com/meitu/titan), a distributed implementation of Redis compatible layer, to connect to the TiKV cluster via the Redis protocol:
 
 1. Create a `titan-docker-compose.yml` file, add the above base config to this file, and then append the following section:
 
@@ -158,5 +158,5 @@ All the following example docker compose config file will contain this base conf
 
 ## What's next?
 
-+ If you want to try the Go client, see [Try Two Types of APIs](../clients/go-client-api.md). You need to build your docker image and add it to the docker compose config file like above YCSB or Titan does. 
++ If you want to try the Go client, see [Try Two Types of APIs](../../reference/clients/go-client-api.md). You need to build your docker image and add it to the docker compose config file like above YCSB or Titan does. 
 + If you want to run a full cluster with monitor support, please follow the [tidb-docker-compose guide](https://github.com/pingcap/tidb-docker-compose/blob/master/README.md), comment the `tidb` and `tispark` sections out in the [values.yaml](https://github.com/pingcap/tidb-docker-compose/blob/master/compose/values.yaml), generate the new docker compose config, then add your own binary image and run it.

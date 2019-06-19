@@ -1,12 +1,12 @@
 ---
 title: Key Metrics
 summary: Learn some key metrics displayed on the Grafana Overview dashboard.
-category: operations
+category: reference
 ---
 
 # Key Metrics
 
-If your TiKV cluster is deployed using Ansible or Docker Compose, the monitoring system is deployed at the same time. For more details, see [Overview of the TiKV Monitoring Framework](monitor-overview.md).
+If your TiKV cluster is deployed using Ansible or Docker Compose, the monitoring system is deployed at the same time. For more details, see [Overview of the TiKV Monitoring Framework](../../how-to/monitor/overview.md).
 
 The Grafana dashboard is divided into a series of sub-dashboards which include Overview, PD, TiKV, and so on. You can use various metrics to help you diagnose the cluster.
 

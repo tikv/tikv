@@ -1,7 +1,7 @@
 ---
 title: TiKV Security Configuration 
 summary: Learn about the security configuration in TiKV.
-category: operations
+category: reference
 ---
 
 # TiKV Security Configuration

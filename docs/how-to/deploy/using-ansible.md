@@ -1,7 +1,7 @@
 ---
 title: Install and Deploy TiKV Using Ansible
 summary: Use TiDB-Ansible to deploy a TiKV cluster on multiple nodes.
-category: operations
+category: how-to
 ---
 
 # Install and Deploy TiKV Using Ansible
@@ -10,7 +10,7 @@ This guide describes how to install and deploy TiKV using Ansible. Ansible is an
 
 [TiDB-Ansible](https://github.com/pingcap/tidb-ansible) is a TiDB cluster deployment tool developed by PingCAP, based on Ansible playbook. TiDB-Ansible enables you to quickly deploy a new TiKV cluster which includes PD, TiKV, and the cluster monitoring modules.
 
-> **Warning:** For the production environment, use TiDB-Ansible to deploy your TiKV cluster. If you only want to try TiKV out and explore the features, see [Install and Deploy TiKV using Docker Compose](deploy-tikv-using-docker-compose.md) on a single machine.
+> **Warning:** For the production environment, use TiDB-Ansible to deploy your TiKV cluster. If you only want to try TiKV out and explore the features, see [Install and Deploy TiKV using Docker Compose](using-docker-compose.md) on a single machine.
 
 ## Prepare
 
@@ -25,7 +25,7 @@ Before you start, make sure you have:
     - CentOS 7.3 (64 bit) or later with Python 2.7 installed, x86_64 architecture (AMD64)
     - Network between machines
     
-    > **Note:** When you deploy TiKV using Ansible, use SSD disks for the data directory of TiKV and PD nodes. Otherwise, the system will not perform well. For more details, see [Software and Hardware Requirements](https://github.com/pingcap/docs/blob/master/op-guide/recommendation.md).
+    > **Note:** When you deploy TiKV using Ansible, use SSD disks for the data directory of TiKV and PD nodes. Otherwise, the system will not perform well. For more details, see [Software and Hardware Requirements](hardware-recommendation.md).
 
 2. A Control Machine that meets the following requirements:
 
@@ -178,7 +178,7 @@ Make sure you have logged in to the Control Machine using the `tidb` user accoun
 
     This step creates the `tidb` user account on the target machines, and configures the sudo rules and the SSH mutual trust between the Control Machine and the target machines.
 
-> **Note:** To configure the SSH mutual trust and sudo without password manually, see [How to manually configure the SSH mutual trust and sudo without password](https://github.com/pingcap/docs/blob/master/op-guide/ansible-deployment.md#how-to-manually-configure-the-ssh-mutual-trust-and-sudo-without-password).
+> **Note:** To configure the SSH mutual trust and sudo without password manually, see [How to manually configure the SSH mutual trust and sudo without password](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md#how-to-manually-configure-the-ssh-mutual-trust-and-sudo-without-password).
 
 ## Step 6: Install the NTP service on the target machines
 
@@ -333,7 +333,7 @@ You can choose one of the following two types of cluster topology according to y
 
 - [The cluster topology of a single TiKV instance on each TiKV node](#option-1-use-the-cluster-topology-of-a-single-tikv-instance-on-each-tikv-node)
 
-    In most cases, it is recommended to deploy one TiKV instance on each TiKV node for better performance. However, if the CPU and memory of your TiKV machines are much better than the required in [Hardware and Software Requirements](https://github.com/pingcap/docs/blob/master/op-guide/recommendation.md), and you have more than two disks in one node or the capacity of one SSD is larger than 2 TB, you can deploy no more than 2 TiKV instances on a single TiKV node.
+    In most cases, it is recommended to deploy one TiKV instance on each TiKV node for better performance. However, if the CPU and memory of your TiKV machines are much better than the required in [Hardware and Software Requirements](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/hardware-recommendations.md), and you have more than two disks in one node or the capacity of one SSD is larger than 2 TB, you can deploy no more than 2 TiKV instances on a single TiKV node.
 
 - [The cluster topology of multiple TiKV instances on each TiKV node](#option-2-use-the-cluster-topology-of-multiple-tikv-instances-on-each-tikv-node)
 
@@ -478,7 +478,7 @@ Edit the parameters in the service configuration file:
     deploy_without_tidb = True
     ```
 
-> **Note:** If you need to edit other variables, see [the variable description table](https://github.com/pingcap/docs/blob/master/op-guide/ansible-deployment.md#edit-other-variables-optional).
+> **Note:** If you need to edit other variables, see [the variable description table](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md).
 
 ## Step 11: Deploy the TiKV cluster
 
@@ -538,7 +538,7 @@ You can check whether the TiKV cluster has been successfully deployed using the 
 curl 172.16.10.1:2379/pd/api/v1/stores
 ```
 
-If you want to try the Go client, see [Try Two Types of APIs](../clients/go-client-api.md).
+If you want to try the Go client, see [Try Two Types of APIs](../..reference/clients/go-client-api.md).
 
 ## Stop the TiKV cluster
 

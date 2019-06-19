@@ -1,7 +1,7 @@
 ---
 title: TiKV Coprocessor Configuration 
 summary: Learn how to configure Coprocessor in TiKV.
-category: operations
+category: reference
 ---
 
 # TiKV Coprocessor Configuration

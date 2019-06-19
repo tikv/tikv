@@ -1,7 +1,7 @@
 ---
 title: Monitor a TiKV Cluster
 summary: Learn how to monitor the state of a TiKV cluster.
-category: operations
+category: how-to
 ---
 
 # Monitor a TiKV Cluster
@@ -21,7 +21,7 @@ The API address of the Placement Driver (PD) is `http://${host}:${port}/pd/api/v
 
 The default port number is 2379.
 
-For detailed information about various API names, see [PD API doc](https://cdn.rawgit.com/pingcap/docs/master/op-guide/pd-api-v1.html).
+For detailed information about various API names, see [PD API doc](https://download.pingcap.com/pd-api-v1.html).
 
 You can use the interface to get the state of all the TiKV instances and the information about load balancing. It is the most important and frequently-used interface to get the state information of all the TiKV nodes. See the following example for the information about a 3-instance TiKV cluster deployed on a single machine:
 

@@ -1,7 +1,7 @@
 ---
 title: Namespace Configuration
 summary: Learn how to configure namespace in TiKV.
-category: operations
+category: how-to
 ---
 
 # Namespace Configuration
@@ -120,6 +120,6 @@ Then two namespaces, `ns1` and `ns2`, are created. But they do not work because 
 
 The namespace configuration is finished. PD will schedule the replicas of table 1001 to TiKV nodes 1,2, and 3 and schedule the replicas of table 1002 to TiKV nodes 4, 5, and 6.
 
-In addition, PD supports some other `table_ns` subcommands, such as the `remove` and `rm_store` commands which remove the table and TiKV node from the specified namespace respectively. PD also supports setting different scheduling configurations within the namespace. For more details, see [PD Control User Guide](https://github.com/pingcap/docs/blob/master/tools/pd-control.md).
+In addition, PD supports some other `table_ns` subcommands, such as the `remove` and `rm_store` commands which remove the table and TiKV node from the specified namespace respectively. PD also supports setting different scheduling configurations within the namespace. For more details, see [PD Control User Guide](../../reference/tools/pd-control.md).
 
 When the namespace configuration is updated, the namespace constraint may be violated. It will take a while for PD to complete the scheduling process. You can view all Regions that violate the constraint using the `pd-ctl` command `region check incorrect-ns`.

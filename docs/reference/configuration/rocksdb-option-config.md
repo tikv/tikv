@@ -1,7 +1,7 @@
 ---
 title: RocksDB Option Configuration 
 summary: Learn how to configure RocksDB options.
-category: operations
+category: reference
 ---
 
 # RocksDB Option Configuration

@@ -1,7 +1,7 @@
 ---
 title: TiKV Storage Configuration 
 summary: Learn how to configure TiKV Storage.
-category: operations
+category: reference
 ---
 
 # TiKV Storage Configuration

@@ -1,12 +1,12 @@
 ---
 title: Try Two Types of APIs
 summary: Learn how to use the Raw Key-Value API and the Transactional Key-Value API in TiKV.
-category: user guide
+category: reference
 ---
 
 # Try Two Types of APIs
 
-To apply to different scenarios, TiKV provides [two types of APIs](../overview.md#two-types-of-apis) for developers: the Raw Key-Value API and the Transactional Key-Value API. This document uses two examples to guide you through how to use the two APIs in TiKV. The usage examples are based on multiple nodes for testing. You can also quickly try the two types of APIs on a single machine.
+To apply to different scenarios, TiKV provides [two types of APIs](../../overview.md#two-types-of-apis) for developers: the Raw Key-Value API and the Transactional Key-Value API. This document uses two examples to guide you through how to use the two APIs in TiKV. The usage examples are based on multiple nodes for testing. You can also quickly try the two types of APIs on a single machine.
 
 > **Warning:** Do not use these two APIs together in the same cluster, otherwise they might corrupt each other's data.
 

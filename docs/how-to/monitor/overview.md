@@ -1,7 +1,7 @@
 ---
 title: Overview of the TiKV Monitoring Framework
 summary: Use Prometheus and Grafana to build the TiKV monitoring framework.
-category: operations
+category: how-to
 ---
 
 # Overview of the TiKV Monitoring Framework

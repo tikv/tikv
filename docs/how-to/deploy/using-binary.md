@@ -1,14 +1,14 @@
 ---
 title: Install and Deploy TiKV Using Binary Files
 summary: Use binary files to deploy a TiKV cluster on a single machine or on multiple nodes for testing.
-category: operations
+category: how-to
 ---
 
 # Install and Deploy TiKV Using Binary Files
 
 This guide describes how to deploy a TiKV cluster using binary files.
 
-> **Warning:** Do not use binary files to deploy the TiKV cluster in the production environment. For production, [use Ansible to deploy the TiKV cluster](deploy-tikv-using-ansible.md).
+> **Warning:** Do not use binary files to deploy the TiKV cluster in the production environment. For production, [use Ansible to deploy the TiKV cluster](using-ansible.md).
 
 - To quickly understand and try TiKV, see [Deploy the TiKV cluster on a single machine](#deploy-the-tikv-cluster-on-a-single-machine).
 - To try TiKV out and explore the features, see [Deploy the TiKV cluster on multiple nodes for testing](#deploy-the-tikv-cluster-on-multiple-nodes-for-testing).
@@ -152,4 +152,4 @@ The result displays the store count and detailed information regarding each stor
 
 ## What's next?
 
-If you want to try the Go client, see [Try Two Types of APIs](../clients/go-client-api.md).
+If you want to try the Go client, see [Try Two Types of APIs](../../reference/clients/go-client-api.md).

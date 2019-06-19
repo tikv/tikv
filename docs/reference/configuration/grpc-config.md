@@ -1,7 +1,7 @@
 ---
 title: gRPC Configuration 
 summary: Learn how to configure gRPC.
-category: operations
+category: reference
 ---
 
 # gRPC Configuration

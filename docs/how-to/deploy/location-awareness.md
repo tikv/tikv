@@ -1,7 +1,7 @@
 ---
 title: Label Configuration
 summary: Learn how to configure labels.
-category: operations
+category: how-to
 ---
 
 # Label Configuration

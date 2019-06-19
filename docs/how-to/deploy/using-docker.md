@@ -1,20 +1,20 @@
 ---
 title: Install and Deploy TiKV Using Docker
 summary: Use Docker to deploy a TiKV cluster on multiple nodes.
-category: operations
+category: how-to
 ---
 
 # Install and Deploy TiKV Using Docker
 
 This guide describes how to deploy a multi-node TiKV cluster using Docker.
 
-> **Warning:** Do not use Docker to deploy the TiKV cluster in the production environment. For production, [use Ansible to deploy the TiKV cluster](deploy-tikv-using-ansible.md).
+> **Warning:** Do not use Docker to deploy the TiKV cluster in the production environment. For production, [use Ansible to deploy the TiKV cluster](using-ansible.md).
 
 ## Prerequisites
 
 Make sure that Docker is installed on each machine.
 
-For more details about prerequisites, see [Hardware and Software Requirements](https://github.com/pingcap/docs/blob/master/op-guide/recommendation.md).
+For more details about prerequisites, see [Hardware and Software Requirements](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/hardware-recommendations.md).
 
 ## Deploy the TiKV cluster on multiple nodes
 
@@ -154,4 +154,4 @@ If the state of all the TiKV instances is "Up", you have successfully deployed a
 
 ## What's next?
 
-If you want to try the Go client, see [Try Two Types of APIs](../clients/go-client-api.md).
+If you want to try the Go client, see [Try Two Types of APIs](../../reference/clients/go-client-api.md).
