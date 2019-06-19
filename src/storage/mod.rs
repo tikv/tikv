@@ -317,11 +317,11 @@ impl Command {
         }
     }
 
-    pub fn priority_tag(&self) -> &'static str {
+    pub fn priority_tag(&self) -> CommandPriority {
         match self.get_context().get_priority() {
-            CommandPri::Low => "low",
-            CommandPri::Normal => "normal",
-            CommandPri::High => "high",
+            CommandPri::Low => CommandPriority::low,
+            CommandPri::Normal => CommandPriority::normal,
+            CommandPri::High => CommandPriority::high,
         }
     }
 
@@ -329,21 +329,21 @@ impl Command {
         !self.readonly() && self.priority() != CommandPri::High
     }
 
-    pub fn tag(&self) -> &'static str {
+    pub fn tag(&self) -> CommandKind {
         match *self {
-            Command::Prewrite { .. } => "prewrite",
-            Command::AcquirePessimisticLock { .. } => "acquire_pessimistic_lock",
-            Command::Commit { .. } => "commit",
-            Command::Cleanup { .. } => "cleanup",
-            Command::Rollback { .. } => "rollback",
-            Command::PessimisticRollback { .. } => "pessimistic_rollback",
-            Command::ScanLock { .. } => "scan_lock",
-            Command::ResolveLock { .. } => "resolve_lock",
-            Command::ResolveLockLite { .. } => "resolve_lock_lite",
-            Command::DeleteRange { .. } => "delete_range",
-            Command::Pause { .. } => "pause",
-            Command::MvccByKey { .. } => "key_mvcc",
-            Command::MvccByStartTs { .. } => "start_ts_mvcc",
+            Command::Prewrite { .. } => CommandKind::prewrite,
+            Command::AcquirePessimisticLock { .. } => CommandKind::acquire_pessimistic_lock,
+            Command::Commit { .. } => CommandKind::commit,
+            Command::Cleanup { .. } => CommandKind::cleanup,
+            Command::Rollback { .. } => CommandKind::rollback,
+            Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
+            Command::ScanLock { .. } => CommandKind::scan_lock,
+            Command::ResolveLock { .. } => CommandKind::resolve_lock,
+            Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
+            Command::DeleteRange { .. } => CommandKind::delete_range,
+            Command::Pause { .. } => CommandKind::pause,
+            Command::MvccByKey { .. } => CommandKind::key_mvcc,
+            Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
         }
     }
 
@@ -2581,7 +2581,7 @@ mod tests {
         storage
             .async_pause(
                 Context::new(),
-                vec![],
+                vec![Key::from_raw(b"y")],
                 1000,
                 expect_ok_callback(tx.clone(), 3),
             )

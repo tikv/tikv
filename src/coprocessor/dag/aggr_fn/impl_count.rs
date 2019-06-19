@@ -96,10 +96,15 @@ impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount
     }
 
     #[inline]
-    fn update_vector(&mut self, _ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()> {
+    fn update_vector(
+        &mut self,
+        _ctx: &mut EvalContext,
+        physical_values: &[Option<T>],
+        logical_rows: &[usize],
+    ) -> Result<()> {
         // Will be used for expressions like `COUNT(col)`.
-        for value in values {
-            if value.is_some() {
+        for physical_index in logical_rows {
+            if physical_values[*physical_index].is_some() {
                 self.count += 1;
             }
         }
@@ -158,11 +163,11 @@ mod tests {
         assert_eq!(result[0].as_int_slice(), &[Some(6)]);
 
         state
-            .update_vector(&mut ctx, &[Some(1i64), None, Some(-1i64)])
+            .update_vector(&mut ctx, &[Some(1i64), None, Some(-1i64)], &[1, 2])
             .unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].as_int_slice(), &[Some(8)]);
+        assert_eq!(result[0].as_int_slice(), &[Some(7)]);
     }
 }
