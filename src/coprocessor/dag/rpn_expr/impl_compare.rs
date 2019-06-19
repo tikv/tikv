@@ -16,7 +16,7 @@ where
     C::compare(lhs, rhs)
 }
 
-pub trait Comparer: 'static + Send + Sync {
+pub trait Comparer {
     type T: Evaluable;
 
     fn compare(lhs: &Option<Self::T>, rhs: &Option<Self::T>) -> Result<Option<i64>>;
@@ -109,7 +109,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
     }
 }
 
-pub trait CmpOp: 'static + Send + Sync {
+pub trait CmpOp {
     #[inline]
     fn compare_null() -> Option<i64> {
         None

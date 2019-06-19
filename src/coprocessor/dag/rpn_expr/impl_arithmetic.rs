@@ -5,7 +5,6 @@ use cop_codegen::rpn_fn;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::{self, Error};
 use crate::coprocessor::Result;
-use std::fmt::Debug;
 
 #[rpn_fn]
 #[inline]
@@ -21,7 +20,7 @@ pub fn arithmetic<A: ArithmeticOp>(
     }
 }
 
-pub trait ArithmeticOp: Send + Sync + Debug + 'static {
+pub trait ArithmeticOp {
     type T: Evaluable;
 
     fn calc(lhs: &Self::T, rhs: &Self::T) -> Result<Option<Self::T>>;
