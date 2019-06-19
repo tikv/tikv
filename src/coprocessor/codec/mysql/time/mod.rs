@@ -535,7 +535,7 @@ impl Time {
         }
         // TODO:support case month or day is 0(2012-00-00 12:12:12)
         let nanos = self.time.nanosecond();
-        let base = TEN_POW[NANO_WIDTH - fsp as usize];
+        let base = TEN_POW[NANO_WIDTH - usize::from(fsp)];
         let expect_nanos = ((f64::from(nanos) / f64::from(base)).round() as u32) * base;
         let diff = i64::from(nanos) - i64::from(expect_nanos);
         let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));

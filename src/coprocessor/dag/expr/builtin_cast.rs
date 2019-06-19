@@ -587,7 +587,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let mut val = try_opt!(self.children[0].eval_duration(ctx, row));
-        val.set_fsp(mysql::MAX_FSP as u8);
+        val.maximize_fsp();
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))
     }
@@ -1639,7 +1639,7 @@ mod tests {
             let data = res.unwrap();
             let mut expt = *exp;
             if to_fsp != mysql::UNSPECIFIED_FSP {
-                expt.set_fsp(to_fsp as u8);
+                expt = expt.round_frac(to_fsp).expect("fail to round");
             }
             assert_eq!(
                 data.to_string(),

@@ -297,11 +297,11 @@ mod tests {
     fn test_duration_any_value() {
         test_any_value!(
             vec![(
-                Duration::from_nanos(10, 0).unwrap(),
-                Duration::from_nanos(11, 0).unwrap(),
-                Duration::from_nanos(12, 0).unwrap(),
-                Duration::from_nanos(13, 0).unwrap(),
-                Duration::from_nanos(10, 0).unwrap(),
+                Duration::from_millis(10, 0).unwrap(),
+                Duration::from_millis(11, 0).unwrap(),
+                Duration::from_millis(12, 0).unwrap(),
+                Duration::from_millis(13, 0).unwrap(),
+                Duration::from_millis(10, 0).unwrap(),
             )],
             Vec<(Duration, Duration, Duration, Duration, Duration)>,
             Datum::Dur,

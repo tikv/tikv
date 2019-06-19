@@ -489,9 +489,13 @@ mod tests {
     #[test]
     fn test_compare_duration() {
         fn map_double_to_duration(v: Real) -> Duration {
-            let d = std::time::Duration::from_millis((v.abs() * 1000.0) as u64);
-            let is_neg = v.into_inner() < 0.0;
-            Duration::new(d, is_neg, 4).unwrap()
+            let millis = (v.abs() * 1000.0) as i64;
+            let millis = if v.into_inner() < 0.0 {
+                -millis
+            } else {
+                millis
+            };
+            Duration::from_millis(millis, 4).unwrap()
         }
 
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {

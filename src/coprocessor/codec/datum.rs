@@ -1040,7 +1040,6 @@ mod tests {
 
     use std::cmp::Ordering;
     use std::sync::Arc;
-    use std::time::Duration as StdDuration;
     use std::{i16, i32, i64, i8, u16, u32, u64, u8};
 
     fn same_type(l: &Datum, r: &Datum) -> bool {
@@ -1073,12 +1072,8 @@ mod tests {
             ],
             vec![Datum::Null],
             vec![
-                Duration::new(StdDuration::from_millis(23), false, MAX_FSP)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(23), true, MAX_FSP)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(23, MAX_FSP).unwrap().into(),
+                Duration::from_millis(-23, MAX_FSP).unwrap().into(),
             ],
             vec![
                 Datum::U64(1),
@@ -1209,84 +1204,52 @@ mod tests {
             ),
             (b"".as_ref().into(), b"".as_ref().into(), Ordering::Equal),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Datum::Null,
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(29034), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(29034, 2).unwrap().into(),
                 Ordering::Less,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Equal,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(-34, 2).unwrap().into(),
                 Datum::Null,
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(0), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(0, 2).unwrap().into(),
                 Datum::I64(0),
                 Ordering::Equal,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(29034), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(-29034, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), true, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(-3340, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Less,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
+                Duration::from_millis(-34, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 b"-00.34".as_ref().into(),
                 Ordering::Greater,
             ),
