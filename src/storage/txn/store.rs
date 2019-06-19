@@ -160,21 +160,87 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 }
 
-// The below FixtureStore is for testing only. Unfortunately it can't be under
-// cfg(test) because the test_coprocessor crate imports it.
-
 pub use fixture::{FixtureStore, FixtureStoreScanner};
 
+/// The below FixtureStore is for testing only. Unfortunately it can't be under
+/// cfg(test) because the test_coprocessor crate imports it.
+///
+/// The FixtureStore works by holding a BTreeMap of Result types, so that when a
+/// `get` operation is called it can optionally return an error. FixtureStore
+/// needs to clone these errors in order to return them. Because the Store trait
+/// returns txn::Error types, and that is a huge type that doesn't otherwise
+/// need to be cloned, and can't easily be cloned, FixtureStore uses a trick
+/// below to only store error variants used by actual test cases.
+///
+/// The FixtureStore is created by passing in a map containing txn::Errors, then
+/// internally those are converted to FixtureErrors, which contain a much
+/// smaller subset of clonable variants. This eliminates error-cloning sprawl
+/// from all over tikv, since that error-prone error-cloning code only needs to
+/// be used right here.
 mod fixture {
 
     use crate::storage::{Key, Statistics};
 
-    use super::{Result};
-    use super::{Store, Scanner};
+    use super::{Result, Error, Store, Scanner};
+    use crate::storage::mvcc::Error as MvccError;
+
+    quick_error! {
+        #[derive(Debug)]
+        enum FixtureError {
+            Mvcc(err: MvccError) {
+                from()
+                cause(err)
+                description(err.description())
+            }
+        }
+    }
+
+    impl Clone for FixtureError {
+        fn clone(&self) -> FixtureError {
+            match self {
+                FixtureError::Mvcc(ref e) => FixtureError::Mvcc(match *e {
+                    MvccError::KeyIsLocked {
+                        ref key,
+                        ref primary,
+                        ts,
+                        ttl,
+                        txn_size,
+                    } => MvccError::KeyIsLocked {
+                        key: key.clone(),
+                        primary: primary.clone(),
+                        ts,
+                        ttl,
+                        txn_size,
+                    },
+                    MvccError::BadFormatLock => MvccError::BadFormatLock,
+                    _ => unimplemented!("{:?}", self),
+                }),
+            }
+        }
+    }
+
+    impl From<Error> for FixtureError {
+        fn from(e: Error) -> FixtureError {
+            match e {
+                Error::Mvcc(e) => FixtureError::Mvcc(e),
+                _ => unimplemented!("{:?}", e),
+            }
+        }
+    }
+
+    impl From<FixtureError> for Error {
+        fn from(e: FixtureError) -> Error {
+            match e {
+                FixtureError::Mvcc(e) => Error::Mvcc(e),
+            }
+        }
+    }
+
+    type FixtureResult<T> = std::result::Result<T, FixtureError>;
 
     /// A Store for testing
     pub struct FixtureStore {
-        data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
+        data: std::collections::BTreeMap<Key, FixtureResult<Vec<u8>>>,
     }
 
     impl Clone for FixtureStore {
@@ -186,7 +252,7 @@ mod fixture {
                     let owned_k = k.clone();
                     let owned_v = match v {
                         Ok(v) => Ok(v.clone()),
-                        Err(e) => Err(e.maybe_clone().unwrap()),
+                        Err(e) => Err(e.clone()),
                     };
                     (owned_k, owned_v)
                 })
@@ -197,6 +263,9 @@ mod fixture {
 
     impl FixtureStore {
         pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
+            let data = data.into_iter().map(|(k, v)| {
+                (k, v.map_err(FixtureError::from))
+            }).collect();
             FixtureStore { data }
         }
     }
@@ -210,7 +279,7 @@ mod fixture {
             match r {
                 None => Ok(None),
                 Some(Ok(v)) => Ok(Some(v.clone())),
-                Some(Err(e)) => Err(e.maybe_clone().unwrap()),
+                Some(Err(e)) => Err(e.clone().into()),
             }
         }
 
@@ -252,12 +321,12 @@ mod fixture {
                     let owned_v = if key_only {
                         match v {
                             Ok(_v) => Ok(vec![]),
-                            Err(e) => Err(e.maybe_clone().unwrap()),
+                            Err(e) => Err(e.clone()),
                         }
                     } else {
                         match v {
                             Ok(v) => Ok(v.clone()),
-                            Err(e) => Err(e.maybe_clone().unwrap()),
+                            Err(e) => Err(e.clone()),
                         }
                     };
                     (owned_k, owned_v)
@@ -277,7 +346,7 @@ mod fixture {
 
     /// A Scanner for FixtureStore
     pub struct FixtureStoreScanner {
-        data: std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
+        data: std::vec::IntoIter<(Key, FixtureResult<Vec<u8>>)>,
     }
 
     impl Scanner for FixtureStoreScanner {
@@ -287,7 +356,7 @@ mod fixture {
             match value {
                 None => Ok(None),
                 Some((k, Ok(v))) => Ok(Some((k, v))),
-                Some((_k, Err(e))) => Err(e),
+                Some((_k, Err(e))) => Err(e.into()),
             }
         }
 
