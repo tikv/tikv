@@ -5,12 +5,10 @@ mod expr_builder;
 mod expr_eval;
 #[cfg(test)]
 pub mod test_util;
-mod vector_view;
 
 pub use self::expr::{RpnExpression, RpnExpressionNode};
 pub use self::expr_builder::RpnExpressionBuilder;
 pub use self::expr_eval::RpnStackNode;
-pub use self::vector_view::{ConcreteLogicalVectorView, LogicalVectorView};
 
 use tipb::expression::FieldType;
 
