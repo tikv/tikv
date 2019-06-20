@@ -310,6 +310,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Start waiter manager and deadlock detector
     if cfg.pessimistic_txn.enabled {
+        let waiter_mgr_runner = WaiterManager::new(
+            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
+            cfg.pessimistic_txn.wait_for_lock_timeout,
+            cfg.pessimistic_txn.wake_up_delay_duration,
+        );
         let detector_runner = Detector::new(
             node.id(),
             WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
@@ -318,27 +323,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             resolver,
             cfg.pessimistic_txn.monitor_membership_interval,
         );
-        detector_worker
-            .as_mut()
-            .unwrap()
-            .start(detector_runner)
-            .unwrap_or_else(|e| fatal!("failed to start deadlock detector: {}", e));
-
-        // Initialize deadlock detector
-        let detector_scheduler =
-            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler());
-        detector_scheduler.initialize();
-
-        let waiter_mgr_runner = WaiterManager::new(
-            detector_scheduler,
-            cfg.pessimistic_txn.wait_for_lock_timeout,
-            cfg.pessimistic_txn.wake_up_delay_duration,
-        );
         waiter_mgr_worker
             .as_mut()
             .unwrap()
             .start(waiter_mgr_runner)
             .unwrap_or_else(|e| fatal!("failed to start waiter manager: {}", e));
+        detector_worker
+            .as_mut()
+            .unwrap()
+            .start(detector_runner)
+            .unwrap_or_else(|e| fatal!("failed to start deadlock detector: {}", e));
     }
 
     // Run server.

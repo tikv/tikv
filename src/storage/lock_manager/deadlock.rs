@@ -112,7 +112,6 @@ pub enum DetectType {
 }
 
 pub enum Task {
-    Initialize,
     Detect {
         tp: DetectType,
         txn_ts: u64,
@@ -127,7 +126,6 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::Initialize => write!(f, "initialize"),
             Task::Detect { tp, txn_ts, lock } => write!(
                 f,
                 "Detect {{ tp: {:?}, txn_ts: {:?}, lock: {:?} }}",
@@ -150,10 +148,6 @@ impl Scheduler {
         if let Err(Stopped(task)) = self.0.schedule(task) {
             error!("failed to send task to deadlock_detector"; "task" => %task);
         }
-    }
-
-    pub fn initialize(&self) {
-        self.notify_scheduler(Task::Initialize);
     }
 
     pub fn detect(&self, txn_ts: u64, lock: Lock) {
@@ -382,6 +376,8 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
     fn initialize(&mut self, handle: &Handle) {
         assert!(!self.is_initialized);
+        // Get leader info now because tokio_timer::Interval can't execute immediately.
+        let _ = Self::monitor_membership_change(&self.pd_client, &self.resolver, &self.inner);
         self.schedule_membership_change_monitor(handle);
         self.schedule_detect_table_expiration(handle);
         self.is_initialized = true;
@@ -512,10 +508,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
 impl<S: StoreAddrResolver + 'static> FutureRunnable<Task> for Detector<S> {
     fn run(&mut self, task: Task, handle: &Handle) {
+        if !self.is_initialized {
+            self.initialize(handle);
+        }
+
         match task {
-            Task::Initialize => {
-                self.initialize(handle);
-            }
             Task::Detect { tp, txn_ts, lock } => {
                 self.handle_detect(handle, tp, txn_ts, lock);
             }
