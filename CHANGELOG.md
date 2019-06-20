@@ -10,7 +10,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 + Engine
     - Check iterator status when scanning. [4936](https://github.com/tikv/tikv/pull/4936)
-    - Fix ingested file and direcotry not being sync. [4937](https://github.com/tikv/tikv/pull/4937)
+    - Fix the issue that ingested files and directory are not synchronized. [4937](https://github.com/tikv/tikv/pull/4937)
 
 + Server
     - Sanitize block size config. [4928](https://github.com/tikv/tikv/pull/4928)
