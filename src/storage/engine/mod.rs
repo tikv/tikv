@@ -150,6 +150,7 @@ pub trait Iterator: Send + Sized {
     fn seek_to_first(&mut self) -> bool;
     fn seek_to_last(&mut self) -> bool;
     fn valid(&self) -> bool;
+    fn status(&self) -> Result<()>;
 
     fn validate_key(&self, _: &Key) -> Result<()> {
         Ok(())
@@ -377,7 +378,7 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if self.scan_mode == ScanMode::Forward
-            && self.valid()
+            && self.valid()?
             && self.key(statistics) >= key.as_encoded().as_slice()
         {
             return Ok(true);
@@ -396,7 +397,7 @@ impl<I: Iterator> Cursor<I> {
     /// around `key`, otherwise you should use `seek` instead.
     pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
-        if !self.iter.valid() {
+        if !self.valid()? {
             return self.seek(key, statistics);
         }
         let ord = self.key(statistics).cmp(key.as_encoded());
@@ -419,7 +420,7 @@ impl<I: Iterator> Cursor<I> {
                 self.seek(key, statistics),
                 statistics
             );
-            if self.iter.valid() {
+            if self.valid()? {
                 if self.key(statistics) < key.as_encoded().as_slice() {
                     self.next(statistics);
                 }
@@ -435,7 +436,7 @@ impl<I: Iterator> Cursor<I> {
                 statistics
             );
         }
-        if !self.iter.valid() {
+        if !self.valid()? {
             self.max_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
@@ -472,7 +473,7 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if self.scan_mode == ScanMode::Backward
-            && self.valid()
+            && self.valid()?
             && self.key(statistics) <= key.as_encoded().as_slice()
         {
             return Ok(true);
@@ -488,7 +489,7 @@ impl<I: Iterator> Cursor<I> {
     /// Find the largest key that is not greater than the specific key.
     pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
-        if !self.iter.valid() {
+        if !self.valid()? {
             return self.seek_for_prev(key, statistics);
         }
         let ord = self.key(statistics).cmp(key.as_encoded());
@@ -512,7 +513,7 @@ impl<I: Iterator> Cursor<I> {
                 self.seek_for_prev(key, statistics),
                 statistics
             );
-            if self.iter.valid() {
+            if self.valid()? {
                 if self.key(statistics) > key.as_encoded().as_slice() {
                     self.prev(statistics);
                 }
@@ -528,7 +529,7 @@ impl<I: Iterator> Cursor<I> {
             );
         }
 
-        if !self.iter.valid() {
+        if !self.valid()? {
             self.min_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
@@ -631,8 +632,19 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn valid(&self) -> bool {
-        self.iter.valid()
+    // As Rocksdb described, if Iterator::Valid() is false, there are two possibilities:
+    // (1) We reached the end of the data. In this case, status() is OK();
+    // (2) there is an error. In this case status() is not OK().
+    // So check status when iterator is invalidated.
+    pub fn valid(&self) -> Result<bool> {
+        if !self.iter.valid() {
+            if let Err(e) = self.iter.status() {
+                return Err(e);
+            }
+            Ok(false)
+        } else {
+            Ok(true)
+        }
     }
 }
 
