@@ -239,27 +239,18 @@ impl Inner {
                 debug!("leader not change"; "leader_id" => leader_id, "leader_addr" => leader_addr);
             }
             _ => {
-                if self.store_id != leader_id {
-                    self.become_follower(leader_id);
+                if self.store_id == leader_id {
+                    info!("become the leader of deadlock detector!"; "self_id" => self.store_id);
                 } else {
-                    self.become_leader();
+                    if self.is_leader() {
+                        info!("changed from leader to follower"; "self_id" => self.store_id);
+                    }
+                    info!("leader changed"; "leader_id" => leader_id);
                 }
+                self.reset();
                 self.leader_info.replace((leader_id, leader_addr));
             }
         }
-    }
-
-    fn become_leader(&mut self) {
-        info!("become the leader of deadlock detector!"; "self_id" => self.store_id);
-        self.reset();
-    }
-
-    fn become_follower(&mut self, leader_id: u64) {
-        if self.store_id == leader_id {
-            info!("changed from leader to follower"; "self_id" => self.store_id);
-        }
-        info!("leader changed"; "leader_id" => leader_id);
-        self.reset();
     }
 
     fn reconnect_leader(&mut self, handle: &Handle) {
