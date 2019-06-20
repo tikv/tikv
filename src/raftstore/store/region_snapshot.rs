@@ -102,7 +102,7 @@ impl RegionSnapshot {
             }
         }
 
-        it.status()
+        Ok(())
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
@@ -343,20 +343,30 @@ impl RegionIterator {
 mod tests {
     use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
+    use std::thread;
 
     use kvproto::metapb::{Peer, Region};
     use tempdir::TempDir;
 
     use crate::raftstore::store::keys::*;
     use crate::raftstore::store::PeerStorage;
+    use crate::raftstore::store::snap::snap_io::{apply_sst_cf_file, build_sst_cf_file};
     use crate::raftstore::Result;
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
+    use crate::config::TiKvConfig;
+    use crate::storage::kv::RocksSnapshot;
+    use crate::storage::mvcc::{WriteType,Write};
+    use crate::storage::txn::Scanner;
+    use crate::storage::mvcc::ScannerBuilder;
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::Writable;
+    use engine::rocks::{ Writable, Snapshot, SstFileWriter, IngestExternalFileOptions, EnvOptions};
     use engine::Engines;
+    use engine::util::delete_all_files_in_range;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
+    use tikv_util::config::{ReadableSize, ReadableDuration};
     use tikv_util::{escape, worker};
 
     use super::*;
@@ -369,6 +379,35 @@ mod tests {
         Engines::new(
             Arc::new(
                 rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                    .unwrap(),
+            ),
+            Arc::new(
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
+            ),
+            shared_block_cache,
+        )
+    }
+
+    fn new_temp_titan_engine(path:&TempDir) -> Engines {
+        let mut cfg = TiKvConfig::default();
+        let cache = cfg.storage.block_cache.build_shared_cache();
+        cfg.rocksdb.titan.enabled = true;
+        cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
+        cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+        cfg.rocksdb.defaultcf.dynamic_level_bytes = false;
+        cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
+        cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
+        cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
+        cfg.rocksdb.defaultcf.titan.min_blob_size = 0;
+        let kv_db_opts = cfg.rocksdb.build_opt();
+        let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
+        
+        let raft_path = path.path().join(Path::new("titan"));
+        let shared_block_cache = false;
+        Engines::new(
+            Arc::new(
+                rocks::util::new_engine(path.path().to_str().unwrap(), Some(kv_db_opts), ALL_CFS, Some(kv_cfs_opts))
                     .unwrap(),
             ),
             Arc::new(
@@ -445,6 +484,60 @@ mod tests {
                     .unwrap();
             }
         }
+
+        let store = new_peer_storage(engines, &r);
+        (store, data)
+    }
+
+    fn load_multiple_levels_overlap_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+        let mut r = Region::new();
+        r.mut_peers().push(Peer::new());
+        r.set_id(10);
+        r.set_start_key(b"".to_vec());
+        r.set_end_key(b"".to_vec());
+
+        let data = vec![];
+
+
+        let start_ts = 7;
+        let commit_ts = 8;
+        let write = Write::new(
+            WriteType::Put,
+            start_ts,
+            None,
+        );
+        let db = &engines.kv;
+        let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
+        let write_cf = db.cf_handle(CF_WRITE).unwrap();
+        db.put_cf(&default_cf, &data_key(Key::from_raw(b"a").append_ts(start_ts).as_encoded()), b"a_value").unwrap();
+        db.put_cf(&write_cf, &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()), &write.to_bytes()).unwrap();
+        db.put_cf(&default_cf, &data_key(Key::from_raw(b"b").append_ts(start_ts).as_encoded()), b"b_value").unwrap();
+        db.put_cf(&write_cf, &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()), &write.to_bytes()).unwrap();
+        db.flush(true).unwrap();
+        compact_files_in_range(&db, None, None, None).unwrap();
+
+        let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+        assert_eq!(value, 0);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+        assert_eq!(value, 1);
+
+        let mut io_options = db.get_options();
+        let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
+        let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+        writer.open(&sst_file_path.to_str().unwrap()).unwrap();
+        writer.delete(&data_key(Key::from_raw(b"a").append_ts(start_ts).as_encoded())).unwrap();
+        writer.finish().unwrap();
+        let mut opts = IngestExternalFileOptions::new();
+        opts.move_files(true);
+        db.ingest_external_file_cf(&default_cf, &opts, &[sst_file_path.to_str().unwrap()]).unwrap();
+
+        let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+        assert_eq!(value, 0);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+        assert_eq!(value, 1);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+        assert_eq!(value, 1);
+
 
         let store = new_peer_storage(engines, &r);
         (store, data)
@@ -784,5 +877,81 @@ mod tests {
         }
         res.sort();
         assert_eq!(res, test_data[1..3].to_vec());
+    }
+
+    #[test] 
+    fn test_delete_files_in_range() {
+        let path = TempDir::new("test-raftstore").unwrap();
+        let engines = new_temp_titan_engine(&path);
+
+        let (store, test_data) = load_multiple_levels_overlap_dataset(engines);
+        
+        // used to trigger titan gc
+        let db = &store.engines.kv;
+        db.put(b"1", b"1").unwrap();
+        db.flush(true).unwrap();
+        db.put(b"2", b"2").unwrap();
+        db.flush(true).unwrap();
+        compact_files_in_range(db, Some(b"0"), Some(b"3"), Some(1)).unwrap();
+
+        let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+        assert_eq!(value, 0);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level1").unwrap();
+        assert_eq!(value, 1);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+        assert_eq!(value, 1);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+        assert_eq!(value, 1);
+
+        // wait Titan to purge obsolete files
+        thread::sleep(Duration::from_secs(2));
+
+        delete_all_files_in_range(&store.engines.kv, &data_key(Key::from_raw(b"a").as_encoded()), &data_key(Key::from_raw(b"b").as_encoded())).unwrap();
+
+        let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+        assert_eq!(value, 0);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level1").unwrap();
+        assert_eq!(value, 1);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+        assert_eq!(value, 0);
+        let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+        assert_eq!(value, 1);
+        
+        let default_sst_file_path = path.path().join("default.sst");
+        let write_sst_file_path = path.path().join("write.sst");
+        let stats = build_sst_cf_file(
+            &default_sst_file_path.to_str().unwrap(),
+            &Snapshot::new(Arc::clone(&store.engines.kv)),
+            CF_DEFAULT,
+            b"",
+            b"{",
+            None,
+        )
+        .unwrap();
+        let stats = build_sst_cf_file(
+            &write_sst_file_path.to_str().unwrap(),
+            &Snapshot::new(Arc::clone(&store.engines.kv)),
+            CF_WRITE,
+            b"",
+            b"{",
+            None,
+        )
+        .unwrap();
+
+        let dir1 = TempDir::new("test-snap-cf-db-apply").unwrap();
+        let engines1 = new_temp_engine(&dir1);
+        apply_sst_cf_file(&default_sst_file_path.to_str().unwrap(), &engines1.kv, CF_DEFAULT).unwrap();
+        apply_sst_cf_file(&write_sst_file_path.to_str().unwrap(), &engines1.kv, CF_WRITE).unwrap();
+
+        let snapshot = RocksSnapshot::new(Arc::clone(&engines1.kv));
+        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+            .range(Some(Key::from_raw(b"a")), None)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(b"b"), b"b_value".to_vec())),
+        );
     }
 }

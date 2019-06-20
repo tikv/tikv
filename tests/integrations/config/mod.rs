@@ -401,6 +401,7 @@ fn test_serde_custom_tikv_config() {
             dirname: "bar".to_owned(),
             disable_gc: false,
             max_background_gc: 9,
+            purge_obsolete_files_period: ReadableDuration::secs(1),
         },
     };
     value.raftdb = RaftDbConfig {

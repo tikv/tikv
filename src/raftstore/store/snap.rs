@@ -41,7 +41,7 @@ use crate::raftstore::store::metrics::{
 use crate::raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
 #[path = "snap/io.rs"]
-mod snap_io;
+pub mod snap_io;
 
 // Data in CF_RAFT should be excluded for a snapshot.
 pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];

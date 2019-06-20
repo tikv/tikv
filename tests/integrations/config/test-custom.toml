@@ -173,6 +173,7 @@ enabled = true
 dirname = "bar"
 disable-gc = false
 max-background-gc = 9
+purge-obsolete-files-period = 1s
 
 [rocksdb.defaultcf]
 block-size = "12KB"

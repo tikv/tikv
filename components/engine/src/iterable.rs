@@ -189,6 +189,5 @@ where
             break;
         }
     }
-
-    it.status().map_err(From::from)
+    Ok(())
 }

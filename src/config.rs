@@ -580,6 +580,7 @@ pub struct TitanDBConfig {
     pub dirname: String,
     pub disable_gc: bool,
     pub max_background_gc: i32,
+    pub purge_obsolete_files_period: ReadableDuration,
 }
 
 impl Default for TitanDBConfig {
@@ -589,6 +590,7 @@ impl Default for TitanDBConfig {
             dirname: "".to_owned(),
             disable_gc: false,
             max_background_gc: 1,
+            purge_obsolete_files_period: ReadableDuration::secs(10),
         }
     }
 }
@@ -599,6 +601,7 @@ impl TitanDBConfig {
         opts.set_dirname(&self.dirname);
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
+        opts.set_purge_obsolete_files_period(self.purge_obsolete_files_period.as_secs() as usize);
         opts
     }
 }
