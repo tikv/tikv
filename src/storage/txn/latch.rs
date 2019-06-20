@@ -3,8 +3,11 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
 use std::usize;
+
+use spin::Mutex;
+
+const WAITING_LIST_SHRINK_SIZE: usize = 32;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -97,7 +100,7 @@ impl Latches {
     pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_count: usize = 0;
         for i in &lock.required_slots[lock.owned_count..] {
-            let mut latch = self.slots[*i].lock().unwrap();
+            let mut latch = self.slots[*i].lock();
             let front = latch.waiting.front().cloned();
             match front {
                 Some(cid) => {
@@ -124,11 +127,18 @@ impl Latches {
     pub fn release(&self, lock: &Lock, who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
         for i in &lock.required_slots[..lock.owned_count] {
-            let mut latch = self.slots[*i].lock().unwrap();
+            let mut latch = self.slots[*i].lock();
             let front = latch.waiting.pop_front().unwrap();
             assert_eq!(front, who);
             if let Some(wakeup) = latch.waiting.front() {
                 wakeup_list.push(*wakeup);
+            }
+            // For some hot keys, the waiting list maybe very long, so we should shrink the waiting
+            // VecDeque after pop.
+            if latch.waiting.capacity() > WAITING_LIST_SHRINK_SIZE
+                && latch.waiting.len() < WAITING_LIST_SHRINK_SIZE
+            {
+                latch.waiting.shrink_to_fit();
             }
         }
         wakeup_list

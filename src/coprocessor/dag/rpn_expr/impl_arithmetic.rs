@@ -1,52 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cop_codegen::RpnFunction;
+use cop_codegen::rpn_fn;
 
-use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::{self, Error};
-use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
-use std::fmt::Debug;
 
-#[derive(Debug, RpnFunction)]
-#[rpn_function(args = 2)]
-pub struct RpnFnArithmetic<A: ArithmeticOp> {
-    _phantom: std::marker::PhantomData<A>,
-}
-
-impl<A: ArithmeticOp> RpnFnArithmetic<A> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg0: &Option<A::T>,
-        arg1: &Option<A::T>,
-    ) -> Result<Option<A::T>> {
-        if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
-            A::calc(lhs, rhs)
-        } else {
-            // All arithmetical functions with a NULL argument return NULL
-            Ok(None)
-        }
+#[rpn_fn]
+#[inline]
+pub fn arithmetic<A: ArithmeticOp>(
+    arg0: &Option<A::T>,
+    arg1: &Option<A::T>,
+) -> Result<Option<A::T>> {
+    if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
+        A::calc(lhs, rhs)
+    } else {
+        // All arithmetical functions with a NULL argument return NULL
+        Ok(None)
     }
 }
 
-impl<A: ArithmeticOp> Clone for RpnFnArithmetic<A> {
-    fn clone(&self) -> Self {
-        Self::new()
-    }
-}
-
-impl<A: ArithmeticOp> Copy for RpnFnArithmetic<A> {}
-
-pub trait ArithmeticOp: Send + Sync + Debug + 'static {
+pub trait ArithmeticOp {
     type T: Evaluable;
 
     fn calc(lhs: &Self::T, rhs: &Self::T) -> Result<Option<Self::T>>;
@@ -327,6 +301,18 @@ impl ArithmeticOp for DecimalMod {
     }
 }
 
+#[derive(Debug)]
+pub struct DecimalMultiply;
+
+impl ArithmeticOp for DecimalMultiply {
+    type T = Decimal;
+
+    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        let res: codec::Result<Decimal> = (lhs * rhs).into();
+        Ok(Some(res?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,6 +540,7 @@ mod tests {
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
+
     #[test]
     fn test_mod_int_unsigned() {
         let tests = vec![
@@ -667,6 +654,20 @@ mod tests {
                 .push_param(lhs.parse::<Decimal>().ok())
                 .push_param(rhs.parse::<Decimal>().ok())
                 .evaluate(ScalarFuncSig::ModDecimal)
+                .unwrap();
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_multiply_decimal() {
+        let test_cases = vec![("1.1", "2.2", "2.42")];
+        for (lhs, rhs, expected) in test_cases {
+            let expected: Option<Decimal> = expected.parse().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs.parse::<Decimal>().ok())
+                .push_param(rhs.parse::<Decimal>().ok())
+                .evaluate(ScalarFuncSig::MultiplyDecimal)
                 .unwrap();
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }

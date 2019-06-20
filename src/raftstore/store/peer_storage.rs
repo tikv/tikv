@@ -794,7 +794,7 @@ impl PeerStorage {
         let (tx, rx) = mpsc::sync_channel(1);
         *snap_state = SnapState::Generating(rx);
 
-        let task = GenSnapTask::new(self.region.get_id(), tx);
+        let task = GenSnapTask::new(self.region.get_id(), self.committed_index(), tx);
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);
@@ -1401,7 +1401,7 @@ pub fn do_snapshot(
     let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = mgr.get_snapshot_for_building(&key, &kv_snap)?;
+    let mut s = mgr.get_snapshot_for_building(&key)?;
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());

@@ -563,7 +563,9 @@ mod tests {
         ) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
-            txn.acquire_pessimistic_lock(k, pk, for_update_ts, false, &Options::default())
+            let mut options = Options::default();
+            options.for_update_ts = for_update_ts;
+            txn.acquire_pessimistic_lock(k, pk, false, &options)
                 .unwrap();
             self.write(txn.into_modifies());
         }
@@ -611,11 +613,13 @@ mod tests {
                         let handle = rocks::util::get_cf_handle(db, cf).unwrap();
                         wb.delete_cf(handle, &k).unwrap();
                     }
-                    Modify::DeleteRange(cf, k1, k2) => {
-                        let k1 = keys::data_key(k1.as_encoded());
-                        let k2 = keys::data_key(k2.as_encoded());
-                        let handle = rocks::util::get_cf_handle(db, cf).unwrap();
-                        wb.delete_range_cf(handle, &k1, &k2).unwrap();
+                    Modify::DeleteRange(cf, k1, k2, notify_only) => {
+                        if !notify_only {
+                            let k1 = keys::data_key(k1.as_encoded());
+                            let k2 = keys::data_key(k2.as_encoded());
+                            let handle = rocks::util::get_cf_handle(db, cf).unwrap();
+                            wb.delete_range_cf(handle, &k1, &k2).unwrap();
+                        }
                     }
                 }
             }
