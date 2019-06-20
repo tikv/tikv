@@ -7,6 +7,8 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Raftstore
     - Fix request latency jetter when transferring leader and conf changes. [4734](https://github.com/tikv/tikv/pull/4734)
     - Remove confusing empty callbacks. [4682](https://github.com/tikv/tikv/pull/4682)
++ Engine
+    - Check iterator status when invalid. [4936](https://github.com/tikv/tikv/pull/4936)
 
 ## [3.0.0-rc.2]
 
