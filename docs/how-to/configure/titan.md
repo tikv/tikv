@@ -40,6 +40,10 @@ If you find Titan does not help or is causing read or other performance issues, 
    ```
    tikv-ctl --host 127.0.0.1:20160 modify-tikv-config -m kvdb -n default.blob_run_mode -v "kFallback"
    ```
+  
+    > **Note:**
+    >
+    > Make sure you have already enabled Titan.
 
 2. Wait until the number of blob files reduced to 0. Alternatively, you can do this 
 quicky via `tikv-ctl compact-cluster`.
