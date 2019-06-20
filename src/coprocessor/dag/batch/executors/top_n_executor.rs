@@ -694,8 +694,8 @@ mod tests {
 
     #[test]
     fn test_integration_3() {
-        use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{IntIntPlus, RpnFnArithmetic};
-        use crate::coprocessor::dag::rpn_expr::impl_op::RpnFnIsNull;
+        use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{arithmetic_fn_meta, IntIntPlus};
+        use crate::coprocessor::dag::rpn_expr::impl_op::is_null_fn_meta;
 
         // Order by multiple expressions, data len > n.
         //
@@ -717,13 +717,13 @@ mod tests {
             vec![
                 RpnExpressionBuilder::new()
                     .push_column_ref(0)
-                    .push_fn_call(RpnFnIsNull::<Int>::new(), FieldTypeTp::LongLong)
+                    .push_fn_call(is_null_fn_meta::<Int>(), FieldTypeTp::LongLong)
                     .build(),
                 RpnExpressionBuilder::new().push_column_ref(0).build(),
                 RpnExpressionBuilder::new()
                     .push_column_ref(1)
                     .push_constant(1)
-                    .push_fn_call(RpnFnArithmetic::<IntIntPlus>::new(), FieldTypeTp::LongLong)
+                    .push_fn_call(arithmetic_fn_meta::<IntIntPlus>(), FieldTypeTp::LongLong)
                     .build(),
             ],
             vec![false, false, true],
