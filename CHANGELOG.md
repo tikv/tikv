@@ -6,11 +6,38 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Engine
     - Synchronize all files and directories for received snapshots [#4853](https://github.com/tikv/tikv/pull/4853)
 
+## [3.0.0-rc.3]
+
++ Engine
+    - Check iterator status when scanning. [4936](https://github.com/tikv/tikv/pull/4936)
+    - Fix ingested file and direcotry not being sync. [4937](https://github.com/tikv/tikv/pull/4937)
+
++ Server
+    - Sanitize block size config. [4928](https://github.com/tikv/tikv/pull/4928)
+    - Support replicating delete_range request but do not delete data when applying. [4490](https://github.com/tikv/tikv/pull/4490)
+    - Add read index related metrics. [4830](https://github.com/tikv/tikv/pull/4830)
+    - Add GC worker related metrics. [4922](https://github.com/tikv/tikv/pull/4922)
+
 + Raftstore
+    - Fix the issue that local reader cache is not cleared correctly. [4778](https://github.com/tikv/tikv/pull/4778)
     - Fix request latency jetter when transferring leader and conf changes. [4734](https://github.com/tikv/tikv/pull/4734)
     - Remove confusing empty callbacks. [4682](https://github.com/tikv/tikv/pull/4682)
-+ Engine
-    - Check iterator status when invalid. [4936](https://github.com/tikv/tikv/pull/4936)
+    - Clear stale reads after role change. [4810](https://github.com/tikv/tikv/pull/4810)
+    - Sync CF files of received snapshots. [4807](https://github.com/tikv/tikv/pull/4807)
+    - Fix missing fsync calls for snapshots. [4850](https://github.com/tikv/tikv/pull/4850)
+
++ Coprocessor
+    - Improve coprocessor batch executor. [4877](https://github.com/tikv/tikv/pull/4877)
+
++ Transaction 
+    - Support resolve lock lite. [4882](https://github.com/tikv/tikv/pull/4882)
+    - Improve pessimistic lock transaction. [4889](https://github.com/tikv/tikv/pull/4889)
+
++ Tikv-ctl 
+    - Improve `bad-regions` and `tombstone` subcommands. [4862](https://github.com/tikv/tikv/pull/4862)
+
++ Misc
+    - Add dist_release. [4841](https://github.com/tikv/tikv/pull/4841)
 
 ## [3.0.0-rc.2]
 
