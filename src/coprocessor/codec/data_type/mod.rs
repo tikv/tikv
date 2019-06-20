@@ -106,3 +106,18 @@ impl_evaluable_type! { Bytes }
 impl_evaluable_type! { DateTime }
 impl_evaluable_type! { Duration }
 impl_evaluable_type! { Json }
+
+/// A scalar value container, a.k.a. datum, for all concrete eval types.
+///
+/// In many cases, for example, at the framework level, the concrete eval type is unknown at compile
+/// time. So we use this enum container to represent types dynamically.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScalarParameter {
+    Int(Int),
+    Real(Real),
+    Decimal(Decimal),
+    Bytes(Bytes),
+    DateTime(DateTime),
+    Duration(Duration),
+    Json(Json),
+}

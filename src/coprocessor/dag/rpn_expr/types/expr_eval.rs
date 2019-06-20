@@ -245,6 +245,7 @@ impl RpnExpression {
                 RpnExpressionNode::FnCall {
                     ref func,
                     ref field_type,
+                    ref imp_params,
                 } => {
                     // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
                     // `[A, B, C, Foo]`.
@@ -257,6 +258,7 @@ impl RpnExpression {
                     let call_info = RpnFnCallPayload {
                         output_rows,
                         raw_args: stack_slice,
+                        imp_params,
                         ret_field_type: field_type,
                     };
                     let ret = (func.fn_ptr)(context, &call_info)?;

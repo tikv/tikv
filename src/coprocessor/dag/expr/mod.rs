@@ -11,7 +11,7 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::coprocessor::codec::mysql::charset;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use crate::coprocessor::codec::{self, Datum};
+use crate::coprocessor::codec::{self, datum, Datum};
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
 use tikv_util::codec::number;
@@ -61,6 +61,7 @@ pub struct Constant {
 pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
+    imp_params: Vec<Datum>,
     field_type: FieldType,
     cus_rng: CusRng,
 }
@@ -269,6 +270,7 @@ impl Expression {
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
                 ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
+                let imp_params = datum::decode(&mut expr.get_val())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
@@ -278,6 +280,7 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             field_type,
+                            imp_params,
                             cus_rng: CusRng {
                                 rng: RefCell::new(None),
                             },

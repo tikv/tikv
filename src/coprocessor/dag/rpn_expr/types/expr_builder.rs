@@ -11,6 +11,7 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::mysql::MAX_FSP;
+use crate::coprocessor::codec::{datum, Datum};
 use crate::coprocessor::{Error, Result};
 
 /// Helper to build an `RpnExpression`.
@@ -278,6 +279,23 @@ where
     // Map pb func to `RpnFnMeta`.
     let func = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
     let args = tree_node.take_children().into_vec();
+
+    // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
+    let datums = datum::decode(&mut tree_node.get_val())?;
+    let imp_params = datums
+        .into_iter()
+        .map(|d| match d {
+            Datum::I64(n) => ScalarParameter::Int(n),
+            Datum::U64(n) => ScalarParameter::Int(n as i64),
+            Datum::F64(n) => ScalarParameter::Real(Real::new(n).unwrap()),
+            Datum::Dur(dur) => ScalarParameter::Duration(dur),
+            Datum::Bytes(bytes) => ScalarParameter::Bytes(bytes),
+            Datum::Dec(dec) => ScalarParameter::Decimal(dec),
+            Datum::Json(json) => ScalarParameter::Json(json),
+            _ => unreachable!(),
+        })
+        .collect();
+
     if func.args_len != args.len() {
         return Err(box_err!(
             "Unexpected arguments, expect {}, received {}",
@@ -292,6 +310,7 @@ where
     rpn_nodes.push(RpnExpressionNode::FnCall {
         func,
         field_type: tree_node.take_field_type(),
+        imp_params,
     });
     Ok(())
 }

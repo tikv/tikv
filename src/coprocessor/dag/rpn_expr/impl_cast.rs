@@ -16,10 +16,13 @@ use crate::coprocessor::Result;
 ///
 /// TODO: This function supports some internal casts performed by TiKV. However it would be better
 /// to be done in TiDB.
-pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Result<RpnFnMeta> {
+pub fn get_cast_fn(
+    from_field_type: &FieldType,
+    to_field_type: &FieldType,
+) -> Result<(RpnFnMeta, Vec<ScalarParameter>)> {
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
-    Ok(match (from, to) {
+    let func = match (from, to) {
         (EvalType::Int, EvalType::Decimal) => {
             if !from_field_type
                 .as_accessor()
@@ -40,7 +43,8 @@ pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Re
         (EvalType::Duration, EvalType::Real) => cast_duration_as_real_fn_meta(),
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
-    })
+    };
+    Ok((func, vec![ScalarParameter::Int(0)]))
 }
 
 fn produce_dec_with_specified_tp(
