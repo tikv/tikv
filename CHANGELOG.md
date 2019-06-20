@@ -30,7 +30,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
     - Improve coprocessor batch executor. [4877](https://github.com/tikv/tikv/pull/4877)
 
 + Transaction 
-    - Support `ResolveLock` lite to allow only resolving specified lock keys. [4882](https://github.com/tikv/tikv/pull/4882)
+    - Support `ResolveLockLite` to allow only resolving specified lock keys. [4882](https://github.com/tikv/tikv/pull/4882)
     - Improve pessimistic lock transaction. [4889](https://github.com/tikv/tikv/pull/4889)
 
 + Tikv-ctl 
