@@ -2,22 +2,8 @@
 
 #[macro_use]
 extern crate clap;
-#[macro_use(
-    slog_kv,
-    slog_crit,
-    slog_info,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
-extern crate slog;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate vlog;
-
-mod util;
 
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
@@ -49,9 +35,10 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
+use tikv::binutil as util;
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::Key;
 use tikv_util::security::{SecurityConfig, SecurityManager};
@@ -76,8 +63,9 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
-            let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
@@ -90,7 +78,7 @@ fn new_debug_executor(
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
             let mut raft_db_opts = cfg.raftdb.build_opt();
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+            let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
@@ -103,6 +91,7 @@ fn new_debug_executor(
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
                 Arc::new(raft_db),
+                cache.is_some(),
             ))) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
@@ -479,6 +468,11 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
+    fn set_region_tombstone_force(&self, region_ids: Vec<u64>) {
+        self.check_local_mode();
+        self.set_region_tombstone_by_id(region_ids);
+    }
+
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
@@ -552,6 +546,8 @@ trait DebugExecutor {
     );
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+
+    fn set_region_tombstone_by_id(&self, regions: Vec<u64>);
 
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool);
 
@@ -696,6 +692,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
+    fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
+        unimplemented!("only avaliable for local mode");
+    }
+
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
         unimplemented!("only available for local mode");
     }
@@ -828,6 +828,19 @@ impl DebugExecutor for Debugger {
         }
     }
 
+    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
+        let ret = self
+            .set_region_tombstone_by_id(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
+        if ret.is_empty() {
+            v1!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            ve1!("region: {}, error: {}", region_id, error);
+        }
+    }
+
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
         let ret = self
             .recover_regions(regions, read_only)
@@ -891,7 +904,7 @@ impl DebugExecutor for Debugger {
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
         region.mut_region_epoch().set_version(old_version + 1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         region.peers.clear();
         let mut peer = Peer::new();
@@ -1343,7 +1356,6 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("pd")
-                        .required(true)
                         .short("p")
                         .takes_value(true)
                         .multiple(true)
@@ -1351,6 +1363,12 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("force")
+                        .long("force")
+                        .takes_value(false)
+                        .help("force execute without pd"),
                 ),
         )
         .subcommand(
@@ -1847,13 +1865,18 @@ fn main() {
             .map(str::parse)
             .collect::<Result<Vec<_>, _>>()
             .expect("parse regions fail");
-        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
-        let mut cfg = PdConfig::default();
-        cfg.endpoints = pd_urls;
-        if let Err(e) = cfg.validate() {
-            panic!("invalid pd configuration: {:?}", e);
+        if let Some(pd_urls) = matches.values_of("pd") {
+            let pd_urls = Vec::from_iter(pd_urls.map(ToOwned::to_owned));
+            let mut cfg = PdConfig::default();
+            cfg.endpoints = pd_urls;
+            if let Err(e) = cfg.validate() {
+                panic!("invalid pd configuration: {:?}", e);
+            }
+            debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+        } else {
+            assert!(matches.is_present("force"));
+            debug_executor.set_region_tombstone_force(regions);
         }
-        debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("recover-mvcc") {
         let read_only = matches.is_present("read-only");
         if matches.is_present("all") {

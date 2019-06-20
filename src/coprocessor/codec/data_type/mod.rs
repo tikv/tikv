@@ -5,18 +5,18 @@
 
 mod scalar;
 mod vector;
-mod vector_like;
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
-pub type Real = f64;
+pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 // Dynamic eval types.
-pub use self::scalar::ScalarValue;
+pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
-pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
+
+use cop_datatype::EvalType;
 
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
@@ -63,19 +63,14 @@ where
 }
 
 /// A trait of all types that can be used during evaluation (eval type).
-pub trait Evaluable: Clone + std::fmt::Debug + Send + 'static {
+pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
+    const EVAL_TYPE: EvalType;
+
     /// Borrows this concrete type from a `ScalarValue` in the same type.
     fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self>;
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type.
     fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>];
-
-    /// Borrows a specialized reference from a `VectorLikeValueRef`. The specialized reference is
-    /// also vector-like but contains the concrete type information, which doesn't need type
-    /// checks (but needs vector/scalar checks) when accessing.
-    fn borrow_vector_like_specialized(
-        v: VectorLikeValueRef<'_>,
-    ) -> VectorLikeValueRefSpecialized<'_, Self>;
 
     /// Converts a vector of this concrete type into a `VectorValue` in the same type.
     fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
@@ -84,6 +79,8 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + 'static {
 macro_rules! impl_evaluable_type {
     ($ty:tt) => {
         impl Evaluable for $ty {
+            const EVAL_TYPE: EvalType = EvalType::$ty;
+
             #[inline]
             fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self> {
                 v.as_ref()
@@ -92,13 +89,6 @@ macro_rules! impl_evaluable_type {
             #[inline]
             fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>] {
                 v.as_ref()
-            }
-
-            #[inline]
-            fn borrow_vector_like_specialized(
-                v: VectorLikeValueRef<'_>,
-            ) -> VectorLikeValueRefSpecialized<'_, Self> {
-                v.into()
             }
 
             #[inline]

@@ -8,12 +8,12 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
-use crate::coprocessor::codec::datum::Datum;
-use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use crate::coprocessor::Result;
-
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
@@ -59,7 +59,7 @@ impl TopNExecutor {
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<TopNExecutor> {
+    ) -> Result<Self> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -93,7 +93,7 @@ impl TopNExecutor {
         let ctx = Arc::new(RefCell::new(self.eval_ctx.take().unwrap()));
         let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
         while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let cols = row.inflate_cols_with_offsets(&ctx.borrow(), &self.related_cols_offset)?;
             let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(row, ob_values, Arc::clone(&self.order_by.items))?;
@@ -115,10 +115,7 @@ impl Executor for TopNExecutor {
             self.fetch_all()?;
         }
         let iter = self.iter.as_mut().unwrap();
-        match iter.next() {
-            Some(sort_row) => Ok(Some(sort_row)),
-            None => Ok(None),
-        }
+        Ok(iter.next())
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -133,6 +130,14 @@ impl Executor for TopNExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
+
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             if let Some(mut topn_warnings) = self.eval_warnings.take() {
@@ -142,10 +147,6 @@ impl Executor for TopNExecutor {
         } else {
             self.eval_warnings.take()
         }
-    }
-
-    fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
     }
 }
 
@@ -399,7 +400,7 @@ pub mod tests {
             TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let mut topn_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = topn_ect.next().unwrap() {
-            topn_rows.push(row.take_origin());
+            topn_rows.push(row.take_origin().unwrap());
         }
         assert_eq!(topn_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 3, 2, 6];

@@ -111,17 +111,17 @@ impl Serialize for ReadableSize {
         let size = self.0;
         let mut buffer = String::new();
         if size == 0 {
-            write!(buffer, "{}KB", size).unwrap();
+            write!(buffer, "{}KiB", size).unwrap();
         } else if size % PB == 0 {
-            write!(buffer, "{}PB", size / PB).unwrap();
+            write!(buffer, "{}PiB", size / PB).unwrap();
         } else if size % TB == 0 {
-            write!(buffer, "{}TB", size / TB).unwrap();
+            write!(buffer, "{}TiB", size / TB).unwrap();
         } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GB", size / GB).unwrap();
+            write!(buffer, "{}GiB", size / GB).unwrap();
         } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MB", size / MB).unwrap();
+            write!(buffer, "{}MiB", size / MB).unwrap();
         } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KB", size / KB).unwrap();
+            write!(buffer, "{}KiB", size / KB).unwrap();
         } else {
             return serializer.serialize_u64(size);
         }
@@ -142,35 +142,32 @@ impl FromStr for ReadableSize {
             return Err(format!("ASCII string is expected, but got {:?}", s));
         }
 
-        let mut chrs = size_str.chars();
-        let mut number_str = size_str;
-        let mut unit_char = chrs.next_back().unwrap();
-        if unit_char < '0' || unit_char > '9' {
-            number_str = chrs.as_str();
-            if unit_char == 'B' {
-                let b = match chrs.next_back() {
-                    Some(b) => b,
-                    None => return Err(format!("numeric value is expected: {:?}", s)),
-                };
-                if b < '0' || b > '9' {
-                    number_str = chrs.as_str();
-                    unit_char = b;
-                }
-            }
-        } else {
-            unit_char = 'B';
-        }
+        // size: digits and '.' as decimal separator
+        let size_len = size_str
+            .to_string()
+            .chars()
+            .take_while(|c| char::is_ascii_digit(c) || *c == '.')
+            .count();
 
-        let unit = match unit_char {
-            'K' => KB,
-            'M' => MB,
-            'G' => GB,
-            'T' => TB,
-            'P' => PB,
-            'B' => UNIT,
-            _ => return Err(format!("only B, KB, MB, GB, TB, PB are supported: {:?}", s)),
+        // unit: alphabetic characters
+        let (size, unit) = size_str.split_at(size_len);
+
+        let unit = match unit.trim() {
+            "K" | "KB" | "KiB" => KB,
+            "M" | "MB" | "MiB" => MB,
+            "G" | "GB" | "GiB" => GB,
+            "T" | "TB" | "TiB" => TB,
+            "P" | "PB" | "PiB" => PB,
+            "B" | "" => UNIT,
+            _ => {
+                return Err(format!(
+                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
+                    s
+                ));
+            }
         };
-        match number_str.trim().parse::<f64>() {
+
+        match size.parse::<f64>() {
             Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
             Err(_) => Err(format!("invalid size string: {:?}", s)),
         }
@@ -224,9 +221,9 @@ impl<'de> Deserialize<'de> for ReadableSize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
-impl Into<Duration> for ReadableDuration {
-    fn into(self) -> Duration {
-        self.0
+impl From<ReadableDuration> for Duration {
+    fn from(readable: ReadableDuration) -> Duration {
+        readable.0
     }
 }
 
@@ -477,7 +474,7 @@ mod check_kernel {
     }
 
     /// `check_kernel_params` checks kernel parameters, following are checked so far:
-    ///   - `net.core.somaxconn` should be greater or equak to 32768.
+    ///   - `net.core.somaxconn` should be greater or equal to 32768.
     ///   - `net.ipv4.tcp_syncookies` should be 0
     ///   - `vm.swappiness` shoud be 0
     ///
@@ -832,12 +829,12 @@ mod tests {
         }
 
         let legal_cases = vec![
-            (0, "0KB"),
-            (2 * KB, "2KB"),
-            (4 * MB, "4MB"),
-            (5 * GB, "5GB"),
-            (7 * TB, "7TB"),
-            (11 * PB, "11PB"),
+            (0, "0KiB"),
+            (2 * KB, "2KiB"),
+            (4 * MB, "4MiB"),
+            (5 * GB, "5GiB"),
+            (7 * TB, "7TiB"),
+            (11 * PB, "11PiB"),
         ];
         for (size, exp) in legal_cases {
             let c = SizeHolder {
@@ -872,6 +869,17 @@ mod tests {
             ("23", 23),
             ("1", 1),
             ("1024B", KB),
+            // units with binary prefixes
+            (" 0.5 PiB", PB / 2),
+            ("1PiB", PB),
+            ("0.5 TiB", TB / 2),
+            ("2 TiB", TB * 2),
+            ("0.5GiB ", GB / 2),
+            ("787GiB ", GB * 787),
+            ("0.5MiB", MB / 2),
+            ("3MiB", MB * 3),
+            ("0.5KiB", KB / 2),
+            ("1 KiB", KB),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
@@ -880,7 +888,8 @@ mod tests {
         }
 
         let illegal_cases = vec![
-            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B",
+            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B", "1K24B", " 5_KB",
+            "4B7", "5M_",
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);

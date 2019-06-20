@@ -4,11 +4,13 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tikv::coprocessor::codec::{datum, table, Datum};
-use tikv::storage::{Engine, FixtureStore, Key, Mutation, RocksEngine, TestEngineBuilder};
+use tikv::storage::{
+    Engine, FixtureStore, Key, Mutation, RocksEngine, SnapshotStore, TestEngineBuilder,
+};
 use tikv_util::collections::HashMap;
 
 pub struct Insert<'a, E: Engine> {
@@ -157,11 +159,13 @@ impl<E: Engine> Store<E> {
 
     pub fn commit_with_ctx(&mut self, ctx: Context) {
         let commit_ts = next_id() as u64;
-        let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
-        self.store
-            .commit(ctx, handles, self.current_ts, commit_ts)
-            .unwrap();
-        self.last_committed_ts = commit_ts;
+        let handles: Vec<_> = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
+        if !handles.is_empty() {
+            self.store
+                .commit(ctx, handles, self.current_ts, commit_ts)
+                .unwrap();
+            self.last_committed_ts = commit_ts;
+        }
     }
 
     pub fn commit(&mut self) {
@@ -193,6 +197,12 @@ impl<E: Engine> Store<E> {
             .collect()
     }
 
+    /// Directly creates a `SnapshotStore` over current committed data.
+    pub fn to_snapshot_store(&self) -> SnapshotStore<E::Snap> {
+        let snapshot = self.get_engine().snapshot(&Context::new()).unwrap();
+        SnapshotStore::new(snapshot, self.last_committed_ts, IsolationLevel::SI, true)
+    }
+
     /// Strip off committed MVCC information to create a `FixtureStore`.
     pub fn to_fixture_store(&self) -> FixtureStore {
         let data = self
@@ -201,6 +211,30 @@ impl<E: Engine> Store<E> {
             .map(|(key, value)| (Key::from_raw(&key), Ok(value)))
             .collect();
         FixtureStore::new(data)
+    }
+}
+
+/// A trait for a general implementation to convert to a Txn store.
+pub trait ToTxnStore<S: tikv::storage::Store> {
+    /// Converts to a specific Txn Store.
+    fn to_store(&self) -> S;
+}
+
+impl<E: Engine, S: tikv::storage::Store> ToTxnStore<S> for Store<E> {
+    default fn to_store(&self) -> S {
+        unimplemented!()
+    }
+}
+
+impl<E: Engine> ToTxnStore<SnapshotStore<E::Snap>> for Store<E> {
+    fn to_store(&self) -> SnapshotStore<<E as Engine>::Snap> {
+        self.to_snapshot_store()
+    }
+}
+
+impl<E: Engine> ToTxnStore<FixtureStore> for Store<E> {
+    fn to_store(&self) -> FixtureStore {
+        self.to_fixture_store()
     }
 }
 

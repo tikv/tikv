@@ -189,9 +189,9 @@ pub enum TimeType {
     Timestamp,
 }
 
-impl Into<FieldTypeTp> for TimeType {
-    fn into(self) -> FieldTypeTp {
-        match self {
+impl From<TimeType> for FieldTypeTp {
+    fn from(time_type: TimeType) -> FieldTypeTp {
+        match time_type {
             TimeType::Date => FieldTypeTp::Date,
             TimeType::DateTime => FieldTypeTp::DateTime,
             TimeType::Timestamp => FieldTypeTp::Timestamp,
@@ -1080,12 +1080,19 @@ mod tests {
     fn test_parse_datetime_dst() {
         let ok_tables = vec![
             ("Asia/Shanghai", "1988-04-09 23:59:59", 576604799),
-            ("Asia/Shanghai", "1988-04-10 01:00:00", 576604800),
-            ("Asia/Shanghai", "1988-09-11 00:00:00", 589910400),
-            ("Asia/Shanghai", "1988-09-11 00:00:01", 589910401),
-            ("Asia/Shanghai", "1988-09-10 23:59:59", 589906799), // ambiguous
-            ("Asia/Shanghai", "1988-09-10 23:00:00", 589903200), // ambiguous
-            ("Asia/Shanghai", "1988-09-10 22:59:59", 589903199),
+            // No longer DST since tzdata 2018f
+            ("Asia/Shanghai", "1988-04-10 00:00:00", 576604800),
+            ("Asia/Shanghai", "1988-04-10 01:00:00", 576608400),
+            // DST starts from 02:00
+            ("Asia/Shanghai", "1988-04-17 01:00:00", 577213200),
+            ("Asia/Shanghai", "1988-04-17 01:59:59", 577216799),
+            ("Asia/Shanghai", "1988-04-17 03:00:00", 577216800),
+            // DST ends at 02:00
+            ("Asia/Shanghai", "1988-09-11 00:59:59", 589910399),
+            ("Asia/Shanghai", "1988-09-11 01:00:00", 589910400), // ambiguous
+            ("Asia/Shanghai", "1988-09-11 01:59:59", 589913999), // ambiguous
+            ("Asia/Shanghai", "1988-09-11 02:00:00", 589917600),
+            ("Asia/Shanghai", "1988-09-11 02:00:01", 589917601),
             ("Asia/Shanghai", "2015-01-02 23:59:59", 1420214399),
             ("America/Los_Angeles", "1919-03-30 01:59:59", -1601820001),
             ("America/Los_Angeles", "1919-03-30 03:00:00", -1601820000),
@@ -1099,15 +1106,20 @@ mod tests {
         for (tz_name, time_str, utc_timestamp) in ok_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
             let t = Time::parse_datetime(time_str, UNSPECIFIED_FSP, &tz).unwrap();
-            assert_eq!(t.time.timestamp(), utc_timestamp);
+            assert_eq!(
+                t.time.timestamp(),
+                utc_timestamp,
+                "{} {}",
+                tz_name,
+                time_str
+            );
         }
 
         // TODO: When calling `UNIX_TIMESTAMP()` in MySQL, these date time will not fail.
         // However it will fail when inserting into a TIMESTAMP field.
         let fail_tables = vec![
-            ("Asia/Shanghai", "1988-04-10"),
-            ("Asia/Shanghai", "1988-04-10 00:00:00"),
-            ("Asia/Shanghai", "1988-04-10 00:59:59"),
+            ("Asia/Shanghai", "1988-04-17 02:00:00"),
+            ("Asia/Shanghai", "1988-04-17 02:59:59"),
             ("America/Los_Angeles", "1919-03-30 02:00:00"),
             ("America/Los_Angeles", "1919-03-30 02:59:59"),
             ("America/Los_Angeles", "2011-03-13 02:00:00"),
@@ -1116,7 +1128,12 @@ mod tests {
 
         for (tz_name, time_str) in fail_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
-            assert!(Time::parse_datetime(time_str, UNSPECIFIED_FSP, &tz).is_err());
+            assert!(
+                Time::parse_datetime(time_str, UNSPECIFIED_FSP, &tz).is_err(),
+                "{} {}",
+                tz_name,
+                time_str,
+            );
         }
     }
 

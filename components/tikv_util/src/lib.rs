@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(fnbox)]
 #![cfg_attr(test, feature(test))]
 
 #[macro_use]
@@ -42,7 +41,8 @@ use std::time::Duration;
 use std::{env, slice, thread, u64};
 
 use protobuf::Message;
-use rand::{self, ThreadRng};
+use rand;
+use rand::rngs::ThreadRng;
 
 pub mod codec;
 pub mod collections;
@@ -531,16 +531,6 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     }))
 }
 
-#[inline]
-pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
-    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
-    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
-    // here.
-    let mut new_vec = Vec::with_capacity(vec.capacity());
-    new_vec.extend_from_slice(vec);
-    new_vec
-}
-
 /// Checks environment variables that affect TiKV.
 pub fn check_environment_variables() {
     if cfg!(unix) && env::var("TZ").is_err() {
@@ -567,6 +557,14 @@ pub fn check_environment_variables() {
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
+}
+
+pub unsafe fn erase_lifetime_mut<'a, T: ?Sized>(v: &mut T) -> &'a mut T {
+    &mut *(v as *mut T)
+}
+
+pub unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
+    &*(v as *const T)
 }
 
 #[cfg(test)]

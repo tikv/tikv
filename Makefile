@@ -21,6 +21,7 @@ ENABLE_FEATURES += portable
 endif
 
 # Enable sse4.2 by default unless disable explicitly
+# Note this env var is also tested by scripts/check-sse4_2.sh
 ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
@@ -42,6 +43,12 @@ export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+
+# Turn on cargo pipelining to add more build parallelism. This has shown decent
+# speedups in TiKV.
+#
+# https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199/68
+export CARGO_BUILD_PIPELINING=true
 
 default: release
 
@@ -76,20 +83,52 @@ ctl:
 run:
 	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
 
+# An optimized build suitable for development and benchmarking, by default built
+# with RocksDB compiled with the "portable" option, for -march=x86-64 (an
+# sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
+# enabled (the "sse" option)
 release:
-	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
+	make dist_release
+
+# An optimized build that builds an "unportable" RocksDB, which means it is
+# built with -march native. It again includes the "sse" option by default.
+unportable_release:
+	make dist_unportable_release
+
+# An optimized build with jemalloc memory profiling enabled.
+prof_release:
+	make dist_prof_release
+
+# An optimized build instrumented with failpoints.
+# This is used for schrodinger chaos testing.
+fail_release:
+	make dist_fail_release
+
+# The target used by CI/CD to build the distributable release artifacts.
+# Individual developers should only need to use the `dist_` rules when working
+# on the CI/CD system.
+dist_release:
+	make build_release
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
 
-unportable_release:
+# Distributable bins with SSE4.2 optimizations
+dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make release
 
-prof_release:
+# Distributable bins with jemalloc memory profiling
+dist_prof_release:
 	ENABLE_FEATURES=mem-profiling make release
 
-fail_release:
+# Distributable bins instrumented with failpoints.
+# This is used for schrodinger chaos testing.
+dist_fail_release:
 	FAIL_POINT=1 make release
+
+# Build with release flag
+build_release:
+	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
@@ -113,9 +152,6 @@ test:
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
-
-bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --no-default-features --features "${ENABLE_FEATURES}" -- --nocapture
 
 unset-override:
 	@# unset first in case of any previous overrides
@@ -280,14 +316,14 @@ x-test: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-test: export X_CARGO_RELEASE=0
 x-test: export X_CARGO_CONFIG_FILE=${TEST_CONFIG}
 x-test:
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 x-bench: export X_CARGO_CMD=bench
 x-bench: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-bench: export X_CARGO_RELEASE=0
 x-bench: export X_CARGO_CONFIG_FILE=${BENCH_CONFIG}
 x-bench:
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 # Devs might want to use the config files but not the makefiles.
 # These are rules to put each config file in place.

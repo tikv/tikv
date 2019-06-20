@@ -3,6 +3,8 @@
 use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use std::i64;
 
+use crate::CF_DEFAULT;
+
 use crate::rocks::{
     self, DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
     HistogramData, DB,
@@ -19,6 +21,15 @@ pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
 pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
 pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
+
+pub const ROCKSDB_TITANDB_LIVE_BLOB_SIZE: &str = "rocksdb.titandb.live-blob-size";
+pub const ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE: &str = "rocksdb.titandb.num-live-blob-file";
+pub const ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE: &str = "rocksdb.titandb.\
+                                                          num-obsolete-blob-file";
+pub const ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
+                                                       live-blob-file-size";
+pub const ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
+                                                           obsolete-blob-file-size";
 
 pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheMiss,
@@ -886,7 +897,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
     }
 }
 
-pub fn flush_engine_properties(engine: &DB, name: &str) {
+pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool) {
     for cf in engine.cf_names() {
         let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
@@ -898,11 +909,12 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
             .with_label_values(&[name, cf])
             .set(cf_used_size as i64);
 
-        // For block cache usage
-        let block_cache_usage = engine.get_block_cache_usage_cf(handle);
-        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
-            .with_label_values(&[name, cf])
-            .set(block_cache_usage as i64);
+        if !shared_block_cache {
+            let block_cache_usage = engine.get_block_cache_usage_cf(handle);
+            STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+                .with_label_values(&[name, cf])
+                .set(block_cache_usage as i64);
+        }
 
         // TODO: find a better place to record these metrics.
         // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
@@ -963,6 +975,43 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
                 .with_label_values(&[name, cf])
                 .set(v as i64);
         }
+
+        // Titan live blob size
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE) {
+            STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        // Titan num live blob file
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
+            STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        // Titan num obsolete blob file
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
+        {
+            STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        // Titan live blob file size
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE) {
+            STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
+
+        // Titan obsolete blob file size
+        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+        {
+            STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
     }
 
     // For snapshot
@@ -978,6 +1027,16 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
         STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
             .with_label_values(&[name])
             .set(d as i64);
+    }
+
+    if shared_block_cache {
+        // Since block cache is shared, getting cache size from any CF is fine. Here we get from
+        // default CF.
+        let handle = rocks::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
+        let block_cache_usage = engine.get_block_cache_usage_cf(handle);
+        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+            .with_label_values(&[name, "all"])
+            .set(block_cache_usage as i64);
     }
 }
 
@@ -1246,6 +1305,36 @@ lazy_static! {
         "Stall conditions changed of each column family",
         &["db", "cf", "type"]
     ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_live_blob_size",
+        "Total blob value size referenced by LSM tree",
+        &["db", "cf"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_num_live_blob_file",
+        "Number of live blob file",
+        &["db", "cf"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_num_obsolete_blob_file",
+        "Number of obsolete blob file",
+        &["db", "cf"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_live_blob_file_size",
+        "Size of live blob file",
+        &["db", "cf"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_obsolete_blob_file_size",
+        "Size of obsolete blob file",
+        &["db", "cf"]
+    ).unwrap();
 }
 
 #[cfg(test)]
@@ -1270,6 +1359,7 @@ mod tests {
             flush_engine_histogram_metrics(*tp, HistogramData::default(), "test-name");
         }
 
-        flush_engine_properties(&db, "test-name");
+        let shared_block_cache = false;
+        flush_engine_properties(&db, "test-name", shared_block_cache);
     }
 }

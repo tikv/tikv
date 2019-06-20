@@ -1,10 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::boxed::FnBox;
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::cmp::Ordering;
 use std::time::Duration;
-use std::{error, result};
+use std::{error, ptr, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
 use crate::storage::{Key, Value};
@@ -44,7 +43,7 @@ const STAT_SEEK: &str = "seek";
 const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
 const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
-pub type Callback<T> = Box<dyn FnBox((CbContext, Result<T>)) + Send>;
+pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
 
 #[derive(Debug)]
 pub struct CbContext {
@@ -61,7 +60,8 @@ impl CbContext {
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
-    DeleteRange(CfName, Key, Key),
+    // cf_name, start_key, end_key, notify_only
+    DeleteRange(CfName, Key, Key, bool),
 }
 
 pub trait Engine: Send + Clone + 'static {
@@ -682,6 +682,36 @@ impl Error {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+thread_local! {
+    // A pointer to thread local engine. Use raw pointer and `UnsafeCell` to reduce runtime check.
+    static TLS_ENGINE_ANY: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
+}
+
+/// Execute the closure on the thread local engine.
+pub fn with_tls_engine<E: Engine, F, R>(f: F) -> R
+where
+    F: FnOnce(&E) -> R,
+{
+    TLS_ENGINE_ANY.with(|e| {
+        let engine = unsafe { &*(*e.get() as *const E) };
+        f(engine)
+    })
+}
+
+/// Set the thread local engine.
+pub fn set_tls_engine<E: Engine>(engine: E) {
+    let engine = Box::into_raw(Box::new(engine)) as *mut ();
+    TLS_ENGINE_ANY.with(|e| unsafe { *e.get() = engine });
+}
+
+/// Destroy the thread local engine.
+pub fn destroy_tls_engine<E: Engine>() {
+    TLS_ENGINE_ANY.with(|e| unsafe {
+        drop(Box::from_raw(*e.get() as *mut E));
+        *e.get() = ptr::null_mut();
+    });
+}
 
 #[cfg(test)]
 pub mod tests {

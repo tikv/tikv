@@ -19,7 +19,7 @@ use crate::coprocessor::*;
 const BATCH_INITIAL_SIZE: usize = 32;
 
 // TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
-const BATCH_MAX_SIZE: usize = 1024;
+pub const BATCH_MAX_SIZE: usize = 1024;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
@@ -50,6 +50,9 @@ pub struct BatchDAGHandler {
     /// Traditional metric interface.
     // TODO: Deprecate it in Coprocessor DAG v2.
     metrics: ExecutorMetrics,
+
+    /// Whether or not execution summary need to be collected.
+    collect_exec_summary: bool,
 }
 
 impl BatchDAGHandler {
@@ -58,16 +61,17 @@ impl BatchDAGHandler {
         out_most_executor: Box<dyn BatchExecutor>,
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
-        ranges_len: usize,
-        executors_len: usize,
+        statistics: BatchExecuteStatistics,
+        collect_exec_summary: bool,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
             config,
-            statistics: BatchExecuteStatistics::new(executors_len, ranges_len),
+            statistics,
             metrics: ExecutorMetrics::default(),
+            collect_exec_summary,
         }
     }
 }
@@ -104,19 +108,24 @@ impl RequestHandler for BatchDAGHandler {
             // field.
             warnings.merge(&mut result.warnings);
 
-            // Notice that rows_len == 0 doesn't mean that it is drained.
-            if result.data.rows_len() > 0 {
+            // Notice that logical rows len == 0 doesn't mean that it is drained.
+            if !result.logical_rows.is_empty() {
                 assert_eq!(
-                    result.data.columns_len(),
+                    result.physical_columns.columns_len(),
                     self.out_most_executor.schema().len()
                 );
                 let mut chunk = Chunk::new();
                 {
                     let data = chunk.mut_rows_data();
-                    data.reserve(result.data.maximum_encoded_size(&self.output_offsets)?);
+                    data.reserve(
+                        result
+                            .physical_columns
+                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
+                    );
                     // Although `schema()` can be deeply nested, it is ok since we process data in
                     // batch.
-                    result.data.encode(
+                    result.physical_columns.encode(
+                        &result.logical_rows,
                         &self.output_offsets,
                         self.out_most_executor.schema(),
                         data,
@@ -141,23 +150,22 @@ impl RequestHandler for BatchDAGHandler {
                         .map(|v| *v as i64)
                         .collect(),
                 );
-                sel_resp.set_execution_summaries(RepeatedField::from_vec(
-                    self.statistics
+
+                if self.collect_exec_summary {
+                    let summaries = self
+                        .statistics
                         .summary_per_executor
                         .iter()
                         .map(|summary| {
                             let mut ret = ExecutorExecutionSummary::new();
-                            if let Some(summary) = summary {
-                                ret.set_num_iterations(summary.num_iterations as u64);
-                                ret.set_num_produced_rows(summary.num_produced_rows as u64);
-                                ret.set_time_processed_ns(
-                                    summary.time_processed_ms as u64 * 1_000_000,
-                                );
-                            }
+                            ret.set_num_iterations(summary.num_iterations as u64);
+                            ret.set_num_produced_rows(summary.num_produced_rows as u64);
+                            ret.set_time_processed_ns(summary.time_processed_ns as u64);
                             ret
                         })
-                        .collect(),
-                ));
+                        .collect();
+                    sel_resp.set_execution_summaries(RepeatedField::from_vec(summaries));
+                }
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
