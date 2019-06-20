@@ -227,6 +227,7 @@ trait DebugExecutor {
                 .for_each(move |(key, mvcc)| {
                     if point_query && key != from {
                         v1!("no mvcc infos for {}", escape(&from));
+                        return future::err::<(), String>("no mvcc infos".to_owned());
                     }
 
                     v1!("key: {}", escape(&key));
