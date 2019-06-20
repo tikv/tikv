@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Multi-view concurrency control functionality.
+//! Multi-version concurrency control functionality.
 
 mod lock;
 mod metrics;

@@ -141,7 +141,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     ctx.set_peer(leader.clone());
     b.iter(|| {
         let on_finished: EngineCallback<RegionSnapshot> = Box::new(move |results| {
-            test::black_box(results);
+            let _ = test::black_box(results);
         });
         kv.async_snapshot(&ctx, on_finished).unwrap();
     });

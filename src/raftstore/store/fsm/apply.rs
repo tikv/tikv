@@ -1242,6 +1242,7 @@ impl ApplyDelegate {
     ) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
+        let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
                 "invalid delete range command, start_key: {:?}, end_key: {:?}",
@@ -1270,38 +1271,43 @@ impl ApplyDelegate {
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        ctx.engines
-            .kv
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
+        if !notify_only {
+            ctx.engines
+                .kv
+                .delete_files_in_range_cf(
+                    handle, &start_key, &end_key, /* include_end */ false,
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete files in range [{}, {}): {:?}",
+                        self.tag,
+                        escape(&start_key),
+                        escape(&end_key),
+                        e
+                    )
+                });
+
+            // Delete all remaining keys.
+            engine_util::delete_all_in_range_cf(
+                &ctx.engines.kv,
+                cf,
+                &start_key,
+                &end_key,
+                use_delete_range,
+            )
             .unwrap_or_else(|e| {
                 panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                     self.tag,
                     escape(&start_key),
                     escape(&end_key),
+                    cf,
                     e
-                )
+                );
             });
+        }
 
-        // Delete all remaining keys.
-        engine_util::delete_all_in_range_cf(
-            &ctx.engines.kv,
-            cf,
-            &start_key,
-            &end_key,
-            use_delete_range,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                self.tag,
-                escape(&start_key),
-                escape(&end_key),
-                cf,
-                e
-            );
-        });
-
+        // TODO: Should this be executed when `notify_only` is set?
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
@@ -2238,15 +2244,25 @@ type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
 
 pub struct GenSnapTask {
     region_id: u64,
+    commit_index: u64,
     snap_notifier: SyncSender<RaftSnapshot>,
 }
 
 impl GenSnapTask {
-    pub fn new(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
+    pub fn new(
+        region_id: u64,
+        commit_index: u64,
+        snap_notifier: SyncSender<RaftSnapshot>,
+    ) -> GenSnapTask {
         GenSnapTask {
             region_id,
+            commit_index,
             snap_notifier,
         }
+    }
+
+    pub fn commit_index(&self) -> u64 {
+        self.commit_index
     }
 
     pub fn generate_and_schedule_snapshot(
@@ -2265,6 +2281,15 @@ impl GenSnapTask {
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
+    }
+}
+
+impl Debug for GenSnapTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GenSnapTask")
+            .field("region_id", &self.region_id)
+            .field("commit_index", &self.commit_index)
+            .finish()
     }
 }
 
@@ -2594,11 +2619,13 @@ impl ApplyFsm {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
+        let applied_index = self.delegate.apply_state.get_applied_index();
+        assert!(snap_task.commit_index() <= applied_index);
         let mut need_sync = apply_ctx
             .apply_res
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
-            && self.delegate.last_sync_apply_index != self.delegate.apply_state.get_applied_index();
+            && self.delegate.last_sync_apply_index != applied_index;
         (|| {
             fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
         })();
@@ -2620,7 +2647,7 @@ impl ApplyFsm {
             apply_ctx.flush();
             // For now, it's more like last_flush_apply_index.
             // TODO: Update it only when `flush()` returns true.
-            self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
+            self.delegate.last_sync_apply_index = applied_index;
         }
 
         if let Err(e) = snap_task
@@ -3178,7 +3205,7 @@ mod tests {
             2,
             vec![
                 Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
-                Msg::Snapshot(GenSnapTask::new(2, tx)),
+                Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {

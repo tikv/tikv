@@ -21,6 +21,7 @@ use tipb::expression::FieldType;
 /// (i.e. Copy), instead of by reference, for **EACH** function invocation.
 #[derive(Clone, Copy)]
 pub struct RpnFnCallPayload<'a> {
+    output_rows: usize,
     raw_args: &'a [RpnStackNode<'a>],
     ret_field_type: &'a FieldType,
 }
@@ -48,5 +49,11 @@ impl<'a> RpnFnCallPayload<'a> {
     #[inline]
     pub fn return_field_type(&'a self) -> &'a FieldType {
         self.ret_field_type
+    }
+
+    /// Gets expected rows of output.
+    #[inline]
+    pub fn output_rows(&'a self) -> usize {
+        self.output_rows
     }
 }

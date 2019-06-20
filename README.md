@@ -156,6 +156,22 @@ cargo test $TESTNAME
 
 Our CI systems automatically test all the pull requests, so making sure the full suite passes the test before creating your PR is not strictly required. **All merged PRs must have passed CI test.**
 
+Note that, to reduce compilation time, TiKV builds do not include debugging information by default. The easiest way to enable debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo).
+
+```bash
+RUSTFLAGS=-Cdebuginfo=2 make
+RUSTFLAGS=-Cdebuginfo=2 cargo build
+```
+
+When building with make, cargo will automatically use [pipelined][p] compilation to increase the paralellism of the build. To turn on pipelining while using cargo directly,
+set `CARGO_BUILD_PIPELINING=true`:
+
+```bash
+CARGO_BUILD_PIPELINING=true cargo build
+```
+
+[p]: https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199
+
 ### Getting the rest of the system working
 
 To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd)) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
