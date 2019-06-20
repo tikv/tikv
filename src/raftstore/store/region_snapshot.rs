@@ -107,7 +107,7 @@ impl RegionSnapshot {
             }
         }
 
-        Ok(())
+        it.status()
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
@@ -304,6 +304,11 @@ impl RegionIterator {
     #[inline]
     pub fn valid(&self) -> bool {
         self.valid
+    }
+
+    #[inline]
+    pub fn status(&self) -> Result<()> {
+        self.iter.status().map_err(From::from)
     }
 
     #[inline]
