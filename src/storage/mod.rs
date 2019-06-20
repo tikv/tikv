@@ -75,6 +75,8 @@ pub enum Mutation {
     /// Set a lock on `Key`.
     Lock(Key),
     /// Put `Value` into `Key` if `Key` does not yet exist.
+    /// 
+    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
     Insert((Key, Value)),
 }
 
@@ -138,7 +140,7 @@ pub enum Command {
     },
     /// Commit the transaction that started at `lock_ts`.
     ///
-    /// This should be following a [`Prewrite`](Command::Prewrite) or [`AcquirePessimisticLock`](Command::AcquirePessimisticLock).
+    /// This should be following a [`Prewrite`](Command::Prewrite).
     Commit {
         ctx: Context,
         /// The keys affected.
@@ -215,9 +217,6 @@ pub enum Command {
         key_locks: Vec<(Key, Lock)>,
     },
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
-    ///
-    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
-    /// before safe point.
     ResolveLockLite {
         ctx: Context,
         /// The transaction timestamp.
