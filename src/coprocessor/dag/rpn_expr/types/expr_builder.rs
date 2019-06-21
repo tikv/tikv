@@ -810,9 +810,12 @@ mod tests {
     fn test_expr_with_val() {
         fn build_expr() -> Expr {
             let mut expr =
-                ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsReal, FieldTypeTp::LongLong).build();
-            expr.mut_children().push(ExprDefBuilder::constant_int(7).build());
-            expr.mut_children().push(ExprDefBuilder::constant_int(3).build());
+                ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsReal, FieldTypeTp::LongLong)
+                    .build();
+            expr.mut_children()
+                .push(ExprDefBuilder::constant_int(7).build());
+            expr.mut_children()
+                .push(ExprDefBuilder::constant_int(3).build());
             expr
         }
 
