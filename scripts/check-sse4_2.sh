@@ -44,8 +44,7 @@ for dir in $dirs; do
             # f2.*0f 38 is the opcode of `crc32`, see Intel® SSE4 Programming Reference
             found=0
             for sym in $fast_crc32; do
-		read -r start stop <<<$(nm "$dirfile" | grep -A1 "$sym" | awk '{printf("0x"$1" ")}')
-		stop=${stop:-0xFFFFFFFFFFFFFFFF} # This is the last symbol
+		read -r start stop <<<$(nm -n "$dirfile" | grep -A1 "$sym" | awk '{printf("0x"$1" ")}')
                 if [[ `objdump -d $dirfile --start-address $start --stop-address $stop 2> /dev/null | grep ".*f2.*0f 38.*crc32"` ]]; then
                     found=1
                     break
