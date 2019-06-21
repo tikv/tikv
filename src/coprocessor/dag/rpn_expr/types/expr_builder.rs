@@ -299,6 +299,11 @@ where
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
     let datums = datum::decode(&mut tree_node.get_val())?;
+    for d in datums.iter() {
+        if let Datum::Null = d {
+            return Err(box_err!("push down datum should be NOT NULL"));
+        }
+    }
     let implicit_args = datums
         .into_iter()
         .map(|d| match d {
