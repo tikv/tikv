@@ -6,13 +6,13 @@ mod expr_eval;
 #[cfg(test)]
 pub mod test_util;
 
+use tipb::expression::FieldType;
+
 pub use self::expr::{RpnExpression, RpnExpressionNode};
 pub use self::expr_builder::RpnExpressionBuilder;
 pub use self::expr_eval::RpnStackNode;
 
-use tipb::expression::FieldType;
-
-use crate::coprocessor::codec::data_type::ScalarArg;
+use crate::coprocessor::codec::data_type::ScalarValue;
 
 /// A structure for holding argument values and type information of arguments and return values.
 ///
@@ -25,7 +25,7 @@ use crate::coprocessor::codec::data_type::ScalarArg;
 pub struct RpnFnCallPayload<'a> {
     output_rows: usize,
     raw_args: &'a [RpnStackNode<'a>],
-    implicit_args: &'a [ScalarArg],
+    implicit_args: &'a Option<Vec<ScalarValue>>,
     ret_field_type: &'a FieldType,
 }
 
@@ -63,12 +63,20 @@ impl<'a> RpnFnCallPayload<'a> {
     /// Gets the length of implicit arguments
     #[inline]
     pub fn implicit_args_len(&'a self) -> usize {
-        self.implicit_args.len()
+        match self.implicit_args {
+            Some(args) => args.len(),
+            None => 0,
+        }
     }
 
     /// Get implicit argument at the special position
     #[inline]
-    pub fn implicit_args_at(&'a self, position: usize) -> &'a ScalarArg {
-        &self.implicit_args[position]
+    pub fn implicit_args_at(&'a self, position: usize) -> &'a ScalarValue {
+        match self.implicit_args {
+            Some(args) => &args[position],
+            None => panic!(
+                "call `implicit_args_at` at a function which does not contain implicit arguments"
+            ),
+        }
     }
 }

@@ -121,13 +121,13 @@ impl RpnExpressionBuilder {
     pub fn push_fn_call_with_implicit_args(
         mut self,
         func: RpnFnMeta,
-        implicit_args: Vec<ScalarArg>,
+        implicit_args: Vec<ScalarValue>,
         return_field_type: impl Into<FieldType>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
             func,
             field_type: return_field_type.into(),
-            implicit_args,
+            implicit_args: Some(implicit_args),
         };
         self.0.push(node);
         self
@@ -143,7 +143,7 @@ impl RpnExpressionBuilder {
         let node = RpnExpressionNode::FnCall {
             func,
             field_type: return_field_type.into(),
-            implicit_args: vec![],
+            implicit_args: None,
         };
         self.0.push(node);
         self
@@ -302,13 +302,13 @@ where
     let implicit_args = datums
         .into_iter()
         .map(|d| match d {
-            Datum::I64(n) => ScalarArg::Int(n),
-            Datum::U64(n) => ScalarArg::Int(n as i64),
-            Datum::F64(n) => ScalarArg::Real(Real::new(n).unwrap()),
-            Datum::Dur(dur) => ScalarArg::Duration(dur),
-            Datum::Bytes(bytes) => ScalarArg::Bytes(bytes),
-            Datum::Dec(dec) => ScalarArg::Decimal(dec),
-            Datum::Json(json) => ScalarArg::Json(json),
+            Datum::I64(n) => ScalarValue::Int(Some(n)),
+            Datum::U64(n) => ScalarValue::Int(Some(n as i64)),
+            Datum::F64(n) => ScalarValue::Real(Some(Real::new(n).unwrap())),
+            Datum::Dur(dur) => ScalarValue::Duration(Some(dur)),
+            Datum::Bytes(bytes) => ScalarValue::Bytes(Some(bytes)),
+            Datum::Dec(dec) => ScalarValue::Decimal(Some(dec)),
+            Datum::Json(json) => ScalarValue::Json(Some(json)),
             _ => unreachable!(),
         })
         .collect();
@@ -327,7 +327,7 @@ where
     rpn_nodes.push(RpnExpressionNode::FnCall {
         func,
         field_type: tree_node.take_field_type(),
-        implicit_args,
+        implicit_args: Some(implicit_args),
     });
     Ok(())
 }
@@ -844,7 +844,7 @@ mod tests {
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarArg::Int(0)]);
+                assert_eq!(implicit_args, Some(vec![ScalarValue::Int(Some(0))]));
             }
             _ => unreachable!(),
         }
@@ -862,7 +862,7 @@ mod tests {
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarArg::Int(1)]);
+                assert_eq!(implicit_args, Some(vec![ScalarValue::Int(Some(1))]));
             }
             _ => unreachable!(),
         }
@@ -882,7 +882,7 @@ mod tests {
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarArg::Int(0)]);
+                assert_eq!(implicit_args, Some(vec![ScalarValue::Int(Some(0))]));
             }
             _ => unreachable!(),
         }
@@ -901,7 +901,7 @@ mod tests {
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarArg::Int(1)]);
+                assert_eq!(implicit_args, Some(vec![ScalarValue::Int(Some(1))]));
             }
             _ => unreachable!(),
         }
@@ -922,17 +922,17 @@ mod tests {
         append_children(&mut expr);
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
-        let params = vec![
-            ScalarArg::Int(0),
-            ScalarArg::Real(Real::new(1.1).unwrap()),
-            ScalarArg::Bytes(b"from TiDB".to_vec()),
-            ScalarArg::Decimal(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
-            ScalarArg::Json(Json::Boolean(false)),
-            ScalarArg::Duration(Duration::from_nanos(10000, 3).unwrap()),
+        let args = vec![
+            ScalarValue::Int(Some(0)),
+            ScalarValue::Real(Some(Real::new(1.1).unwrap())),
+            ScalarValue::Bytes(Some(b"from TiDB".to_vec())),
+            ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
+            ScalarValue::Json(Some(Json::Boolean(false))),
+            ScalarValue::Duration(Some(Duration::from_nanos(10000, 3).unwrap())),
         ];
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, params);
+                assert_eq!(implicit_args, Some(args));
             }
             _ => unreachable!(),
         }
@@ -957,17 +957,17 @@ mod tests {
         append_children(&mut expr);
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
-        let params = vec![
-            ScalarArg::Int(0),
-            ScalarArg::Real(Real::new(1.1).unwrap()),
-            ScalarArg::Bytes(b"from TiKV".to_vec()),
-            ScalarArg::Decimal(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
-            ScalarArg::Json(Json::Boolean(false)),
-            ScalarArg::Duration(Duration::from_nanos(10000, 3).unwrap()),
+        let args = vec![
+            ScalarValue::Int(Some(0)),
+            ScalarValue::Real(Some(Real::new(1.1).unwrap())),
+            ScalarValue::Bytes(Some(b"from TiKV".to_vec())),
+            ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
+            ScalarValue::Json(Some(Json::Boolean(false))),
+            ScalarValue::Duration(Some(Duration::from_nanos(10000, 3).unwrap())),
         ];
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, params);
+                assert_eq!(implicit_args, Some(args));
             }
             _ => unreachable!(),
         }
