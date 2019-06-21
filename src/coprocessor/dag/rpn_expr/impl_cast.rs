@@ -44,6 +44,10 @@ pub fn get_cast_fn(
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
     };
+    // This cast function is inserted by `Coprocessor` automatically,
+    // the `inUnion` flag always false in this situation. Ideally,
+    // the cast function should be inserted by TiDB and pushed down
+    // with all implicit arguments.
     Ok((func, vec![ScalarArg::Int(0)]))
 }
 
