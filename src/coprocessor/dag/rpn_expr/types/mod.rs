@@ -71,12 +71,10 @@ impl<'a> RpnFnCallPayload<'a> {
 
     /// Get implicit argument at the special position
     #[inline]
-    pub fn implicit_args_at(&'a self, position: usize) -> &'a ScalarValue {
+    pub fn implicit_args_at(&'a self, position: usize) -> Option<&'a ScalarValue> {
         match self.implicit_args {
-            Some(args) => &args[position],
-            None => panic!(
-                "call `implicit_args_at` at a function which does not contain implicit arguments"
-            ),
+            Some(args) => Some(&args[position]),
+            None => None,
         }
     }
 }
