@@ -112,7 +112,7 @@ impl_evaluable_type! { Json }
 /// In many cases, for example, at the framework level, the concrete eval type is unknown at compile
 /// time. So we use this enum container to represent types dynamically.
 #[derive(Clone, Debug, PartialEq)]
-pub enum ScalarParameter {
+pub enum ScalarArg {
     Int(Int),
     Real(Real),
     Decimal(Decimal),

@@ -19,7 +19,7 @@ use crate::coprocessor::Result;
 pub fn get_cast_fn(
     from_field_type: &FieldType,
     to_field_type: &FieldType,
-) -> Result<(RpnFnMeta, Vec<ScalarParameter>)> {
+) -> Result<(RpnFnMeta, Vec<ScalarArg>)> {
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
     let func = match (from, to) {
@@ -44,7 +44,7 @@ pub fn get_cast_fn(
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
     };
-    Ok((func, vec![ScalarParameter::Int(0)]))
+    Ok((func, vec![ScalarArg::Int(0)]))
 }
 
 fn produce_dec_with_specified_tp(

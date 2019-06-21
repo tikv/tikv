@@ -3,7 +3,7 @@
 use tipb::expression::FieldType;
 
 use super::super::function::RpnFnMeta;
-use crate::coprocessor::codec::data_type::{ScalarParameter, ScalarValue};
+use crate::coprocessor::codec::data_type::{ScalarArg, ScalarValue};
 
 /// A type for each node in the RPN expression list.
 #[derive(Debug, Clone)]
@@ -12,7 +12,7 @@ pub enum RpnExpressionNode {
     FnCall {
         func: RpnFnMeta,
         field_type: FieldType,
-        imp_params: Vec<ScalarParameter>,
+        implicit_args: Vec<ScalarArg>,
     },
 
     /// Represents a scalar constant value.

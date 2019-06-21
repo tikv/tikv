@@ -118,16 +118,16 @@ impl RpnExpressionBuilder {
     }
 
     #[cfg(test)]
-    pub fn push_fn_call_with_imp_params(
+    pub fn push_fn_call_with_implicit_args(
         mut self,
         func: RpnFnMeta,
-        imp_params: Vec<ScalarParameter>,
+        implicit_args: Vec<ScalarArg>,
         return_field_type: impl Into<FieldType>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
             func,
             field_type: return_field_type.into(),
-            imp_params,
+            implicit_args,
         };
         self.0.push(node);
         self
@@ -143,7 +143,7 @@ impl RpnExpressionBuilder {
         let node = RpnExpressionNode::FnCall {
             func,
             field_type: return_field_type.into(),
-            imp_params: vec![],
+            implicit_args: vec![],
         };
         self.0.push(node);
         self
@@ -299,16 +299,16 @@ where
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
     let datums = datum::decode(&mut tree_node.get_val())?;
-    let imp_params = datums
+    let implicit_args = datums
         .into_iter()
         .map(|d| match d {
-            Datum::I64(n) => ScalarParameter::Int(n),
-            Datum::U64(n) => ScalarParameter::Int(n as i64),
-            Datum::F64(n) => ScalarParameter::Real(Real::new(n).unwrap()),
-            Datum::Dur(dur) => ScalarParameter::Duration(dur),
-            Datum::Bytes(bytes) => ScalarParameter::Bytes(bytes),
-            Datum::Dec(dec) => ScalarParameter::Decimal(dec),
-            Datum::Json(json) => ScalarParameter::Json(json),
+            Datum::I64(n) => ScalarArg::Int(n),
+            Datum::U64(n) => ScalarArg::Int(n as i64),
+            Datum::F64(n) => ScalarArg::Real(Real::new(n).unwrap()),
+            Datum::Dur(dur) => ScalarArg::Duration(dur),
+            Datum::Bytes(bytes) => ScalarArg::Bytes(bytes),
+            Datum::Dec(dec) => ScalarArg::Decimal(dec),
+            Datum::Json(json) => ScalarArg::Json(json),
             _ => unreachable!(),
         })
         .collect();
@@ -327,7 +327,7 @@ where
     rpn_nodes.push(RpnExpressionNode::FnCall {
         func,
         field_type: tree_node.take_field_type(),
-        imp_params,
+        implicit_args,
     });
     Ok(())
 }
@@ -843,8 +843,8 @@ mod tests {
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { imp_params, .. } => {
-                assert_eq!(imp_params, vec![ScalarParameter::Int(0)]);
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, vec![ScalarArg::Int(0)]);
             }
             _ => unreachable!(),
         }
@@ -861,8 +861,8 @@ mod tests {
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { imp_params, .. } => {
-                assert_eq!(imp_params, vec![ScalarParameter::Int(1)]);
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, vec![ScalarArg::Int(1)]);
             }
             _ => unreachable!(),
         }
@@ -881,8 +881,8 @@ mod tests {
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { imp_params, .. } => {
-                assert_eq!(imp_params, vec![ScalarParameter::Int(0)]);
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, vec![ScalarArg::Int(0)]);
             }
             _ => unreachable!(),
         }
@@ -900,8 +900,8 @@ mod tests {
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { imp_params, .. } => {
-                assert_eq!(imp_params, vec![ScalarParameter::Int(1)]);
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, vec![ScalarArg::Int(1)]);
             }
             _ => unreachable!(),
         }
@@ -923,16 +923,16 @@ mod tests {
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         let params = vec![
-            ScalarParameter::Int(0),
-            ScalarParameter::Real(Real::new(1.1).unwrap()),
-            ScalarParameter::Bytes(b"from TiDB".to_vec()),
-            ScalarParameter::Decimal(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
-            ScalarParameter::Json(Json::Boolean(false)),
-            ScalarParameter::Duration(Duration::from_nanos(10000, 3).unwrap()),
+            ScalarArg::Int(0),
+            ScalarArg::Real(Real::new(1.1).unwrap()),
+            ScalarArg::Bytes(b"from TiDB".to_vec()),
+            ScalarArg::Decimal(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
+            ScalarArg::Json(Json::Boolean(false)),
+            ScalarArg::Duration(Duration::from_nanos(10000, 3).unwrap()),
         ];
         match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { imp_params, .. } => {
-                assert_eq!(imp_params, params);
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, params);
             }
             _ => unreachable!(),
         }
@@ -958,16 +958,16 @@ mod tests {
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         let params = vec![
-            ScalarParameter::Int(0),
-            ScalarParameter::Real(Real::new(1.1).unwrap()),
-            ScalarParameter::Bytes(b"from TiKV".to_vec()),
-            ScalarParameter::Decimal(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
-            ScalarParameter::Json(Json::Boolean(false)),
-            ScalarParameter::Duration(Duration::from_nanos(10000, 3).unwrap()),
+            ScalarArg::Int(0),
+            ScalarArg::Real(Real::new(1.1).unwrap()),
+            ScalarArg::Bytes(b"from TiKV".to_vec()),
+            ScalarArg::Decimal(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
+            ScalarArg::Json(Json::Boolean(false)),
+            ScalarArg::Duration(Duration::from_nanos(10000, 3).unwrap()),
         ];
         match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { imp_params, .. } => {
-                assert_eq!(imp_params, params);
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, params);
             }
             _ => unreachable!(),
         }

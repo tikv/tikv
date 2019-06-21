@@ -12,7 +12,7 @@ pub use self::expr_eval::RpnStackNode;
 
 use tipb::expression::FieldType;
 
-use crate::coprocessor::codec::data_type::ScalarParameter;
+use crate::coprocessor::codec::data_type::ScalarArg;
 
 /// A structure for holding argument values and type information of arguments and return values.
 ///
@@ -25,7 +25,7 @@ use crate::coprocessor::codec::data_type::ScalarParameter;
 pub struct RpnFnCallPayload<'a> {
     output_rows: usize,
     raw_args: &'a [RpnStackNode<'a>],
-    imp_params: &'a [ScalarParameter],
+    implicit_args: &'a [ScalarArg],
     ret_field_type: &'a FieldType,
 }
 
@@ -60,15 +60,15 @@ impl<'a> RpnFnCallPayload<'a> {
         self.output_rows
     }
 
-    /// Gets the length of implicit parameters
+    /// Gets the length of implicit arguments
     #[inline]
-    pub fn imp_params_len(&'a self) -> usize {
-        self.imp_params.len()
+    pub fn implicit_args_len(&'a self) -> usize {
+        self.implicit_args.len()
     }
 
-    /// Get implicit parameter at the special position
+    /// Get implicit argument at the special position
     #[inline]
-    pub fn imp_param_at(&'a self, position: usize) -> &'a ScalarParameter {
-        &self.imp_params[position]
+    pub fn imp_param_at(&'a self, position: usize) -> &'a ScalarArg {
+        &self.implicit_args[position]
     }
 }
