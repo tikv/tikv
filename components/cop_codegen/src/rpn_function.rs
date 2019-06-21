@@ -539,7 +539,7 @@ mod tests {
     fn test_generic_generate_constructor() {
         let gen = generic_fn();
         let expected: TokenStream = r#"
-            pub const fn foo_fn <A: M, B> () -> crate::coprocessor::dag::rpn_expr::function::RpnFn
+            pub const fn foo_fn_meta <A: M, B> () -> crate::coprocessor::dag::rpn_expr::function::RpnFnMeta
             where B: N<M> {
                 #[inline]
                 fn run <A: M, B> (
@@ -553,7 +553,7 @@ mod tests {
                         Foo_Evaluator :: < A , B > (std::marker::PhantomData)
                     ).eval(Null, ctx, payload)
                 }
-                crate::coprocessor::dag::rpn_expr::function::RpnFn {
+                crate::coprocessor::dag::rpn_expr::function::RpnFnMeta {
                     name: "foo",
                     args_len: 1usize,
                     fn_ptr: run :: <A, B> ,
