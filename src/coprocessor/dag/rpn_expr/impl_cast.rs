@@ -19,7 +19,7 @@ use crate::coprocessor::Result;
 pub fn get_cast_fn(
     from_field_type: &FieldType,
     to_field_type: &FieldType,
-) -> Result<(RpnFnMeta, Option<Vec<ScalarValue>>)> {
+) -> Result<(RpnFnMeta, Vec<ScalarValue>)> {
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
     let func = match (from, to) {
@@ -48,7 +48,9 @@ pub fn get_cast_fn(
     // the `inUnion` flag always false in this situation. Ideally,
     // the cast function should be inserted by TiDB and pushed down
     // with all implicit arguments.
-    Ok((func, None))
+    // **Note**: CAST family functions inserted by `Coprocessor` will
+    // use empty implicit arguments to avoid memory allocation.
+    Ok((func, vec![]))
 }
 
 fn produce_dec_with_specified_tp(

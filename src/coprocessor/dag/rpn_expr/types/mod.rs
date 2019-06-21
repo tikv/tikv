@@ -25,7 +25,7 @@ use crate::coprocessor::codec::data_type::ScalarValue;
 pub struct RpnFnCallPayload<'a> {
     output_rows: usize,
     raw_args: &'a [RpnStackNode<'a>],
-    implicit_args: &'a Option<Vec<ScalarValue>>,
+    implicit_args: &'a Vec<ScalarValue>,
     ret_field_type: &'a FieldType,
 }
 
@@ -63,18 +63,12 @@ impl<'a> RpnFnCallPayload<'a> {
     /// Gets the length of implicit arguments
     #[inline]
     pub fn implicit_args_len(&'a self) -> usize {
-        match self.implicit_args {
-            Some(args) => args.len(),
-            None => 0,
-        }
+        self.implicit_args.len()
     }
 
     /// Get implicit argument at the special position
     #[inline]
-    pub fn implicit_args_at(&'a self, position: usize) -> Option<&'a ScalarValue> {
-        match self.implicit_args {
-            Some(args) => Some(&args[position]),
-            None => None,
-        }
+    pub fn implicit_args_at(&'a self, position: usize) -> &'a ScalarValue {
+        &self.implicit_args[position]
     }
 }

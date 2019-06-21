@@ -127,7 +127,7 @@ impl RpnExpressionBuilder {
         let node = RpnExpressionNode::FnCall {
             func,
             field_type: return_field_type.into(),
-            implicit_args: Some(implicit_args),
+            implicit_args,
         };
         self.0.push(node);
         self
@@ -143,7 +143,7 @@ impl RpnExpressionBuilder {
         let node = RpnExpressionNode::FnCall {
             func,
             field_type: return_field_type.into(),
-            implicit_args: None,
+            implicit_args: vec![],
         };
         self.0.push(node);
         self
@@ -327,7 +327,7 @@ where
     rpn_nodes.push(RpnExpressionNode::FnCall {
         func,
         field_type: tree_node.take_field_type(),
-        implicit_args: Some(implicit_args),
+        implicit_args,
     });
     Ok(())
 }
@@ -462,6 +462,7 @@ mod tests {
     use cop_codegen::rpn_fn;
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
+    use tipb_helper::ExprDefBuilder;
 
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::coprocessor::Result;
@@ -807,62 +808,36 @@ mod tests {
     #[test]
     #[allow(clippy::iter_skip_next)]
     fn test_expr_with_val() {
-        fn append_children(expr: &mut Expr) {
-            // node b
-            let mut node_b = Expr::new();
-            node_b.set_tp(ExprType::Int64);
-            node_b
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_b.mut_val().encode_i64(7).unwrap();
-
-            // node c
-            let mut node_c = Expr::new();
-            node_c.set_tp(ExprType::Int64);
-            node_c
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_c.mut_val().encode_i64(3).unwrap();
-            expr.mut_children().push(node_b);
-            expr.mut_children().push(node_c);
+        fn build_expr() -> Expr {
+            let mut expr =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsReal, FieldTypeTp::LongLong).build();
+            expr.mut_children().push(ExprDefBuilder::constant_int(7).build());
+            expr.mut_children().push(ExprDefBuilder::constant_int(3).build());
+            expr
         }
 
         // Simple cases
         // bytes generated from TiDB
         // datum(0)
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_sig(ScalarFuncSig::CastIntAsReal);
-        expr.mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
+        let mut expr = build_expr();
         expr.mut_val().extend(&vec![8, 0]);
-        append_children(&mut expr);
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, Some(vec![ScalarValue::Int(Some(0))]));
+                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(0))]);
             }
             _ => unreachable!(),
         }
 
         // datum(1)
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_sig(ScalarFuncSig::CastIntAsReal);
-        expr.mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
+        let mut expr = build_expr();
         expr.mut_val().extend(&vec![8, 2]);
-        append_children(&mut expr);
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, Some(vec![ScalarValue::Int(Some(1))]));
+                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(1))]);
             }
             _ => unreachable!(),
         }
@@ -870,38 +845,26 @@ mod tests {
         // bytes generated from TiKV
         // datum(0)
         let bytes = datum::encode_value(&[Datum::I64(0)]).unwrap();
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_sig(ScalarFuncSig::CastIntAsReal);
-        expr.mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
+        let mut expr = build_expr();
         expr.set_val(bytes);
-        append_children(&mut expr);
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, Some(vec![ScalarValue::Int(Some(0))]));
+                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(0))]);
             }
             _ => unreachable!(),
         }
 
         // datum(1)
         let bytes = datum::encode_value(&[Datum::I64(1)]).unwrap();
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_sig(ScalarFuncSig::CastIntAsReal);
-        expr.mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
+        let mut expr = build_expr();
         expr.set_val(bytes);
-        append_children(&mut expr);
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, Some(vec![ScalarValue::Int(Some(1))]));
+                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(1))]);
             }
             _ => unreachable!(),
         }
@@ -909,17 +872,11 @@ mod tests {
         // Combine various datums
         // bytes generated from TiDB
         // Int/Real/Duration/Decimal/Bytes/Json
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_sig(ScalarFuncSig::CastIntAsReal);
-        expr.mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
+        let mut expr = build_expr();
         expr.mut_val().extend(&vec![
             8, 0, 5, 191, 241, 153, 153, 153, 153, 153, 154, 2, 18, 102, 114, 111, 109, 32, 84,
             105, 68, 66, 6, 2, 1, 129, 5, 10, 4, 2, 7, 128, 0, 0, 0, 0, 0, 39, 16,
         ]);
-        append_children(&mut expr);
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         let args = vec![
@@ -932,7 +889,7 @@ mod tests {
         ];
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, Some(args));
+                assert_eq!(implicit_args, args);
             }
             _ => unreachable!(),
         }
@@ -947,14 +904,8 @@ mod tests {
             Datum::Dur(Duration::from_nanos(10000, 3).unwrap()),
         ];
         let bytes = datum::encode_value(&datums).unwrap();
-        let mut expr = Expr::new();
-        expr.set_tp(ExprType::ScalarFunc);
-        expr.set_sig(ScalarFuncSig::CastIntAsReal);
-        expr.mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
+        let mut expr = build_expr();
         expr.set_val(bytes);
-        append_children(&mut expr);
         let mut vec = vec![];
         append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
         let args = vec![
@@ -967,7 +918,7 @@ mod tests {
         ];
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, Some(args));
+                assert_eq!(implicit_args, args);
             }
             _ => unreachable!(),
         }
