@@ -805,6 +805,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::iter_skip_next)]
     fn test_expr_with_val() {
         fn append_children(expr: &mut Expr) {
             // node b
@@ -868,7 +869,7 @@ mod tests {
 
         // bytes generated from TiKV
         // datum(0)
-        let bytes = datum::encode_value(&vec![Datum::I64(0)]).unwrap();
+        let bytes = datum::encode_value(&[Datum::I64(0)]).unwrap();
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(ScalarFuncSig::CastIntAsReal);
@@ -887,7 +888,7 @@ mod tests {
         }
 
         // datum(1)
-        let bytes = datum::encode_value(&vec![Datum::I64(1)]).unwrap();
+        let bytes = datum::encode_value(&[Datum::I64(1)]).unwrap();
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(ScalarFuncSig::CastIntAsReal);
