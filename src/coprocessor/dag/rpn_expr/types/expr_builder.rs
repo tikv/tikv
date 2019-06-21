@@ -117,6 +117,22 @@ impl RpnExpressionBuilder {
         Self(Vec::new())
     }
 
+    #[cfg(test)]
+    pub fn push_fn_call_with_imp_params(
+        mut self,
+        func: RpnFnMeta,
+        imp_params: Vec<ScalarParameter>,
+        return_field_type: impl Into<FieldType>,
+    ) -> Self {
+        let node = RpnExpressionNode::FnCall {
+            func,
+            field_type: return_field_type.into(),
+            imp_params,
+        };
+        self.0.push(node);
+        self
+    }
+
     /// Pushes a `FnCall` node.
     #[cfg(test)]
     pub fn push_fn_call(
@@ -127,6 +143,7 @@ impl RpnExpressionBuilder {
         let node = RpnExpressionNode::FnCall {
             func,
             field_type: return_field_type.into(),
+            imp_params: vec![],
         };
         self.0.push(node);
         self
@@ -446,6 +463,7 @@ mod tests {
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
 
+    use crate::coprocessor::codec::datum::{self, Datum};
     use crate::coprocessor::Result;
     use tikv_util::codec::number::NumberEncoder;
 
@@ -783,6 +801,174 @@ mod tests {
                 append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
                     .is_ok()
             );
+        }
+    }
+
+    #[test]
+    fn test_expr_with_val() {
+        fn append_children(expr: &mut Expr) {
+            // node b
+            let mut node_b = Expr::new();
+            node_b.set_tp(ExprType::Int64);
+            node_b
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
+            node_b.mut_val().encode_i64(7).unwrap();
+
+            // node c
+            let mut node_c = Expr::new();
+            node_c.set_tp(ExprType::Int64);
+            node_c
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
+            node_c.mut_val().encode_i64(3).unwrap();
+            expr.mut_children().push(node_b);
+            expr.mut_children().push(node_c);
+        }
+
+        // Simple cases
+        // bytes generated from TiDB
+        // datum(0)
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(ScalarFuncSig::CastIntAsReal);
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        expr.mut_val().extend(&vec![8, 0]);
+        append_children(&mut expr);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { imp_params, .. } => {
+                assert_eq!(imp_params, vec![ScalarParameter::Int(0)]);
+            }
+            _ => unreachable!(),
+        }
+
+        // datum(1)
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(ScalarFuncSig::CastIntAsReal);
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        expr.mut_val().extend(&vec![8, 2]);
+        append_children(&mut expr);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { imp_params, .. } => {
+                assert_eq!(imp_params, vec![ScalarParameter::Int(1)]);
+            }
+            _ => unreachable!(),
+        }
+
+        // bytes generated from TiKV
+        // datum(0)
+        let bytes = datum::encode_value(&vec![Datum::I64(0)]).unwrap();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(ScalarFuncSig::CastIntAsReal);
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        expr.set_val(bytes);
+        append_children(&mut expr);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { imp_params, .. } => {
+                assert_eq!(imp_params, vec![ScalarParameter::Int(0)]);
+            }
+            _ => unreachable!(),
+        }
+
+        // datum(1)
+        let bytes = datum::encode_value(&vec![Datum::I64(1)]).unwrap();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(ScalarFuncSig::CastIntAsReal);
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        expr.set_val(bytes);
+        append_children(&mut expr);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { imp_params, .. } => {
+                assert_eq!(imp_params, vec![ScalarParameter::Int(1)]);
+            }
+            _ => unreachable!(),
+        }
+
+        // Combine various datums
+        // bytes generated from TiDB
+        // Int/Real/Duration/Decimal/Bytes/Json
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(ScalarFuncSig::CastIntAsReal);
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        expr.mut_val().extend(&vec![
+            8, 0, 5, 191, 241, 153, 153, 153, 153, 153, 154, 2, 18, 102, 114, 111, 109, 32, 84,
+            105, 68, 66, 6, 2, 1, 129, 5, 10, 4, 2, 7, 128, 0, 0, 0, 0, 0, 39, 16,
+        ]);
+        append_children(&mut expr);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        let params = vec![
+            ScalarParameter::Int(0),
+            ScalarParameter::Real(Real::new(1.1).unwrap()),
+            ScalarParameter::Bytes(b"from TiDB".to_vec()),
+            ScalarParameter::Decimal(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
+            ScalarParameter::Json(Json::Boolean(false)),
+            ScalarParameter::Duration(Duration::from_nanos(10000, 3).unwrap()),
+        ];
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { imp_params, .. } => {
+                assert_eq!(imp_params, params);
+            }
+            _ => unreachable!(),
+        }
+
+        // bytes generated from TiKV
+        let datums = vec![
+            Datum::I64(0),
+            Datum::F64(1.1),
+            Datum::Bytes(b"from TiKV".to_vec()),
+            Datum::Dec(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
+            Datum::Json(Json::Boolean(false)),
+            Datum::Dur(Duration::from_nanos(10000, 3).unwrap()),
+        ];
+        let bytes = datum::encode_value(&datums).unwrap();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(ScalarFuncSig::CastIntAsReal);
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        expr.set_val(bytes);
+        append_children(&mut expr);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        let params = vec![
+            ScalarParameter::Int(0),
+            ScalarParameter::Real(Real::new(1.1).unwrap()),
+            ScalarParameter::Bytes(b"from TiKV".to_vec()),
+            ScalarParameter::Decimal(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
+            ScalarParameter::Json(Json::Boolean(false)),
+            ScalarParameter::Duration(Duration::from_nanos(10000, 3).unwrap()),
+        ];
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { imp_params, .. } => {
+                assert_eq!(imp_params, params);
+            }
+            _ => unreachable!(),
         }
     }
 }

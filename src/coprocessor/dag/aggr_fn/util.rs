@@ -76,7 +76,7 @@ pub fn rewrite_exp_for_bit_op(schema: &[FieldType], exp: &mut RpnExpression) -> 
     exp.push(RpnExpressionNode::FnCall {
         func,
         field_type: new_ret_field_type,
-        imp_params: imp_params,
+        imp_params,
     });
     Ok(())
 }
