@@ -98,48 +98,119 @@ Use this command to view or modify the configuration information.
 Usage:
 
 ```bash
->> config show                                // Display the config information of the scheduler
+>> ./bin/pd-ctl config show all   // Display all config information of the scheduler
 {
-  "max-snapshot-count": 3,
-  "max-pending-peer-count": 16,
-  "max-merge-region-size": 20,
-  "max-merge-region-keys": 200000,
-  "split-merge-interval": "1h0m0s",
-  "patrol-region-interval": "100ms",
-  "max-store-down-time": "1h0m0s",
-  "leader-schedule-limit": 4,
-  "region-schedule-limit": 4,
-  "replica-schedule-limit":8,
-  "merge-schedule-limit": 8,
-  "tolerant-size-ratio": 5,
-  "low-space-ratio": 0.8,
-  "high-space-ratio": 0.6,
-  "disable-raft-learner": "false",
-  "disable-remove-down-replica": "false",
-  "disable-replace-offline-replica": "false",
-  "disable-make-up-replica": "false",
-  "disable-remove-extra-replica": "false",
-  "disable-location-replacement": "false",
-  "disable-namespace-relocation": "false",
-  "schedulers-v2": [
-    {
-      "type": "balance-region",
-      "args": null,
-      "disable": false
+  "client-urls": "http://127.0.0.1:2379",
+  "peer-urls": "http://127.0.0.1:2380",
+  "advertise-client-urls": "http://127.0.0.1:2379",
+  "advertise-peer-urls": "http://127.0.0.1:2380",
+  "name": "pd-chenshunings-MacBook-Pro.local",
+  "data-dir": "default.pd-chenshunings-MacBook-Pro.local",
+  "force-new-cluster": false,
+  "initial-cluster": "pd-chenshunings-MacBook-Pro.local=http://127.0.0.1:2380",
+  "initial-cluster-state": "new",
+  "join": "",
+  "lease": 3,
+  "log": {
+    "level": "",
+    "format": "text",
+    "disable-timestamp": false,
+    "file": {
+      "filename": "",
+      "log-rotate": true,
+      "max-size": 0,
+      "max-days": 0,
+      "max-backups": 0
     },
-    {
-      "type": "balance-leader",
-      "args": null,
-      "disable": false
-    },
-    {
-      "type": "hot-region",
-      "args": null,
-      "disable": false
-    }
-  ]
+    "development": false,
+    "disable-caller": false,
+    "disable-stacktrace": false,
+    "sampling": null
+  },
+  "log-file": "",
+  "log-level": "",
+  "tso-save-interval": "3s",
+  "metric": {
+    "job": "pd-chenshunings-MacBook-Pro.local",
+    "address": "",
+    "interval": "15s"
+  },
+  "schedule": {
+    "max-snapshot-count": 3,
+    "max-pending-peer-count": 16,
+    "max-merge-region-size": 20,
+    "max-merge-region-keys": 200000,
+    "split-merge-interval": "1h0m0s",
+    "enable-two-way-merge": false,
+    "patrol-region-interval": "100ms",
+    "max-store-down-time": "30m0s",
+    "leader-schedule-limit": 8,
+    "region-schedule-limit": 1024,
+    "replica-schedule-limit": 1024,
+    "merge-schedule-limit": 8,
+    "hot-region-schedule-limit": 2,
+    "hot-region-cache-hits-threshold": 3,
+    "store-balance-rate": 1,
+    "tolerant-size-ratio": 0,
+    "low-space-ratio": 0.8,
+    "high-space-ratio": 0.6,
+    "disable-raft-learner": "false",
+    "disable-remove-down-replica": "false",
+    "disable-replace-offline-replica": "false",
+    "disable-make-up-replica": "false",
+    "disable-remove-extra-replica": "false",
+    "disable-location-replacement": "false",
+    "disable-namespace-relocation": "false",
+    "schedulers-v2": [
+      {
+        "type": "balance-region",
+        "args": null,
+        "disable": false
+      },
+      {
+        "type": "balance-leader",
+        "args": null,
+        "disable": false
+      },
+      {
+        "type": "hot-region",
+        "args": null,
+        "disable": false
+      },
+      {
+        "type": "label",
+        "args": null,
+        "disable": false
+      }
+    ]
+  },
+  "replication": {
+    "max-replicas": 3,
+    "location-labels": "",
+    "strictly-match-label": "false"
+  },
+  "namespace": {},
+  "pd-server": {
+    "use-region-storage": "true"
+  },
+  "cluster-version": "0.0.0",
+  "quota-backend-bytes": "0 B",
+  "auto-compaction-mode": "periodic",
+  "auto-compaction-retention-v2": "1h",
+  "TickInterval": "500ms",
+  "ElectionInterval": "3s",
+  "PreVote": true,
+  "security": {
+    "cacert-path": "",
+    "cert-path": "",
+    "key-path": ""
+  },
+  "label-property": {},
+  "WarningMsgs": null,
+  "namespace-classifier": "table",
+  "LeaderPriorityCheckInterval": "1m0s"
 }
->> config show all                            // Display all config information
+>> config show                            // Display default config information
 >> config show namespace ts1                  // Display the config information of the namespace named ts1
 {
   "leader-schedule-limit": 4,
@@ -273,6 +344,12 @@ The configuration above is global. You can also tune the configuration by config
 - `disable-location-replacement` is used to disable the isolation level check. When you set it to `true`, PD does not improve the isolation level of Region replicas by scheduling.
 
 - `disable-namespace-relocation` is used to disable Region relocation to the store of its namespace. When you set it to `true`, PD does not move Regions to stores where they belong to.
+
+- `use-region-storage` is used to enable or disable Region metadata storage in PD.  When you set it to `true`, the metadata of PD Regions will be saved to the Region Meta-Storage, a seperate storage engine. This solves the potential performance issue with BlotDB (backend of etcd) that may occur if the stored metadata has reached a GB level. Metadata is synchonized across multiple PD servers and eventally consistency is guranteed through Raft. The default value is `true`.
+
+   > **Note:**
+   >
+   > This feature is introduced in TiKV 3.0.
 
 ### `config delete namespace <name> [<option>]`
 
