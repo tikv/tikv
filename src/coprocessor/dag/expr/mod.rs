@@ -61,8 +61,8 @@ pub struct Constant {
 pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
-    imp_params: Vec<Datum>,
     field_type: FieldType,
+    imp_params: Vec<Datum>,
     cus_rng: CusRng,
 }
 
