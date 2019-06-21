@@ -500,7 +500,7 @@ mod tests {
             pub struct Foo_Evaluator<A: M, B> (std::marker::PhantomData<(A, B)>)
                 where B: N<M> ;
 
-            impl<A: M, B> crate::coprocessor::dag::rpn_expr::function::Evaluator 
+            impl<A: M, B> crate::coprocessor::dag::rpn_expr::function::Evaluator
                 for Foo_Evaluator<A, B>
                 where B: N<M> {
                 #[inline]
@@ -531,7 +531,7 @@ mod tests {
                 where B: N<M> {
                     use crate::coprocessor::dag::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     ArgConstructor::new(
-                        0usize, 
+                        0usize,
                         Foo_Evaluator :: < A , B > (std::marker::PhantomData)
                     ).eval(Null, ctx, payload)
                 }
