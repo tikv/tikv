@@ -68,7 +68,7 @@ impl<'a> RpnFnCallPayload<'a> {
 
     /// Get implicit argument at the special position
     #[inline]
-    pub fn imp_param_at(&'a self, position: usize) -> &'a ScalarArg {
+    pub fn implicit_args_at(&'a self, position: usize) -> &'a ScalarArg {
         &self.implicit_args[position]
     }
 }
