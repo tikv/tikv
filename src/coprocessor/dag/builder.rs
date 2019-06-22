@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
+use tipb::select::DAGRequest;
 
 use crate::storage::Store;
 
@@ -14,7 +15,7 @@ use super::executor::{
     TopNExecutor,
 };
 use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
-use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::expr::{EvalConfig, Flag, SqlMode};
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 
@@ -28,52 +29,27 @@ use crate::coprocessor::*;
 pub struct DAGBuilder;
 
 impl DAGBuilder {
-    /// Given a list of executor descriptors and returns whether all executor descriptors can
+    /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn can_build_batch(exec_descriptors: &[executor::Executor]) -> bool {
-        use cop_datatype::EvalType;
-        use cop_datatype::FieldTypeAccessor;
-        use std::convert::TryFrom;
-
+    pub fn check_build_batch(exec_descriptors: &[executor::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    for column in descriptor.get_columns() {
-                        let eval_type = EvalType::try_from(column.tp());
-                        if eval_type.is_err() {
-                            debug!(
-                                "Coprocessor request cannot be batched";
-                                "unsupported_column_tp" => ?column.tp(),
-                            );
-                            return false;
-                        }
-                    }
+                    BatchTableScanExecutor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    for column in descriptor.get_columns() {
-                        let eval_type = EvalType::try_from(column.tp());
-                        if eval_type.is_err() {
-                            debug!(
-                                "Coprocessor request cannot be batched";
-                                "unsupported_column_tp" => ?column.tp(),
-                            );
-                            return false;
-                        }
-                    }
+                    BatchIndexScanExecutor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeLimit => {}
                 _ => {
-                    debug!(
-                        "Coprocessor request cannot be batched";
-                        "unsupported_executor_tp" => ?ed.get_tp(),
-                    );
-                    return false;
+                    return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
                 }
             }
         }
-        true
+
+        Ok(())
     }
 
     // Note: `S` is `'static` because we have trait objects `Executor`.
@@ -129,13 +105,13 @@ impl DAGBuilder {
             }
         }
 
-        for ex in executor_descriptors {
-            match ex.get_tp() {
+        for ed in executor_descriptors {
+            match ed.get_tp() {
                 ExecType::TypeLimit => {
                     executor = Box::new(BatchLimitExecutor::new(
-                        executor,
-                        ex.get_limit().get_limit() as usize,
                         ExecSummaryCollectorDisabled,
+                        executor,
+                        ed.get_limit().get_limit() as usize,
                     )?);
                 }
                 _ => {
@@ -230,6 +206,117 @@ impl DAGBuilder {
                 "first exec type should be *Scan, but get {:?}",
                 first.get_tp()
             )),
+        }
+    }
+
+    fn build_dag<S: Store + 'static>(
+        eval_cfg: EvalConfig,
+        mut req: DAGRequest,
+        ranges: Vec<KeyRange>,
+        store: S,
+        deadline: Deadline,
+        batch_row_limit: usize,
+    ) -> Result<super::DAGRequestHandler> {
+        let executor = Self::build_normal(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            Arc::new(eval_cfg),
+            req.get_collect_range_counts(),
+        )?;
+        Ok(super::DAGRequestHandler::new(
+            deadline,
+            executor,
+            req.take_output_offsets(),
+            batch_row_limit,
+        ))
+    }
+
+    fn build_batch_dag<S: Store + 'static>(
+        deadline: Deadline,
+        config: EvalConfig,
+        mut req: DAGRequest,
+        ranges: Vec<KeyRange>,
+        store: S,
+    ) -> Result<super::batch_handler::BatchDAGHandler> {
+        let ranges_len = ranges.len();
+        let executors_len = req.get_executors().len();
+
+        let config = Arc::new(config);
+        let out_most_executor = super::builder::DAGBuilder::build_batch(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            config.clone(),
+        )?;
+
+        // Check output offsets
+        let output_offsets = req.take_output_offsets();
+        let schema_len = out_most_executor.schema().len();
+        for offset in &output_offsets {
+            if (*offset as usize) >= schema_len {
+                return Err(box_err!(
+                    "Invalid output offset (schema has {} columns, access index {})",
+                    schema_len,
+                    offset
+                ));
+            }
+        }
+
+        Ok(super::batch_handler::BatchDAGHandler::new(
+            deadline,
+            out_most_executor,
+            output_offsets,
+            config,
+            ranges_len,
+            executors_len,
+        ))
+    }
+
+    pub fn build<S: Store + 'static>(
+        req: DAGRequest,
+        ranges: Vec<KeyRange>,
+        store: S,
+        deadline: Deadline,
+        batch_row_limit: usize,
+        is_streaming: bool,
+        enable_batch_if_possible: bool,
+    ) -> Result<Box<dyn RequestHandler>> {
+        let mut eval_cfg = EvalConfig::from_flag(Flag::from_bits_truncate(req.get_flags()));
+        // We respect time zone name first, then offset.
+        if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
+            box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
+        } else if req.has_time_zone_offset() {
+            box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
+        } else {
+            // This should not be reachable. However we will not panic here in case
+            // of compatibility issues.
+        }
+        if req.has_max_warning_count() {
+            eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
+        }
+        if req.has_sql_mode() {
+            eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
+        }
+
+        let mut is_batch = false;
+        if enable_batch_if_possible && !is_streaming {
+            let build_batch_result =
+                super::builder::DAGBuilder::check_build_batch(req.get_executors());
+            if let Err(e) = build_batch_result {
+                debug!("Coprocessor request cannot be batched"; "reason" => %e);
+            } else {
+                is_batch = true;
+            }
+        }
+
+        if is_batch {
+            Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())
+        } else {
+            Ok(
+                Self::build_dag(eval_cfg, req, ranges, store, deadline, batch_row_limit)?
+                    .into_boxed(),
+            )
         }
     }
 }

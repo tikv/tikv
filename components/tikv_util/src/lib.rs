@@ -8,8 +8,6 @@ extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate prometheus;
-#[macro_use]
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
@@ -51,10 +49,10 @@ pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod futurepool;
-pub mod io_limiter;
+pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
@@ -102,6 +100,10 @@ pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
 }
 
 pub const NO_LIMIT: u64 = u64::MAX;
+
+pub trait AssertClone: Clone {}
+
+pub trait AssertCopy: Copy {}
 
 pub trait AssertSend: Send {}
 

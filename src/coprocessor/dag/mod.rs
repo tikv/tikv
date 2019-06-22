@@ -22,6 +22,7 @@
 //!
 //!   Obviously, this kind of executor must not be the first executor in the pipeline.
 
+pub mod aggr_fn;
 pub mod batch;
 pub mod batch_handler;
 mod builder;
@@ -32,5 +33,6 @@ pub mod rpn_expr;
 mod scanner;
 
 pub use self::batch_handler::BatchDAGHandler;
+pub use self::builder::DAGBuilder;
 pub use self::handler::DAGRequestHandler;
 pub use self::scanner::{ScanOn, Scanner};
