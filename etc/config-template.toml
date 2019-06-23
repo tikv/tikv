@@ -749,4 +749,4 @@
 # wake-up-delay-duration = 1
 #
 ## Interval in milliseconds to check the membership change of deadlock detector.
-# monitor-membership-interval 3000
+# monitor-membership-interval = 3000
