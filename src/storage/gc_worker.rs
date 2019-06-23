@@ -1198,6 +1198,14 @@ mod tests {
             callback(&mut self.regions.range(from..).map(|(_, v)| v));
             Ok(())
         }
+
+        fn get_regions_in_range(
+            &self,
+            _start: &[u8],
+            _end: &[u8],
+        ) -> EngineResult<Vec<metapb::Region>> {
+            Ok(vec![])
+        }
     }
 
     struct MockGCRunner {

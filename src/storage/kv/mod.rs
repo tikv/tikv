@@ -15,6 +15,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use kvproto::metapb;
 
 mod btree_engine;
 mod compact_listener;
@@ -155,6 +156,9 @@ pub trait RegionInfoProvider: Send + Clone + 'static {
     /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
     /// this TiKV satisfies `filter(peer)` returns true.
     fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
+
+    /// Get all regions in range [`start`, `end`).
+    fn get_regions_in_range(&self, start: &[u8], end: &[u8]) -> Result<Vec<metapb::Region>>;
 }
 
 macro_rules! near_loop {

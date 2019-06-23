@@ -32,7 +32,8 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/zhangjinpeng1987/rust-rocksdb.git"
+branch = "tikv-3.0-guards"
 package = "rocksdb"
 
 [dev-dependencies]

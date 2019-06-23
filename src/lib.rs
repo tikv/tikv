@@ -73,6 +73,7 @@ pub mod binutil;
 pub mod config;
 pub mod coprocessor;
 pub mod import;
+pub mod misc_util;
 pub mod pd;
 pub mod raftstore;
 pub mod server;

@@ -83,8 +83,8 @@ pub fn open_opt(
 }
 
 pub struct CFOptions<'a> {
-    cf: &'a str,
-    options: ColumnFamilyOptions,
+    pub cf: &'a str,
+    pub options: ColumnFamilyOptions,
 }
 
 impl<'a> CFOptions<'a> {
