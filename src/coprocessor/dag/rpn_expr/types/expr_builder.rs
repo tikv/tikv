@@ -304,13 +304,12 @@ where
         let arg = match d {
             Datum::I64(n) => ScalarValue::Int(Some(n)),
             Datum::U64(n) => ScalarValue::Int(Some(n as i64)),
-            Datum::F64(n) => ScalarValue::Real(Some(Real::new(n).unwrap())),
+            Datum::F64(n) => ScalarValue::Real(Real::new(n).ok()),
             Datum::Dur(dur) => ScalarValue::Duration(Some(dur)),
             Datum::Bytes(bytes) => ScalarValue::Bytes(Some(bytes)),
             Datum::Dec(dec) => ScalarValue::Decimal(Some(dec)),
             Datum::Json(json) => ScalarValue::Json(Some(json)),
-            Datum::Null => return Err(box_err!("push down datum should be NOT NULL")),
-            _ => unreachable!(),
+            _ => return Err(box_err!("Unsupported push down datum {}", d)),
         };
         implicit_args.push(arg);
     }
