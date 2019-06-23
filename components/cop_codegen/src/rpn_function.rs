@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use proc_macro::Diagnostic;
 
-use super::Result;
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
@@ -9,6 +9,8 @@ use syn::{
     parse2, parse_str, FnArg, GenericArgument, Ident, ItemFn, Lifetime, LifetimeDef, PathArguments,
     Type, TypePath,
 };
+
+use super::Result;
 
 pub struct RpnFnGenerator {
     meta: Vec<Ident>,
@@ -27,7 +29,9 @@ impl RpnFnGenerator {
                 .unwrap()
                 .error("Lifetime definition is not allowed"));
         }
-
+        if let Some(dia) = check(&meta, &item_fn) {
+            return Err(dia);
+        }
         let arg_types = item_fn
             .decl
             .inputs
@@ -225,6 +229,72 @@ macro_rules! destruct {
     };
 }
 
+macro_rules! destruct2 {
+    ($elem:expr, $tp:ident::$var:ident, $msg:expr, $span_elem:expr) => {
+        if let $tp::$var(elem) = $elem {
+            elem
+        } else {
+            return Some($span_elem.span().unwrap().error($msg));
+        }
+    };
+    ($elem:expr, $tp:ident::$var:ident, $msg:expr) => {
+        destruct2!($elem, $tp::$var, $msg, $elem);
+    };
+}
+
+fn check(meta: &[Ident], item_fn: &ItemFn) -> Option<Diagnostic> {
+    let err_msg = "The attr can only be empty or `ctx`\
+                   or `ctx, payload` or `payload, ctx`, \
+                   and make sure that the n attributes and their orders \
+                   are the same as the first n param of the function signature.";
+    let (ctx, ctx_type) = ("ctx", "EvalContext");
+    let (payload, payload_type) = ("payload", "RpnFnCallPayload");
+    if meta.len() > 2 || meta.len() > item_fn.decl.inputs.len() {
+        return Some(meta[0].span().unwrap().error(err_msg));
+    }
+    if meta.len() == 1 && (meta[0] != ctx && meta[0] != payload) {
+        return Some(meta[0].span().unwrap().error(err_msg));
+    } else if meta.len() == 2 {
+        if meta[0] == ctx {
+            if meta[1] != payload {
+                return Some(meta[1].span().unwrap().error("Must be `payload`"));
+            }
+        } else if meta[0] == payload {
+            if meta[1] != ctx {
+                return Some(meta[1].span().unwrap().error("Must be `ctx`"));
+            }
+        } else {
+            return Some(meta[0].span().unwrap().error(err_msg));
+        }
+    }
+    let mut iter = item_fn.decl.inputs.iter();
+    for mid in meta.iter() {
+        let fn_arg = iter.next().unwrap();
+        if mid == ctx {
+            let arg = destruct2!(fn_arg, FnArg::Captured, "Must be a captured parameter");
+            let tp = destruct2!(
+                &arg.ty,
+                Type::Reference,
+                "Must be `&mut EvalContext` or `&EvalContext`"
+            );
+            let path = destruct2!(&*tp.elem, Type::Path, "Must be `EvalContext`");
+            let seg = &path.path.segments;
+            if seg.len() != 1 || seg.iter().next().unwrap().ident != ctx_type {
+                return Some(path.span().unwrap().error("Must be `EvalContext`"));
+            }
+        } else {
+            assert_eq!(mid, payload);
+            let arg = destruct2!(fn_arg, FnArg::Captured, "Must be a captured parameter");
+            let tp = destruct2!(&arg.ty, Type::Path, "Must be `RpnFnCallPayload`");
+            let seg = &tp.path.segments;
+            if seg.len() != 1 || seg.iter().next().unwrap().ident != payload_type {
+                return Some(tp.span().unwrap().error("Must be `RpnFnCallPayload`"));
+            }
+        }
+    }
+    None
+}
+
 fn parse_arg_type(arg: &FnArg) -> Result<TypePath> {
     let arg = destruct!(arg, FnArg::Captured, "Must be a captured parameter");
     let tp = destruct!(&arg.ty, Type::Reference, "Must be `&Option`");
@@ -266,6 +336,8 @@ fn common_types() -> (TokenStream, TokenStream, TokenStream) {
 
 #[cfg(test)]
 mod tests {
+    use std::panic;
+
     use super::*;
 
     fn no_generic_fn() -> RpnFnGenerator {
@@ -543,5 +615,83 @@ mod tests {
             }
         };
         assert_eq!(expected.to_string(), gen.generate_constructor().to_string());
+    }
+
+    #[test]
+    fn test_attr_check() {
+        let case = vec![
+            (
+                r#"fn f(c: &mut EvalContext){}"#,
+                vec![Ident::new("ctx", Span::call_site())],
+                true,
+            ),
+            (
+                r#"fn f(c: &EvalContext){}"#,
+                vec![Ident::new("ctx", Span::call_site())],
+                true,
+            ),
+            (
+                r#"fn f(p: RpnFnCallPayload){}"#,
+                vec![Ident::new("payload", Span::call_site())],
+                true,
+            ),
+            (
+                r#"fn f(c: &EvalContext, p: RpnFnCallPayload){}"#,
+                vec![
+                    Ident::new("ctx", Span::call_site()),
+                    Ident::new("payload", Span::call_site()),
+                ],
+                true,
+            ),
+            (
+                r#"fn f(c: &mut EvalContext, p: RpnFnCallPayload){}"#,
+                vec![
+                    Ident::new("ctx", Span::call_site()),
+                    Ident::new("payload", Span::call_site()),
+                ],
+                true,
+            ),
+            (
+                r#"fn f(c: &mut i32){}"#,
+                vec![Ident::new("ctx", Span::call_site())],
+                false,
+            ),
+            (
+                r#"fn f(c: &mut i32){}"#,
+                vec![Ident::new("payload", Span::call_site())],
+                false,
+            ),
+            (
+                r#"fn f(c: &mut i32){}"#,
+                vec![
+                    Ident::new("ctx", Span::call_site()),
+                    Ident::new("x", Span::call_site()),
+                ],
+                false,
+            ),
+            (
+                r#"fn f(c: &mut i32){}"#,
+                vec![
+                    Ident::new("ctx", Span::call_site()),
+                    Ident::new("y", Span::call_site()),
+                    Ident::new("z", Span::call_site()),
+                ],
+                false,
+            ),
+        ];
+        for (x, y, z) in case {
+            println!("{}", x);
+            if z {
+                let item_fn = parse_str(x).unwrap();
+                let ans = check(&y, &item_fn);
+                assert!(ans.is_none());
+            } else {
+                let res = panic::catch_unwind(move || {
+                    let item_fn = parse_str(x).unwrap();
+                    check(&y, &item_fn);
+                });
+                assert!(res.is_err());
+            }
+        }
     }
 }
