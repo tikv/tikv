@@ -121,8 +121,8 @@ impl RpnExpressionBuilder {
     pub fn push_fn_call_with_implicit_args(
         mut self,
         func: RpnFnMeta,
-        implicit_args: Vec<ScalarValue>,
         return_field_type: impl Into<FieldType>,
+        implicit_args: Vec<ScalarValue>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
             func,
@@ -299,14 +299,9 @@ where
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
     let datums = datum::decode(&mut tree_node.get_val())?;
-    for d in datums.iter() {
-        if let Datum::Null = d {
-            return Err(box_err!("push down datum should be NOT NULL"));
-        }
-    }
-    let implicit_args = datums
-        .into_iter()
-        .map(|d| match d {
+    let mut implicit_args = Vec::with_capacity(datums.len());
+    for d in datums {
+        let arg = match d {
             Datum::I64(n) => ScalarValue::Int(Some(n)),
             Datum::U64(n) => ScalarValue::Int(Some(n as i64)),
             Datum::F64(n) => ScalarValue::Real(Some(Real::new(n).unwrap())),
@@ -314,9 +309,11 @@ where
             Datum::Bytes(bytes) => ScalarValue::Bytes(Some(bytes)),
             Datum::Dec(dec) => ScalarValue::Decimal(Some(dec)),
             Datum::Json(json) => ScalarValue::Json(Some(json)),
+            Datum::Null => return Err(box_err!("push down datum should be NOT NULL")),
             _ => unreachable!(),
-        })
-        .collect();
+        };
+        implicit_args.push(arg);
+    }
 
     if func.args_len != args.len() {
         return Err(box_err!(
