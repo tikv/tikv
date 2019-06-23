@@ -55,7 +55,7 @@ enum FsmTypes<N, C> {
 
 // A macro to introduce common definition of scheduler.
 macro_rules! impl_sched {
-    ($name:ident) => {
+    ($name:ident, $ty:path, Fsm = $fsm:tt) => {
         pub struct $name<N, C> {
             sender: channel::Sender<FsmTypes<N, C>>,
         }
@@ -68,52 +68,33 @@ macro_rules! impl_sched {
                 }
             }
         }
+
+        impl<N: Fsm, C: Fsm> FsmScheduler for $name<N, C> {
+            type Fsm = $fsm;
+
+            #[inline]
+            fn schedule(&self, fsm: Box<Self::Fsm>) {
+                match self.sender.send($ty(fsm)) {
+                    Ok(()) => return,
+                    // TODO: use debug instead.
+                    Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
+                    _ => unreachable!(),
+                }
+            }
+
+            fn shutdown(&self) {
+                // TODO: close it explicitly once it's supported.
+                // Magic number, actually any number greater than poll pool size works.
+                for _ in 0..100 {
+                    let _ = self.sender.send(FsmTypes::Empty);
+                }
+            }
+        }
     };
 }
 
-impl_sched!(NormalScheduler);
-impl_sched!(ControlScheduler);
-
-impl<N: Fsm, C> FsmScheduler for NormalScheduler<N, C> {
-    type Fsm = N;
-
-    #[inline]
-    fn schedule(&self, fsm: Box<N>) {
-        match self.sender.send(FsmTypes::Normal(fsm)) {
-            Ok(()) => return,
-            // TODO: use debug instead.
-            Err(SendError(FsmTypes::Normal(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
-            _ => unreachable!(),
-        }
-    }
-
-    fn shutdown(&self) {
-        // TODO: close it explicitly once it's supported.
-        // Magic number, actually any number greater than poll pool size works.
-        for _ in 0..100 {
-            let _ = self.sender.send(FsmTypes::Empty);
-        }
-    }
-}
-
-impl<N, C: Fsm> FsmScheduler for ControlScheduler<N, C> {
-    type Fsm = C;
-
-    #[inline]
-    fn schedule(&self, fsm: Box<C>) {
-        match self.sender.send(FsmTypes::Control(fsm)) {
-            Ok(()) => return,
-            Err(SendError(FsmTypes::Control(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
-            _ => unreachable!(),
-        }
-    }
-
-    fn shutdown(&self) {
-        for _ in 0..100 {
-            let _ = self.sender.send(FsmTypes::Empty);
-        }
-    }
-}
+impl_sched!(NormalScheduler, FsmTypes::Normal, Fsm = N);
+impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 
 /// A basic struct for a round of polling.
 #[allow(clippy::vec_box)]
