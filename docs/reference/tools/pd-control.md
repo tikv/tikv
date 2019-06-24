@@ -169,19 +169,25 @@ Usage:
     >> config set max-pending-peer-count 64  // Set the maximum number of pending peers to 64
     ```
 
-- `max-merge-region-size` controls the upper limit on the size of Region Merge (the unit is M). When `regionSize` exceeds the specified value, PD does not merge it with the adjacent Region. Setting it to 0 indicates disabling Region Merge.
+- `max-merge-region-size` controls the upper limit on the size of Region Merge (the unit is M). When `regionSize` exceeds the specified value, PD does not merge it with the adjacent Region. Setting it to 0 indicates disabling Region Merge. The default value is 20.
 
     ```bash
     >> config set max-merge-region-size 16 // Set the upper limit on the size of Region Merge to 16M
     ```
 
-- `max-merge-region-keys` controls the upper limit on the key count of Region Merge. When `regionKeyCount` exceeds the specified value, PD does not merge it with the adjacent Region.
+- `max-merge-region-keys` controls the upper limit on the key count of Region Merge. When `regionKeyCount` exceeds the specified value, PD does not merge it with the adjacent Region. The default value is 200000.
 
     ```bash
     >> config set max-merge-region-keys 50000 // Set the the upper limit on KeyCount to 50000
     ```
 
-- `split-merge-interval` controls the interval between the `split` and `merge` operations on a same Region. This means the newly split Region won't be merged within a period of time.
+- `split-merge-interval` controls the interval between the `split` and `merge` operations on a same Region. This means:
+    
+    - Newly split Regions won't be merged within the specified period of time.
+
+    - Region Merge won't happen within the specified period of time after PD starts or restarts.
+ 
+  The default value is 1h. 
 
     ```bash
     >> config set split-merge-interval 24h  // Set the interval between `split` and `merge` to one day
@@ -217,7 +223,7 @@ Usage:
     >> config set replica-schedule-limit 4        // 4 tasks of replica scheduling at the same time at most
     ```
 
-- `merge-schedule-limit` controls the number of Region Merge scheduling tasks. Setting the value to 0 closes Region Merge. Usually the Merge scheduling has a large load, so do not set a too large value.
+- `merge-schedule-limit` controls the number of Region Merge scheduling tasks. Setting the value to 0 closes Region Merge. Usually the Merge scheduling has a large load, so do not set a too large value. The default value is 8.ß
 
     ```bash
     >> config set merge-schedule-limit 16       // 16 tasks of Merge scheduling at the same time at most
@@ -598,7 +604,7 @@ Usage:
 
 ### `region topsize [limit]`
 
-Use this command to list Regions with top approximate size. The default value of the limit is 16.
+Use this command to list Regions with top approximate sizeƒ. The default value of the limit is 16.
 
 Usage:
 
