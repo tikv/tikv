@@ -281,7 +281,10 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => Some(!bs.is_empty() && convert::bytes_to_int(ctx, bs)? != 0),
+            Datum::Bytes(ref bs) => Some(
+                !bs.is_empty()
+                    && convert::convert_bytes_to_int(ctx, bs, FieldTypeTp::LongLong)? != 0,
+            ),
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
@@ -348,7 +351,7 @@ impl Datum {
             Datum::I64(i) => Ok(i),
             Datum::U64(u) => convert::convert_uint_to_int(u, tp),
             Datum::F64(f) => convert::convert_float_to_int(f, tp),
-            Datum::Bytes(bs) => convert::bytes_to_int(ctx, &bs),
+            Datum::Bytes(bs) => convert::convert_bytes_to_int(ctx, &bs, FieldTypeTp::LongLong),
             Datum::Time(mut t) => {
                 t.round_frac(mysql::DEFAULT_FSP)?;
                 let d = t.to_decimal()?;

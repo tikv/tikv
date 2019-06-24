@@ -131,6 +131,17 @@ pub fn convert_float_to_int(fval: f64, tp: FieldTypeTp) -> Result<i64> {
     Ok(val as i64)
 }
 
+/// `convert_bytes_to_int` converts a byte arrays to an i64 in best effort.
+pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp) -> Result<i64> {
+    let s = str::from_utf8(bytes)?.trim();
+    let vs = get_valid_int_prefix(ctx, s)?;
+    let val = bytes_to_int_without_context(vs.as_bytes());
+    match val {
+        Ok(val) => convert_int_to_int(val, tp),
+        Err(_) => Err(Error::overflow("BIGINT", &vs)),
+    }
+}
+
 /// `convert_float_to_uint` converts a f64 value to a u64 value.
 /// Returns the overflow error if the value exceeds the boundary.
 #[inline]
@@ -205,13 +216,6 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
         }
     }
     r.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", ""))
-}
-
-/// `bytes_to_int` converts a byte arrays to an i64 in best effort.
-pub fn bytes_to_int(ctx: &mut EvalContext, bytes: &[u8]) -> Result<i64> {
-    let s = str::from_utf8(bytes)?.trim();
-    let vs = get_valid_int_prefix(ctx, s)?;
-    bytes_to_int_without_context(vs.as_bytes()).map_err(|_| Error::overflow("BIGINT", &vs))
 }
 
 /// `bytes_to_uint` converts a byte arrays to an u64 in best effort.
@@ -388,11 +392,13 @@ const MAX_ZERO_COUNT: i64 = 20;
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::f64::EPSILON;
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
     use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
+    use crate::coprocessor::dag::expr::Flag;
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 
     use super::*;
@@ -435,7 +441,33 @@ mod tests {
     }
 
     #[test]
-    fn test_bytes_to_i64() {
+    fn test_convert_bytes_to_int_truncated() {
+        let mut ctx = EvalContext::default();
+        let bs = b"123bb";
+        let val = convert_bytes_to_int(&mut ctx, bs, FieldTypeTp::LongLong);
+        match val {
+            Err(e) => assert!(
+                e.description().contains("Data Truncated"),
+                "expect data truncated, but got {:?}",
+                e
+            ),
+            res => panic!("expect convert {:?} to truncated, but got {:?}", bs, res),
+        };
+
+        // IGNORE_TRUNCATE
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IGNORE_TRUNCATE)));
+        let val = convert_bytes_to_int(&mut ctx, bs, FieldTypeTp::LongLong);
+        assert_eq!(val.unwrap(), 123i64);
+
+        // TRUNCATE_AS_WARNING
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
+        let val = convert_bytes_to_int(&mut ctx, bs, FieldTypeTp::LongLong);
+        assert_eq!(val.unwrap(), 123i64);
+        assert_eq!(ctx.warnings.warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_convert_bytes_to_int_without_context() {
         let tests: Vec<(&'static [u8], i64)> = vec![
             (b"0", 0),
             (b" 23a", 23),
@@ -651,6 +683,7 @@ mod tests {
             (-4294967296.8, FieldTypeTp::LongLong, Some(-4294967297)),
             (-4294967297.1, FieldTypeTp::LongLong, Some(-4294967297)),
             (f64::MAX, FieldTypeTp::LongLong, None),
+            (f64::MIN, FieldTypeTp::LongLong, None),
         ];
 
         for (from, tp, to) in tests {

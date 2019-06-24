@@ -8,7 +8,9 @@ use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use crate::coprocessor::codec::convert::{
+    self, convert_bytes_to_int, convert_float_to_int, convert_float_to_uint,
+};
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
@@ -61,7 +63,7 @@ impl ScalarFunc {
             _ => false,
         };
         let res = if is_negative {
-            convert::bytes_to_int(ctx, &val).map(|v| {
+            convert_bytes_to_int(ctx, &val, FieldTypeTp::LongLong).map(|v| {
                 ctx.warnings
                     .append_warning(Error::cast_neg_int_as_unsigned());
                 v
