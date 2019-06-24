@@ -21,7 +21,7 @@ use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{escape, Either, HandyRwLock};
+use tikv_util::{Either, HandyRwLock};
 
 use super::*;
 
@@ -974,7 +974,10 @@ impl PdClient for TestPdClient {
             }
         }
 
-        Err(box_err!("no region contains key {:?}", escape(key)))
+        Err(box_err!(
+            "no region contains key {}",
+            hex::encode_upper(key)
+        ))
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
