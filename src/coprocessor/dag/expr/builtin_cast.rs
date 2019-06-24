@@ -587,7 +587,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let mut val = try_opt!(self.children[0].eval_duration(ctx, row));
-        val.maximize_fsp();
+        val = val.maximize_fsp();
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))
     }

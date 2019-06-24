@@ -489,13 +489,7 @@ mod tests {
     #[test]
     fn test_compare_duration() {
         fn map_double_to_duration(v: Real) -> Duration {
-            let millis = (v.abs() * 1000.0) as i64;
-            let millis = if v.into_inner() < 0.0 {
-                -millis
-            } else {
-                millis
-            };
-            Duration::from_millis(millis, 4).unwrap()
+            Duration::from_millis((v.into_inner() * 1000.0) as i64, 4).unwrap()
         }
 
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
