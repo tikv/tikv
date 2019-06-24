@@ -77,7 +77,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
-    pub min_blob_size: u64,
+    pub min_blob_size: ReadableSize,
     pub blob_file_compression: CompressionType,
     pub blob_cache_size: ReadableSize,
     pub min_gc_batch_size: ReadableSize,
@@ -90,7 +90,7 @@ pub struct TitanCfConfig {
 impl Default for TitanCfConfig {
     fn default() -> Self {
         Self {
-            min_blob_size: ReadableSize::kb(1).0 as u64, // disable titan default
+            min_blob_size: ReadableSize::kb(1), // disable titan default
             blob_file_compression: CompressionType::Lz4,
             blob_cache_size: ReadableSize::mb(0),
             min_gc_batch_size: ReadableSize::mb(16),
@@ -105,7 +105,7 @@ impl Default for TitanCfConfig {
 impl TitanCfConfig {
     fn build_opts(&self) -> TitanDBOptions {
         let mut opts = TitanDBOptions::new();
-        opts.set_min_blob_size(self.min_blob_size);
+        opts.set_min_blob_size(self.min_blob_size.0 as u64);
         opts.set_blob_file_compression(self.blob_file_compression.into());
         opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
@@ -263,7 +263,7 @@ macro_rules! write_into_metrics {
             .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
         $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
-            .set($cf.titan.min_blob_size as f64);
+            .set($cf.titan.min_blob_size.0 as f64);
         $metrics
             .with_label_values(&[$tag, "titan_blob_cache_size"])
             .set($cf.titan.blob_cache_size.0 as f64);
@@ -403,7 +403,7 @@ cf_config!(WriteCfConfig);
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.min_blob_size = ReadableSize::gb(4);
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -477,7 +477,7 @@ cf_config!(LockCfConfig);
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.min_blob_size = ReadableSize::gb(4);
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -533,7 +533,7 @@ cf_config!(RaftCfConfig);
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.min_blob_size = ReadableSize::gb(4);
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -594,6 +594,7 @@ pub struct TitanDBConfig {
     pub dirname: String,
     pub disable_gc: bool,
     pub max_background_gc: i32,
+    pub purge_obsolete_files_period: ReadableDuration,
 }
 
 impl Default for TitanDBConfig {
@@ -603,6 +604,7 @@ impl Default for TitanDBConfig {
             dirname: "".to_owned(),
             disable_gc: false,
             max_background_gc: 1,
+            purge_obsolete_files_period: ReadableDuration::secs(10),
         }
     }
 }
@@ -613,6 +615,7 @@ impl TitanDBConfig {
         opts.set_dirname(&self.dirname);
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
+        opts.set_purge_obsolete_files_period(self.purge_obsolete_files_period.as_secs() as usize);
         opts
     }
 
