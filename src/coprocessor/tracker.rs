@@ -159,7 +159,7 @@ impl Tracker {
                 "scan_iter_ops" => self.total_exec_metrics.cf_stats.total_op_count(),
                 "scan_iter_processed" => self.total_exec_metrics.cf_stats.total_processed(),
                 "scan_ranges" => self.req_ctx.ranges_len,
-                "scan_first_range" => self.req_ctx.first_range.as_ref().map(::log_wrappers::kvproto::coprocessor::KeyRange),
+                "scan_first_range" => ?self.req_ctx.first_range,
                 self.total_perf_statistics,
             );
         }

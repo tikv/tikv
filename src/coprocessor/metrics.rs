@@ -56,6 +56,17 @@ lazy_static! {
         &["req", "metric"]
     )
     .unwrap();
+    pub static ref COPR_DAG_REQ_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_coprocessor_dag_request_count",
+        "Total number of DAG requests",
+        &["vec_type"]
+    )
+    .unwrap();
+    pub static ref COPR_RESP_SIZE: IntCounter = register_int_counter!(
+        "tikv_coprocessor_response_bytes",
+        "Total bytes of response body"
+    )
+    .unwrap();
     pub static ref COPR_EXECUTOR_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_executor_count",
         "Total number of each executor",

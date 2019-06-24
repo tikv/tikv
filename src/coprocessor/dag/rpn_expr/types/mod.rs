@@ -6,11 +6,13 @@ mod expr_eval;
 #[cfg(test)]
 pub mod test_util;
 
+use tipb::expression::FieldType;
+
 pub use self::expr::{RpnExpression, RpnExpressionNode};
 pub use self::expr_builder::RpnExpressionBuilder;
 pub use self::expr_eval::RpnStackNode;
 
-use tipb::expression::FieldType;
+use crate::coprocessor::codec::data_type::ScalarValue;
 
 /// A structure for holding argument values and type information of arguments and return values.
 ///
@@ -23,6 +25,7 @@ use tipb::expression::FieldType;
 pub struct RpnFnCallPayload<'a> {
     output_rows: usize,
     raw_args: &'a [RpnStackNode<'a>],
+    implicit_args: &'a Vec<ScalarValue>,
     ret_field_type: &'a FieldType,
 }
 
@@ -55,5 +58,17 @@ impl<'a> RpnFnCallPayload<'a> {
     #[inline]
     pub fn output_rows(&'a self) -> usize {
         self.output_rows
+    }
+
+    /// Gets the length of implicit arguments
+    #[inline]
+    pub fn implicit_args_len(&'a self) -> usize {
+        self.implicit_args.len()
+    }
+
+    /// Get implicit argument at the special position
+    #[inline]
+    pub fn implicit_args_at(&'a self, position: usize) -> &'a ScalarValue {
+        &self.implicit_args[position]
     }
 }
