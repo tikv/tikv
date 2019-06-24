@@ -118,7 +118,9 @@ impl DAGBuilder {
         match first_ed.get_tp() {
             ExecType::TypeTableScan => {
                 // TODO: Use static metrics.
-                COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
+                COPR_EXECUTOR_COUNT
+                    .with_label_values(&["batch_table_scan"])
+                    .inc();
 
                 let mut descriptor = first_ed.take_tbl_scan();
                 let columns_info = descriptor.take_columns().into_vec();
@@ -134,7 +136,9 @@ impl DAGBuilder {
                 );
             }
             ExecType::TypeIndexScan => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
+                COPR_EXECUTOR_COUNT
+                    .with_label_values(&["batch_index_scan"])
+                    .inc();
 
                 let mut descriptor = first_ed.take_idx_scan();
                 let columns_info = descriptor.take_columns().into_vec();
@@ -163,7 +167,9 @@ impl DAGBuilder {
 
             let new_executor: Box<dyn BatchExecutor> = match ed.get_tp() {
                 ExecType::TypeSelection => {
-                    COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["batch_selection"])
+                        .inc();
 
                     Box::new(
                         BatchSelectionExecutor::new(
@@ -178,7 +184,7 @@ impl DAGBuilder {
                     if ed.get_aggregation().get_group_by().is_empty() =>
                 {
                     COPR_EXECUTOR_COUNT
-                        .with_label_values(&["simple_aggregation"])
+                        .with_label_values(&["batch_simple_aggr"])
                         .inc();
 
                     Box::new(
@@ -195,7 +201,7 @@ impl DAGBuilder {
                         .is_ok()
                     {
                         COPR_EXECUTOR_COUNT
-                            .with_label_values(&["fast_hash_aggregation"])
+                            .with_label_values(&["batch_fast_hash_aggr"])
                             .inc();
 
                         Box::new(
@@ -209,7 +215,7 @@ impl DAGBuilder {
                         )
                     } else {
                         COPR_EXECUTOR_COUNT
-                            .with_label_values(&["slow_hash_aggregation"])
+                            .with_label_values(&["batch_slow_hash_aggr"])
                             .inc();
 
                         Box::new(
@@ -225,7 +231,7 @@ impl DAGBuilder {
                 }
                 ExecType::TypeStreamAgg => {
                     COPR_EXECUTOR_COUNT
-                        .with_label_values(&["stream_aggregation"])
+                        .with_label_values(&["batch_stream_aggr"])
                         .inc();
 
                     Box::new(
@@ -239,7 +245,9 @@ impl DAGBuilder {
                     )
                 }
                 ExecType::TypeLimit => {
-                    COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["batch_limit"])
+                        .inc();
 
                     Box::new(
                         BatchLimitExecutor::new(executor, ed.get_limit().get_limit() as usize)?
@@ -247,7 +255,9 @@ impl DAGBuilder {
                     )
                 }
                 ExecType::TypeTopN => {
-                    COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["batch_top_n"])
+                        .inc();
 
                     let mut d = ed.take_topN();
                     let order_bys = d.get_order_by().len();
@@ -505,8 +515,10 @@ impl DAGBuilder {
         }
 
         if is_batch {
+            COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
             Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())
         } else {
+            COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
             Ok(
                 Self::build_dag(eval_cfg, req, ranges, store, deadline, batch_row_limit)?
                     .into_boxed(),
