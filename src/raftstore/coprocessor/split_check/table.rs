@@ -11,7 +11,6 @@ use kvproto::pdpb::CheckPolicy;
 use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
-use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 
 use super::super::{
@@ -155,9 +154,9 @@ impl SplitCheckObserver for TableCheckObserver {
                 first_encoded_table_prefix = to_encoded_table_prefix(encoded_start_key);
             }
             _ => panic!(
-                "start_key {:?} and end_key {:?} out of order",
-                escape(encoded_start_key),
-                escape(encoded_end_key)
+                "start_key {} and end_key {} out of order",
+                hex::encode_upper(encoded_start_key),
+                hex::encode_upper(encoded_end_key)
             ),
         }
         host.add_checker(Box::new(Checker {
