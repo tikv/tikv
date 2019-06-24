@@ -29,7 +29,6 @@ use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
 use tikv_util::collections::HashMap;
-use tikv_util::escape;
 use tikv_util::time::time_now_sec;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
@@ -133,7 +132,7 @@ impl Display for Task {
                 f,
                 "ask split region {} with key {}",
                 region.get_id(),
-                escape(split_key)
+                hex::encode_upper(&split_key),
             ),
             Task::AskBatchSplit {
                 ref region,
@@ -143,7 +142,7 @@ impl Display for Task {
                 f,
                 "ask split region {} with {}",
                 region.get_id(),
-                KeysInfoFormatter(&split_keys)
+                KeysInfoFormatter(split_keys.iter())
             ),
             Task::Heartbeat {
                 ref region,
