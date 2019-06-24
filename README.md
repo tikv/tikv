@@ -79,7 +79,7 @@ We provide multiple deployment methods, but it is recommended to use our Ansible
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/op-guide/ansible-deployment.md)
+- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md)
 - [Deploy TiKV separately Using Ansible](docs/how-to/deploy/using-ansible.md)
 
 ## Client drivers

@@ -84,7 +84,7 @@ All the following example docker compose config file will contain this base conf
 
 ## Example
 
-### Run [YCSB](https://github.com/pingcap/go-ycsb) to connect to the TiKV cluster:
+### Run [GO-YCSB](https://github.com/pingcap/go-ycsb) to connect to the TiKV cluster:
 
 1. Create a `ycsb-docker-compose.yml` file, add the above base config to this file, and then append the following section:
 
