@@ -64,10 +64,12 @@ pub fn delete_all_in_range_cf(
     } else {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
         let end = KeyBuilder::from_slice(end_key, 0, 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), false);
-        // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-        // avoids referring to missing blob files.
-        iter_opt.set_titan_key_only(true);
+        let mut iter_opt = IterOption::new(Some(start), Some(end), false);
+        if db.is_titan() {
+            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
+            // to avoid referring to missing blob files.
+            iter_opt.titan_key_only(true);
+        }
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into());
         while it.valid() {
