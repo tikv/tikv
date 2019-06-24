@@ -173,7 +173,7 @@ enabled = true
 dirname = "bar"
 disable-gc = false
 max-background-gc = 9
-purge-obsolete-files-period = 1s
+purge-obsolete-files-period = "1s"
 
 [rocksdb.defaultcf]
 block-size = "12KB"
@@ -217,7 +217,7 @@ prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 
 [rocksdb.defaultcf.titan]
-min-blob-size = 2018
+min-blob-size = "2018B"
 blob-file-compression = "zstd"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
