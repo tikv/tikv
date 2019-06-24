@@ -6,7 +6,7 @@ use crate::coprocessor::codec::table::truncate_as_row_key;
 use crate::coprocessor::util;
 use crate::coprocessor::Result;
 use crate::storage::{Key, Scanner as KvScanner, Statistics, Store, Value};
-use tikv_util::{escape, set_panic_mark};
+use tikv_util::set_panic_mark;
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 
@@ -91,9 +91,9 @@ impl<S: Store> Scanner<S> {
             set_panic_mark();
             panic!(
                 "key: {} out of range, start: {}, end: {}",
-                escape(&key),
-                escape(self.range.get_start()),
-                escape(self.range.get_end())
+                hex::encode_upper(&key),
+                hex::encode_upper(self.range.get_start()),
+                hex::encode_upper(self.range.get_end())
             );
         }
 

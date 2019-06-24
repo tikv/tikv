@@ -3,7 +3,6 @@
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::coprocessor::codec::table;
 use tikv_util::codec::bytes::{self, encode_bytes};
-use tikv_util::escape;
 
 use crate::raftstore::store::util;
 use kvproto::metapb::Region;
@@ -46,10 +45,10 @@ impl SplitObserver {
         match util::check_key_in_region_exclusive(&key, region) {
             Ok(()) => Ok(key),
             Err(_) => Err(format!(
-                "key \"{}\" should be in (\"{}\", \"{}\")",
-                escape(&key),
-                escape(region.get_start_key()),
-                escape(region.get_end_key()),
+                "key {} should be in ({}, {})",
+                hex::encode_upper(&key),
+                hex::encode_upper(region.get_start_key()),
+                hex::encode_upper(region.get_end_key()),
             )),
         }
     }
