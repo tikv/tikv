@@ -231,7 +231,7 @@ pub enum Command {
     /// **This is an unsafe action.**
     /// 
     /// All keys in the range will be deleted permanently regardless of their timestamps.
-    /// That means, you are even unable to get deleted keys by specifying an older timestamp.
+    /// This means, you are even unable to get deleted keys by specifying an older timestamp.
     DeleteRange {
         ctx: Context,
         /// The inclusive start key.
@@ -1245,9 +1245,9 @@ impl<E: Engine> Storage<E> {
     /// Resolve locks according to `txn_status`.
     ///
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
-    /// before safe point.
+    /// before the safe point.
     ///
-    /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
+    /// `txn_status` maps lock_ts to commit_ts. If a transaction is rolled back, it is mapped to 0.
     /// For an example, check the [`Command::ResolveLock`] docs.
     ///
     /// Schedules a [`Command::ResolveLock`].
@@ -1271,7 +1271,7 @@ impl<E: Engine> Storage<E> {
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
     ///
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
-    /// before safe point.
+    /// before the safe point.
     ///
     /// Schedules a [`Command::ResolveLockLite`].
     pub fn async_resolve_lock_lite(
@@ -1307,7 +1307,7 @@ impl<E: Engine> Storage<E> {
     ///
     /// This function is **VERY DANGEROUS**. It's not only running on one single region, but it can
     /// delete a large range that spans over many regions, bypassing the Raft layer. This is
-    /// designed for TiDB to quickly free up disk space while doing GC after
+    /// designed for TiDB to quickly free up the disk space and do GC afterward.
     /// drop/truncate table/index. By invoking this function, it's user's responsibility to make
     /// sure no more operations will be performed in this destroyed range.
     pub fn async_unsafe_destroy_range(

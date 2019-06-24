@@ -451,8 +451,7 @@ fn process_read_impl<E: Engine>(
                 Ok(ProcessResult::Res)
             } else {
                 let next_scan_key = if has_remain {
-                    // Locks is resolved via drop (`_lock`) here.
-                    // There might be more locks, so keep going.
+                    // There might be more locks.
                     kv_pairs.last().map(|(k, _lock)| k.clone())
                 } else {
                     // All locks are scanned
