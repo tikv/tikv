@@ -690,6 +690,45 @@ Success!
 >> store weight 1 5 10          // Set the leader weight to 5 and region weight to 10 for the store with the store id of 1
 ```
 
+### `store limit <store_id> <rate>`
+
+Use this command to modify the upper limit of scheduling rate for a specific store. The tasks include operations such as adding a peer or a learner.
+
+Example:
+
+```bash
+>> store limit 2 1 // Set the upper limit of scheduling speed for store 2 to be 1 scheduling task per second.
+```
+
+### `stores show limit`
+
+Use this command to view the upper limit of scheduling rate for all stores, in the unit of tasks per second.
+
+Example:
+
+```bash
+» stores show limit // If store-balance-rate is set to 15, the corresponding rate for all stores should be 15 / 60 = 0.25.
+{
+ "4": {
+   "rate": 0.25
+ },
+ "5": {
+   "rate": 0.25
+ },
+ ...
+}
+```
+
+### `stores set limit <rate>`
+
+Use this command to set the maximum number of scheduling tasks for all stores, in the unit of tasks per second. The tasks include operations such as adding a peer or a learner.
+
+Example:
+
+```bash
+>> stores set limit 2 // Set the upper limit of scheduling speed for all stores to be 2 scheduling tasks per second.
+```
+
 ### `table_ns [create | add | remove | set_store | rm_store | set_meta | rm_meta]`
 
 Use this command to view the namespace information of the table.
