@@ -552,7 +552,7 @@ dependencies = [
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "rocksdb 0.3.0 (git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option)",
+ "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
  "serde 1.0.71 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.81 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1074,13 +1074,13 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option#c9df713705f9b3971f732657ced2638a61a490f8"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#0d5b733406818c82eba08d00454b205336e007cf"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
  "cmake 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
- "libtitan_sys 0.0.1 (git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option)",
+ "libtitan_sys 0.0.1 (git+https://github.com/pingcap/rust-rocksdb.git)",
  "libz-sys 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "lz4-sys 1.8.0 (git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build)",
  "snappy-sys 0.1.0 (git+https://github.com/busyjay/rust-snappy.git?branch=static-link)",
@@ -1090,7 +1090,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option#c9df713705f9b3971f732657ced2638a61a490f8"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#0d5b733406818c82eba08d00454b205336e007cf"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1858,11 +1858,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option#c9df713705f9b3971f732657ced2638a61a490f8"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#0d5b733406818c82eba08d00454b205336e007cf"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
- "librocksdb_sys 0.1.0 (git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option)",
+ "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
 ]
 
 [[package]]
@@ -3053,8 +3053,8 @@ dependencies = [
 "checksum lexical-core 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3e82e023e062f1d25f807ad182008fba1b46538e999f908a08cc0c29e084462e"
 "checksum libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)" = "2d2857ec59fadc0773853c664d2d18e7198e83883e7060b63c924cb077bd5c74"
 "checksum libfuzzer-sys 0.1.0 (git+https://github.com/rust-fuzz/libfuzzer-sys.git)" = "<none>"
-"checksum librocksdb_sys 0.1.0 (git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option)" = "<none>"
-"checksum libtitan_sys 0.0.1 (git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option)" = "<none>"
+"checksum librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git)" = "<none>"
+"checksum libtitan_sys 0.0.1 (git+https://github.com/pingcap/rust-rocksdb.git)" = "<none>"
 "checksum libz-sys 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)" = "2eb5e43362e38e2bca2fd5f5134c4d4564a23a5c28e9b95411652021a8675ebe"
 "checksum lock_api 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = "949826a5ccf18c1b3a7c3d57692778d21768b79e46eb9dd07bfc4c2160036c54"
 "checksum log 0.3.9 (git+https://github.com/busyjay/log?branch=use-static-module)" = "<none>"
@@ -3137,7 +3137,7 @@ dependencies = [
 "checksum regex 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "37e7cbbd370869ce2e8dff25c7018702d10b21a20ef7135316f8daecd6c25b7f"
 "checksum regex-syntax 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)" = "747ba3b235651f6e2f67dfa8bcdcd073ddb7c243cb21c442fc12395dfcac212d"
 "checksum remove_dir_all 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)" = "3488ba1b9a2084d38645c4c08276a1752dcbf2c7130d74f1569681ad5d2799c5"
-"checksum rocksdb 0.3.0 (git+https://github.com/Connor1996/rust-rocksdb.git?branch=add-titan-option)" = "<none>"
+"checksum rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)" = "<none>"
 "checksum rust-crypto 0.2.36 (registry+https://github.com/rust-lang/crates.io-index)" = "f76d05d3993fd5f4af9434e8e436db163a12a9d40e1a58a726f27a01dfd12a2a"
 "checksum rustc-demangle 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)" = "bcfe5b13211b4d78e5c2cadfebd7769197d95c639c35a50057eb4c05de811395"
 "checksum rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)" = "dcf128d1287d2ea9d80910b5f1120d0b8eede3fbf1abe91c40d39ea7d51e6fda"
