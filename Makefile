@@ -21,6 +21,7 @@ ENABLE_FEATURES += portable
 endif
 
 # Enable sse4.2 by default unless disable explicitly
+# Note this env var is also tested by scripts/check-sse4_2.sh
 ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
@@ -42,6 +43,12 @@ export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+
+# Turn on cargo pipelining to add more build parallelism. This has shown decent
+# speedups in TiKV.
+#
+# https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199/68
+export CARGO_BUILD_PIPELINING=true
 
 default: release
 

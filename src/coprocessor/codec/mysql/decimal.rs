@@ -861,7 +861,7 @@ pub struct Decimal {
 
     /// An array of u32 words.
     /// A word is an u32 value can hold 9 digits.(0 <= word < wordBase)
-    word_buf: Box<[u32]>,
+    word_buf: [u32; 9],
 }
 
 #[derive(Debug, Clone)]
@@ -908,7 +908,7 @@ impl Decimal {
             precision: 0,
             result_frac_cnt: 0,
             negative,
-            word_buf: Box::new([0; 9]),
+            word_buf: [0; 9],
         }
     }
 
