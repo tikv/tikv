@@ -16,6 +16,8 @@ pub struct IterOption {
     upper_bound: Option<KeyBuilder>,
     prefix_same_as_start: bool,
     fill_cache: bool,
+    // only supported when Titan enabled, otherwise it doesn't take effect.
+    titan_key_only: bool,
     seek_mode: SeekMode,
 }
 
@@ -30,6 +32,7 @@ impl IterOption {
             upper_bound,
             prefix_same_as_start: false,
             fill_cache,
+            titan_key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
     }
@@ -48,6 +51,11 @@ impl IterOption {
     #[inline]
     pub fn fill_cache(&mut self, v: bool) {
         self.fill_cache = v;
+    }
+
+    #[inline]
+    pub fn titan_key_only(&mut self, v: bool) {
+        self.titan_key_only = v;
     }
 
     #[inline]
@@ -101,6 +109,9 @@ impl IterOption {
     pub fn build_read_opts(self) -> ReadOptions {
         let mut opts = ReadOptions::new();
         opts.fill_cache(self.fill_cache);
+        if self.titan_key_only {
+            opts.set_titan_key_only(true);
+        }
         if self.total_order_seek_used() {
             opts.set_total_order_seek(true);
         } else if self.prefix_same_as_start {
@@ -123,6 +134,7 @@ impl Default for IterOption {
             upper_bound: None,
             prefix_same_as_start: false,
             fill_cache: true,
+            titan_key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
     }
