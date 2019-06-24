@@ -40,7 +40,7 @@ use crate::raftstore::{Error, Result};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
-use tikv_util::{escape, MustConsumeVec};
+use tikv_util::MustConsumeVec;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -2417,7 +2417,7 @@ impl ReadExecutor {
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
                         region.get_id(),
-                        escape(key),
+                        hex::encode_upper(key),
                         cf,
                         e
                     )
@@ -2429,7 +2429,7 @@ impl ReadExecutor {
                     panic!(
                         "[region {}] failed to get {}: {:?}",
                         region.get_id(),
-                        escape(key),
+                        hex::encode_upper(key),
                         e
                     )
                 })
