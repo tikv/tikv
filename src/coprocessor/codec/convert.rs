@@ -1,13 +1,49 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::{self, i64, str, u64};
+use std::{self, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
 use cop_datatype::{self, FieldTypeTp};
 
 use super::mysql::Res;
 use super::{Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
+
+/// `integer_unsigned_upper_bound` returns the max u64 values of different mysql types
+pub fn integer_unsigned_upper_bound(tp: FieldTypeTp) -> u64 {
+    match tp {
+        FieldTypeTp::Tiny => u64::from(u8::MAX),
+        FieldTypeTp::Short => u64::from(u16::MAX),
+        FieldTypeTp::Int24 => (1u64 << 24) - 1u64,
+        FieldTypeTp::Long => u64::from(u32::MAX),
+        FieldTypeTp::LongLong | FieldTypeTp::Bit | FieldTypeTp::Set | FieldTypeTp::Enum => u64::MAX,
+        _ => panic!("input bytes is not a mysql type: {}", tp),
+    }
+}
+
+/// `integer_signed_upper_bound` returns the max i64 values of different mysql types
+pub fn integer_signed_upper_bound(tp: FieldTypeTp) -> i64 {
+    match tp {
+        FieldTypeTp::Tiny => i64::from(i8::MAX),
+        FieldTypeTp::Short => i64::from(i16::MAX),
+        FieldTypeTp::Int24 => (1i64 << 23) - 1i64,
+        FieldTypeTp::Long => i64::from(i32::MAX),
+        FieldTypeTp::LongLong => i64::MAX,
+        _ => panic!("input bytes is not a mysql type: {}", tp),
+    }
+}
+
+/// `integer_signed_lower_bound` returns the min i64 values of different mysql types
+pub fn integer_signed_lower_bound(tp: FieldTypeTp) -> i64 {
+    match tp {
+        FieldTypeTp::Tiny => i64::from(i8::MIN),
+        FieldTypeTp::Short => i64::from(i16::MIN),
+        FieldTypeTp::Int24 => -1i64 << 23,
+        FieldTypeTp::Long => i64::from(i32::MIN),
+        FieldTypeTp::LongLong => i64::MIN,
+        _ => panic!("input bytes is not a mysql type: {}", tp),
+    }
+}
 
 /// `truncate_binary` truncates a buffer to the specified length.
 #[inline]
@@ -50,9 +86,23 @@ macro_rules! overflow {
     }};
 }
 
+/// `convert_int_to_int` converts an int value to a diferent int value.
+pub fn convert_int_to_int(val: i64, tp: FieldTypeTp) -> Result<i64> {
+    let lower_bound = integer_signed_lower_bound(tp);
+    if val < lower_bound {
+        return overflow!(val, tp);
+    }
+    let upper_bound = integer_signed_upper_bound(tp);
+    if val > upper_bound {
+        return overflow!(val, tp);
+    }
+    Ok(val)
+}
+
 /// `convert_uint_to_int` converts an uint value to an int value.
 #[inline]
-pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: FieldTypeTp) -> Result<i64> {
+pub fn convert_uint_to_int(val: u64, tp: FieldTypeTp) -> Result<i64> {
+    let upper_bound = integer_signed_upper_bound(tp);
     if val > upper_bound as u64 {
         return overflow!(val, tp);
     }
@@ -61,18 +111,15 @@ pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: FieldTypeTp) -> Resul
 
 /// `convert_float_to_int` converts an f64 value to an i64 value.
 ///  Returns the overflow error if the value exceeds the boundary.
-pub fn convert_float_to_int(
-    fval: f64,
-    lower_bound: i64,
-    upper_bound: i64,
-    tp: FieldTypeTp,
-) -> Result<i64> {
+pub fn convert_float_to_int(fval: f64, tp: FieldTypeTp) -> Result<i64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
+    let lower_bound = integer_signed_lower_bound(tp);
     if val < lower_bound as f64 {
         return overflow!(val, tp);
     }
 
+    let upper_bound = integer_signed_upper_bound(tp);
     if val > upper_bound as f64 {
         return overflow!(val, tp);
     }
@@ -81,13 +128,14 @@ pub fn convert_float_to_int(
 
 /// `convert_float_to_uint` converts a f64 value to a u64 value.
 /// Returns the overflow error if the value exceeds the boundary.
-pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: FieldTypeTp) -> Result<u64> {
+pub fn convert_float_to_uint(fval: f64, tp: FieldTypeTp) -> Result<u64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
     if val < 0f64 {
         return overflow!(val, tp);
     }
 
+    let upper_bound = integer_unsigned_upper_bound(tp);
     if val > upper_bound as f64 {
         return overflow!(val, tp);
     }
@@ -344,6 +392,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_convert_int_to_int() {
+        let tests: Vec<(i64, FieldTypeTp, Option<i64>)> = vec![
+            (123, FieldTypeTp::Tiny, Some(123)),
+            (-123, FieldTypeTp::Tiny, Some(-123)),
+            (256, FieldTypeTp::Tiny, None),
+            (-257, FieldTypeTp::Tiny, None),
+            (123, FieldTypeTp::Short, Some(123)),
+            (-123, FieldTypeTp::Short, Some(-123)),
+            (65536, FieldTypeTp::Short, None),
+            (-65537, FieldTypeTp::Short, None),
+            (123, FieldTypeTp::Int24, Some(123)),
+            (-123, FieldTypeTp::Int24, Some(-123)),
+            (8388610, FieldTypeTp::Int24, None),
+            (-8388610, FieldTypeTp::Int24, None),
+            (8388610, FieldTypeTp::Long, Some(8388610)),
+            (-8388610, FieldTypeTp::Long, Some(-8388610)),
+            (4294967297, FieldTypeTp::Long, None),
+            (-4294967297, FieldTypeTp::Long, None),
+            (8388610, FieldTypeTp::LongLong, Some(8388610)),
+            (-8388610, FieldTypeTp::LongLong, Some(-8388610)),
+        ];
+
+        for (from, tp, to) in tests {
+            let r = convert_int_to_int(from, tp);
+            match to {
+                Some(to) => assert_eq!(to, r.unwrap()),
+                None => assert!(
+                    r.is_err(),
+                    "from: {}, to tp: {} should be overflow",
+                    from,
+                    tp
+                ),
+            }
+        }
+    }
+
+    #[test]
     fn test_bytes_to_i64() {
         let tests: Vec<(&'static [u8], i64)> = vec![
             (b"0", 0),
@@ -505,26 +590,82 @@ mod tests {
 
     #[test]
     fn test_convert_uint_into_int() {
-        assert!(convert_uint_to_int(u64::MAX, i64::MAX, FieldTypeTp::LongLong).is_err());
-        let v = convert_uint_to_int(u64::MIN, i64::MAX, FieldTypeTp::LongLong).unwrap();
-        assert_eq!(v, u64::MIN as i64);
-        // TODO port tests from tidb(tidb haven't implemented now)
+        let tests: Vec<(u64, FieldTypeTp, Option<i64>)> = vec![
+            (123, FieldTypeTp::Tiny, Some(123)),
+            (256, FieldTypeTp::Tiny, None),
+            (123, FieldTypeTp::Short, Some(123)),
+            (65536, FieldTypeTp::Short, None),
+            (123, FieldTypeTp::Int24, Some(123)),
+            (8388610, FieldTypeTp::Int24, None),
+            (8388610, FieldTypeTp::Long, Some(8388610)),
+            (4294967297, FieldTypeTp::Long, None),
+            (4294967297, FieldTypeTp::LongLong, Some(4294967297)),
+            (u64::MAX, FieldTypeTp::LongLong, None),
+        ];
+
+        for (from, tp, to) in tests {
+            let r = convert_uint_to_int(from, tp);
+            match to {
+                Some(to) => assert_eq!(to, r.unwrap()),
+                None => assert!(
+                    r.is_err(),
+                    "from: {}, to tp: {} should be overflow",
+                    from,
+                    tp
+                ),
+            }
+        }
     }
 
     #[test]
     fn test_convert_float_to_int() {
-        assert!(convert_float_to_int(f64::MIN, i64::MIN, i64::MAX, FieldTypeTp::Double).is_err());
-        assert!(convert_float_to_int(f64::MAX, i64::MIN, i64::MAX, FieldTypeTp::Double).is_err());
-        let v = convert_float_to_int(0.1, i64::MIN, i64::MAX, FieldTypeTp::Double).unwrap();
-        assert_eq!(v, 0);
-        // TODO port tests from tidb(tidb haven't implemented now)
+        let tests: Vec<(f64, FieldTypeTp, Option<i64>)> = vec![
+            (123.1, FieldTypeTp::Tiny, Some(123)),
+            (123.6, FieldTypeTp::Tiny, Some(124)),
+            (-123.1, FieldTypeTp::Tiny, Some(-123)),
+            (-123.6, FieldTypeTp::Tiny, Some(-124)),
+            (256.5, FieldTypeTp::Tiny, None),
+            (256.1, FieldTypeTp::Short, Some(256)),
+            (256.6, FieldTypeTp::Short, Some(257)),
+            (-256.1, FieldTypeTp::Short, Some(-256)),
+            (-256.6, FieldTypeTp::Short, Some(-257)),
+            (65535.5, FieldTypeTp::Short, None),
+            (65536.1, FieldTypeTp::Int24, Some(65536)),
+            (65536.5, FieldTypeTp::Int24, Some(65537)),
+            (-65536.1, FieldTypeTp::Int24, Some(-65536)),
+            (-65536.5, FieldTypeTp::Int24, Some(-65537)),
+            (8388610.2, FieldTypeTp::Int24, None),
+            (8388610.4, FieldTypeTp::Long, Some(8388610)),
+            (8388610.5, FieldTypeTp::Long, Some(8388611)),
+            (-8388610.4, FieldTypeTp::Long, Some(-8388610)),
+            (-8388610.5, FieldTypeTp::Long, Some(-8388611)),
+            (4294967296.8, FieldTypeTp::Long, None),
+            (4294967296.8, FieldTypeTp::LongLong, Some(4294967297)),
+            (4294967297.1, FieldTypeTp::LongLong, Some(4294967297)),
+            (-4294967296.8, FieldTypeTp::LongLong, Some(-4294967297)),
+            (-4294967297.1, FieldTypeTp::LongLong, Some(-4294967297)),
+            (f64::MAX, FieldTypeTp::LongLong, None),
+        ];
+
+        for (from, tp, to) in tests {
+            let r = convert_float_to_int(from, tp);
+            match to {
+                Some(to) => assert_eq!(to, r.unwrap()),
+                None => assert!(
+                    r.is_err(),
+                    "from: {}, to tp: {} should be overflow",
+                    from,
+                    tp
+                ),
+            }
+        }
     }
 
     #[test]
     fn test_convert_float_to_uint() {
-        assert!(convert_float_to_uint(f64::MIN, u64::MAX, FieldTypeTp::Double).is_err());
-        assert!(convert_float_to_uint(f64::MAX, u64::MAX, FieldTypeTp::Double).is_err());
-        let v = convert_float_to_uint(0.1, u64::MAX, FieldTypeTp::Double).unwrap();
+        assert!(convert_float_to_uint(f64::MIN, FieldTypeTp::LongLong).is_err());
+        assert!(convert_float_to_uint(f64::MAX, FieldTypeTp::LongLong).is_err());
+        let v = convert_float_to_uint(0.1, FieldTypeTp::LongLong).unwrap();
         assert_eq!(v, 0);
         // TODO port tests from tidb(tidb haven't implemented now)
     }

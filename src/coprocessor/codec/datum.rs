@@ -343,13 +343,11 @@ impl Datum {
     /// `into_i64` converts self into i64.
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
-        let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
         let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => convert::convert_uint_to_int(u, upper_bound, tp),
-
-            Datum::F64(f) => convert::convert_float_to_int(f, lower_bound, upper_bound, tp),
+            Datum::U64(u) => convert::convert_uint_to_int(u, tp),
+            Datum::F64(f) => convert::convert_float_to_int(f, tp),
             Datum::Bytes(bs) => convert::bytes_to_int(ctx, &bs),
             Datum::Time(mut t) => {
                 t.round_frac(mysql::DEFAULT_FSP)?;
