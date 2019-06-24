@@ -34,6 +34,7 @@ features = ["nightly"]
 [dependencies.engine_rocksdb]
 git = "https://github.com/Connor1996/rust-rocksdb.git"
 package = "rocksdb"
+branch = "add-titan-option"
 
 [dev-dependencies]
 tempdir = "0.3"

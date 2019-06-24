@@ -102,7 +102,7 @@ impl RegionSnapshot {
             }
         }
 
-        Ok(())
+        it.status()
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
@@ -362,7 +362,7 @@ mod tests {
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
     use engine::rocks::{EnvOptions, IngestExternalFileOptions, Snapshot, SstFileWriter, Writable};
-    use engine::util::delete_all_files_in_range;
+    use engine::util::{delete_all_in_range, delete_all_files_in_range};
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
@@ -934,7 +934,11 @@ mod tests {
             &store.engines.kv,
             &data_key(Key::from_raw(b"a").as_encoded()),
             &data_key(Key::from_raw(b"b").as_encoded()),
-        )
+        ).unwrap();
+        delete_all_in_range(&store.engines.kv,
+            &data_key(Key::from_raw(b"a").as_encoded()),
+            &data_key(Key::from_raw(b"b").as_encoded()),
+            false)
         .unwrap();
 
         let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();

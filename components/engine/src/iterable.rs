@@ -201,5 +201,6 @@ where
             break;
         }
     }
-    Ok(())
+
+    it.status().map_err(From::from)
 }
