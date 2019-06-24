@@ -18,7 +18,12 @@
 //! function name) that generates an `RpnFnMeta` struct.
 //!
 //! If you needs `EvalContext` or the raw `RpnFnCallPayload`, just put it ahead of the function
-//! parameters, and add `ctx` or `payload` argument to the attribute. For example:
+//! parameters, and add `ctx` or `payload` argument to the attribute.
+//! It can only be `#[rpn_fn]` or `#[rpn_fn(ctx)]` or `#[rpn_fn(ctx,payload)]` or `#[rpn_fn(payload,ctx)]`,
+//! and make sure that the n attributes and their orders are the same as the first n param's type
+//! of the function signature.
+//!
+//! For example:
 //!
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`

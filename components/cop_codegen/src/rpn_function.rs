@@ -29,7 +29,7 @@ impl RpnFnGenerator {
                 .unwrap()
                 .error("Lifetime definition is not allowed"));
         }
-        if let Some(dia) = check(&meta, &item_fn) {
+        if let Some(dia) = check_attr(&meta, &item_fn) {
             return Err(dia);
         }
         let arg_types = item_fn
@@ -242,7 +242,7 @@ macro_rules! destruct2 {
     };
 }
 
-fn check(meta: &[Ident], item_fn: &ItemFn) -> Option<Diagnostic> {
+fn check_attr(meta: &[Ident], item_fn: &ItemFn) -> Option<Diagnostic> {
     let err_msg = "The attr can only be empty or `ctx`\
                    or `ctx, payload` or `payload, ctx`, \
                    and make sure that the n attributes and their orders \
@@ -285,7 +285,12 @@ fn check(meta: &[Ident], item_fn: &ItemFn) -> Option<Diagnostic> {
         } else {
             assert_eq!(mid, payload);
             let arg = destruct2!(fn_arg, FnArg::Captured, "Must be a captured parameter");
-            let tp = destruct2!(&arg.ty, Type::Path, "Must be `RpnFnCallPayload`");
+            let tp;
+            if let Type::Reference(elem) = &arg.ty {
+                tp = destruct2!(&*elem.elem, Type::Path, "Must be `RpnFnCallPayload`");
+            } else {
+                tp = destruct2!(&arg.ty, Type::Path, "Must be `RpnFnCallPayload`");
+            }
             let seg = &tp.path.segments;
             if seg.len() != 1 || seg.iter().next().unwrap().ident != payload_type {
                 return Some(tp.span().unwrap().error("Must be `RpnFnCallPayload`"));
@@ -618,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn test_attr_check() {
+    fn test_check_attr() {
         let case = vec![
             (
                 r#"fn f(c: &mut EvalContext){}"#,
@@ -632,6 +637,21 @@ mod tests {
             ),
             (
                 r#"fn f(p: RpnFnCallPayload){}"#,
+                vec![Ident::new("payload", Span::call_site())],
+                true,
+            ),
+            (
+                r#"fn f(p: &RpnFnCallPayload){}"#,
+                vec![Ident::new("payload", Span::call_site())],
+                true,
+            ),
+            (
+                r#"fn f(p: &RpnFnCallPayload<'_>){}"#,
+                vec![Ident::new("payload", Span::call_site())],
+                true,
+            ),
+            (
+                r#"fn f(p: &RpnFnCallPayload<'a>){}"#,
                 vec![Ident::new("payload", Span::call_site())],
                 true,
             ),
@@ -651,6 +671,31 @@ mod tests {
                 ],
                 true,
             ),
+            (
+                r#"fn f(c: RpnFnCallPayload,  p : &mut EvalContext,){}"#,
+                vec![
+                    Ident::new("payload", Span::call_site()),
+                    Ident::new("ctx", Span::call_site()),
+                ],
+                true,
+            ),
+            (
+                r#"fn f(c: RpnFnCallPayload,  p : & EvalContext,){}"#,
+                vec![
+                    Ident::new("payload", Span::call_site()),
+                    Ident::new("ctx", Span::call_site()),
+                ],
+                true,
+            ),
+            (
+                r#"fn f(c: &RpnFnCallPayload,  p : & EvalContext,){}"#,
+                vec![
+                    Ident::new("payload", Span::call_site()),
+                    Ident::new("ctx", Span::call_site()),
+                ],
+                true,
+            ),
+            (r#"fn f(c: i32){}"#, vec![], true),
             (
                 r#"fn f(c: &mut i32){}"#,
                 vec![Ident::new("ctx", Span::call_site())],
@@ -683,12 +728,12 @@ mod tests {
             println!("{}", x);
             if z {
                 let item_fn = parse_str(x).unwrap();
-                let ans = check(&y, &item_fn);
+                let ans = check_attr(&y, &item_fn);
                 assert!(ans.is_none());
             } else {
                 let res = panic::catch_unwind(move || {
                     let item_fn = parse_str(x).unwrap();
-                    check(&y, &item_fn);
+                    check_attr(&y, &item_fn);
                 });
                 assert!(res.is_err());
             }
