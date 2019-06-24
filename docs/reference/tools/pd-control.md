@@ -223,7 +223,7 @@ Usage:
     >> config set replica-schedule-limit 4        // 4 tasks of replica scheduling at the same time at most
     ```
 
-- `merge-schedule-limit` controls the number of Region Merge scheduling tasks. Setting the value to 0 closes Region Merge. Usually the Merge scheduling has a large load, so do not set a too large value. The default value is 8.ß
+- `merge-schedule-limit` controls the number of Region Merge scheduling tasks. Setting the value to 0 closes Region Merge. Usually the Merge scheduling has a large load, so do not set a too large value. The default value is 8.
 
     ```bash
     >> config set merge-schedule-limit 16       // 16 tasks of Merge scheduling at the same time at most
@@ -604,7 +604,7 @@ Usage:
 
 ### `region topsize [limit]`
 
-Use this command to list Regions with top approximate sizeƒ. The default value of the limit is 16.
+Use this command to list Regions with top approximate size. The default value of the limit is 16.
 
 Usage:
 
