@@ -480,6 +480,10 @@ impl Peer {
             .maybe_append(log_idx, log_term, merge.get_commit(), entries)
     }
 
+    pub fn commit_to(&mut self, to_commit: u64) {
+        self.raft_group.raft.raft_log.commit_to(to_commit)
+    }
+
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
         if self.pending_remove {
