@@ -28,6 +28,9 @@ else
     exit 1
 fi
 
+# All features are enabled explicitly
+args="$args --no-default-features"
+
 features="default"
 
 if [[ -n "$X_CARGO_FEATURES" ]]; then

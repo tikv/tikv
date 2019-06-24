@@ -102,7 +102,7 @@ impl RegionSnapshot {
             }
         }
 
-        Ok(())
+        it.status()
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
@@ -357,7 +357,7 @@ mod tests {
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
-    use tikv_util::{escape, worker};
+    use tikv_util::worker;
 
     use super::*;
 
@@ -501,15 +501,23 @@ mod tests {
                 let check_res =
                     |iter: &RegionIterator, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
                         if !in_range {
-                            assert!(res.is_err(), "exp failed at {}", escape(seek_key));
+                            assert!(
+                                res.is_err(),
+                                "exp failed at {}",
+                                hex::encode_upper(seek_key)
+                            );
                             return;
                         }
                         if exp.is_none() {
-                            assert!(!res.unwrap(), "exp none at {}", escape(seek_key));
+                            assert!(!res.unwrap(), "exp none at {}", hex::encode_upper(seek_key));
                             return;
                         }
 
-                        assert!(res.unwrap(), "should succeed at {}", escape(seek_key));
+                        assert!(
+                            res.unwrap(),
+                            "should succeed at {}",
+                            hex::encode_upper(seek_key)
+                        );
                         let (exp_key, exp_val) = exp.unwrap();
                         assert_eq!(iter.key(), exp_key);
                         assert_eq!(iter.value(), exp_val);

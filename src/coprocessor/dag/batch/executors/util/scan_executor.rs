@@ -193,7 +193,9 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     use std::convert::TryFrom;
 
     for column in columns_info {
-        box_try!(EvalType::try_from(column.tp()));
+        if column.has_pk_handle() {
+            box_try!(EvalType::try_from(column.tp()));
+        }
     }
     Ok(())
 }
@@ -209,10 +211,11 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         assert!(!self.is_ended);
         assert!(scan_rows > 0);
 
-        let mut data = self.imp.build_column_vec(scan_rows);
-        let is_drained = self.fill_column_vec(scan_rows, &mut data);
+        let mut logical_columns = self.imp.build_column_vec(scan_rows);
+        let is_drained = self.fill_column_vec(scan_rows, &mut logical_columns);
 
-        data.assert_columns_equal_length();
+        logical_columns.assert_columns_equal_length();
+        let logical_rows = (0..logical_columns.rows_len()).collect();
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
@@ -226,7 +229,8 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         };
 
         BatchExecuteResult {
-            data,
+            physical_columns: logical_columns,
+            logical_rows,
             is_drained,
             warnings: self.imp.mut_context().take_warnings(),
         }

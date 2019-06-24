@@ -38,7 +38,7 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
 use crate::storage::lock_manager::Config as PessimisticTxnConfig;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use engine::rocks::util::config::{self as rocks_config, CompressionType};
+use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
@@ -53,6 +53,7 @@ const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
 const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -84,6 +85,7 @@ pub struct TitanCfConfig {
     pub discardable_ratio: f64,
     pub sample_ratio: f64,
     pub merge_small_file_threshold: ReadableSize,
+    pub blob_run_mode: BlobRunMode,
 }
 
 impl Default for TitanCfConfig {
@@ -97,6 +99,7 @@ impl Default for TitanCfConfig {
             discardable_ratio: 0.5,
             sample_ratio: 0.1,
             merge_small_file_threshold: ReadableSize::mb(8),
+            blob_run_mode: BlobRunMode::Normal,
         }
     }
 }
@@ -157,6 +160,21 @@ macro_rules! cf_config {
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
             pub titan: TitanCfConfig,
+        }
+
+        impl $name {
+            fn validate(&self) -> Result<(), Box<dyn Error>> {
+                if self.block_size.0 as usize > MAX_BLOCK_SIZE {
+                    return Err(format!(
+                        "invalid block-size {} for {}, exceed max size {}",
+                        self.block_size.0,
+                        stringify!($name),
+                        MAX_BLOCK_SIZE
+                    )
+                    .into());
+                }
+                Ok(())
+            }
         }
     };
 }
@@ -599,6 +617,10 @@ impl TitanDBConfig {
         opts.set_max_background_gc(self.max_background_gc);
         opts
     }
+
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -750,6 +772,11 @@ impl DbConfig {
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.defaultcf.validate()?;
+        self.lockcf.validate()?;
+        self.writecf.validate()?;
+        self.raftcf.validate()?;
+        self.titan.validate()?;
         Ok(())
     }
 
@@ -933,6 +960,11 @@ impl RaftDbConfig {
 
     pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
+    }
+
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.defaultcf.validate()?;
+        Ok(())
     }
 }
 
@@ -1260,6 +1292,7 @@ impl TiKvConfig {
         }
 
         self.rocksdb.validate()?;
+        self.raftdb.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
         self.pd.validate()?;
@@ -1551,6 +1584,24 @@ mod tests {
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
+        tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_block_size() {
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.pd.endpoints = vec!["".to_owned()];
+        tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::gb(10);
+        assert!(tikv_cfg.validate().is_err());
+        tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.writecf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.validate().unwrap();
     }
 

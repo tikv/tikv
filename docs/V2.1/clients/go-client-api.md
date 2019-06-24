@@ -124,6 +124,24 @@ found val:  for key: Company
 
 RawKVClient is a client of the TiKV server and only supports the GET/PUT/DELETE/SCAN commands. The RawKVClient can be safely and concurrently accessed by multiple goroutines, as long as it is not closed. Therefore, for one process, one client is enough generally.
 
+### Possible Error
+
+- If you see this error:
+
+    ```bash
+    build rawkv-demo: cannot load github.com/pingcap/pd/pd-client: cannot find module providing package github.com/pingcap/pd/pd-client
+    ```
+
+    You can run `GO111MODULE=on go get -u github.com/pingcap/tidb@master` to fix it.
+
+- If you got this error when you run `go get -u github.com/pingcap/tidb@master`:
+
+    ```
+    go: github.com/golang/lint@v0.0.0-20190409202823-959b441ac422: parsing go.mod: unexpected module path "golang.org/x/lint"
+    ```
+
+    You can run `go mod edit -replace github.com/golang/lint=golang.org/x/lint@latest` to fix it. [Refer Link](https://github.com/golang/lint/issues/446#issuecomment-483638233)
+
 ## Try the Transactional Key-Value API
 
 The Transactional Key-Value API is more complicated than the Raw Key-Value API. Some transaction related concepts are listed as follows. For more details, see the [KV package](https://github.com/pingcap/tidb/tree/master/kv).

@@ -25,7 +25,7 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::{escape, HandyRwLock};
+use tikv_util::HandyRwLock;
 
 use super::*;
 
@@ -621,7 +621,7 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
-        panic!("find no region for {:?}", escape(key));
+        panic!("find no region for {}", hex::encode_upper(key));
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -717,11 +717,6 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
-    #[allow(dead_code)]
-    pub fn must_delete_range(&mut self, start: &[u8], end: &[u8]) {
-        self.must_delete_range_cf("default", start, end)
-    }
-
     pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
         let resp = self.request(
             start,
@@ -729,6 +724,17 @@ impl<T: Simulator> Cluster<T> {
             false,
             Duration::from_secs(5),
         );
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
+    }
+
+    pub fn must_notify_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
+        let mut req = new_delete_range_cmd(cf, start, end);
+        req.mut_delete_range().set_notify_only(true);
+        let resp = self.request(start, vec![req], false, Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -881,9 +887,9 @@ impl<T: Simulator> Cluster<T> {
 
             if try_cnt > 250 {
                 panic!(
-                    "region {:?} has not been split by {:?}",
+                    "region {:?} has not been split by {}",
                     region,
-                    escape(split_key)
+                    hex::encode_upper(split_key)
                 );
             }
             try_cnt += 1;

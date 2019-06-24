@@ -49,7 +49,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
-pub const PESSIMISTIC_TXN: u8 = b'p';
+pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
@@ -99,7 +99,6 @@ pub enum Command {
         keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: u64,
-        for_update_ts: u64,
         options: Options,
     },
     Commit {
@@ -117,6 +116,12 @@ pub enum Command {
         ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
+    },
+    PessimisticRollback {
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
     },
     ScanLock {
         ctx: Context,
@@ -176,14 +181,14 @@ impl Display for Command {
                 ref ctx,
                 ref keys,
                 start_ts,
-                for_update_ts,
+                ref options,
                 ..
             } => write!(
                 f,
-                "kv::command::acquirepessimisticlock keys({}) @ {},{} | {:?}",
+                "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
                 keys.len(),
                 start_ts,
-                for_update_ts,
+                options.for_update_ts,
                 ctx
             ),
             Command::Commit {
@@ -216,6 +221,19 @@ impl Display for Command {
                 "kv::command::rollback keys({}) @ {} | {:?}",
                 keys.len(),
                 start_ts,
+                ctx
+            ),
+            Command::PessimisticRollback {
+                ref ctx,
+                ref keys,
+                start_ts,
+                for_update_ts,
+            } => write!(
+                f,
+                "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}",
+                keys.len(),
+                start_ts,
+                for_update_ts,
                 ctx
             ),
             Command::ScanLock {
@@ -299,11 +317,11 @@ impl Command {
         }
     }
 
-    pub fn priority_tag(&self) -> &'static str {
+    pub fn priority_tag(&self) -> CommandPriority {
         match self.get_context().get_priority() {
-            CommandPri::Low => "low",
-            CommandPri::Normal => "normal",
-            CommandPri::High => "high",
+            CommandPri::Low => CommandPriority::low,
+            CommandPri::Normal => CommandPriority::normal,
+            CommandPri::High => CommandPriority::high,
         }
     }
 
@@ -311,20 +329,21 @@ impl Command {
         !self.readonly() && self.priority() != CommandPri::High
     }
 
-    pub fn tag(&self) -> &'static str {
+    pub fn tag(&self) -> CommandKind {
         match *self {
-            Command::Prewrite { .. } => "prewrite",
-            Command::AcquirePessimisticLock { .. } => "pessimistic_lock",
-            Command::Commit { .. } => "commit",
-            Command::Cleanup { .. } => "cleanup",
-            Command::Rollback { .. } => "rollback",
-            Command::ScanLock { .. } => "scan_lock",
-            Command::ResolveLock { .. } => "resolve_lock",
-            Command::ResolveLockLite { .. } => "resolve_lock_lite",
-            Command::DeleteRange { .. } => "delete_range",
-            Command::Pause { .. } => "pause",
-            Command::MvccByKey { .. } => "key_mvcc",
-            Command::MvccByStartTs { .. } => "start_ts_mvcc",
+            Command::Prewrite { .. } => CommandKind::prewrite,
+            Command::AcquirePessimisticLock { .. } => CommandKind::acquire_pessimistic_lock,
+            Command::Commit { .. } => CommandKind::commit,
+            Command::Cleanup { .. } => CommandKind::cleanup,
+            Command::Rollback { .. } => CommandKind::rollback,
+            Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
+            Command::ScanLock { .. } => CommandKind::scan_lock,
+            Command::ResolveLock { .. } => CommandKind::resolve_lock,
+            Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
+            Command::DeleteRange { .. } => CommandKind::delete_range,
+            Command::Pause { .. } => CommandKind::pause,
+            Command::MvccByKey { .. } => CommandKind::key_mvcc,
+            Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
         }
     }
 
@@ -334,6 +353,7 @@ impl Command {
             | Command::AcquirePessimisticLock { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
+            | Command::PessimisticRollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
@@ -352,6 +372,7 @@ impl Command {
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
+            | Command::PessimisticRollback { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::ResolveLockLite { ref ctx, .. }
@@ -369,6 +390,7 @@ impl Command {
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
+            | Command::PessimisticRollback { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::ResolveLockLite { ref mut ctx, .. }
@@ -403,6 +425,7 @@ impl Command {
             }
             Command::Commit { ref keys, .. }
             | Command::Rollback { ref keys, .. }
+            | Command::PessimisticRollback { ref keys, .. }
             | Command::Pause { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
@@ -436,6 +459,7 @@ pub struct Options {
     pub key_only: bool,
     pub reverse_scan: bool,
     pub is_first_lock: bool,
+    pub for_update_ts: u64,
     pub is_pessimistic_lock: Vec<bool>,
     // How many keys this transaction involved.
     pub txn_size: u64,
@@ -449,6 +473,7 @@ impl Options {
             key_only,
             reverse_scan: false,
             is_first_lock: false,
+            for_update_ts: 0,
             is_pessimistic_lock: vec![],
             txn_size: 0,
         }
@@ -938,7 +963,6 @@ impl<E: Engine> Storage<E> {
         keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: u64,
-        for_update_ts: u64,
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
@@ -959,11 +983,10 @@ impl<E: Engine> Storage<E> {
             keys,
             primary,
             start_ts,
-            for_update_ts,
             options,
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_lock.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
         Ok(())
     }
 
@@ -990,16 +1013,25 @@ impl<E: Engine> Storage<E> {
     /// Delete all keys in the range [`start_key`, `end_key`).
     /// All keys in the range will be deleted permanently regardless of their timestamps.
     /// That means, you are even unable to get deleted keys by specifying an older timestamp.
+    /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
+    /// still be replicated via Raft. This is used to notify that the data will be deleted by
+    /// `unsafe_destroy_range` soon.
     pub fn async_delete_range(
         &self,
         ctx: Context,
         start_key: Key,
         end_key: Key,
+        notify_only: bool,
         callback: Callback<()>,
     ) -> Result<()> {
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
-            modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
+            modifies.push(Modify::DeleteRange(
+                cf,
+                start_key.clone(),
+                end_key.clone(),
+                notify_only,
+            ));
         }
 
         self.engine.async_write(
@@ -1039,6 +1071,31 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
+        Ok(())
+    }
+
+    /// Roll back pessimistic locks identified by `start_ts` and `for_update_ts`
+    pub fn async_pessimistic_rollback(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
+        callback: Callback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
+        let cmd = Command::PessimisticRollback {
+            ctx,
+            keys,
+            start_ts,
+            for_update_ts,
+        };
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
         Ok(())
     }
 
@@ -1362,7 +1419,7 @@ impl<E: Engine> Storage<E> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(cf, start_key, end_key)],
+            vec![Modify::DeleteRange(cf, start_key, end_key, false)],
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
@@ -2524,7 +2581,7 @@ mod tests {
         storage
             .async_pause(
                 Context::new(),
-                vec![],
+                vec![Key::from_raw(b"y")],
                 1000,
                 expect_ok_callback(tx.clone(), 3),
             )
@@ -2598,6 +2655,7 @@ mod tests {
                 Context::new(),
                 Key::from_raw(b"x"),
                 Key::from_raw(b"z"),
+                false,
                 expect_ok_callback(tx.clone(), 5),
             )
             .unwrap();
@@ -2624,6 +2682,7 @@ mod tests {
                 Context::new(),
                 Key::from_raw(b""),
                 Key::from_raw(&[255]),
+                false,
                 expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();

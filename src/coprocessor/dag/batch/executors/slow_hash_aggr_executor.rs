@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::hash::{Hash, Hasher};
+use std::ptr::NonNull;
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
-use smallvec::SmallVec;
-
 use tikv_util::collections::HashMap;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, FieldType};
@@ -13,8 +13,10 @@ use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
+use crate::coprocessor::dag::batch::executors::util::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
@@ -116,13 +118,19 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
+        let group_by_len = group_by_exps.len();
+        let mut group_key_offsets = Vec::with_capacity(1024);
+        group_key_offsets.push(0);
         let aggr_impl = SlowHashAggregationImpl {
             states: Vec::with_capacity(1024),
             groups: HashMap::default(),
             group_by_exps,
-            states_offset_each_row: Vec::with_capacity(
+            group_key_buffer: Box::new(Vec::with_capacity(8192)),
+            group_key_offsets,
+            states_offset_each_logical_row: Vec::with_capacity(
                 crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE,
             ),
+            group_by_results_unsafe: Vec::with_capacity(group_by_len),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -137,39 +145,35 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
 
 pub struct SlowHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
-    groups: HashMap<Vec<u8>, GroupInfo>,
+
+    /// The value is the group index. `states` and `group_key_offsets` are stored in
+    /// the order of group index.
+    groups: HashMap<GroupKeyRefUnsafe, usize>,
     group_by_exps: Vec<RpnExpression>,
-    states_offset_each_row: Vec<usize>,
+
+    /// Encoded group keys are stored in this buffer sequentially. Offsets of each encoded
+    /// element are stored in `group_key_offsets`.
+    ///
+    /// `GroupKeyRefUnsafe` contains a raw pointer to this buffer.
+    #[allow(clippy::box_vec)]
+    group_key_buffer: Box<Vec<u8>>,
+
+    /// The offsets of encoded keys in `group_key_buffer`. This `Vec` always has a leading `0`
+    /// element. Then, the begin and end offsets of the "i"-th column of the group key whose group
+    /// index is "j" are `group_key_offsets[j * group_by_len + i]` and
+    /// `group_key_offsets[j * group_by_len + i + 1]`. (group_by_len is the count of group by
+    /// expressions)
+    group_key_offsets: Vec<usize>,
+
+    states_offset_each_logical_row: Vec<usize>,
+
+    /// Stores evaluation results of group by expressions.
+    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
+    /// are only valid in the same batch where they are added.
+    group_by_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
-#[derive(Debug)]
-struct GroupInfo {
-    /// The start offset of the states of this group stored in
-    /// `SlowHashAggregationImpl::states`.
-    states_start_offset: usize,
-
-    /// The offset of each GROUP BY column in the group key. There will be an additional offset
-    /// at the end, which equals to the group key length.
-    ///
-    /// For example, if the group key `AaaFfffff` is composed by two group column `[Aaa, Ffffff]`,
-    /// then the value of this field is `[0, 3, 9]`.
-    ///
-    /// Note 1:
-    /// We want aggregation executor to provide each GROUP BY column independently, which will be
-    /// useful in future executors (like Projection executor). However, currently this segmentation
-    /// is not useful because we return data by row and columns will be always pasted together.
-    /// Thus segmentation or not doesn't make any differences.
-    ///
-    /// Note 2:
-    /// We use `SmallVec<[..; 6]>` so that when group by columns <= 5 SmallVec avoids allocation.
-    /// We think the case that there are more than 5 group by columns are rare.
-    ///
-    /// Note 3:
-    /// We use `SmallVec<[u32; ..]>` instead of `SmallVec<[usize; ..]>` because the length of the
-    /// group key will not exceed `u32`. Using `u32` instead of `usize` makes this field small
-    /// and can be fit into the cache line better.
-    group_key_offsets: SmallVec<[u32; 6]>,
-}
+unsafe impl Send for SlowHashAggregationImpl {}
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImpl {
     #[inline]
@@ -186,65 +190,99 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
-        mut input: LazyBatchColumnVec,
+        mut input_physical_columns: LazyBatchColumnVec,
+        input_logical_rows: &[usize],
     ) -> Result<()> {
-        let rows_len = input.rows_len();
-
         // 1. Calculate which group each src row belongs to.
-        self.states_offset_each_row.clear();
+        self.states_offset_each_logical_row.clear();
 
+        let context = &mut entities.context;
         let src_schema = entities.src.schema();
+        let logical_rows_len = input_logical_rows.len();
+        let group_by_len = self.group_by_exps.len();
+        let aggr_fn_len = entities.each_aggr_fn.len();
 
-        // TODO: Eliminate these allocations using an allocator.
-        let mut group_by_keys = Vec::with_capacity(rows_len);
-        let mut group_by_keys_offsets = Vec::with_capacity(rows_len);
-        for _ in 0..rows_len {
-            group_by_keys.push(Vec::with_capacity(32));
-            group_by_keys_offsets.push(SmallVec::new());
+        // Decode columns with mutable input first, so subsequent access to input can be immutable
+        // (and the borrow checker will be happy)
+        ensure_columns_decoded(
+            &context.cfg.tz,
+            &self.group_by_exps,
+            src_schema,
+            &mut input_physical_columns,
+            input_logical_rows,
+        )?;
+        assert!(self.group_by_results_unsafe.is_empty());
+        unsafe {
+            eval_exprs_decoded_no_lifetime(
+                context,
+                &self.group_by_exps,
+                src_schema,
+                &input_physical_columns,
+                input_logical_rows,
+                &mut self.group_by_results_unsafe,
+            )?;
         }
-        for group_by_exp in &self.group_by_exps {
-            let group_by_result =
-                group_by_exp.eval(&mut entities.context, rows_len, src_schema, &mut input)?;
-            // Unwrap is fine because we have verified the group by expression before.
-            let group_column = group_by_result.vector_value().unwrap();
-            let field_type = group_by_result.field_type();
-            for row_index in 0..rows_len {
-                group_by_keys_offsets[row_index].push(group_by_keys[row_index].len() as u32);
-                group_column.encode(row_index, field_type, &mut group_by_keys[row_index])?;
+
+        let buffer_ptr = (&*self.group_key_buffer).into();
+        for logical_row_idx in 0..logical_rows_len {
+            let offset_begin = self.group_key_buffer.len();
+
+            // always encode group keys to the buffer first
+            // we'll then remove them if the group already exists
+            for group_by_result in &self.group_by_results_unsafe {
+                match group_by_result {
+                    RpnStackNode::Vector { value, field_type } => {
+                        value.as_ref().encode(
+                            value.logical_rows()[logical_row_idx],
+                            field_type,
+                            &mut self.group_key_buffer,
+                        )?;
+                        self.group_key_offsets.push(self.group_key_buffer.len());
+                    }
+                    // we have checked that group by cannot be a scalar
+                    _ => unreachable!(),
+                }
             }
-        }
-        // One extra offset, to be used as the end offset.
-        for row_index in 0..rows_len {
-            group_by_keys_offsets[row_index].push(group_by_keys[row_index].len() as u32);
-        }
+            let group_key_ref_unsafe = GroupKeyRefUnsafe {
+                buffer_ptr,
+                begin: offset_begin,
+                end: self.group_key_buffer.len(),
+            };
 
-        for (group_key, group_key_offsets) in group_by_keys.into_iter().zip(group_by_keys_offsets) {
-            match self.groups.entry(group_key) {
+            let group_len = self.groups.len();
+            let group_index = match self.groups.entry(group_key_ref_unsafe) {
                 Entry::Vacant(entry) => {
-                    let offset = self.states.len();
-                    self.states_offset_each_row.push(offset);
-                    entry.insert(GroupInfo {
-                        states_start_offset: offset,
-                        group_key_offsets,
-                    });
+                    // if it's a new group, the group index is the current group count
+                    entry.insert(group_len);
                     for aggr_fn in &entities.each_aggr_fn {
                         self.states.push(aggr_fn.create_state());
                     }
+                    group_len
                 }
                 Entry::Occupied(entry) => {
-                    self.states_offset_each_row
-                        .push(entry.get().states_start_offset);
+                    // remove the duplicated group key
+                    self.group_key_buffer.truncate(offset_begin);
+                    self.group_key_offsets
+                        .truncate(self.group_key_offsets.len() - group_by_len);
+                    *entry.get()
                 }
-            }
+            };
+            self.states_offset_each_logical_row
+                .push(group_index * aggr_fn_len);
         }
 
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(
             entities,
-            &mut input,
+            &mut input_physical_columns,
+            input_logical_rows,
             &mut self.states,
-            &self.states_offset_each_row,
+            &self.states_offset_each_logical_row,
         )?;
+
+        // Remember to remove expression results of the current batch. They are invalid
+        // in the next batch.
+        self.group_by_results_unsafe.clear();
 
         Ok(())
     }
@@ -273,20 +311,21 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         let aggr_fns_len = entities.each_aggr_fn.len();
 
         let groups = std::mem::replace(&mut self.groups, HashMap::default());
-        for (group_key, group_info) in groups {
+        for (_, group_index) in groups {
+            let states_start_offset = group_index * aggr_fns_len;
             iteratee(
                 entities,
-                &self.states
-                    [group_info.states_start_offset..group_info.states_start_offset + aggr_fns_len],
+                &self.states[states_start_offset..states_start_offset + aggr_fns_len],
             )?;
 
             // Extract group column from group key for each group
+            let group_key_offsets = &self.group_key_offsets[group_index * group_by_exps_len..];
             for group_index in 0..group_by_exps_len {
-                let offset_begin = group_info.group_key_offsets[group_index] as usize;
-                let offset_end = group_info.group_key_offsets[group_index + 1] as usize;
+                let offset_begin = group_key_offsets[group_index];
+                let offset_end = group_key_offsets[group_index + 1];
                 group_by_columns[group_index]
                     .mut_raw()
-                    .push(&group_key[offset_begin..offset_end]);
+                    .push(&self.group_key_buffer[offset_begin..offset_end]);
             }
         }
 
@@ -300,6 +339,34 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     }
 }
 
+/// A reference to a group key slice in the `group_key_buffer` of `SlowHashAggregationImpl`.
+///
+/// It is safe as soon as it doesn't outlive the `SlowHashAggregationImpl` that creates this
+/// reference.
+struct GroupKeyRefUnsafe {
+    /// Points to the `group_key_buffer` of `SlowHashAggregationImpl`
+    buffer_ptr: NonNull<Vec<u8>>,
+    begin: usize,
+    end: usize,
+}
+
+impl Hash for GroupKeyRefUnsafe {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        unsafe { self.buffer_ptr.as_ref()[self.begin..self.end].hash(state) }
+    }
+}
+
+impl PartialEq for GroupKeyRefUnsafe {
+    fn eq(&self, other: &GroupKeyRefUnsafe) -> bool {
+        unsafe {
+            self.buffer_ptr.as_ref()[self.begin..self.end]
+                == other.buffer_ptr.as_ref()[other.begin..other.end]
+        }
+    }
+}
+
+impl Eq for GroupKeyRefUnsafe {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,7 +377,7 @@ mod tests {
     use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
-    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
 
     #[test]
@@ -330,7 +397,7 @@ mod tests {
             RpnExpressionBuilder::new()
                 .push_column_ref(0)
                 .push_constant(1.0)
-                .push_fn_call(RpnFnArithmetic::<RealPlus>::new(), FieldTypeTp::Double)
+                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), FieldTypeTp::Double)
                 .build(),
         ];
 
@@ -356,11 +423,13 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
         let mut r = exec.next_batch(1);
@@ -370,35 +439,36 @@ mod tests {
         // NULL,  NULL
         // 5,     2.5
         // Thus there are 4 groups.
-        assert_eq!(r.data.rows_len(), 4);
-        assert_eq!(r.data.columns_len(), 5); // 3 result column, 2 group by column
+        assert_eq!(&r.logical_rows, &[0, 1, 2, 3]);
+        assert_eq!(r.physical_columns.rows_len(), 4);
+        assert_eq!(r.physical_columns.columns_len(), 5); // 3 result column, 2 group by column
 
         // Let's check the two group by column first.
-        r.data[3]
-            .ensure_decoded(&Tz::utc(), &exec.schema()[3])
+        r.physical_columns[3]
+            .ensure_all_decoded(&Tz::utc(), &exec.schema()[3])
             .unwrap();
         assert_eq!(
-            r.data[3].decoded().as_int_slice(),
+            r.physical_columns[3].decoded().as_int_slice(),
             &[Some(5), None, None, Some(1)]
         );
-        r.data[4]
-            .ensure_decoded(&Tz::utc(), &exec.schema()[4])
+        r.physical_columns[4]
+            .ensure_all_decoded(&Tz::utc(), &exec.schema()[4])
             .unwrap();
         assert_eq!(
-            r.data[4].decoded().as_real_slice(),
+            r.physical_columns[4].decoded().as_real_slice(),
             &[Real::new(2.5).ok(), Real::new(8.0).ok(), None, None]
         );
 
         assert_eq!(
-            r.data[0].decoded().as_int_slice(),
+            r.physical_columns[0].decoded().as_int_slice(),
             &[Some(1), Some(1), Some(2), Some(1)]
         );
         assert_eq!(
-            r.data[1].decoded().as_int_slice(),
+            r.physical_columns[1].decoded().as_int_slice(),
             &[Some(1), Some(1), Some(0), Some(0)]
         );
         assert_eq!(
-            r.data[2].decoded().as_real_slice(),
+            r.physical_columns[2].decoded().as_real_slice(),
             &[Real::new(6.5).ok(), Real::new(12.0).ok(), None, None]
         );
     }

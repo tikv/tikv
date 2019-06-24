@@ -622,6 +622,16 @@
 # default: 8MB
 # merge-small-file-threshold = "8MB"
 
+## The mode used to process blob files. In read-only mode Titan
+## stops writing value into blob log. In fallback mode Titan
+## converts blob index into real value on flush and compaction.
+## This option is especially useful for downgrading Titan.
+##   default:   kNormal
+##   read-only: kReadOnly
+##   fallback:  kFallback
+# default: normal
+# blob-run-mode = "normal"
+
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -739,4 +749,4 @@
 # wake-up-delay-duration = 1
 #
 ## Interval in milliseconds to check the membership change of deadlock detector.
-# monitor-membership-interval 3000
+# monitor-membership-interval = 3000
