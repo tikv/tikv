@@ -7,7 +7,7 @@ pub mod signal_handler;
 pub fn tikv_version_info() -> String {
     let fallback = "Unknown (env var does not exist when building)";
     format!(
-        "Release Version:   {}\
+        "\nRelease Version:   {}\
          \nGit Commit Hash:   {}\
          \nGit Commit Branch: {}\
          \nUTC Build Time:    {}\
