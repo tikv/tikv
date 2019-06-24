@@ -238,7 +238,7 @@ impl Expression {
     }
 
     pub fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<Self> {
-        debug!("build expr:{:?}", expr);
+        error!("build expr:{:?}", expr);
         let tp = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),

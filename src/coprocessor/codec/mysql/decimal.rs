@@ -1868,6 +1868,13 @@ pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
+        error!(
+            "encode_decimal:prec:{:?},frac:{:?},dec:{:?},to_string:{:?}",
+            prec,
+            frac,
+            d,
+            d.to_string()
+        );
         self.write_all(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
