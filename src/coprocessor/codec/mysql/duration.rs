@@ -495,7 +495,7 @@ impl Duration {
 
     // TODO: impl TryFrom/TryInto instead
     pub fn to_decimal(self) -> Result<Decimal> {
-        self.fmt("").parse()
+        self.format("").parse()
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
@@ -615,7 +615,7 @@ impl Duration {
         }
     }
 
-    fn fmt(&self, sep: &str) -> String {
+    fn format(self, sep: &str) -> String {
         let mut string = String::new();
         if self.get_neg() {
             string.push('-');
@@ -646,7 +646,7 @@ impl Duration {
 
 impl Display for Duration {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.fmt(":"))
+        write!(formatter, "{}", self.format(":"))
     }
 }
 
