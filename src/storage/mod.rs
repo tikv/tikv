@@ -3,19 +3,17 @@
 pub mod config;
 pub mod gc_worker;
 pub mod kv;
+pub mod lock_manager;
 mod metrics;
 pub mod mvcc;
 pub mod readpool_impl;
 pub mod txn;
 pub mod types;
 
-use std::boxed::FnBox;
-use std::cmp;
-use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::sync::{atomic, Arc, Mutex};
-use std::u64;
+use std::{cmp, error, u64};
 
 use engine::rocks::DB;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
@@ -26,31 +24,33 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
-use self::txn::CMD_BATCH_SIZE;
 
-pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::kv::raftkv::RaftKv;
 pub use self::kv::{
-    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
-    TestEngineBuilder,
+    destroy_tls_engine, set_tls_engine, with_tls_engine, CFStatistics, Cursor, CursorBuilder,
+    Engine, Error as EngineError, FlowStatistics, Iterator, Modify, RegionInfoProvider,
+    RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
 };
+use self::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
+use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
-pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
+pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
+pub const TXN_SIZE_PREFIX: u8 = b't';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
@@ -94,6 +94,13 @@ pub enum Command {
         start_ts: u64,
         options: Options,
     },
+    AcquirePessimisticLock {
+        ctx: Context,
+        keys: Vec<(Key, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        options: Options,
+    },
     Commit {
         ctx: Context,
         keys: Vec<Key>,
@@ -110,6 +117,12 @@ pub enum Command {
         keys: Vec<Key>,
         start_ts: u64,
     },
+    PessimisticRollback {
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
+    },
     ScanLock {
         ctx: Context,
         max_ts: u64,
@@ -121,6 +134,12 @@ pub enum Command {
         txn_status: HashMap<u64, u64>,
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
+    },
+    ResolveLockLite {
+        ctx: Context,
+        start_ts: u64,
+        commit_ts: u64,
+        resolve_keys: Vec<Key>,
     },
     DeleteRange {
         ctx: Context,
@@ -158,6 +177,20 @@ impl Display for Command {
                 start_ts,
                 ctx
             ),
+            Command::AcquirePessimisticLock {
+                ref ctx,
+                ref keys,
+                start_ts,
+                ref options,
+                ..
+            } => write!(
+                f,
+                "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
+                keys.len(),
+                start_ts,
+                options.for_update_ts,
+                ctx
+            ),
             Command::Commit {
                 ref ctx,
                 ref keys,
@@ -190,6 +223,19 @@ impl Display for Command {
                 start_ts,
                 ctx
             ),
+            Command::PessimisticRollback {
+                ref ctx,
+                ref keys,
+                start_ts,
+                for_update_ts,
+            } => write!(
+                f,
+                "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}",
+                keys.len(),
+                start_ts,
+                for_update_ts,
+                ctx
+            ),
             Command::ScanLock {
                 ref ctx,
                 max_ts,
@@ -202,6 +248,7 @@ impl Display for Command {
                 start_key, limit, max_ts, ctx
             ),
             Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
+            Command::ResolveLockLite { .. } => write!(f, "kv::resolve_lock_lite"),
             Command::DeleteRange {
                 ref ctx,
                 ref start_key,
@@ -261,11 +308,20 @@ impl Command {
         self.get_context().get_priority()
     }
 
-    pub fn priority_tag(&self) -> &'static str {
+    pub fn is_sys_cmd(&self) -> bool {
+        match *self {
+            Command::ScanLock { .. }
+            | Command::ResolveLock { .. }
+            | Command::ResolveLockLite { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn priority_tag(&self) -> CommandPriority {
         match self.get_context().get_priority() {
-            CommandPri::Low => "low",
-            CommandPri::Normal => "normal",
-            CommandPri::High => "high",
+            CommandPri::Low => CommandPriority::low,
+            CommandPri::Normal => CommandPriority::normal,
+            CommandPri::High => CommandPriority::high,
         }
     }
 
@@ -273,29 +329,35 @@ impl Command {
         !self.readonly() && self.priority() != CommandPri::High
     }
 
-    pub fn tag(&self) -> &'static str {
+    pub fn tag(&self) -> CommandKind {
         match *self {
-            Command::Prewrite { .. } => "prewrite",
-            Command::Commit { .. } => "commit",
-            Command::Cleanup { .. } => "cleanup",
-            Command::Rollback { .. } => "rollback",
-            Command::ScanLock { .. } => "scan_lock",
-            Command::ResolveLock { .. } => "resolve_lock",
-            Command::DeleteRange { .. } => "delete_range",
-            Command::Pause { .. } => "pause",
-            Command::MvccByKey { .. } => "key_mvcc",
-            Command::MvccByStartTs { .. } => "start_ts_mvcc",
+            Command::Prewrite { .. } => CommandKind::prewrite,
+            Command::AcquirePessimisticLock { .. } => CommandKind::acquire_pessimistic_lock,
+            Command::Commit { .. } => CommandKind::commit,
+            Command::Cleanup { .. } => CommandKind::cleanup,
+            Command::Rollback { .. } => CommandKind::rollback,
+            Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
+            Command::ScanLock { .. } => CommandKind::scan_lock,
+            Command::ResolveLock { .. } => CommandKind::resolve_lock,
+            Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
+            Command::DeleteRange { .. } => CommandKind::delete_range,
+            Command::Pause { .. } => CommandKind::pause,
+            Command::MvccByKey { .. } => CommandKind::key_mvcc,
+            Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
         }
     }
 
     pub fn ts(&self) -> u64 {
         match *self {
             Command::Prewrite { start_ts, .. }
+            | Command::AcquirePessimisticLock { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
+            | Command::PessimisticRollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
+            Command::ResolveLockLite { start_ts, .. } => start_ts,
             Command::ResolveLock { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
@@ -306,11 +368,14 @@ impl Command {
     pub fn get_context(&self) -> &Context {
         match *self {
             Command::Prewrite { ref ctx, .. }
+            | Command::AcquirePessimisticLock { ref ctx, .. }
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
+            | Command::PessimisticRollback { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
+            | Command::ResolveLockLite { ref ctx, .. }
             | Command::DeleteRange { ref ctx, .. }
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
@@ -321,11 +386,14 @@ impl Command {
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
             Command::Prewrite { ref mut ctx, .. }
+            | Command::AcquirePessimisticLock { ref mut ctx, .. }
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
+            | Command::PessimisticRollback { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
+            | Command::ResolveLockLite { ref mut ctx, .. }
             | Command::DeleteRange { ref mut ctx, .. }
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
@@ -350,7 +418,15 @@ impl Command {
                     }
                 }
             }
-            Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
+            Command::AcquirePessimisticLock { ref keys, .. } => {
+                for (key, _) in keys {
+                    bytes += key.as_encoded().len();
+                }
+            }
+            Command::Commit { ref keys, .. }
+            | Command::Rollback { ref keys, .. }
+            | Command::PessimisticRollback { ref keys, .. }
+            | Command::Pause { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
                 }
@@ -360,13 +436,15 @@ impl Command {
                     bytes += lock.0.as_encoded().len();
                 }
             }
+            Command::ResolveLockLite {
+                ref resolve_keys, ..
+            } => {
+                for k in resolve_keys {
+                    bytes += k.as_encoded().len();
+                }
+            }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
-            }
-            Command::Pause { ref keys, .. } => {
-                for key in keys {
-                    bytes += key.as_encoded().len();
-                }
             }
             _ => {}
         }
@@ -380,6 +458,11 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
+    pub is_first_lock: bool,
+    pub for_update_ts: u64,
+    pub is_pessimistic_lock: Vec<bool>,
+    // How many keys this transaction involved.
+    pub txn_size: u64,
 }
 
 impl Options {
@@ -389,6 +472,10 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
+            is_first_lock: false,
+            for_update_ts: 0,
+            is_pessimistic_lock: vec![],
+            txn_size: 0,
         }
     }
 
@@ -457,13 +544,19 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test()).build();
+        let engine = Arc::new(Mutex::new(self.engine.clone()));
+        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test())
+            .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+            .before_stop(|| destroy_tls_engine::<E>())
+            .build();
         Storage::from_engine(
             self.engine,
             &self.config,
             read_pool,
             self.local_storage,
             self.raft_store_router,
+            None,
+            None,
         )
     }
 }
@@ -491,10 +584,7 @@ pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    /// The worker to execute storage commands.
-    worker: Arc<Mutex<Worker<Msg>>>,
-    /// `worker_scheduler` is used to schedule tasks to run in `worker`.
-    worker_scheduler: worker::Scheduler<Msg>,
+    sched: TxnScheduler<E>,
 
     /// The thread pool used to run most read operations.
     read_pool: ReadPool,
@@ -508,6 +598,8 @@ pub struct Storage<E: Engine> {
 
     // Fields below are storage configurations.
     max_key_size: usize,
+
+    pessimistic_txn_enabled: bool,
 }
 
 impl<E: Engine> Clone for Storage<E> {
@@ -515,18 +607,18 @@ impl<E: Engine> Clone for Storage<E> {
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
-        debug!(
+        trace!(
             "Storage referenced"; "original_ref" => refs
         );
 
         Self {
             engine: self.engine.clone(),
-            worker: self.worker.clone(),
-            worker_scheduler: self.worker_scheduler.clone(),
+            sched: self.sched.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
+            pessimistic_txn_enabled: self.pessimistic_txn_enabled,
         }
     }
 }
@@ -536,24 +628,12 @@ impl<E: Engine> Drop for Storage<E> {
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
-        debug!(
+        trace!(
             "Storage de-referenced"; "original_ref" => refs
         );
 
         if refs != 1 {
             return;
-        }
-
-        // This is the last reference of the storage. Now all its references are dropped. Stop and
-        // destroy the storage now.
-        let mut worker = self.worker.lock().unwrap();
-        if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("Failed to ask scheduler to quit"; "err" => ?e);
-        }
-
-        let h = worker.stop().unwrap();
-        if let Err(e) = h.join() {
-            error!("Failed to join sched_handle"; "err" => ?e);
         }
 
         let r = self.gc_worker.stop();
@@ -573,17 +653,15 @@ impl<E: Engine> Storage<E> {
         read_pool: ReadPool,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+        detector_scheduler: Option<DetectorScheduler>,
     ) -> Result<Self> {
-        let worker = Arc::new(Mutex::new(
-            Builder::new("storage-scheduler")
-                .batch_size(CMD_BATCH_SIZE)
-                .pending_capacity(config.scheduler_notify_capacity)
-                .create(),
-        ));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
-        let runner = Scheduler::new(
+        let pessimistic_txn_enabled =
+            waiter_mgr_scheduler.is_some() && detector_scheduler.is_some();
+        let sched = TxnScheduler::new(
             engine.clone(),
-            worker_scheduler.clone(),
+            waiter_mgr_scheduler,
+            detector_scheduler,
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -595,19 +673,18 @@ impl<E: Engine> Storage<E> {
             config.gc_ratio_threshold,
         );
 
-        worker.lock().unwrap().start(runner)?;
         gc_worker.start()?;
 
         info!("Storage started.");
 
         Ok(Storage {
             engine,
-            worker,
-            worker_scheduler,
+            sched,
             read_pool,
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
+            pessimistic_txn_enabled,
         })
     }
 
@@ -629,15 +706,12 @@ impl<E: Engine> Storage<E> {
     #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        match self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }) {
-            Ok(()) => Ok(()),
-            Err(ScheduleError::Full(_)) => Err(Error::SchedTooBusy),
-            Err(ScheduleError::Stopped(_)) => Err(Error::Closed),
-        }
+        self.sched.run_cmd(cmd, cb);
+        Ok(())
     }
 
     /// Get a snapshot of `engine`.
-    fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
+    fn async_snapshot(engine: &E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
         let (callback, future) = tikv_util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
 
@@ -658,42 +732,43 @@ impl<E: Engine> Storage<E> {
         start_ts: u64,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::Snap| {
-                    tls_processing_read_observe_duration(CMD, || {
-                        let mut statistics = Statistics::default();
-                        let snap_store = SnapshotStore::new(
-                            snapshot,
-                            start_ts,
-                            ctx.get_isolation_level(),
-                            !ctx.get_not_fill_cache(),
-                        );
-                        let result = snap_store
-                            .get(&key, &mut statistics)
-                            // map storage::txn::Error -> storage::Error
-                            .map_err(Error::from)
-                            .map(|r| {
-                                tls_collect_key_reads(CMD, 1);
-                                r
-                            });
+            with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let mut statistics = Statistics::default();
+                            let snap_store = SnapshotStore::new(
+                                snapshot,
+                                start_ts,
+                                ctx.get_isolation_level(),
+                                !ctx.get_not_fill_cache(),
+                            );
+                            let result = snap_store
+                                .get(&key, &mut statistics)
+                                // map storage::txn::Error -> storage::Error
+                                .map_err(Error::from)
+                                .map(|r| {
+                                    tls_collect_key_reads(CMD, 1);
+                                    r
+                                });
 
-                        tls_collect_scan_count(CMD, &statistics);
-                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                            tls_collect_scan_count(CMD, &statistics);
+                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                        result
+                            result
+                        })
                     })
-                })
-                .then(move |r| {
-                    tls_collect_command_duration(CMD, command_duration.elapsed());
-                    r
-                })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
         });
 
         future::result(res)
@@ -710,48 +785,49 @@ impl<E: Engine> Storage<E> {
         start_ts: u64,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::Snap| {
-                    tls_processing_read_observe_duration(CMD, || {
-                        let mut statistics = Statistics::default();
-                        let snap_store = SnapshotStore::new(
-                            snapshot,
-                            start_ts,
-                            ctx.get_isolation_level(),
-                            !ctx.get_not_fill_cache(),
-                        );
-                        let kv_pairs: Vec<_> = snap_store
-                            .batch_get(&keys, &mut statistics)
-                            .into_iter()
-                            .zip(keys)
-                            .filter(|&(ref v, ref _k)| {
-                                !(v.is_ok() && v.as_ref().unwrap().is_none())
-                            })
-                            .map(|(v, k)| match v {
-                                Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                Err(e) => Err(Error::from(e)),
-                                _ => unreachable!(),
-                            })
-                            .collect();
+            with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let mut statistics = Statistics::default();
+                            let snap_store = SnapshotStore::new(
+                                snapshot,
+                                start_ts,
+                                ctx.get_isolation_level(),
+                                !ctx.get_not_fill_cache(),
+                            );
+                            let kv_pairs: Vec<_> = snap_store
+                                .batch_get(&keys, &mut statistics)
+                                .into_iter()
+                                .zip(keys)
+                                .filter(|&(ref v, ref _k)| {
+                                    !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                })
+                                .map(|(v, k)| match v {
+                                    Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                    Err(e) => Err(Error::from(e)),
+                                    _ => unreachable!(),
+                                })
+                                .collect();
 
-                        tls_collect_key_reads(CMD, kv_pairs.len());
-                        tls_collect_scan_count(CMD, &statistics);
-                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                            tls_collect_key_reads(CMD, kv_pairs.len());
+                            tls_collect_scan_count(CMD, &statistics);
+                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                        Ok(kv_pairs)
+                            Ok(kv_pairs)
+                        })
                     })
-                })
-                .then(move |r| {
-                    tls_collect_command_duration(CMD, command_duration.elapsed());
-                    r
-                })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
         });
 
         future::result(res)
@@ -772,58 +848,59 @@ impl<E: Engine> Storage<E> {
         options: Options,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "scan";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::Snap| {
-                    tls_processing_read_observe_duration(CMD, || {
-                        let snap_store = SnapshotStore::new(
-                            snapshot,
-                            start_ts,
-                            ctx.get_isolation_level(),
-                            !ctx.get_not_fill_cache(),
-                        );
+            with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let snap_store = SnapshotStore::new(
+                                snapshot,
+                                start_ts,
+                                ctx.get_isolation_level(),
+                                !ctx.get_not_fill_cache(),
+                            );
 
-                        let mut scanner;
-                        if !options.reverse_scan {
-                            scanner = snap_store.scanner(
-                                false,
-                                options.key_only,
-                                Some(start_key),
-                                end_key,
-                            )?;
-                        } else {
-                            scanner = snap_store.scanner(
-                                true,
-                                options.key_only,
-                                end_key,
-                                Some(start_key),
-                            )?;
-                        };
-                        let res = scanner.scan(limit);
+                            let mut scanner;
+                            if !options.reverse_scan {
+                                scanner = snap_store.scanner(
+                                    false,
+                                    options.key_only,
+                                    Some(start_key),
+                                    end_key,
+                                )?;
+                            } else {
+                                scanner = snap_store.scanner(
+                                    true,
+                                    options.key_only,
+                                    end_key,
+                                    Some(start_key),
+                                )?;
+                            };
+                            let res = scanner.scan(limit);
 
-                        let statistics = scanner.take_statistics();
-                        tls_collect_scan_count(CMD, &statistics);
-                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                            let statistics = scanner.take_statistics();
+                            tls_collect_scan_count(CMD, &statistics);
+                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                        res.map_err(Error::from).map(|results| {
-                            tls_collect_key_reads(CMD, results.len());
-                            results
-                                .into_iter()
-                                .map(|x| x.map_err(Error::from))
-                                .collect()
+                            res.map_err(Error::from).map(|results| {
+                                tls_collect_key_reads(CMD, results.len());
+                                results
+                                    .into_iter()
+                                    .map(|x| x.map_err(Error::from))
+                                    .collect()
+                            })
                         })
                     })
-                })
-                .then(move |r| {
-                    tls_collect_command_duration(CMD, command_duration.elapsed());
-                    r
-                })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
         });
 
         future::result(res)
@@ -862,9 +939,9 @@ impl<E: Engine> Storage<E> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         for m in &mutations {
-            let size = m.key().as_encoded().len();
-            if size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
+            let key_size = m.key().as_encoded().len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
                 return Ok(());
             }
         }
@@ -877,6 +954,39 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        Ok(())
+    }
+
+    pub fn async_acquire_pessimistic_lock(
+        &self,
+        ctx: Context,
+        keys: Vec<(Key, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        options: Options,
+        callback: Callback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
+        for k in &keys {
+            let key_size = k.0.as_encoded().len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
+                return Ok(());
+            }
+        }
+        let cmd = Command::AcquirePessimisticLock {
+            ctx,
+            keys,
+            primary,
+            start_ts,
+            options,
+        };
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
         Ok(())
     }
 
@@ -903,16 +1013,25 @@ impl<E: Engine> Storage<E> {
     /// Delete all keys in the range [`start_key`, `end_key`).
     /// All keys in the range will be deleted permanently regardless of their timestamps.
     /// That means, you are even unable to get deleted keys by specifying an older timestamp.
+    /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
+    /// still be replicated via Raft. This is used to notify that the data will be deleted by
+    /// `unsafe_destroy_range` soon.
     pub fn async_delete_range(
         &self,
         ctx: Context,
         start_key: Key,
         end_key: Key,
+        notify_only: bool,
         callback: Callback<()>,
     ) -> Result<()> {
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
-            modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
+            modifies.push(Modify::DeleteRange(
+                cf,
+                start_key.clone(),
+                end_key.clone(),
+                notify_only,
+            ));
         }
 
         self.engine.async_write(
@@ -952,6 +1071,31 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
+        Ok(())
+    }
+
+    /// Roll back pessimistic locks identified by `start_ts` and `for_update_ts`
+    pub fn async_pessimistic_rollback(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
+        callback: Callback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
+        let cmd = Command::PessimisticRollback {
+            ctx,
+            keys,
+            start_ts,
+            for_update_ts,
+        };
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
         Ok(())
     }
 
@@ -1015,6 +1159,25 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    pub fn async_resolve_lock_lite(
+        &self,
+        ctx: Context,
+        start_ts: u64,
+        commit_ts: u64,
+        resolve_keys: Vec<Key>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cmd = Command::ResolveLockLite {
+            ctx,
+            start_ts,
+            commit_ts,
+            resolve_keys,
+        };
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
+        Ok(())
+    }
+
     /// Does garbage collection, which means cleaning up old MVCC keys.
     /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
     /// during and after the GC operation.
@@ -1051,46 +1214,50 @@ impl<E: Engine> Storage<E> {
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
         const CMD: &str = "raw_get";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC_STATIC.raw_get.start_coarse_timer();
+        let res = self.read_pool.spawn_handle(priority, move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
-        let readpool = self.read_pool.clone();
+            with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let cf = match Self::rawkv_cf(&cf) {
+                                Ok(x) => x,
+                                Err(e) => return future::err(e),
+                            };
+                            // no scan_count for this kind of op.
 
-        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = readpool.spawn_handle(priority, move || {
-                tls_processing_read_observe_duration(CMD, || {
-                    let cf = match Self::rawkv_cf(&cf) {
-                        Ok(x) => x,
-                        Err(e) => return future::err(e),
-                    };
-                    // no scan_count for this kind of op.
+                            let key_len = key.len();
+                            let result = snapshot
+                                .get_cf(cf, &Key::from_encoded(key))
+                                // map storage::engine::Error -> storage::Error
+                                .map_err(Error::from)
+                                .map(|r| {
+                                    if let Some(ref value) = r {
+                                        let mut stats = Statistics::default();
+                                        stats.data.flow_stats.read_keys = 1;
+                                        stats.data.flow_stats.read_bytes = key_len + value.len();
+                                        tls_collect_read_flow(ctx.get_region_id(), &stats);
+                                        tls_collect_key_reads(CMD, 1);
+                                    }
+                                    r
+                                });
+                            future::result(result)
+                        })
+                    })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
+        });
 
-                    let key_len = key.len();
-                    let result = snapshot
-                        .get_cf(cf, &Key::from_encoded(key))
-                        // map storage::engine::Error -> storage::Error
-                        .map_err(Error::from)
-                        .map(|r| {
-                            if let Some(ref value) = r {
-                                let mut stats = Statistics::default();
-                                stats.data.flow_stats.read_keys = 1;
-                                stats.data.flow_stats.read_bytes = key_len + value.len();
-                                tls_collect_read_flow(ctx.get_region_id(), &stats);
-                                tls_collect_key_reads(CMD, 1);
-                            }
-                            r
-                        });
-
-                    timer.observe_duration();
-                    future::result(result)
-                })
-            });
-            future::result(res)
-                .map_err(|_| Error::SchedTooBusy)
-                .flatten()
-        })
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Get the values of some raw keys in a batch.
@@ -1101,54 +1268,57 @@ impl<E: Engine> Storage<E> {
         keys: Vec<Vec<u8>>,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_get";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC_STATIC
-            .raw_batch_get
-            .start_coarse_timer();
+        let res = self.read_pool.spawn_handle(priority, move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
-        let readpool = self.read_pool.clone();
+            with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
+                            let cf = match Self::rawkv_cf(&cf) {
+                                Ok(x) => x,
+                                Err(e) => return future::err(e),
+                            };
+                            // no scan_count for this kind of op.
+                            let mut stats = Statistics::default();
+                            let result: Vec<Result<KvPair>> = keys
+                                .into_iter()
+                                .map(|k| {
+                                    let v = snapshot.get_cf(cf, &k);
+                                    (k, v)
+                                })
+                                .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                                .map(|(k, v)| match v {
+                                    Ok(Some(v)) => {
+                                        stats.data.flow_stats.read_keys += 1;
+                                        stats.data.flow_stats.read_bytes +=
+                                            k.as_encoded().len() + v.len();
+                                        Ok((k.into_encoded(), v))
+                                    }
+                                    Err(e) => Err(Error::from(e)),
+                                    _ => unreachable!(),
+                                })
+                                .collect();
 
-        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = readpool.spawn_handle(priority, move || {
-                tls_processing_read_observe_duration(CMD, || {
-                    let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
-                    let cf = match Self::rawkv_cf(&cf) {
-                        Ok(x) => x,
-                        Err(e) => return future::err(e),
-                    };
-                    // no scan_count for this kind of op.
-                    let mut stats = Statistics::default();
-                    let result: Vec<Result<KvPair>> = keys
-                        .into_iter()
-                        .map(|k| {
-                            let v = snapshot.get_cf(cf, &k);
-                            (k, v)
+                            tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
+                            tls_collect_read_flow(ctx.get_region_id(), &stats);
+                            future::ok(result)
                         })
-                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
-                        .map(|(k, v)| match v {
-                            Ok(Some(v)) => {
-                                stats.data.flow_stats.read_keys += 1;
-                                stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
-                                Ok((k.into_encoded(), v))
-                            }
-                            Err(e) => Err(Error::from(e)),
-                            _ => unreachable!(),
-                        })
-                        .collect();
+                    })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
+        });
 
-                    tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
-                    tls_collect_read_flow(ctx.get_region_id(), &stats);
-
-                    timer.observe_duration();
-                    future::ok(result)
-                })
-            });
-            future::result(res)
-                .map_err(|_| Error::SchedTooBusy)
-                .flatten()
-        })
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Write a raw key to the storage.
@@ -1249,7 +1419,7 @@ impl<E: Engine> Storage<E> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(cf, start_key, end_key)],
+            vec![Modify::DeleteRange(cf, start_key, end_key, false)],
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
@@ -1381,55 +1551,62 @@ impl<E: Engine> Storage<E> {
         reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_scan";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC_STATIC.raw_scan.start_coarse_timer();
+        let res = self.read_pool.spawn_handle(priority, move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
-        let readpool = self.read_pool.clone();
+            with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let end_key = end_key.map(Key::from_encoded);
 
-        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = readpool.spawn_handle(priority, move || {
-                tls_processing_read_observe_duration(CMD, || {
-                    let end_key = end_key.map(Key::from_encoded);
+                            let mut statistics = Statistics::default();
+                            let result = if reverse {
+                                Self::reverse_raw_scan(
+                                    &snapshot,
+                                    &cf,
+                                    &Key::from_encoded(key),
+                                    end_key,
+                                    limit,
+                                    &mut statistics,
+                                    key_only,
+                                )
+                                .map_err(Error::from)
+                            } else {
+                                Self::raw_scan(
+                                    &snapshot,
+                                    &cf,
+                                    &Key::from_encoded(key),
+                                    end_key,
+                                    limit,
+                                    &mut statistics,
+                                    key_only,
+                                )
+                                .map_err(Error::from)
+                            };
 
-                    let mut statistics = Statistics::default();
-                    let result = if reverse {
-                        Self::reverse_raw_scan(
-                            &snapshot,
-                            &cf,
-                            &Key::from_encoded(key),
-                            end_key,
-                            limit,
-                            &mut statistics,
-                            key_only,
-                        )
-                        .map_err(Error::from)
-                    } else {
-                        Self::raw_scan(
-                            &snapshot,
-                            &cf,
-                            &Key::from_encoded(key),
-                            end_key,
-                            limit,
-                            &mut statistics,
-                            key_only,
-                        )
-                        .map_err(Error::from)
-                    };
+                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                            tls_collect_key_reads(
+                                CMD,
+                                statistics.write.flow_stats.read_keys as usize,
+                            );
+                            tls_collect_scan_count(CMD, &statistics);
+                            future::result(result)
+                        })
+                    })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
+        });
 
-                    tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                    tls_collect_key_reads(CMD, statistics.write.flow_stats.read_keys as usize);
-                    tls_collect_scan_count(CMD, &statistics);
-
-                    timer.observe_duration();
-                    future::result(result)
-                })
-            });
-            future::result(res)
-                .map_err(|_| Error::SchedTooBusy)
-                .flatten()
-        })
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Check the given raw kv CF name. Return the CF name, or `Err` if given CF name is invalid.
@@ -1479,79 +1656,83 @@ impl<E: Engine> Storage<E> {
         reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_scan";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC_STATIC
-            .raw_batch_scan
-            .start_coarse_timer();
+        let res = self.read_pool.spawn_handle(priority, move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
-        let readpool = self.read_pool.clone();
-
-        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = readpool.spawn_handle(priority, move || {
-                tls_processing_read_observe_duration(CMD, || {
-                    let mut statistics = Statistics::default();
-                    if !Self::check_key_ranges(&ranges, reverse) {
-                        return future::result(Err(box_err!("Invalid KeyRanges")));
-                    };
-                    let mut result = Vec::new();
-                    let ranges_len = ranges.len();
-                    for i in 0..ranges_len {
-                        let start_key = Key::from_encoded(ranges[i].take_start_key());
-                        let end_key = ranges[i].take_end_key();
-                        let end_key = if end_key.is_empty() {
-                            if i + 1 == ranges_len {
-                                None
-                            } else {
-                                Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
+            with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let mut statistics = Statistics::default();
+                            if !Self::check_key_ranges(&ranges, reverse) {
+                                return future::result(Err(box_err!("Invalid KeyRanges")));
+                            };
+                            let mut result = Vec::new();
+                            let ranges_len = ranges.len();
+                            for i in 0..ranges_len {
+                                let start_key = Key::from_encoded(ranges[i].take_start_key());
+                                let end_key = ranges[i].take_end_key();
+                                let end_key = if end_key.is_empty() {
+                                    if i + 1 == ranges_len {
+                                        None
+                                    } else {
+                                        Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
+                                    }
+                                } else {
+                                    Some(Key::from_encoded(end_key))
+                                };
+                                let pairs = if reverse {
+                                    match Self::reverse_raw_scan(
+                                        &snapshot,
+                                        &cf,
+                                        &start_key,
+                                        end_key,
+                                        each_limit,
+                                        &mut statistics,
+                                        key_only,
+                                    ) {
+                                        Ok(x) => x,
+                                        Err(e) => return future::err(e),
+                                    }
+                                } else {
+                                    match Self::raw_scan(
+                                        &snapshot,
+                                        &cf,
+                                        &start_key,
+                                        end_key,
+                                        each_limit,
+                                        &mut statistics,
+                                        key_only,
+                                    ) {
+                                        Ok(x) => x,
+                                        Err(e) => return future::err(e),
+                                    }
+                                };
+                                result.extend(pairs.into_iter());
                             }
-                        } else {
-                            Some(Key::from_encoded(end_key))
-                        };
-                        let pairs = if reverse {
-                            match Self::reverse_raw_scan(
-                                &snapshot,
-                                &cf,
-                                &start_key,
-                                end_key,
-                                each_limit,
-                                &mut statistics,
-                                key_only,
-                            ) {
-                                Ok(x) => x,
-                                Err(e) => return future::err(e),
-                            }
-                        } else {
-                            match Self::raw_scan(
-                                &snapshot,
-                                &cf,
-                                &start_key,
-                                end_key,
-                                each_limit,
-                                &mut statistics,
-                                key_only,
-                            ) {
-                                Ok(x) => x,
-                                Err(e) => return future::err(e),
-                            }
-                        };
-                        result.extend(pairs.into_iter());
-                    }
 
-                    tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                    tls_collect_key_reads(CMD, statistics.write.flow_stats.read_keys as usize);
+                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                            tls_collect_key_reads(
+                                CMD,
+                                statistics.write.flow_stats.read_keys as usize,
+                            );
+                            tls_collect_scan_count(CMD, &statistics);
+                            future::ok(result)
+                        })
+                    })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
+        });
 
-                    tls_collect_scan_count(CMD, &statistics);
-
-                    timer.observe_duration();
-                    future::ok(result)
-                })
-            });
-            future::result(res)
-                .map_err(|_| Error::SchedTooBusy)
-                .flatten()
-        })
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Get MVCC info of a transactional key.
@@ -1627,6 +1808,9 @@ quick_error! {
         InvalidCf (cf_name: String) {
             description("invalid cf name")
             display("invalid cf name: {}", cf_name)
+        }
+        PessimisticTxnNotEnabled {
+            description("pessimistic transaction is not enabled")
         }
     }
 }
@@ -2397,7 +2581,7 @@ mod tests {
         storage
             .async_pause(
                 Context::new(),
-                vec![],
+                vec![Key::from_raw(b"y")],
                 1000,
                 expect_ok_callback(tx.clone(), 3),
             )
@@ -2471,6 +2655,7 @@ mod tests {
                 Context::new(),
                 Key::from_raw(b"x"),
                 Key::from_raw(b"z"),
+                false,
                 expect_ok_callback(tx.clone(), 5),
             )
             .unwrap();
@@ -2497,6 +2682,7 @@ mod tests {
                 Context::new(),
                 Key::from_raw(b""),
                 Key::from_raw(&[255]),
+                false,
                 expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();
@@ -3044,9 +3230,10 @@ mod tests {
         ]
         .into_iter()
         .map(|(k, v)| Some((k, v)));
+        let engine = storage.get_engine();
         expect_multi_values(
             results.clone().collect(),
-            <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
+            <Storage<RocksEngine>>::async_snapshot(&engine, &ctx)
                 .and_then(move |snapshot| {
                     <Storage<RocksEngine>>::raw_scan(
                         &snapshot,
@@ -3062,7 +3249,7 @@ mod tests {
         );
         expect_multi_values(
             results.rev().collect(),
-            <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
+            <Storage<RocksEngine>>::async_snapshot(&engine, &ctx)
                 .and_then(move |snapshot| {
                     <Storage<RocksEngine>>::reverse_raw_scan(
                         &snapshot,
@@ -3752,5 +3939,119 @@ mod tests {
                 ts += 10;
             }
         }
+    }
+
+    #[test]
+    fn test_resolve_lock_lite() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                99,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Rollback key 'b' and key 'c' and left key 'a' still locked.
+        let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                99,
+                0,
+                resolve_keys,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Check lock for key 'a'.
+        let lock_a = {
+            let mut lock = LockInfo::new();
+            lock.set_primary_lock(b"c".to_vec());
+            lock.set_lock_version(99);
+            lock.set_key(b"a".to_vec());
+            lock
+        };
+        storage
+            .async_scan_locks(
+                Context::new(),
+                99,
+                vec![],
+                0,
+                expect_value_callback(tx.clone(), 0, vec![lock_a]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Resolve lock for key 'a'.
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                99,
+                0,
+                vec![Key::from_raw(b"a")],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                101,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Commit key 'b' and key 'c' and left key 'a' still locked.
+        let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                101,
+                102,
+                resolve_keys,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Check lock for key 'a'.
+        let lock_a = {
+            let mut lock = LockInfo::new();
+            lock.set_primary_lock(b"c".to_vec());
+            lock.set_lock_version(101);
+            lock.set_key(b"a".to_vec());
+            lock
+        };
+        storage
+            .async_scan_locks(
+                Context::new(),
+                101,
+                vec![],
+                0,
+                expect_value_callback(tx.clone(), 0, vec![lock_a]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
     }
 }

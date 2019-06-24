@@ -36,28 +36,42 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        KeyIsLocked {key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64} {
+        KeyIsLocked { key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64, txn_size: u64 } {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {}-{}@{} ttl {}",
+            display("key is locked (backoff or cleanup) {:?}-{:?}@{} ttl {} txn_size {}",
                         escape(key),
                         escape(primary),
                         ts,
-                        ttl)
+                        ttl,
+                        txn_size)
         }
-        BadFormatLock {description("bad format lock data")}
-        BadFormatWrite {description("bad format write data")}
-        Committed {commit_ts: u64} {
+        BadFormatLock { description("bad format lock data") }
+        BadFormatWrite { description("bad format write data") }
+        Committed { commit_ts: u64 } {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }
-        TxnLockNotFound {start_ts: u64, commit_ts: u64, key: Vec<u8> } {
+        PessimisticLockRollbacked { start_ts: u64, key: Vec<u8> } {
+            description("pessimistic lock already rollbacked")
+            display("pessimistic lock already rollbacked, start_ts:{}, key:{:?}", start_ts, escape(key))
+        }
+        TxnLockNotFound { start_ts: u64, commit_ts: u64, key: Vec<u8> } {
             description("txn lock not found")
             display("txn lock not found {}-{} key:{:?}", start_ts, commit_ts, escape(key))
+        }
+        LockTypeNotMatch { start_ts: u64, key: Vec<u8>, pessimistic: bool } {
+            description("lock type not match")
+            display("lock type not match, start_ts:{}, key:{:?}, pessimistic:{}", start_ts, escape(key), pessimistic)
         }
         WriteConflict { start_ts: u64, conflict_start_ts: u64, conflict_commit_ts: u64, key: Vec<u8>, primary: Vec<u8> } {
             description("write conflict")
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
-             start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
+                    start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
+        }
+        Deadlock { start_ts: u64, lock_ts: u64, lock_key: Vec<u8>, deadlock_key_hash: u64 } {
+            description("deadlock")
+            display("deadlock occurs between txn:{} and txn:{}, lock_key:{:?}, deadlock_key_hash:{}",
+                    start_ts, lock_ts, escape(lock_key), deadlock_key_hash)
         }
         AlreadyExist { key: Vec<u8> } {
             description("already exists")
@@ -67,7 +81,11 @@ quick_error! {
             description("write cf corresponding value not found in default cf")
             display("default not found: key:{:?}, write:{:?}, maybe read truncated/dropped table data?", escape(key), write)
         }
-        KeyVersion {description("bad format key(version)")}
+        KeyVersion { description("bad format key(version)") }
+        PessimisticLockNotFound { start_ts: u64, key: Vec<u8> } {
+            description("pessimistic lock not found when prewrite")
+            display("pessimistic lock not found, start_ts:{}, key:{:?}", start_ts, escape(key))
+        }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -87,11 +105,13 @@ impl Error {
                 ref primary,
                 ts,
                 ttl,
+                txn_size,
             } => Some(Error::KeyIsLocked {
                 key: key.clone(),
                 primary: primary.clone(),
                 ts,
                 ttl,
+                txn_size,
             }),
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),
@@ -103,6 +123,15 @@ impl Error {
                 start_ts,
                 commit_ts,
                 key: key.to_owned(),
+            }),
+            Error::LockTypeNotMatch {
+                start_ts,
+                ref key,
+                pessimistic,
+            } => Some(Error::LockTypeNotMatch {
+                start_ts,
+                key: key.to_owned(),
+                pessimistic,
             }),
             Error::WriteConflict {
                 start_ts,
@@ -117,6 +146,17 @@ impl Error {
                 key: key.to_owned(),
                 primary: primary.to_owned(),
             }),
+            Error::Deadlock {
+                start_ts,
+                lock_ts,
+                ref lock_key,
+                deadlock_key_hash,
+            } => Some(Error::Deadlock {
+                start_ts,
+                lock_ts,
+                lock_key: lock_key.to_owned(),
+                deadlock_key_hash,
+            }),
             Error::AlreadyExist { ref key } => Some(Error::AlreadyExist { key: key.clone() }),
             Error::DefaultNotFound { ref key, ref write } => Some(Error::DefaultNotFound {
                 key: key.to_owned(),
@@ -124,6 +164,18 @@ impl Error {
             }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed { commit_ts }),
+            Error::PessimisticLockRollbacked { start_ts, ref key } => {
+                Some(Error::PessimisticLockRollbacked {
+                    start_ts,
+                    key: key.to_owned(),
+                })
+            }
+            Error::PessimisticLockNotFound { start_ts, ref key } => {
+                Some(Error::PessimisticLockNotFound {
+                    start_ts,
+                    key: key.to_owned(),
+                })
+            }
             Error::Io(_) | Error::Other(_) => None,
         }
     }
@@ -224,30 +276,143 @@ pub mod tests {
         Ok(())
     }
 
-    pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
+    fn must_prewrite_put_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        txn.prewrite(
-            Mutation::Put((Key::from_raw(key), value.to_vec())),
-            pk,
-            &Options::default(),
-        )
-        .unwrap();
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+        if for_update_ts == 0 {
+            txn.prewrite(mutation, pk, &options).unwrap();
+        } else {
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+                .unwrap();
+        }
         write(engine, &ctx, txn.into_modifies());
     }
 
-    pub fn must_prewrite_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+    pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
+        must_prewrite_put_impl(engine, key, value, pk, ts, 0, false);
+    }
+
+    pub fn must_pessimistic_prewrite_put<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            ts,
+            for_update_ts,
+            is_pessimistic_lock,
+        );
+    }
+
+    fn must_prewrite_put_err_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        txn.prewrite(
-            Mutation::Delete(Key::from_raw(key)),
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+        if for_update_ts == 0 {
+            txn.prewrite(mutation, pk, &options).unwrap_err();
+        } else {
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+                .unwrap_err();
+        }
+    }
+
+    pub fn must_prewrite_put_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+    ) {
+        must_prewrite_put_err_impl(engine, key, value, pk, ts, 0, false);
+    }
+
+    pub fn must_pessimistic_prewrite_put_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
+        must_prewrite_put_err_impl(
+            engine,
+            key,
+            value,
             pk,
-            &Options::default(),
-        )
-        .unwrap();
+            ts,
+            for_update_ts,
+            is_pessimistic_lock,
+        );
+    }
+
+    fn must_prewrite_delete_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        let mutation = Mutation::Delete(Key::from_raw(key));
+        if for_update_ts == 0 {
+            txn.prewrite(mutation, pk, &options).unwrap();
+        } else {
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+                .unwrap();
+        }
         engine.write(&ctx, txn.into_modifies()).unwrap();
+    }
+
+    pub fn must_prewrite_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+        must_prewrite_delete_impl(engine, key, pk, ts, 0, false);
+    }
+
+    pub fn must_pessimistic_prewrite_delete<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
+        must_prewrite_delete_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
     pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
@@ -266,6 +431,56 @@ pub mod tests {
         assert!(txn
             .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
             .is_err());
+    }
+
+    pub fn must_acquire_pessimistic_lock<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
+            .unwrap();
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine.write(&ctx, modifies).unwrap();
+        }
+    }
+
+    pub fn must_acquire_pessimistic_lock_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
+            .unwrap_err();
+    }
+
+    pub fn must_pessimistic_rollback<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.pessimistic_rollback(Key::from_raw(key), for_update_ts)
+            .unwrap();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     pub fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -320,6 +535,21 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
+        assert_ne!(lock.lock_type, LockType::Pessimistic);
+    }
+
+    pub fn must_pessimistic_locked<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(lock.ts, start_ts);
+        assert_eq!(lock.for_update_ts, for_update_ts);
+        assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 
     pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {

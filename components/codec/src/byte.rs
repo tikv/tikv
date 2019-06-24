@@ -1,18 +1,53 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{Error, Result};
+use std::intrinsics::unlikely;
+use std::io::Read;
 
-/// Memory-comparable encoding and decoding utility for bytes.
-pub struct MemComparableByteCodec;
+use crate::buffer::BufferReader;
+use crate::number::{self, NumberCodec, NumberDecoder, NumberEncoder};
+use crate::{Error, Result};
 
 const MEMCMP_GROUP_SIZE: usize = 8;
 const MEMCMP_PAD_BYTE: u8 = 0;
+
+/// Memory-comparable encoding and decoding utility for bytes.
+pub struct MemComparableByteCodec;
 
 impl MemComparableByteCodec {
     /// Calculates the length of the value after encoding.
     #[inline]
     pub fn encoded_len(src_len: usize) -> usize {
         (src_len / MEMCMP_GROUP_SIZE + 1) * (MEMCMP_GROUP_SIZE + 1)
+    }
+
+    /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
+    /// the memory-comparable format. If the buffer is not complete, the length of buffer will be
+    /// returned.
+    #[inline]
+    fn get_first_encoded_len_internal<T: MemComparableCodecHelper>(encoded: &[u8]) -> usize {
+        let mut idx = MEMCMP_GROUP_SIZE;
+        loop {
+            if unsafe { unlikely(encoded.len() < idx + 1) } {
+                return encoded.len();
+            }
+            let marker = encoded[idx];
+            if unsafe { unlikely(T::parse_padding_size(marker) > 0) } {
+                return idx + 1;
+            }
+            idx += MEMCMP_GROUP_SIZE + 1
+        }
+    }
+
+    /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
+    /// the ascending memory-comparable format.
+    pub fn get_first_encoded_len(encoded: &[u8]) -> usize {
+        Self::get_first_encoded_len_internal::<AscendingMemComparableCodecHelper>(encoded)
+    }
+
+    /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
+    /// the descending memory-comparable format.
+    pub fn get_first_encoded_len_desc(encoded: &[u8]) -> usize {
+        Self::get_first_encoded_len_internal::<DescendingMemComparableCodecHelper>(encoded)
     }
 
     /// Encodes all bytes in the `src` into `dest` in ascending memory-comparable format.
@@ -114,7 +149,7 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `src` is drained while expecting more data.
+    /// Returns `Error::Io` if `src` is drained while expecting more data.
     ///
     /// Returns `Error::BadPadding` if padding in `src` is incorrect.
     ///
@@ -149,7 +184,7 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `src` is drained while expecting more data.
+    /// Returns `Error::Io` if `src` is drained while expecting more data.
     ///
     /// Returns `Error::BadPadding` if padding in `src` is incorrect.
     ///
@@ -179,7 +214,7 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `buffer` is drained while expecting more data.
+    /// Returns `Error::Io` if `buffer` is drained while expecting more data.
     ///
     /// Returns `Error::BadPadding` if padding in `buffer` is incorrect.
     ///
@@ -207,7 +242,7 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `buffer` is drained while expecting more data.
+    /// Returns `Error::Io` if `buffer` is drained while expecting more data.
     ///
     /// Returns `Error::BadPadding` if padding in `buffer` is incorrect.
     ///
@@ -256,7 +291,7 @@ impl MemComparableByteCodec {
             loop {
                 let src_ptr_next = src_ptr.add(MEMCMP_GROUP_SIZE + 1);
                 if std::intrinsics::unlikely(src_ptr_next > src_ptr_end) {
-                    return Err(Error::UnexpectedEOF);
+                    return Err(Error::eof());
                 }
 
                 // Copy `MEMCMP_GROUP_SIZE` bytes any way. However we will truncate the returned
@@ -271,7 +306,7 @@ impl MemComparableByteCodec {
                 if std::intrinsics::unlikely(padding_size > 0) {
                     // First check padding size.
                     if std::intrinsics::unlikely(padding_size > MEMCMP_GROUP_SIZE) {
-                        return Err(Error::BadPadding);
+                        return Err(Error::bad_padding());
                     }
 
                     // Then check padding content. Use `libc::memcmp` to compare two memory blocks
@@ -285,7 +320,7 @@ impl MemComparableByteCodec {
                         padding_size,
                     );
                     if std::intrinsics::unlikely(cmp_result != 0) {
-                        return Err(Error::BadPadding);
+                        return Err(Error::bad_padding());
                     }
 
                     let read_bytes = src_ptr.offset_from(src_ptr_untouched) as usize;
@@ -341,12 +376,332 @@ impl MemComparableCodecHelper for DescendingMemComparableCodecHelper {
     }
 }
 
+pub trait MemComparableByteEncoder: NumberEncoder {
+    /// Writes all bytes in ascending memory-comparable format.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size is not enough.
+    fn write_bytes(&mut self, bs: &[u8]) -> Result<()> {
+        let len = MemComparableByteCodec::encoded_len(bs.len());
+        let buf = unsafe { self.bytes_mut(len) };
+        if unsafe { unlikely(buf.len() < len) } {
+            return Err(Error::eof());
+        }
+        MemComparableByteCodec::encode_all(bs, buf);
+        unsafe {
+            self.advance_mut(len);
+        }
+        Ok(())
+    }
+
+    /// Writes all bytes in descending memory-comparable format.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size is not enough.
+    fn write_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
+        let len = MemComparableByteCodec::encoded_len(bs.len());
+        let buf = unsafe { self.bytes_mut(len) };
+        if unsafe { unlikely(buf.len() < len) } {
+            return Err(Error::eof());
+        }
+        MemComparableByteCodec::encode_all_desc(bs, buf);
+        unsafe {
+            self.advance_mut(len);
+        }
+        Ok(())
+    }
+}
+
+impl<T: NumberEncoder> MemComparableByteEncoder for T {}
+
+pub trait MemComparableByteDecoder: BufferReader {
+    fn read_bytes(&mut self) -> Result<Vec<u8>> {
+        let mut buf = vec![0; self.bytes().len()];
+        let (read, written) = MemComparableByteCodec::try_decode_first(self.bytes(), &mut buf)?;
+        self.advance(read);
+        buf.truncate(written);
+        Ok(buf)
+    }
+}
+
+impl<T: BufferReader> MemComparableByteDecoder for T {}
+
+pub struct CompactByteCodec;
+
+impl CompactByteCodec {
+    /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
+    /// the compact format. If the buffer is not complete, the length of buffer will be returned.
+    pub fn get_first_encoded_len(encoded: &[u8]) -> usize {
+        let result = NumberCodec::try_decode_var_i64(encoded);
+        match result {
+            Err(_) => encoded.len(),
+            Ok((value, decoded_n)) => {
+                let r = value as usize + decoded_n;
+                r.min(encoded.len())
+            }
+        }
+    }
+}
+
+pub trait CompactByteEncoder {
+    /// Joins bytes with its length into a byte slice.
+    /// It is more efficient in both space and time compared to `encode_bytes`.
+    /// Note that the encoded result is not memory-comparable.
+    fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()>;
+}
+
+impl<T: NumberEncoder> CompactByteEncoder for T {
+    #[inline]
+    fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
+        self.write_var_i64(data.len() as i64)?;
+        self.write_all_bytes(data)
+    }
+}
+
+impl CompactByteEncoder for std::fs::File {
+    #[inline]
+    fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
+        use std::io::Write;
+        let mut buf = [0; number::MAX_VARINT64_LENGTH];
+        let written = NumberCodec::encode_var_i64(&mut buf, data.len() as i64);
+        self.write_all(&buf[..written])?;
+        self.write_all(data)?;
+        Ok(())
+    }
+}
+
+pub trait CompactByteDecoder {
+    /// Decodes bytes which are encoded by `write_compact_bytes` before.
+    fn read_compact_bytes(&mut self) -> Result<Vec<u8>>;
+}
+
+impl<T: NumberDecoder> CompactByteDecoder for T {
+    fn read_compact_bytes(&mut self) -> Result<Vec<u8>> {
+        let vn = self.read_var_i64()? as usize;
+        let data = self.bytes();
+        if unsafe { unlikely(data.len() < vn) } {
+            return Err(Error::eof());
+        }
+        let bs = data[0..vn].to_vec();
+        self.advance(vn);
+        Ok(bs)
+    }
+}
+
+impl<T: Read> CompactByteDecoder for std::io::BufReader<T> {
+    fn read_compact_bytes(&mut self) -> Result<Vec<u8>> {
+        let mut buf = [0; number::MAX_VARINT64_LENGTH];
+        let mut end = buf.len();
+        for i in 0..number::MAX_VARINT64_LENGTH {
+            self.read_exact(&mut buf[i..=i])?;
+            if buf[i] < 0x80 {
+                end = i;
+                break;
+            }
+        }
+        let (vn, _) = NumberCodec::try_decode_var_i64(&buf[..=end])?;
+        let mut data = vec![0; vn as usize];
+        self.read_exact(&mut data)?;
+        Ok(data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand;
 
-    use super::MemComparableByteCodec;
+    use super::*;
+    use crate::number;
 
+    #[test]
+    fn test_mem_cmp_encoded_len() {
+        let asc_cases = vec![
+            (0, vec![]),
+            (1, vec![1]),
+            (2, vec![1, 2]),
+            (3, vec![1, 2, 3]),
+            (7, vec![1, 2, 3, 4, 5, 6, 7]),
+            (8, vec![1, 2, 3, 4, 5, 6, 7, 0]),
+            (9, vec![1, 2, 3, 4, 5, 6, 7, 255, 1]),
+            (9, vec![1, 2, 3, 4, 5, 6, 7, 0, 255]),
+            (9, vec![1, 2, 3, 4, 5, 6, 7, 0, 254]),
+            (9, vec![1, 2, 3, 4, 5, 6, 7, 0, 254, 0, 0, 0]),
+            (12, vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0]),
+            (15, vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 1, 2, 3]),
+            (
+                18,
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 1, 2, 3, 0, 0, 251],
+            ),
+            (
+                18,
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 1, 2, 3, 0, 0, 0],
+            ),
+            (
+                18,
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+            ),
+            (
+                18,
+                vec![
+                    0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247, 0, 0,
+                ],
+            ),
+        ];
+        for (expect_len, data) in asc_cases {
+            assert_eq!(
+                expect_len,
+                MemComparableByteCodec::get_first_encoded_len(&data)
+            );
+        }
+
+        let desc_cases = vec![
+            (0, vec![]),
+            (1, vec![1]),
+            (2, vec![1, 2]),
+            (3, vec![1, 2, 3]),
+            (7, vec![1, 2, 3, 4, 5, 6, 7]),
+            (8, vec![1, 2, 3, 4, 5, 6, 7, 0]),
+            (9, vec![1, 2, 3, 4, 5, 6, 7, 255, 1]),
+            (9, vec![1, 2, 3, 4, 5, 6, 7, 0, 255]),
+            (9, vec![1, 2, 3, 4, 5, 6, 7, 0, 254]),
+            (9, vec![254, 253, 252, 251, 250, 249, 248, 255, 1]),
+            (9, vec![254, 253, 252, 251, 250, 249, 248, 255, 1, 1, 1, 1]),
+            (12, vec![1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1]),
+            (15, vec![1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1]),
+            (
+                18,
+                vec![1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 252],
+            ),
+            (
+                18,
+                vec![1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+            ),
+            (
+                18,
+                vec![1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 8],
+            ),
+            (
+                18,
+                vec![
+                    1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 8, 1, 2, 3,
+                ],
+            ),
+        ];
+        for (expect_len, data) in desc_cases {
+            assert_eq!(
+                expect_len,
+                MemComparableByteCodec::get_first_encoded_len_desc(&data)
+            );
+        }
+    }
+
+    #[test]
+    fn test_read_bytes() {
+        let cases: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (vec![], vec![0, 0, 0, 0, 0, 0, 0, 0, 247]),
+            (vec![0], vec![0, 0, 0, 0, 0, 0, 0, 0, 248]),
+            (vec![1, 2, 3], vec![1, 2, 3, 0, 0, 0, 0, 0, 250]),
+            (vec![1, 2, 3, 0], vec![1, 2, 3, 0, 0, 0, 0, 0, 251]),
+            (vec![1, 2, 3, 4, 5, 6, 7], vec![1, 2, 3, 4, 5, 6, 7, 0, 254]),
+            (
+                vec![0, 0, 0, 0, 0, 0, 0, 0],
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+            ),
+            (
+                vec![1, 2, 3, 4, 5, 6, 7, 8],
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+            ),
+            (
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 9, 0, 0, 0, 0, 0, 0, 0, 248],
+            ),
+        ];
+        for (src, encoded) in cases {
+            assert_eq!(encoded.as_slice().read_bytes().unwrap(), src);
+        }
+    }
+
+    #[test]
+    fn test_encode_compact_byte_len() {
+        let cases = vec![
+            (1, vec![0]),
+            (3, vec![10, 104, 101]),
+            (6, vec![10, 104, 101, 108, 108, 111]),
+            (6, vec![10, 104, 101, 108, 108, 111, 2]),
+            (6, vec![10, 104, 101, 108, 108, 111, 2, 3]),
+            (6, vec![12, 228, 184, 150, 231, 149]),
+            (7, vec![12, 228, 184, 150, 231, 149, 140]),
+            (7, vec![12, 228, 184, 150, 231, 149, 140, 2]),
+            (7, vec![12, 228, 184, 150, 231, 149, 140, 2, 3]),
+        ];
+        for (expect_len, data) in cases {
+            assert_eq!(expect_len, CompactByteCodec::get_first_encoded_len(&data));
+        }
+    }
+
+    #[test]
+    fn test_compact_codec() {
+        use super::{CompactByteDecoder, CompactByteEncoder};
+        let tests = vec!["", "hello", "世界"];
+        for &s in &tests {
+            let max_size = s.len() + number::MAX_VARINT64_LENGTH;
+            let mut buf = Vec::with_capacity(max_size);
+            buf.write_compact_bytes(s.as_bytes()).unwrap();
+            assert!(buf.len() <= max_size);
+            let mut input = buf.as_slice();
+            let decoded = input.read_compact_bytes().unwrap();
+            assert!(input.is_empty());
+            assert_eq!(decoded, s.as_bytes());
+        }
+    }
+
+    #[test]
+    fn test_write_compact_bytes_for_file() {
+        use std::{env, fs, fs::File};
+        let cases = vec![
+            ("", vec![0]),
+            ("hello", vec![10, 104, 101, 108, 108, 111]),
+            ("世界", vec![12, 228, 184, 150, 231, 149, 140]),
+        ];
+        for (s, exp) in cases {
+            let mut path = env::temp_dir();
+            path.push("write-compact-codec-file");
+            {
+                let mut f = File::create(&path).unwrap();
+                f.write_compact_bytes(s.as_bytes()).unwrap();
+            }
+            assert_eq!(fs::read(&path).unwrap(), exp);
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_read_compact_bytes_for_file() {
+        use std::{env, fs, fs::File, io::BufReader};
+        let cases = vec![
+            ("", vec![0]),
+            ("hello", vec![10, 104, 101, 108, 108, 111]),
+            ("世界", vec![12, 228, 184, 150, 231, 149, 140]),
+            (
+                "hello",
+                vec![
+                    10, 104, 101, 108, 108, 111, 12, 228, 184, 150, 231, 149, 140,
+                ],
+            ),
+        ];
+        for (exp, encoded) in cases {
+            let mut path = env::temp_dir();
+            path.push("read-compact-codec-file");
+            fs::write(&path, &encoded).unwrap();
+            let f = File::open(&path).unwrap();
+            let mut rdr = BufReader::new(f);
+            let decoded = rdr.read_compact_bytes().unwrap();
+            assert_eq!(decoded, exp.as_bytes());
+            fs::remove_file(path).unwrap();
+        }
+    }
     #[test]
     fn test_memcmp_flip_bytes() {
         for container_len in 0..50 {
@@ -784,7 +1139,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::test;
+    use crate::Error;
 
     /// A naive implementation of encoding in mem-comparable format.
     /// It does not process non zero-padding groups separately.
@@ -846,26 +1201,21 @@ mod benches {
                         &key[index..index + ENC_GROUP_SIZE],
                         desc,
                         &mut buf,
-                    ))
-                    .map_err(|_| super::Error::BufferTooSmall)?;
+                    ))?;
                 } else {
                     pad = ENC_GROUP_SIZE - remain;
-                    self.write_all(adjust_bytes_order(&key[index..], desc, &mut buf))
-                        .map_err(|_| super::Error::BufferTooSmall)?;
+                    self.write_all(adjust_bytes_order(&key[index..], desc, &mut buf))?;
                     if desc {
-                        self.write_all(&ENC_DESC_PADDING[..pad])
-                            .map_err(|_| super::Error::BufferTooSmall)?;
+                        self.write_all(&ENC_DESC_PADDING[..pad])?;
                     } else {
-                        self.write_all(&ENC_ASC_PADDING[..pad])
-                            .map_err(|_| super::Error::BufferTooSmall)?;
+                        self.write_all(&ENC_ASC_PADDING[..pad])?;
                     }
                 }
                 self.write_all(adjust_bytes_order(
                     &[ENC_MARKER - (pad as u8)],
                     desc,
                     &mut buf,
-                ))
-                .map_err(|_| super::Error::BufferTooSmall)?;
+                ))?;
                 index += ENC_GROUP_SIZE;
             }
             Ok(())
@@ -900,7 +1250,7 @@ mod benches {
             let chunk = if next_offset <= data.len() {
                 &data[offset..next_offset]
             } else {
-                return Err(super::Error::UnexpectedEOF);
+                return Err(Error::eof());
             };
             offset = next_offset;
             // the last byte in decode unit is for marker which indicates pad size
@@ -916,7 +1266,7 @@ mod benches {
                 continue;
             }
             if pad_size > ENC_GROUP_SIZE {
-                return Err(super::Error::BadPadding);
+                return Err(Error::bad_padding());
             }
             // if has padding, split the padding pattern and push rest bytes
             let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
@@ -924,7 +1274,7 @@ mod benches {
             let pad_byte = if desc { !0 } else { 0 };
             // check the padding pattern whether validate or not
             if padding.iter().any(|x| *x != pad_byte) {
-                return Err(super::Error::BadPadding);
+                return Err(Error::bad_padding());
             }
 
             if desc {
@@ -945,7 +1295,7 @@ mod benches {
         loop {
             let marker_offset = read_offset + ENC_GROUP_SIZE;
             if marker_offset >= data.len() {
-                return Err(super::Error::UnexpectedEOF);
+                return Err(Error::eof());
             };
 
             unsafe {
@@ -972,7 +1322,7 @@ mod benches {
 
             if pad_size > 0 {
                 if pad_size > ENC_GROUP_SIZE {
-                    return Err(super::Error::BadPadding);
+                    return Err(Error::bad_padding());
                 }
 
                 // check the padding pattern whether validate or not
@@ -982,7 +1332,7 @@ mod benches {
                     &ENC_ASC_PADDING[..pad_size]
                 };
                 if &data[write_offset - pad_size..write_offset] != padding_slice {
-                    return Err(super::Error::BadPadding);
+                    return Err(Error::bad_padding());
                 }
                 unsafe {
                     data.set_len(write_offset - pad_size);

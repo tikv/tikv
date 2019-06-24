@@ -11,7 +11,7 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::Scanner;
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::Result;
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -40,11 +40,7 @@ pub trait ScanExecutorImpl: Send {
 
 /// A shared executor implementation for both table scan and index scan. Implementation differences
 /// between table scan and index scan are further given via `ScanExecutorImpl`.
-pub struct ScanExecutor<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy>
-{
-    /// The execution summary collector of this executor.
-    summary_collector: C,
-
+pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
     /// The internal scanning implementation.
     imp: I,
 
@@ -70,11 +66,8 @@ pub struct ScanExecutor<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, 
     is_ended: bool,
 }
 
-impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy>
-    ScanExecutor<C, S, I, P>
-{
+impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
     pub fn new(
-        summary_collector: C,
         imp: I,
         store: S,
         desc: bool,
@@ -86,7 +79,6 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
             key_ranges.reverse();
         }
         Ok(Self {
-            summary_collector,
             imp,
             store,
             desc,
@@ -201,14 +193,14 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     use std::convert::TryFrom;
 
     for column in columns_info {
-        EvalType::try_from(column.tp()).map_err(|e| Error::Other(box_err!(e)))?;
+        if column.has_pk_handle() {
+            box_try!(EvalType::try_from(column.tp()));
+        }
     }
     Ok(())
 }
 
-impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor
-    for ScanExecutor<C, S, I, P>
-{
+impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanExecutor<S, I, P> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
@@ -219,12 +211,11 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         assert!(!self.is_ended);
         assert!(scan_rows > 0);
 
-        let timer = self.summary_collector.on_start_batch();
+        let mut logical_columns = self.imp.build_column_vec(scan_rows);
+        let is_drained = self.fill_column_vec(scan_rows, &mut logical_columns);
 
-        let mut data = self.imp.build_column_vec(scan_rows);
-        let is_drained = self.fill_column_vec(scan_rows, &mut data);
-
-        data.assert_columns_equal_length();
+        logical_columns.assert_columns_equal_length();
+        let logical_rows = (0..logical_columns.rows_len()).collect();
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
@@ -237,11 +228,9 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
             Ok(false) => {}
         };
 
-        self.summary_collector
-            .on_finish_batch(timer, data.rows_len());
-
         BatchExecuteResult {
-            data,
+            physical_columns: logical_columns,
+            logical_rows,
             is_drained,
             warnings: self.imp.mut_context().take_warnings(),
         }
@@ -255,7 +244,5 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         if let Some(scanner) = &mut self.scanner {
             scanner.collect_statistics_into(&mut destination.cf_stats);
         }
-        self.summary_collector
-            .collect_into(&mut destination.summary_per_executor);
     }
 }

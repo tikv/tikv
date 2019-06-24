@@ -4,7 +4,7 @@ use std::u64;
 
 use crate::rocks;
 use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use crate::{CF_LOCK, CF_RAFT};
+use crate::CF_LOCK;
 
 use super::{Error, Result};
 use super::{IterOption, Iterable};
@@ -59,9 +59,7 @@ pub fn delete_all_in_range_cf(
 ) -> Result<()> {
     let handle = rocks::util::get_cf_handle(db, cf)?;
     let wb = WriteBatch::new();
-    // Since CF_RAFT and CF_LOCK is usually small, so using
-    // traditional way to cleanup.
-    if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
+    if use_delete_range && cf != CF_LOCK {
         wb.delete_range_cf(handle, start_key, end_key)?;
     } else {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
@@ -82,6 +80,7 @@ pub fn delete_all_in_range_cf(
                 break;
             }
         }
+        it.status()?;
     }
 
     if wb.count() > 0 {

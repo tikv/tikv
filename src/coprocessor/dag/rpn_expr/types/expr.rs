@@ -2,7 +2,7 @@
 
 use tipb::expression::FieldType;
 
-use super::super::function::RpnFunction;
+use super::super::function::RpnFnMeta;
 use crate::coprocessor::codec::data_type::ScalarValue;
 
 /// A type for each node in the RPN expression list.
@@ -10,7 +10,7 @@ use crate::coprocessor::codec::data_type::ScalarValue;
 pub enum RpnExpressionNode {
     /// Represents a function call.
     FnCall {
-        func: Box<dyn RpnFunction>,
+        func: RpnFnMeta,
         field_type: FieldType,
     },
 
@@ -37,9 +37,9 @@ impl RpnExpressionNode {
 
     /// Borrows the function instance for `FnCall` variant.
     #[inline]
-    pub fn fn_call_func(&self) -> Option<&dyn RpnFunction> {
+    pub fn fn_call_func(&self) -> Option<RpnFnMeta> {
         match self {
-            RpnExpressionNode::FnCall { ref func, .. } => Some(&*func),
+            RpnExpressionNode::FnCall { func, .. } => Some(*func),
             _ => None,
         }
     }
@@ -92,6 +92,12 @@ impl From<Vec<RpnExpressionNode>> for RpnExpression {
 impl AsRef<[RpnExpressionNode]> for RpnExpression {
     fn as_ref(&self) -> &[RpnExpressionNode] {
         self.0.as_ref()
+    }
+}
+
+impl AsMut<[RpnExpressionNode]> for RpnExpression {
+    fn as_mut(&mut self) -> &mut [RpnExpressionNode] {
+        self.0.as_mut()
     }
 }
 

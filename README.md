@@ -1,13 +1,13 @@
-![tikv_logo](images/tikv-logo.png)
+<img src="images/tikv-logo.png" alt="tikv_logo" width="300"/>
 
 [![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
 [![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
 ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
-TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical Key-Value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
-The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in the academia in recent years, such as the Raft consensus algorithm.
+The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
 
 ![cncf_logo](images/cncf.png)
 
@@ -156,13 +156,29 @@ cargo test $TESTNAME
 
 Our CI systems automatically test all the pull requests, so making sure the full suite passes the test before creating your PR is not strictly required. **All merged PRs must have passed CI test.**
 
+Note that, to reduce compilation time, TiKV builds do not include debugging information by default. The easiest way to enable debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo).
+
+```bash
+RUSTFLAGS=-Cdebuginfo=2 make
+RUSTFLAGS=-Cdebuginfo=2 cargo build
+```
+
+When building with make, cargo will automatically use [pipelined][p] compilation to increase the paralellism of the build. To turn on pipelining while using cargo directly,
+set `CARGO_BUILD_PIPELINING=true`:
+
+```bash
+CARGO_BUILD_PIPELINING=true cargo build
+```
+
+[p]: https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199
+
 ### Getting the rest of the system working
 
 To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd)) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
 
 ### Configuration
 
-Read our configuration guide to learn about various [configuration options](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
+Read our configuration guide to learn about various [configuration options](https://github.com/tikv/tikv/tree/master/docs/op-guide).
 
 ## Contributing
 
@@ -191,7 +207,7 @@ size, disability, ethnicity, sex characteristics, gender identity and expression
 level of experience, education, socio-economic status, nationality, personal
 appearance, race, religion, or sexual identity and orientation.
 
-### Socia Media
+### Social Media
 
 - [Twitter](https://twitter.com/tikvproject)
 - [Blog](https://tikv.org/blog/)

@@ -21,13 +21,13 @@ pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
 impl<S: Snapshot> std::ops::Deref for ScannerBuilder<S> {
     type Target = ScannerConfig<S>;
-    fn deref<'a>(&'a self) -> &'a ScannerConfig<S> {
+    fn deref(&self) -> &ScannerConfig<S> {
         &self.0
     }
 }
 
 impl<S: Snapshot> std::ops::DerefMut for ScannerBuilder<S> {
-    fn deref_mut<'a>(&'a mut self) -> &'a mut ScannerConfig<S> {
+    fn deref_mut(&mut self) -> &mut ScannerConfig<S> {
         &mut self.0
     }
 }
@@ -173,5 +173,98 @@ impl<S: Snapshot> ScannerConfig<S> {
             .scan_mode(self.scan_mode())
             .build()?;
         Ok(cursor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::kv::Engine;
+    use crate::storage::mvcc::tests::*;
+    use crate::storage::mvcc::Error as MvccError;
+    use crate::storage::txn::Error as TxnError;
+    use crate::storage::TestEngineBuilder;
+    use kvproto::kvrpcpb::Context;
+
+    // Collect data from the scanner and assert it equals to `expected`, which is a collection of
+    // (raw_key, value).
+    // `None` value in `expected` means the key is locked.
+    fn check_scan_result<S: Snapshot>(
+        mut scanner: Scanner<S>,
+        expected: &[(Vec<u8>, Option<Vec<u8>>)],
+    ) {
+        let mut scan_result = Vec::new();
+        loop {
+            match scanner.next() {
+                Ok(None) => break,
+                Ok(Some((key, value))) => scan_result.push((key.to_raw().unwrap(), Some(value))),
+                Err(TxnError::Mvcc(MvccError::KeyIsLocked { key, .. })) => {
+                    scan_result.push((key, None))
+                }
+                e => panic!("got error while scanning: {:?}", e),
+            }
+        }
+
+        assert_eq!(scan_result, expected);
+    }
+
+    fn test_scan_with_lock_impl(desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        for i in 0..5 {
+            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 1);
+            must_commit(&engine, &[i], 1, 2);
+            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 10);
+            must_commit(&engine, &[i], 10, 100);
+        }
+
+        must_acquire_pessimistic_lock(&engine, &[1], &[1], 20, 110);
+        must_acquire_pessimistic_lock(&engine, &[2], &[2], 50, 110);
+        must_acquire_pessimistic_lock(&engine, &[3], &[3], 105, 110);
+        must_prewrite_put(&engine, &[4], b"a", &[4], 105);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+
+        let mut expected_result = vec![
+            (vec![0], Some(vec![b'v', 0])),
+            (vec![1], Some(vec![b'v', 1])),
+            (vec![2], Some(vec![b'v', 2])),
+            (vec![3], Some(vec![b'v', 3])),
+            (vec![4], Some(vec![b'v', 4])),
+        ];
+
+        if desc {
+            expected_result = expected_result.into_iter().rev().collect();
+        }
+
+        let scanner = ScannerBuilder::new(snapshot.clone(), 30, desc)
+            .build()
+            .unwrap();
+        check_scan_result(scanner, &expected_result);
+
+        let scanner = ScannerBuilder::new(snapshot.clone(), 70, desc)
+            .build()
+            .unwrap();
+        check_scan_result(scanner, &expected_result);
+
+        let scanner = ScannerBuilder::new(snapshot.clone(), 103, desc)
+            .build()
+            .unwrap();
+        check_scan_result(scanner, &expected_result);
+
+        // The value of key 4 is locked at 105 so that it can't be read at 106
+        if desc {
+            expected_result[0].1 = None;
+        } else {
+            expected_result[4].1 = None;
+        }
+        let scanner = ScannerBuilder::new(snapshot, 106, desc).build().unwrap();
+        check_scan_result(scanner, &expected_result);
+    }
+
+    #[test]
+    fn test_scan_with_lock() {
+        test_scan_with_lock_impl(false);
+        test_scan_with_lock_impl(true);
     }
 }
