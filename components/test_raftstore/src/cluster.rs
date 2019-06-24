@@ -25,7 +25,7 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::{escape, HandyRwLock};
+use tikv_util::HandyRwLock;
 
 use super::*;
 
@@ -621,7 +621,7 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
-        panic!("find no region for {:?}", escape(key));
+        panic!("find no region for {}", hex::encode_upper(key));
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -887,9 +887,9 @@ impl<T: Simulator> Cluster<T> {
 
             if try_cnt > 250 {
                 panic!(
-                    "region {:?} has not been split by {:?}",
+                    "region {:?} has not been split by {}",
                     region,
-                    escape(split_key)
+                    hex::encode_upper(split_key)
                 );
             }
             try_cnt += 1;
