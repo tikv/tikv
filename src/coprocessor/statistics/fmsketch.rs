@@ -57,15 +57,15 @@ impl FMSketch {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::repeat;
+    use super::*;
 
     use tikv_util::as_slice;
 
     use crate::coprocessor::codec::datum;
     use crate::coprocessor::codec::datum::Datum;
     use crate::coprocessor::codec::Result;
-
-    use super::*;
+    use std::iter::repeat;
+    use tikv_util::as_slice;
 
     struct TestData {
         samples: Vec<Datum>,

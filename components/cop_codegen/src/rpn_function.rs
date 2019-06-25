@@ -3,11 +3,11 @@
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
+use syn::spanned::Spanned;
 use syn::{
-    FnArg, GenericArgument, Ident, ItemFn, Lifetime, LifetimeDef, parse2, parse_str, PathArguments,
+    parse2, parse_str, FnArg, GenericArgument, Ident, ItemFn, Lifetime, LifetimeDef, PathArguments,
     Type, TypePath,
 };
-use syn::spanned::Spanned;
 
 use super::Result;
 
@@ -59,8 +59,8 @@ impl RpnFnGenerator {
             self.generate_constructor(),
             self.item_fn.into_token_stream(),
         ]
-            .into_iter()
-            .collect()
+        .into_iter()
+        .collect()
     }
 
     fn generate_fn_trait(&self) -> TokenStream {
@@ -298,7 +298,7 @@ mod tests {
             }
         "#,
         )
-            .unwrap();
+        .unwrap();
         RpnFnGenerator::new(vec![], item_fn).unwrap()
     }
 
@@ -434,7 +434,7 @@ mod tests {
             }
         "#,
         )
-            .unwrap();
+        .unwrap();
         RpnFnGenerator::new(vec![], item_fn).unwrap()
     }
 
@@ -612,13 +612,14 @@ mod tests {
                 false,
             ),
         ];
-        for (src, meta, ok) in case.iter() {
-            let item_fn: ItemFn = parse_str(src).unwrap();
-            if *ok {
-                assert!(check_attr(meta, &item_fn).is_ok());
+        for (src, meta, ok) in case {
+            if ok {
+                let item_fn: ItemFn = parse_str(src).unwrap();
+                assert!(check_attr(&meta, &item_fn).is_ok());
             } else {
                 let r = panic::catch_unwind(move || {
-                    check_attr(meta, &item_fn)
+                    let item_fn: ItemFn = parse_str(src).unwrap();
+                    check_attr(&meta, &item_fn)
                 });
                 assert!(r.is_err());
             }
