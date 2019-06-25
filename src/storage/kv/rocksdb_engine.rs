@@ -73,7 +73,7 @@ impl Drop for RocksEngineCore {
 }
 
 /// The RocksEngine is based on `RocksDB`.
-/// 
+///
 /// This is intended for **testing use only**.
 #[derive(Clone)]
 pub struct RocksEngine {

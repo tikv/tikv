@@ -75,7 +75,7 @@ pub enum Mutation {
     /// Set a lock on `Key`.
     Lock(Key),
     /// Put `Value` into `Key` if `Key` does not yet exist.
-    /// 
+    ///
     /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
     Insert((Key, Value)),
 }
@@ -229,7 +229,7 @@ pub enum Command {
     /// Delete all keys in the range [`start_key`, `end_key`).
     ///
     /// **This is an unsafe action.**
-    /// 
+    ///
     /// All keys in the range will be deleted permanently regardless of their timestamps.
     /// This means, you are even unable to get deleted keys by specifying an older timestamp.
     DeleteRange {
@@ -250,10 +250,7 @@ pub enum Command {
         duration: u64,
     },
     /// Retrieve MVCC information for the given key.
-    MvccByKey {
-        ctx: Context,
-        key: Key
-    },
+    MvccByKey { ctx: Context, key: Key },
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
     MvccByStartTs { ctx: Context, start_ts: u64 },
 }
