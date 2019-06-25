@@ -3,11 +3,11 @@
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
-use syn::spanned::Spanned;
 use syn::{
-    parse2, parse_str, FnArg, GenericArgument, Ident, ItemFn, Lifetime, LifetimeDef, PathArguments,
+    FnArg, GenericArgument, Ident, ItemFn, Lifetime, LifetimeDef, parse2, parse_str, PathArguments,
     Type, TypePath,
 };
+use syn::spanned::Spanned;
 
 use super::Result;
 
@@ -28,7 +28,7 @@ impl RpnFnGenerator {
                 .unwrap()
                 .error("Lifetime definition is not allowed"));
         }
-        if let Err(err) = check_attr(&meta) {
+        if let Err(err) = check_attr(&meta, &item_fn) {
             return Err(err);
         }
         let arg_types = item_fn
@@ -59,8 +59,8 @@ impl RpnFnGenerator {
             self.generate_constructor(),
             self.item_fn.into_token_stream(),
         ]
-        .into_iter()
-        .collect()
+            .into_iter()
+            .collect()
     }
 
     fn generate_fn_trait(&self) -> TokenStream {
@@ -258,21 +258,16 @@ fn parse_arg_type(arg: &FnArg) -> Result<TypePath> {
     Ok(eval_type.clone())
 }
 
-fn check_attr(meta: &[Ident]) -> Result<()> {
-    let err_msg = "The attr can only be empty or `ctx`\
-                   or `ctx, payload` or `payload, ctx`, \
+fn check_attr(meta: &[Ident], item_fn: &ItemFn) -> Result<()> {
+    let err_msg = "The attr can only be `ctx` or `payload`,\
                    and make sure that the n attributes and their orders \
                    are the same as the first n param of the function signature.";
     let (ctx, payload) = ("ctx", "payload");
-    if meta.len() > 2 {
+    if item_fn.decl.inputs.len() < meta.len() {
         return Err(meta[0].span().unwrap().error(err_msg));
     }
-    if meta.len() == 1 && (meta[0] != ctx && meta[0] != payload) {
-        return Err(meta[0].span().unwrap().error(err_msg));
-    } else if meta.len() == 2 {
-        let cp = meta[0] == ctx && meta[1] == payload;
-        let pc = meta[0] == payload && meta[1] == ctx;
-        if !cp && !pc {
+    for m in meta.iter() {
+        if m != ctx && m != payload {
             return Err(meta[0].span().unwrap().error(err_msg));
         }
     }
@@ -290,6 +285,8 @@ fn common_types() -> (TokenStream, TokenStream, TokenStream) {
 
 #[cfg(test)]
 mod tests {
+    use std::panic;
+
     use super::*;
 
     fn no_generic_fn() -> RpnFnGenerator {
@@ -301,7 +298,7 @@ mod tests {
             }
         "#,
         )
-        .unwrap();
+            .unwrap();
         RpnFnGenerator::new(vec![], item_fn).unwrap()
     }
 
@@ -437,7 +434,7 @@ mod tests {
             }
         "#,
         )
-        .unwrap();
+            .unwrap();
         RpnFnGenerator::new(vec![], item_fn).unwrap()
     }
 
@@ -572,9 +569,18 @@ mod tests {
     #[test]
     fn test_check_attr() {
         let case = vec![
-            (vec![Ident::new("ctx", Span::call_site())], true),
-            (vec![Ident::new("payload", Span::call_site())], true),
             (
+                r#"fn f(p: &EvalContext){}"#,
+                vec![Ident::new("ctx", Span::call_site())],
+                true,
+            ),
+            (
+                r#"fn f(p: RpnFnCallPayload){}"#,
+                vec![Ident::new("payload", Span::call_site())],
+                true,
+            ),
+            (
+                r#"fn f(p: RpnFnCallPayload, c: &EvalContext){}"#,
                 vec![
                     Ident::new("payload", Span::call_site()),
                     Ident::new("ctx", Span::call_site()),
@@ -582,15 +588,40 @@ mod tests {
                 true,
             ),
             (
+                r#"fn f(c: &EvalContext, p: RpnFnCallPayload){}"#,
                 vec![
                     Ident::new("ctx", Span::call_site()),
                     Ident::new("payload", Span::call_site()),
                 ],
                 true,
+            ),
+            (
+                r#"fn f(c: &EvalContext){}"#,
+                vec![
+                    Ident::new("ctx", Span::call_site()),
+                    Ident::new("payload", Span::call_site()),
+                ],
+                false,
+            ),
+            (
+                r#"fn f(c: &EvalContext, p: RpnFnCallPayload){}"#,
+                vec![
+                    Ident::new("ctx", Span::call_site()),
+                    Ident::new("x", Span::call_site()),
+                ],
+                false,
             ),
         ];
-        for (meta, ok) in case.iter() {
-            assert_eq!(check_attr(meta).is_ok(), *ok);
+        for (src, meta, ok) in case.iter() {
+            let item_fn: ItemFn = parse_str(src).unwrap();
+            if *ok {
+                assert!(check_attr(meta, &item_fn).is_ok());
+            } else {
+                let r = panic::catch_unwind(move || {
+                    check_attr(meta, &item_fn)
+                });
+                assert!(r.is_err());
+            }
         }
     }
 }
