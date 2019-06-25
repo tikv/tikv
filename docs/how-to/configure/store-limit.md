@@ -37,7 +37,7 @@ PD provides the following two methods to configure scheduling rate limits on sto
         Example:
 
         ```bash
-        » stores show  // If store-balance-rate is set to 15, the corresponding rate for all stores should be 15 / 60 = 0.25.
+        » stores show limit // If store-balance-rate is set to 15, the corresponding rate for all stores should be 15 / 60 = 0.25.
         {
         "4": {
         "rate": 0.25
