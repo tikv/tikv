@@ -69,7 +69,10 @@ macro_rules! impl_sched {
             }
         }
 
-        impl<N: Fsm, C: Fsm> FsmScheduler for $name<N, C> {
+        impl<N, C> FsmScheduler for $name<N, C>
+        where
+            $fsm: Fsm,
+        {
             type Fsm = $fsm;
 
             #[inline]
