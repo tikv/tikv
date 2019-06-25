@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Result;
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
@@ -9,6 +8,8 @@ use syn::{
     parse2, parse_str, FnArg, GenericArgument, Ident, ItemFn, Lifetime, LifetimeDef, PathArguments,
     Type, TypePath,
 };
+
+use super::Result;
 
 pub struct RpnFnGenerator {
     meta: Vec<Ident>,
@@ -27,7 +28,9 @@ impl RpnFnGenerator {
                 .unwrap()
                 .error("Lifetime definition is not allowed"));
         }
-
+        if let Err(err) = check_attr(&meta) {
+            return Err(err);
+        }
         let arg_types = item_fn
             .decl
             .inputs
@@ -253,6 +256,27 @@ fn parse_arg_type(arg: &FnArg) -> Result<TypePath> {
     );
     let eval_type = destruct!(eval_type, Type::Path, "Must be a concrete type");
     Ok(eval_type.clone())
+}
+
+fn check_attr(meta: &[Ident]) -> Result<()> {
+    let err_msg = "The attr can only be empty or `ctx`\
+                   or `ctx, payload` or `payload, ctx`, \
+                   and make sure that the n attributes and their orders \
+                   are the same as the first n param of the function signature.";
+    let (ctx, payload) = ("ctx", "payload");
+    if meta.len() > 2 {
+        return Err(meta[0].span().unwrap().error(err_msg));
+    }
+    if meta.len() == 1 && (meta[0] != ctx && meta[0] != payload) {
+        return Err(meta[0].span().unwrap().error(err_msg));
+    } else if meta.len() == 2 {
+        let cp = meta[0] == ctx && meta[1] == payload;
+        let pc = meta[0] == payload && meta[1] == ctx;
+        if !cp && !pc {
+            return Err(meta[0].span().unwrap().error(err_msg));
+        }
+    }
+    Ok(())
 }
 
 /// Returns `TokenStream`s of some common types
@@ -543,5 +567,30 @@ mod tests {
             }
         };
         assert_eq!(expected.to_string(), gen.generate_constructor().to_string());
+    }
+
+    #[test]
+    fn test_check_attr() {
+        let case = vec![
+            (vec![Ident::new("ctx", Span::call_site())], true),
+            (vec![Ident::new("payload", Span::call_site())], true),
+            (
+                vec![
+                    Ident::new("payload", Span::call_site()),
+                    Ident::new("ctx", Span::call_site()),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    Ident::new("ctx", Span::call_site()),
+                    Ident::new("payload", Span::call_site()),
+                ],
+                true,
+            ),
+        ];
+        for (meta, ok) in case.iter() {
+            assert_eq!(check_attr(meta).is_ok(), *ok);
+        }
     }
 }
