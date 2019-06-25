@@ -2,9 +2,8 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
-use tipb::analyze;
-
 use tikv_util::collections::HashSet;
+use tipb::analyze;
 
 /// `FMSketch` is used to count the approximate number of distinct
 /// elements in multiset.
@@ -58,9 +57,6 @@ impl FMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use tikv_util::as_slice;
-
     use crate::coprocessor::codec::datum;
     use crate::coprocessor::codec::datum::Datum;
     use crate::coprocessor::codec::Result;
