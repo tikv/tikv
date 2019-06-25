@@ -10,6 +10,7 @@ use super::{Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
 
 /// `integer_unsigned_upper_bound` returns the max u64 values of different mysql types
+#[inline]
 pub fn integer_unsigned_upper_bound(tp: FieldTypeTp) -> u64 {
     match tp {
         FieldTypeTp::Tiny => u64::from(u8::MAX),
@@ -22,6 +23,7 @@ pub fn integer_unsigned_upper_bound(tp: FieldTypeTp) -> u64 {
 }
 
 /// `integer_signed_upper_bound` returns the max i64 values of different mysql types
+#[inline]
 pub fn integer_signed_upper_bound(tp: FieldTypeTp) -> i64 {
     match tp {
         FieldTypeTp::Tiny => i64::from(i8::MAX),
@@ -34,6 +36,7 @@ pub fn integer_signed_upper_bound(tp: FieldTypeTp) -> i64 {
 }
 
 /// `integer_signed_lower_bound` returns the min i64 values of different mysql types
+#[inline]
 pub fn integer_signed_lower_bound(tp: FieldTypeTp) -> i64 {
     match tp {
         FieldTypeTp::Tiny => i64::from(i8::MIN),
@@ -87,6 +90,7 @@ macro_rules! overflow {
 }
 
 /// `convert_int_to_int` converts an int value to a diferent int value.
+#[inline]
 pub fn convert_int_to_int(val: i64, tp: FieldTypeTp) -> Result<i64> {
     let lower_bound = integer_signed_lower_bound(tp);
     if val < lower_bound {
@@ -111,6 +115,7 @@ pub fn convert_uint_to_int(val: u64, tp: FieldTypeTp) -> Result<i64> {
 
 /// `convert_float_to_int` converts an f64 value to an i64 value.
 ///  Returns the overflow error if the value exceeds the boundary.
+#[inline]
 pub fn convert_float_to_int(fval: f64, tp: FieldTypeTp) -> Result<i64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
@@ -128,6 +133,7 @@ pub fn convert_float_to_int(fval: f64, tp: FieldTypeTp) -> Result<i64> {
 
 /// `convert_float_to_uint` converts a f64 value to a u64 value.
 /// Returns the overflow error if the value exceeds the boundary.
+#[inline]
 pub fn convert_float_to_uint(fval: f64, tp: FieldTypeTp) -> Result<u64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
