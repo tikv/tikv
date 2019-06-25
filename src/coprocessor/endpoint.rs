@@ -255,6 +255,7 @@ impl<E: Engine> Endpoint<E> {
                 future::result(result)
                     .or_else(|e| Ok::<_, Error>(make_error_response(e)))
                     .map(|mut resp| {
+                        COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                         resp.set_exec_details(exec_details);
                         resp
                     })
@@ -373,6 +374,7 @@ impl<E: Engine> Endpoint<E> {
                                 }
                                 Ok((Some(resp), finished)) => (resp, finished),
                             };
+                            COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                             resp.set_exec_details(exec_details);
 
                             let yielded = Either::Left(resp);
