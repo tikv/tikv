@@ -5,8 +5,10 @@ use std::{self, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
 use cop_datatype::{self, FieldTypeTp};
 
-use super::mysql::Res;
+use super::mysql::{Res, RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
+use crate::coprocessor::codec::data_type::{DateTime, Decimal, Duration, Json};
+use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::coprocessor::dag::expr::EvalContext;
 
 /// `integer_unsigned_upper_bound` returns the max u64 values of different mysql types
@@ -84,31 +86,37 @@ pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
 
 /// `overflow` returns an overflowed error.
 macro_rules! overflow {
-    ($val:ident, $bound:ident) => {{
-        Err(box_err!("constant {} overflows {}", $val, $bound))
+    ($val:ident, $bound:tt) => {{
+        Error::Eval(
+            format!("constant {} overflows {}", $val, $bound),
+            ERR_DATA_OUT_OF_RANGE,
+        )
     }};
 }
 
 /// `convert_int_to_int` converts an int value to a diferent int value.
 #[inline]
-pub fn convert_int_to_int(val: i64, tp: FieldTypeTp) -> Result<i64> {
+pub fn convert_int_to_int(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> Result<i64> {
     let lower_bound = integer_signed_lower_bound(tp);
     if val < lower_bound {
-        return overflow!(val, tp);
+        ctx.handle_overflow(overflow!(val, lower_bound))?;
+        return Ok(val);
     }
     let upper_bound = integer_signed_upper_bound(tp);
     if val > upper_bound {
-        return overflow!(val, tp);
+        ctx.handle_overflow(overflow!(val, upper_bound))?;
+        return Ok(val);
     }
     Ok(val)
 }
 
 /// `convert_uint_to_int` converts an uint value to an int value.
 #[inline]
-pub fn convert_uint_to_int(val: u64, tp: FieldTypeTp) -> Result<i64> {
+pub fn convert_uint_to_int(ctx: &mut EvalContext, val: u64, tp: FieldTypeTp) -> Result<i64> {
     let upper_bound = integer_signed_upper_bound(tp);
     if val > upper_bound as u64 {
-        return overflow!(val, tp);
+        ctx.handle_overflow(overflow!(val, upper_bound))?;
+        return Ok(val as i64);
     }
     Ok(val as i64)
 }
@@ -116,17 +124,19 @@ pub fn convert_uint_to_int(val: u64, tp: FieldTypeTp) -> Result<i64> {
 /// `convert_float_to_int` converts an f64 value to an i64 value.
 ///  Returns the overflow error if the value exceeds the boundary.
 #[inline]
-pub fn convert_float_to_int(fval: f64, tp: FieldTypeTp) -> Result<i64> {
+pub fn convert_float_to_int(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -> Result<i64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
     let lower_bound = integer_signed_lower_bound(tp);
     if val < lower_bound as f64 {
-        return overflow!(val, tp);
+        ctx.handle_overflow(overflow!(val, lower_bound))?;
+        return Ok(val as i64);
     }
 
     let upper_bound = integer_signed_upper_bound(tp);
     if val > upper_bound as f64 {
-        return overflow!(val, tp);
+        ctx.handle_overflow(overflow!(val, upper_bound))?;
+        return Ok(val as i64);
     }
     Ok(val as i64)
 }
@@ -137,24 +147,84 @@ pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp
     let vs = get_valid_int_prefix(ctx, s)?;
     let val = bytes_to_int_without_context(vs.as_bytes());
     match val {
-        Ok(val) => convert_int_to_int(val, tp),
+        Ok(val) => convert_int_to_int(ctx, val, tp),
         Err(_) => Err(Error::overflow("BIGINT", &vs)),
     }
+}
+
+/// `convert_datetime_to_int` converts a `DateTime` to an i64 value
+#[inline]
+pub fn convert_datetime_to_int(
+    ctx: &mut EvalContext,
+    dt: &DateTime,
+    tp: FieldTypeTp,
+) -> Result<i64> {
+    // TODO: avoid this clone after refactor the `Time`
+    let mut t = dt.clone();
+    t.round_frac(DEFAULT_FSP)?;
+    let val = t.to_decimal()?.as_i64_with_ctx(ctx)?;
+    convert_int_to_int(ctx, val, tp)
+}
+
+/// `convert_duration_to_int` converts a `Duration` to an i64 value
+#[inline]
+pub fn convert_duration_to_int(
+    ctx: &mut EvalContext,
+    dur: &Duration,
+    tp: FieldTypeTp,
+) -> Result<i64> {
+    // It's OK to clone because duration only occupies 8 bytes after #4858 merged
+    let dur = dur.clone();
+    let dur = dur.round_frac(DEFAULT_FSP)?;
+    let val = dur.to_decimal()?.as_i64_with_ctx(ctx)?;
+    convert_int_to_int(ctx, val, tp)
+}
+
+/// `convert_decimal_to_int` converts a `Decimal` to an i64 value
+#[inline]
+pub fn convert_decimal_to_int(
+    ctx: &mut EvalContext,
+    dec: &Decimal,
+    tp: FieldTypeTp,
+) -> Result<i64> {
+    // TODO: avoid this clone
+    let dec = match dec.clone().round(0, RoundMode::HalfEven) {
+        Res::Ok(d) => d,
+        Res::Overflow(d) => {
+            ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
+            d
+        }
+        Res::Truncated(d) => {
+            ctx.handle_truncate(true)?;
+            d
+        }
+    };
+    let val = dec.as_i64_with_ctx(ctx)?;
+    convert_int_to_int(ctx, val, tp)
+}
+
+/// `convert_json_to_int` converts a `Json` to an i64 value
+#[inline]
+pub fn convert_json_to_int(ctx: &mut EvalContext, json: &Json, tp: FieldTypeTp) -> Result<i64> {
+    let val = json.cast_to_int();
+    convert_int_to_int(ctx, val, tp)
 }
 
 /// `convert_float_to_uint` converts a f64 value to a u64 value.
 /// Returns the overflow error if the value exceeds the boundary.
 #[inline]
-pub fn convert_float_to_uint(fval: f64, tp: FieldTypeTp) -> Result<u64> {
+pub fn convert_float_to_uint(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -> Result<u64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
     if val < 0f64 {
-        return overflow!(val, tp);
+        ctx.handle_overflow(overflow!(val, 0))?;
+        return Ok(val as u64);
     }
 
     let upper_bound = integer_unsigned_upper_bound(tp);
     if val > upper_bound as f64 {
-        return overflow!(val, tp);
+        ctx.handle_overflow(overflow!(val, upper_bound))?;
+        return Ok(val as u64);
     }
     Ok(val as u64)
 }
@@ -426,8 +496,9 @@ mod tests {
             (-8388610, FieldTypeTp::LongLong, Some(-8388610)),
         ];
 
+        let mut ctx = EvalContext::default();
         for (from, tp, to) in tests {
-            let r = convert_int_to_int(from, tp);
+            let r = convert_int_to_int(&mut ctx, from, tp);
             match to {
                 Some(to) => assert_eq!(to, r.unwrap()),
                 None => assert!(
@@ -641,8 +712,9 @@ mod tests {
             (u64::MAX, FieldTypeTp::LongLong, None),
         ];
 
+        let mut ctx = EvalContext::default();
         for (from, tp, to) in tests {
-            let r = convert_uint_to_int(from, tp);
+            let r = convert_uint_to_int(&mut ctx, from, tp);
             match to {
                 Some(to) => assert_eq!(to, r.unwrap()),
                 None => assert!(
@@ -686,8 +758,9 @@ mod tests {
             (f64::MIN, FieldTypeTp::LongLong, None),
         ];
 
+        let mut ctx = EvalContext::default();
         for (from, tp, to) in tests {
-            let r = convert_float_to_int(from, tp);
+            let r = convert_float_to_int(&mut ctx, from, tp);
             match to {
                 Some(to) => assert_eq!(to, r.unwrap()),
                 None => assert!(
@@ -702,9 +775,10 @@ mod tests {
 
     #[test]
     fn test_convert_float_to_uint() {
-        assert!(convert_float_to_uint(f64::MIN, FieldTypeTp::LongLong).is_err());
-        assert!(convert_float_to_uint(f64::MAX, FieldTypeTp::LongLong).is_err());
-        let v = convert_float_to_uint(0.1, FieldTypeTp::LongLong).unwrap();
+        let mut ctx = EvalContext::default();
+        assert!(convert_float_to_uint(&mut ctx, f64::MIN, FieldTypeTp::LongLong).is_err());
+        assert!(convert_float_to_uint(&mut ctx, f64::MAX, FieldTypeTp::LongLong).is_err());
+        let v = convert_float_to_uint(&mut ctx, 0.1, FieldTypeTp::LongLong).unwrap();
         assert_eq!(v, 0);
         // TODO port tests from tidb(tidb haven't implemented now)
     }

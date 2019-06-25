@@ -349,8 +349,8 @@ impl Datum {
         let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => convert::convert_uint_to_int(u, tp),
-            Datum::F64(f) => convert::convert_float_to_int(f, tp),
+            Datum::U64(u) => convert::convert_uint_to_int(ctx, u, tp),
+            Datum::F64(f) => convert::convert_float_to_int(ctx, f, tp),
             Datum::Bytes(bs) => convert::convert_bytes_to_int(ctx, &bs, FieldTypeTp::LongLong),
             Datum::Time(mut t) => {
                 t.round_frac(mysql::DEFAULT_FSP)?;

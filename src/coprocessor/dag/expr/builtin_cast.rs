@@ -24,10 +24,10 @@ impl ScalarFunc {
     pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
-            let uval = convert_float_to_uint(val, FieldTypeTp::LongLong)?;
+            let uval = convert_float_to_uint(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(uval as i64))
         } else {
-            let res = convert_float_to_int(val, FieldTypeTp::LongLong)?;
+            let res = convert_float_to_int(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(res))
         }
     }
