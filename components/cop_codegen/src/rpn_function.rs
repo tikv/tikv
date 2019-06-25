@@ -28,9 +28,7 @@ impl RpnFnGenerator {
                 .unwrap()
                 .error("Lifetime definition is not allowed"));
         }
-        if let Err(err) = check_attr(&meta, &item_fn) {
-            return Err(err);
-        }
+        check_attr(&meta, &item_fn)?;
         let arg_types = item_fn
             .decl
             .inputs
