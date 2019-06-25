@@ -6,7 +6,7 @@ category: how-to
 
 # Region Merge
 
-TiKV replicates a segment of data in Regions via the Raft status machine. As data writes increase, a Region Split happens when the size of the region or the number of serial keys has reached a threshold. Conversely, if the size of the Region or the amount of keys shrinks because of data deletion, we can use Region Merge to merge adjacent regions that are smaller. This relieves some stress on Raft.
+TiKV replicates a segment of data in Regions via the Raft state machine. As data writes increase, a Region Split happens when the size of the region or the number of keys has reached a threshold. Conversely, if the size of the Region or the amount of keys shrinks because of data deletion, we can use Region Merge to merge adjacent regions that are smaller. This relieves some stress on Raftstore.
 
 
 ## Merge process
@@ -19,7 +19,7 @@ Region Merge is initiated by the Placement Driver (PD). The steps are:
 
 > **Note:**
 >
-> - All replicas of the merged Regions must be on the same TiKV.
+> - All replicas of the merged Regions must belong to the same TiKV cluster.
 > - Newly split Regions won't be merged within the period of time specified by `split-merge-interval`.
 > - Region Merge won't happen within the period of time specified by `split-merge-interval` after PD starts or restarts.
 >- Region Merge won't happen for two Regions that belong to different tables if `namespace-classifier = table` (default).
