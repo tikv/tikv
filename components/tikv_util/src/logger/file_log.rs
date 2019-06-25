@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 /// Adds `Duration` to the initial date and time.
@@ -67,7 +67,11 @@ impl RotatingFileLogger {
 
         // Note: renaming files while they're open only works on Linux and macOS.
         let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
-        fs::rename(&self.file_path, new_path)?;
+        match fs::rename(&self.file_path, new_path) {
+            Ok(_) => Ok(()),
+            Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }?;
         let new_file = open_log_file(&self.file_path)?;
         self.update_rotation_time();
         self.file = new_file;
@@ -162,7 +166,7 @@ mod tests {
         let mut logger = RotatingFileLogger::new(&log_file, Duration::days(1)).unwrap();
         // delete the log_file so rotation fails.
         std::fs::remove_file(&log_file).unwrap();
-        logger.rotate().unwrap_err();
+        logger.rotate().unwrap();
         // dropping the logger still should not panic.
         drop(logger);
     }
