@@ -10,7 +10,6 @@ use engine::rocks;
 use engine::rocks::util::compact_range;
 use engine::CF_WRITE;
 use engine::DB;
-use tikv_util::escape;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -43,8 +42,11 @@ impl Display for Task {
             } => f
                 .debug_struct("Compact")
                 .field("cf_name", cf_name)
-                .field("start_key", &start_key.as_ref().map(|k| escape(k)))
-                .field("end_key", &end_key.as_ref().map(|k| escape(k)))
+                .field(
+                    "start_key",
+                    &start_key.as_ref().map(|k| hex::encode_upper(k)),
+                )
+                .field("end_key", &end_key.as_ref().map(|k| hex::encode_upper(k)))
                 .finish(),
             Task::CheckAndCompact {
                 ref cf_names,
@@ -57,8 +59,8 @@ impl Display for Task {
                 .field(
                     "ranges",
                     &(
-                        ranges.first().as_ref().map(|k| escape(k)),
-                        ranges.last().as_ref().map(|k| escape(k)),
+                        ranges.first().as_ref().map(|k| hex::encode_upper(k)),
+                        ranges.last().as_ref().map(|k| hex::encode_upper(k)),
                     ),
                 )
                 .field("tombstones_num_threshold", &tombstones_num_threshold)

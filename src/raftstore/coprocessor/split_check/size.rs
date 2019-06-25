@@ -11,7 +11,6 @@ use engine::{util, Range};
 use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use tikv_util::escape;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 
@@ -287,8 +286,8 @@ fn get_approximate_split_keys_cf(
             split_size,
             collection.len(),
             cfname,
-            escape(&start),
-            escape(&end)
+            hex::encode_upper(&start),
+            hex::encode_upper(&end)
         ));
     }
     keys.sort();
