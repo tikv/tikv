@@ -11,7 +11,7 @@ The design of TiKV is inspired by some great distributed systems from Google, su
 
 ![cncf_logo](images/cncf.png)
 
-TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
+TiKV an incubating project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2019/05/21/toc-votes-to-move-tikv-into-cncf-incubator/).
 
 ---
 
@@ -66,27 +66,30 @@ We provide multiple deployment methods, but it is recommended to use our Ansible
 
 ### Testing deployment
 
-- [Try TiKV and TiDB](https://github.com/pingcap/docs/blob/master/op-guide/docker-compose.md)
+- [Try TiKV and TiDB](docs/V2.1/op-guide/deploy-tikv-using-docker-compose.md)
 
-    You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://github.com/pingcap/docs).
+    You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This will let you try TiKV cooperating with TiDB, an MySQL speaking stateless query layer that can interact with TiKV. There are other layers such as [TiSpark](https://github.com/pingcap/tispark), and [titan](https://github.com/distributedio/titan).
 
 - Try TiKV separately
-    - [Deploy TiKV Using Docker Compose](docs/op-guide/deploy-tikv-using-docker-compose.md): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
-    - [Deploy TiKV Using Docker](docs/op-guide/deploy-tikv-using-docker.md): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](docs/op-guide/deploy-tikv-using-binary.md): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+    - [Deploy TiKV Using Docker Compose](docs/V2.1/op-guide/deploy-tikv-using-docker-compose.md): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
+    - [Deploy TiKV Using Docker](docs/V2.1/op-guide/deploy-tikv-using-docker.md): To deploy a multi-node TiKV testing cluster using Docker
+    - [Deploy TiKV Using Binary Files](docs/V2.1/op-guide/deploy-tikv-using-binary.md): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
 
 ### Production deployment
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
 - [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/op-guide/ansible-deployment.md)
-- [Deploy TiKV separately Using Ansible](docs/op-guide/deploy-tikv-using-ansible.md)
+- [Deploy TiKV separately Using Ansible](docs/V2.1/op-guide/deploy-tikv-using-ansible.md)
 
 ## Client drivers
 
-Currently, the only interface to TiKV is the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
+There are the following clients for TiKV:
 
-If you want to try the Go client, see [Try Two Types of APIs](docs/clients/go-client-api.md).
+- [Go](https://github.com/tikv/client-go) (The most stable and widely used)
+- [Java](https://github.com/tikv/client-java)
+- [Rust](https://github.com/tikv/client-rust)
+- [C](https://github.com/tikv/client-rust)
 
 ## Setting up a development workspace
 
@@ -106,7 +109,7 @@ To build TiKV you'll need to at least have the following installed:
 
 ### Getting the repository
 
-```
+```bash
 git clone https://github.com/tikv/tikv.git
 cd tikv
 # Future instructions assume you are in this repository
@@ -213,6 +216,10 @@ appearance, race, religion, or sexual identity and orientation.
 - [Blog](https://tikv.org/blog/)
 - [Reddit](https://www.reddit.com/r/TiKV)
 - Post questions or help answer them on [Stack Overflow](https://stackoverflow.com/questions/tagged/tikv)
+
+### Discourse
+
+If you're writing or reading articles about TiKV, want to engage in long form asyncronous discussion, or want to check out things that are happening, you can join our [forum](https://forum.tikv.org).
 
 ### Slack
 
