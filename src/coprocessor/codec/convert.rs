@@ -98,14 +98,15 @@ macro_rules! overflow {
 #[inline]
 pub fn convert_int_to_int(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> Result<i64> {
     let lower_bound = integer_signed_lower_bound(tp);
+    // https://dev.mysql.com/doc/refman/8.0/en/out-of-range-and-overflow.html
     if val < lower_bound {
         ctx.handle_overflow(overflow!(val, lower_bound))?;
-        return Ok(val);
+        return Ok(lower_bound);
     }
     let upper_bound = integer_signed_upper_bound(tp);
     if val > upper_bound {
         ctx.handle_overflow(overflow!(val, upper_bound))?;
-        return Ok(val);
+        return Ok(upper_bound);
     }
     Ok(val)
 }
@@ -116,7 +117,7 @@ pub fn convert_uint_to_int(ctx: &mut EvalContext, val: u64, tp: FieldTypeTp) -> 
     let upper_bound = integer_signed_upper_bound(tp);
     if val > upper_bound as u64 {
         ctx.handle_overflow(overflow!(val, upper_bound))?;
-        return Ok(val as i64);
+        return Ok(upper_bound);
     }
     Ok(val as i64)
 }
@@ -130,13 +131,13 @@ pub fn convert_float_to_int(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -
     let lower_bound = integer_signed_lower_bound(tp);
     if val < lower_bound as f64 {
         ctx.handle_overflow(overflow!(val, lower_bound))?;
-        return Ok(val as i64);
+        return Ok(lower_bound);
     }
 
     let upper_bound = integer_signed_upper_bound(tp);
     if val > upper_bound as f64 {
         ctx.handle_overflow(overflow!(val, upper_bound))?;
-        return Ok(val as i64);
+        return Ok(upper_bound);
     }
     Ok(val as i64)
 }
@@ -148,7 +149,19 @@ pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp
     let val = bytes_to_int_without_context(vs.as_bytes());
     match val {
         Ok(val) => convert_int_to_int(ctx, val, tp),
-        Err(_) => Err(Error::overflow("BIGINT", &vs)),
+        Err(_) => {
+            ctx.handle_overflow(Error::overflow("BIGINT", &vs))?;
+            let val = match vs
+                .as_bytes()
+                .iter()
+                .skip_while(|x| x.is_ascii_whitespace())
+                .next()
+            {
+                Some(&b'-') => integer_signed_lower_bound(tp),
+                _ => integer_signed_upper_bound(tp),
+            };
+            Ok(val)
+        }
     }
 }
 
@@ -174,8 +187,7 @@ pub fn convert_duration_to_int(
     tp: FieldTypeTp,
 ) -> Result<i64> {
     // It's OK to clone because duration only occupies 8 bytes after #4858 merged
-    let dur = dur.clone();
-    let dur = dur.round_frac(DEFAULT_FSP)?;
+    let dur = dur.clone().round_frac(DEFAULT_FSP)?;
     let val = dur.to_decimal()?.as_i64_with_ctx(ctx)?;
     convert_int_to_int(ctx, val, tp)
 }
@@ -218,13 +230,13 @@ pub fn convert_float_to_uint(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) 
     let val = fval.round();
     if val < 0f64 {
         ctx.handle_overflow(overflow!(val, 0))?;
-        return Ok(val as u64);
+        return Ok(0);
     }
 
     let upper_bound = integer_unsigned_upper_bound(tp);
     if val > upper_bound as f64 {
         ctx.handle_overflow(overflow!(val, upper_bound))?;
-        return Ok(val as u64);
+        return Ok(upper_bound);
     }
     Ok(val as u64)
 }
@@ -464,6 +476,7 @@ const MAX_ZERO_COUNT: i64 = 20;
 mod tests {
     use std::error::Error;
     use std::f64::EPSILON;
+    use std::fmt::Debug;
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
@@ -508,6 +521,184 @@ mod tests {
                     tp
                 ),
             }
+        }
+    }
+
+    #[test]
+    fn test_convert_uint_into_int() {
+        let tests: Vec<(u64, FieldTypeTp, Option<i64>)> = vec![
+            (123, FieldTypeTp::Tiny, Some(123)),
+            (256, FieldTypeTp::Tiny, None),
+            (123, FieldTypeTp::Short, Some(123)),
+            (65536, FieldTypeTp::Short, None),
+            (123, FieldTypeTp::Int24, Some(123)),
+            (8388610, FieldTypeTp::Int24, None),
+            (8388610, FieldTypeTp::Long, Some(8388610)),
+            (4294967297, FieldTypeTp::Long, None),
+            (4294967297, FieldTypeTp::LongLong, Some(4294967297)),
+            (u64::MAX, FieldTypeTp::LongLong, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (from, tp, to) in tests {
+            let r = convert_uint_to_int(&mut ctx, from, tp);
+            match to {
+                Some(to) => assert_eq!(to, r.unwrap()),
+                None => assert!(
+                    r.is_err(),
+                    "from: {}, to tp: {} should be overflow",
+                    from,
+                    tp
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_float_to_int() {
+        let tests: Vec<(f64, FieldTypeTp, Option<i64>)> = vec![
+            (123.1, FieldTypeTp::Tiny, Some(123)),
+            (123.6, FieldTypeTp::Tiny, Some(124)),
+            (-123.1, FieldTypeTp::Tiny, Some(-123)),
+            (-123.6, FieldTypeTp::Tiny, Some(-124)),
+            (256.5, FieldTypeTp::Tiny, None),
+            (256.1, FieldTypeTp::Short, Some(256)),
+            (256.6, FieldTypeTp::Short, Some(257)),
+            (-256.1, FieldTypeTp::Short, Some(-256)),
+            (-256.6, FieldTypeTp::Short, Some(-257)),
+            (65535.5, FieldTypeTp::Short, None),
+            (65536.1, FieldTypeTp::Int24, Some(65536)),
+            (65536.5, FieldTypeTp::Int24, Some(65537)),
+            (-65536.1, FieldTypeTp::Int24, Some(-65536)),
+            (-65536.5, FieldTypeTp::Int24, Some(-65537)),
+            (8388610.2, FieldTypeTp::Int24, None),
+            (8388610.4, FieldTypeTp::Long, Some(8388610)),
+            (8388610.5, FieldTypeTp::Long, Some(8388611)),
+            (-8388610.4, FieldTypeTp::Long, Some(-8388610)),
+            (-8388610.5, FieldTypeTp::Long, Some(-8388611)),
+            (4294967296.8, FieldTypeTp::Long, None),
+            (4294967296.8, FieldTypeTp::LongLong, Some(4294967297)),
+            (4294967297.1, FieldTypeTp::LongLong, Some(4294967297)),
+            (-4294967296.8, FieldTypeTp::LongLong, Some(-4294967297)),
+            (-4294967297.1, FieldTypeTp::LongLong, Some(-4294967297)),
+            (f64::MAX, FieldTypeTp::LongLong, None),
+            (f64::MIN, FieldTypeTp::LongLong, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (from, tp, to) in tests {
+            let r = convert_float_to_int(&mut ctx, from, tp);
+            match to {
+                Some(to) => assert_eq!(to, r.unwrap()),
+                None => assert!(
+                    r.is_err(),
+                    "from: {}, to tp: {} should be overflow",
+                    from,
+                    tp
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_datatype_to_int_overflow() {
+        fn test_overflow<T: Debug + Clone>(
+            raw: T,
+            dst: i64,
+            func: fn(&mut EvalContext, T, FieldTypeTp) -> Result<i64>,
+            tp: FieldTypeTp,
+        ) {
+            let mut ctx = EvalContext::default();
+            let val = func(&mut ctx, raw.clone(), tp);
+            match val {
+                Err(e) => assert_eq!(
+                    e.code(),
+                    ERR_DATA_OUT_OF_RANGE,
+                    "expect code {}, but got: {}",
+                    ERR_DATA_OUT_OF_RANGE,
+                    e.code()
+                ),
+                res => panic!("expect convert {:?} to overflow, but got {:?}", raw, res),
+            };
+
+            // OVERFLOW_AS_WARNING
+            let mut ctx =
+                EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+            let val = func(&mut ctx, raw.clone(), tp);
+            assert_eq!(val.unwrap(), dst);
+            assert_eq!(ctx.warnings.warning_cnt, 1);
+        }
+
+        // convert_int_to_int
+        let cases: Vec<(i64, i64, FieldTypeTp)> = vec![
+            (12345, 127, FieldTypeTp::Tiny),
+            (-12345, -128, FieldTypeTp::Tiny),
+            (123456, 32767, FieldTypeTp::Short),
+            (-123456, -32768, FieldTypeTp::Short),
+            (83886078, 8388607, FieldTypeTp::Int24),
+            (-83886078, -8388608, FieldTypeTp::Int24),
+            (i64::MAX, 2147483647, FieldTypeTp::Long),
+            (i64::MIN, -2147483648, FieldTypeTp::Long),
+        ];
+        for (raw, dst, tp) in cases {
+            test_overflow(raw, dst, convert_int_to_int, tp);
+        }
+
+        // convert_uint_to_int
+        let cases: Vec<(u64, i64, FieldTypeTp)> = vec![
+            (12345, 127, FieldTypeTp::Tiny),
+            (123456, 32767, FieldTypeTp::Short),
+            (83886078, 8388607, FieldTypeTp::Int24),
+            (u64::MAX, 2147483647, FieldTypeTp::Long),
+        ];
+        for (raw, dst, tp) in cases {
+            test_overflow(raw, dst, convert_uint_to_int, tp);
+        }
+
+        // convert_float_to_int
+        let cases: Vec<(f64, i64, FieldTypeTp)> = vec![
+            (127.5, 127, FieldTypeTp::Tiny),
+            (12345f64, 127, FieldTypeTp::Tiny),
+            (-12345f64, -128, FieldTypeTp::Tiny),
+            (32767.6, 32767, FieldTypeTp::Short),
+            (123456f64, 32767, FieldTypeTp::Short),
+            (-123456f64, -32768, FieldTypeTp::Short),
+            (8388607.7, 8388607, FieldTypeTp::Int24),
+            (83886078f64, 8388607, FieldTypeTp::Int24),
+            (-83886078f64, -8388608, FieldTypeTp::Int24),
+            (2147483647.8, 2147483647, FieldTypeTp::Long),
+            (-2147483648.8, -2147483648, FieldTypeTp::Long),
+            (f64::MAX, 2147483647, FieldTypeTp::Long),
+            (f64::MIN, -2147483648, FieldTypeTp::Long),
+            (f64::MAX, i64::MAX, FieldTypeTp::LongLong),
+            (f64::MIN, i64::MIN, FieldTypeTp::LongLong),
+        ];
+        for (raw, dst, tp) in cases {
+            test_overflow(raw, dst, convert_float_to_int, tp);
+        }
+
+        // convert_bytes_to_int
+        let cases: Vec<(&[u8], i64, FieldTypeTp)> = vec![
+            (b"128.5", 127, FieldTypeTp::Tiny),
+            (b"12345", 127, FieldTypeTp::Tiny),
+            (b"-12345", -128, FieldTypeTp::Tiny),
+            (b"32768.6", 32767, FieldTypeTp::Short),
+            (b"123456", 32767, FieldTypeTp::Short),
+            (b"-123456", -32768, FieldTypeTp::Short),
+            (b"8388608.7", 8388607, FieldTypeTp::Int24),
+            (b"83886078", 8388607, FieldTypeTp::Int24),
+            (b"-83886078", -8388608, FieldTypeTp::Int24),
+            (b"2147483649.8", 2147483647, FieldTypeTp::Long),
+            (b"-2147483649", -2147483648, FieldTypeTp::Long),
+            (b"314748364221339834234239", i64::MAX, FieldTypeTp::LongLong),
+            (
+                b"-314748364221339834234239",
+                i64::MIN,
+                FieldTypeTp::LongLong,
+            ),
+        ];
+        for (raw, dst, tp) in cases {
+            test_overflow(raw, dst, convert_bytes_to_int, tp);
         }
     }
 
@@ -695,82 +886,6 @@ mod tests {
             assert_eq!(o.unwrap(), *e);
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
-    }
-
-    #[test]
-    fn test_convert_uint_into_int() {
-        let tests: Vec<(u64, FieldTypeTp, Option<i64>)> = vec![
-            (123, FieldTypeTp::Tiny, Some(123)),
-            (256, FieldTypeTp::Tiny, None),
-            (123, FieldTypeTp::Short, Some(123)),
-            (65536, FieldTypeTp::Short, None),
-            (123, FieldTypeTp::Int24, Some(123)),
-            (8388610, FieldTypeTp::Int24, None),
-            (8388610, FieldTypeTp::Long, Some(8388610)),
-            (4294967297, FieldTypeTp::Long, None),
-            (4294967297, FieldTypeTp::LongLong, Some(4294967297)),
-            (u64::MAX, FieldTypeTp::LongLong, None),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (from, tp, to) in tests {
-            let r = convert_uint_to_int(&mut ctx, from, tp);
-            match to {
-                Some(to) => assert_eq!(to, r.unwrap()),
-                None => assert!(
-                    r.is_err(),
-                    "from: {}, to tp: {} should be overflow",
-                    from,
-                    tp
-                ),
-            }
-        }
-    }
-
-    #[test]
-    fn test_convert_float_to_int() {
-        let tests: Vec<(f64, FieldTypeTp, Option<i64>)> = vec![
-            (123.1, FieldTypeTp::Tiny, Some(123)),
-            (123.6, FieldTypeTp::Tiny, Some(124)),
-            (-123.1, FieldTypeTp::Tiny, Some(-123)),
-            (-123.6, FieldTypeTp::Tiny, Some(-124)),
-            (256.5, FieldTypeTp::Tiny, None),
-            (256.1, FieldTypeTp::Short, Some(256)),
-            (256.6, FieldTypeTp::Short, Some(257)),
-            (-256.1, FieldTypeTp::Short, Some(-256)),
-            (-256.6, FieldTypeTp::Short, Some(-257)),
-            (65535.5, FieldTypeTp::Short, None),
-            (65536.1, FieldTypeTp::Int24, Some(65536)),
-            (65536.5, FieldTypeTp::Int24, Some(65537)),
-            (-65536.1, FieldTypeTp::Int24, Some(-65536)),
-            (-65536.5, FieldTypeTp::Int24, Some(-65537)),
-            (8388610.2, FieldTypeTp::Int24, None),
-            (8388610.4, FieldTypeTp::Long, Some(8388610)),
-            (8388610.5, FieldTypeTp::Long, Some(8388611)),
-            (-8388610.4, FieldTypeTp::Long, Some(-8388610)),
-            (-8388610.5, FieldTypeTp::Long, Some(-8388611)),
-            (4294967296.8, FieldTypeTp::Long, None),
-            (4294967296.8, FieldTypeTp::LongLong, Some(4294967297)),
-            (4294967297.1, FieldTypeTp::LongLong, Some(4294967297)),
-            (-4294967296.8, FieldTypeTp::LongLong, Some(-4294967297)),
-            (-4294967297.1, FieldTypeTp::LongLong, Some(-4294967297)),
-            (f64::MAX, FieldTypeTp::LongLong, None),
-            (f64::MIN, FieldTypeTp::LongLong, None),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (from, tp, to) in tests {
-            let r = convert_float_to_int(&mut ctx, from, tp);
-            match to {
-                Some(to) => assert_eq!(to, r.unwrap()),
-                None => assert!(
-                    r.is_err(),
-                    "from: {}, to tp: {} should be overflow",
-                    from,
-                    tp
-                ),
-            }
-        }
     }
 
     #[test]

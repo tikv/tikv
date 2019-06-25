@@ -64,8 +64,11 @@ impl ScalarFunc {
         };
         let res = if is_negative {
             convert_bytes_to_int(ctx, &val, FieldTypeTp::LongLong).map(|v| {
-                ctx.warnings
-                    .append_warning(Error::cast_neg_int_as_unsigned());
+                // TODO: handle inUion flag
+                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                    ctx.warnings
+                        .append_warning(Error::cast_neg_int_as_unsigned());
+                }
                 v
             })
         } else {
@@ -1933,7 +1936,7 @@ mod tests {
                 0,
             ),
             (
-                FieldTypeFlag::empty(),
+                FieldTypeFlag::UNSIGNED,
                 vec![Datum::Bytes(b"-1".to_vec())],
                 -1,
                 1,
@@ -1949,9 +1952,18 @@ mod tests {
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
+            assert_eq!(
+                ctx.warnings.warning_cnt, warnings_cnt,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
+            );
             if warnings_cnt > 0 {
-                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code(),
+                    ERR_UNKNOWN,
+                    "unexpected warning: {:?}",
+                    ctx.warnings.warnings
+                );
             }
         }
 
@@ -1959,14 +1971,16 @@ mod tests {
             (
                 vec![Datum::Bytes(b"-9223372036854775810".to_vec())],
                 i64::MIN,
+                ERR_DATA_OUT_OF_RANGE,
             ),
             (
                 vec![Datum::Bytes(b"18446744073709551616".to_vec())],
                 u64::MAX as i64,
+                ERR_TRUNCATE_WRONG_VALUE,
             ),
         ];
 
-        for (cols, exp) in cases {
+        for (cols, exp, err_code) in cases {
             let col_expr = col_expr(0, FieldTypeTp::String);
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
@@ -1976,10 +1990,16 @@ mod tests {
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(
+                ctx.warnings.warning_cnt, 1,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
+            );
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                ERR_TRUNCATE_WRONG_VALUE
+                err_code,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
             );
 
             // test overflow as error
