@@ -321,7 +321,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "on split";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
-                    "split_keys" => %KeysInfoFormatter(&split_keys),
+                    "split_keys" => %KeysInfoFormatter(split_keys.iter()),
                 );
                 self.on_prepare_split_region(region_epoch, split_keys, callback);
             }

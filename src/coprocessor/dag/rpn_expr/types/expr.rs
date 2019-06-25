@@ -12,6 +12,7 @@ pub enum RpnExpressionNode {
     FnCall {
         func: RpnFnMeta,
         field_type: FieldType,
+        implicit_args: Vec<ScalarValue>,
     },
 
     /// Represents a scalar constant value.
