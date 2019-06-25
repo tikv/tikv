@@ -345,7 +345,8 @@ The configuration above is global. You can also tune the configuration by config
 
 - `disable-namespace-relocation` is used to disable Region relocation to the store of its namespace. When you set it to `true`, PD does not move Regions to stores where they belong to.
 
-- `use-region-storage` is used to enable or disable Region metadata storage in PD.  When you set it to `true`, the metadata of PD Regions will be saved to the Region Meta-Storage, a seperate storage engine. This solves the potential performance issue with BlotDB (backend of etcd) that may occur if the stored metadata has reached a GB level. Metadata is synchonized across multiple PD servers and eventally consistency is guranteed through Raft. The default value is `true`.
+- `use-region-storage` is used to enable or disable Region metadata storage in PD.  When you set it to `true`, the metadata of PD Regions will be saved to the Region Meta-Storage, a separate storage engine. This solves the potential performance issue with BoltDB (backend of etcd) that may occur if the stored metadata has reached a GB level. Metadata is synchronized across multiple PD servers and eventually consistency is guaranteed through Raft. The default value is `true`.
+
 
    > **Note:**
    >
