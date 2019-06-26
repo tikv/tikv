@@ -227,7 +227,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: 2018,
+                min_blob_size: ReadableSize(2018),
                 blob_file_compression: CompressionType::Zstd,
                 blob_cache_size: ReadableSize::gb(12),
                 min_gc_batch_size: ReadableSize::kb(12),
@@ -278,7 +278,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: ReadableSize::gb(4), // disable titan default
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -329,7 +329,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: ReadableSize::gb(4), // disable titan default
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -380,7 +380,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: ReadableSize::gb(4), // disable titan default
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -397,6 +397,7 @@ fn test_serde_custom_tikv_config() {
             dirname: "bar".to_owned(),
             disable_gc: false,
             max_background_gc: 9,
+            purge_obsolete_files_period: ReadableDuration::secs(1),
         },
     };
     value.raftdb = RaftDbConfig {
