@@ -132,7 +132,7 @@ impl ScalarFunc {
     pub fn time_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_time(ctx, row)?;
         if arg.is_none() {
-            Ok(Some(true as i64))
+            return Ok(Some(true as i64));
         }
 
         if self.implicit_args.len() > 0 {
@@ -142,7 +142,7 @@ impl ScalarFunc {
                 //   For DATE and DATETIME columns that are declared as NOT NULL,
                 //   you can find the special date '0000-00-00' by using a statement like this:
                 //   "SELECT * FROM tbl_name WHERE date_column IS NULL"
-                Ok(Some(true as i64))
+                return Ok(Some(true as i64));
             }
         }
         Ok(Some(false as i64))
@@ -206,6 +206,8 @@ mod tests {
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
     use tipb::expression::ScalarFuncSig;
+    use crate::coprocessor::codec::datum::encode;
+    use crate::coprocessor::codec::mysql::{time, Tz, UNSPECIFIED_FSP};
 
     #[test]
     fn test_logic_op() {
@@ -424,6 +426,32 @@ mod tests {
         for (op, arg, exp) in tests {
             let arg1 = datum_expr(arg);
             let op = Expression::build(&ctx, scalar_func_expr(op, &[arg1])).unwrap();
+            let res = op.eval_int(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+    
+    #[test]
+    fn test_unary_op_implicit_args() {
+        // (sig, args, implicit_args, exp)
+        let tests = vec![
+            (ScalarFuncSig::TimeIsNull, Datum::Null, vec![Datum::I64(1)], Some(1)),
+            (ScalarFuncSig::TimeIsNull, Datum::Null, vec![Datum::I64(0)], Some(1)),
+            (ScalarFuncSig::TimeIsNull, Datum::Time(time::zero_datetime(&Tz::utc())), vec![Datum::I64(1)], Some(1)),
+            (ScalarFuncSig::TimeIsNull, Datum::Time(time::zero_datetime(&Tz::utc())), vec![Datum::I64(0)], Some(0)),
+            (ScalarFuncSig::TimeIsNull, Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()), vec![Datum::I64(1)], Some(0)),
+            (ScalarFuncSig::TimeIsNull, Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()), vec![Datum::I64(0)], Some(0)),
+            (ScalarFuncSig::TimeIsNull, Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()), vec![], Some(0)),
+            (ScalarFuncSig::TimeIsNull, Datum::Time(time::zero_datetime(&Tz::utc())), vec![], Some(0))
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, arg, imp_args, exp) in tests {
+            let arg1 = datum_expr(arg);
+            let mut expr = scalar_func_expr(sig, &[arg1]);
+            let val = encode(&imp_args, false).unwrap_or_default();
+            expr.set_val(val);
+            
+            let op = Expression::build(&ctx, expr).unwrap();
             let res = op.eval_int(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
