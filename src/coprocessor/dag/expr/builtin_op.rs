@@ -131,7 +131,21 @@ impl ScalarFunc {
 
     pub fn time_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_time(ctx, row)?;
-        Ok(Some(arg.is_none() as i64))
+        if arg.is_none() {
+            Ok(Some(true as i64))
+        }
+
+        if self.implicit_args.len() > 0 {
+            let is_not_null_col = self.implicit_args[0].i64();
+            if is_not_null_col > 0 && arg.unwrap().is_zero() {
+                // From MySQL document:
+                //   For DATE and DATETIME columns that are declared as NOT NULL,
+                //   you can find the special date '0000-00-00' by using a statement like this:
+                //   "SELECT * FROM tbl_name WHERE date_column IS NULL"
+                Ok(Some(true as i64))
+            }
+        }
+        Ok(Some(false as i64))
     }
 
     pub fn duration_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
