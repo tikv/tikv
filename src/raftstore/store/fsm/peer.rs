@@ -2385,10 +2385,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         //              first_index                         replicated_index
         // `alive_cache_idx` is the smallest `replicated_index` of healthy up nodes.
         // `alive_cache_idx` is only used to gc cache.
+        // Only consider voters when calculating `replicated_idx`, because
+        // learners may be down for a long time. We don't want to pile up
+        // raft logs, and too many logs may cause serious write amplification.
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let last_idx = self.fsm.peer.get_store().last_index();
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
-        for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
+        for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().voters() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
