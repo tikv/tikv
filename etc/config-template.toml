@@ -732,7 +732,7 @@
 
 ## Time to wait in milliseconds before responding to TiDB when pessimistic
 ## transactions # encounter locks
-# wait-for-lock-timeout = 1000
+# wait-for-lock-timeout = 3000
 
 ## Time to delay in milliseconds before responding to TiDB when other transactions
 ## release locks that pessimistic transactions are waiting for(0 to disable).
