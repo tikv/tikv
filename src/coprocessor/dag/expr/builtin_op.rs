@@ -198,7 +198,9 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
+    use crate::coprocessor::codec::datum::encode;
     use crate::coprocessor::codec::mysql::Duration;
+    use crate::coprocessor::codec::mysql::{time, Tz, UNSPECIFIED_FSP};
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{
         check_overflow, datum_expr, scalar_func_expr, str2dec,
@@ -206,8 +208,6 @@ mod tests {
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
     use tipb::expression::ScalarFuncSig;
-    use crate::coprocessor::codec::datum::encode;
-    use crate::coprocessor::codec::mysql::{time, Tz, UNSPECIFIED_FSP};
 
     #[test]
     fn test_logic_op() {
@@ -430,19 +430,59 @@ mod tests {
             assert_eq!(res, exp);
         }
     }
-    
+
     #[test]
     fn test_unary_op_implicit_args() {
         // (sig, args, implicit_args, exp)
         let tests = vec![
-            (ScalarFuncSig::TimeIsNull, Datum::Null, vec![Datum::I64(1)], Some(1)),
-            (ScalarFuncSig::TimeIsNull, Datum::Null, vec![Datum::I64(0)], Some(1)),
-            (ScalarFuncSig::TimeIsNull, Datum::Time(time::zero_datetime(&Tz::utc())), vec![Datum::I64(1)], Some(1)),
-            (ScalarFuncSig::TimeIsNull, Datum::Time(time::zero_datetime(&Tz::utc())), vec![Datum::I64(0)], Some(0)),
-            (ScalarFuncSig::TimeIsNull, Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()), vec![Datum::I64(1)], Some(0)),
-            (ScalarFuncSig::TimeIsNull, Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()), vec![Datum::I64(0)], Some(0)),
-            (ScalarFuncSig::TimeIsNull, Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()), vec![], Some(0)),
-            (ScalarFuncSig::TimeIsNull, Datum::Time(time::zero_datetime(&Tz::utc())), vec![], Some(0))
+            (
+                ScalarFuncSig::TimeIsNull,
+                Datum::Null,
+                vec![Datum::I64(1)],
+                Some(1),
+            ),
+            (
+                ScalarFuncSig::TimeIsNull,
+                Datum::Null,
+                vec![Datum::I64(0)],
+                Some(1),
+            ),
+            (
+                ScalarFuncSig::TimeIsNull,
+                Datum::Time(time::zero_datetime(&Tz::utc())),
+                vec![Datum::I64(1)],
+                Some(1),
+            ),
+            (
+                ScalarFuncSig::TimeIsNull,
+                Datum::Time(time::zero_datetime(&Tz::utc())),
+                vec![Datum::I64(0)],
+                Some(0),
+            ),
+            (
+                ScalarFuncSig::TimeIsNull,
+                Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()),
+                vec![Datum::I64(1)],
+                Some(0),
+            ),
+            (
+                ScalarFuncSig::TimeIsNull,
+                Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()),
+                vec![Datum::I64(0)],
+                Some(0),
+            ),
+            (
+                ScalarFuncSig::TimeIsNull,
+                Datum::Time(time::Time::parse_utc_datetime("170102039.", UNSPECIFIED_FSP).unwrap()),
+                vec![],
+                Some(0),
+            ),
+            (
+                ScalarFuncSig::TimeIsNull,
+                Datum::Time(time::zero_datetime(&Tz::utc())),
+                vec![],
+                Some(0),
+            ),
         ];
         let mut ctx = EvalContext::default();
         for (sig, arg, imp_args, exp) in tests {
@@ -450,7 +490,7 @@ mod tests {
             let mut expr = scalar_func_expr(sig, &[arg1]);
             let val = encode(&imp_args, false).unwrap_or_default();
             expr.set_val(val);
-            
+
             let op = Expression::build(&ctx, expr).unwrap();
             let res = op.eval_int(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
