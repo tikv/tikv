@@ -257,16 +257,19 @@ fn parse_arg_type(arg: &FnArg) -> Result<TypePath> {
 }
 
 fn check_attr(meta: &[Ident], item_fn: &ItemFn) -> Result<()> {
-    let err_msg = "The attr can only be `ctx` or `payload`,\
-                   and make sure that the n attributes and their orders \
-                   are the same as the first n param of the function signature.";
-    let (ctx, payload) = ("ctx", "payload");
     if item_fn.decl.inputs.len() < meta.len() {
-        return Err(meta[0].span().unwrap().error(err_msg));
+        return Err(meta[0]
+            .span()
+            .unwrap()
+            .error("The attrs of `[rpn_fn]` are more than the params of the function"));
     }
-    for m in meta.iter() {
-        if m != ctx && m != payload {
-            return Err(meta[0].span().unwrap().error(err_msg));
+    for m in meta {
+        if m != "ctx" && m != "payload" {
+            return Err(meta[0].span().unwrap().error(
+                "The attr of `[rpn_fn]` can only be `ctx` or `payload`,\
+                 and make sure that the n attributes and their orders \
+                 are the same as the first n param of the function signature.",
+            ));
         }
     }
     Ok(())
@@ -615,6 +618,8 @@ mod tests {
                 let item_fn: ItemFn = parse_str(src).unwrap();
                 assert!(check_attr(&meta, &item_fn).is_ok());
             } else {
+                // It will panic when occur `Err(meta[0].span().unwrap().error())`.
+                // Because 'proc_macro::Span is only available in procedural macros'
                 let r = panic::catch_unwind(move || {
                     let item_fn: ItemFn = parse_str(src).unwrap();
                     check_attr(&meta, &item_fn)
