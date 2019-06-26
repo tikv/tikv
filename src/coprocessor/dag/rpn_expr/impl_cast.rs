@@ -16,10 +16,13 @@ use crate::coprocessor::Result;
 ///
 /// TODO: This function supports some internal casts performed by TiKV. However it would be better
 /// to be done in TiDB.
-pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Result<RpnFnMeta> {
+pub fn get_cast_fn(
+    from_field_type: &FieldType,
+    to_field_type: &FieldType,
+) -> Result<(RpnFnMeta, Vec<ScalarValue>)> {
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
-    Ok(match (from, to) {
+    let func = match (from, to) {
         (EvalType::Int, EvalType::Decimal) => {
             if !from_field_type
                 .as_accessor()
@@ -40,7 +43,14 @@ pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Re
         (EvalType::Duration, EvalType::Real) => cast_duration_as_real_fn_meta(),
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
-    })
+    };
+    // This cast function is inserted by `Coprocessor` automatically,
+    // the `inUnion` flag always false in this situation. Ideally,
+    // the cast function should be inserted by TiDB and pushed down
+    // with all implicit arguments.
+    // **Note**: CAST family functions inserted by `Coprocessor` will
+    // use empty implicit arguments to avoid memory allocation.
+    Ok((func, vec![]))
 }
 
 fn produce_dec_with_specified_tp(
