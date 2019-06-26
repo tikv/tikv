@@ -697,7 +697,7 @@ Use this command to modify the upper limit of scheduling rate for a specific sto
 Example:
 
 ```bash
->> store limit 2 1 // Set the upper limit of scheduling speed for store 2 to be 1 scheduling task per second.
+>> store limit 2 10 // Set the upper limit of scheduling speed for store 2 to be 10 scheduling tasks per minute.
 ```
 
 ### `stores show limit`
@@ -721,12 +721,12 @@ Example:
 
 ### `stores set limit <rate>`
 
-Use this command to set the maximum number of scheduling tasks for all stores, in the unit of tasks per second. The tasks include operations such as adding a peer or a learner.
+Use this command to set the maximum number of scheduling tasks for all stores, in the unit of tasks per minute. The tasks include operations such as adding a peer or a learner.
 
 Example:
 
 ```bash
->> stores set limit 2 // Set the upper limit of scheduling speed for all stores to be 2 scheduling tasks per second.
+>> stores set limit 20 // Set the upper limit of scheduling speed for all stores to be 20 scheduling tasks per minute.
 ```
 
 ### `table_ns [create | add | remove | set_store | rm_store | set_meta | rm_meta]`
