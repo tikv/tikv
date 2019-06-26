@@ -313,6 +313,35 @@ impl ArithmeticOp for DecimalMultiply {
     }
 }
 
+#[derive(Debug)]
+pub struct IntDivideInt;
+
+impl ArithmeticOp for IntDivideInt {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        // check divide by zero
+        if *rhs == 0i64 {
+            return Err(Error::division_by_zero())?;
+        }
+        lhs.checked_div(*rhs).
+            ok_or_else(|| Error::overflow("UNSIGNED BIGINT",
+                                          &format!("({} + {})", lhs, rhs)).into())
+            .map(Some)
+    }
+}
+
+#[derive(Debug)]
+pub struct IntDivideDecimal;
+
+impl ArithmeticOp for IntDivideDecimal {
+    type T = Decimal;
+
+    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        unimplemented!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,5 +700,45 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
+    }
+
+    #[test]
+    fn test_int_divide_int() {
+        // migrate from
+        let test_cases_ok: Vec<(Int, Int, Option<Int>)> = vec![
+            (13 , 11, Some(1)),
+            (13, -11, Some(-1)),
+            (-13, 11, Some(-1)),
+            (-13, -11, Some(1)),
+
+            (33, 11, Some(3)),
+            (33, -11, Some(-3)),
+            (-33, 11, Some(-3)),
+            (-33, -11, Some(3)),
+
+//            (11, 0, None),
+//            (-11, 0, None),
+
+            (-3, 5, Some(0)),
+            (3, -5, Some(0)),
+
+            (std::i64::MIN + 1, -1, Some(std::i64::MAX)),
+            (std::i64::MIN, 1, Some(std::i64::MIN)),
+        ];
+
+        // TODO: make clear if this is ok
+        for (lhs, rhs, expected) in test_cases_ok {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::IntDivideInt)
+                .unwrap();
+            assert_eq!(expected, output, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_decimal() {
+        unimplemented!()
     }
 }
