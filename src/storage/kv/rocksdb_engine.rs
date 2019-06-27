@@ -15,7 +15,7 @@ use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use crate::storage::{BlockCacheConfig, Key, Value};
 use tikv_util::escape;
@@ -89,7 +89,7 @@ impl RocksEngine {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
-                let td = TempDir::new("temp-rocksdb").unwrap();
+                let td = Builder::new().prefix("temp-rocksdb").tempdir().unwrap();
                 (td.path().to_str().unwrap().to_owned(), Some(td))
             }
             _ => (path.to_owned(), None),
@@ -351,7 +351,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::CFStatistics;
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_rocksdb() {
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = TempDir::new("rocksdb_test").unwrap();
+        let dir = Builder::new().prefix("rocksdb_test").tempdir().unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())

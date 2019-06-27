@@ -7,7 +7,7 @@ use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, Body, Method, Request, Response, Server, StatusCode};
-use tempdir::TempDir;
+use tempfile::TempDir;
 use tokio_threadpool::{Builder, ThreadPool};
 
 use std::net::SocketAddr;
@@ -109,7 +109,7 @@ impl StatusServer {
                 .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
                 .then(
                     move |_| -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
-                        let tmp_dir = match TempDir::new("") {
+                        let tmp_dir = match TempDir::new() {
                             Ok(tmp_dir) => tmp_dir,
                             Err(e) => return Box::new(err(e.into())),
                         };

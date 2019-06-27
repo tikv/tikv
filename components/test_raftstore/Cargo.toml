@@ -9,7 +9,7 @@ tikv_util = { path = "../tikv_util" }
 tikv = { path = "../../", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 protobuf = "~2.0"
-tempdir = "0.3"
+tempfile = "3.0"
 raft = "0.4"
 futures = "0.1"
 tokio-timer = "0.2"
