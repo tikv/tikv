@@ -261,15 +261,14 @@ fn check_attr(meta: &[Ident], item_fn: &ItemFn) -> Result<()> {
         return Err(meta[0]
             .span()
             .unwrap()
-            .error("The attrs of `[rpn_fn]` are more than the params of the function"));
+            .error("The attrs of `#[rpn_fn]` are more than the params of the function."));
     }
     for m in meta {
         if m != "ctx" && m != "payload" {
-            return Err(meta[0].span().unwrap().error(
-                "The attr of `[rpn_fn]` can only be `ctx` or `payload`,\
-                 and make sure that the n attributes and their orders \
-                 are the same as the first n param of the function signature.",
-            ));
+            return Err(meta[0]
+                .span()
+                .unwrap()
+                .error("The attr of `#[rpn_fn]` can only be `ctx` or `payload`."));
         }
     }
     Ok(())
