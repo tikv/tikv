@@ -851,6 +851,7 @@ impl RaftDefaultCfConfig {
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
