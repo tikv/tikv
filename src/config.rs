@@ -115,6 +115,7 @@ impl TitanCfConfig {
         opts.set_discardable_ratio(self.discardable_ratio);
         opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
+        opts.set_blob_run_mode(self.blob_run_mode.into());
         opts
     }
 }
