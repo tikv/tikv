@@ -404,8 +404,9 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -478,8 +479,9 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -534,8 +536,9 @@ cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
