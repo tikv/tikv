@@ -16,7 +16,7 @@ PD provides the following two methods to configure scheduling rate limits on sto
 
 - Configure the rate limit using **`store-balance-rate`**.
 
-    `store-balance-rate` specifies the maximum number of scheduling tasks allowed for each store per minute. The scheduling steps include adding Peers or Learners. Set this parameter in the PD configuration file. The default value is 15. This configuration is persistent.
+    `store-balance-rate` specifies the maximum number of scheduling tasks allowed for each store per minute. The scheduling steps include adding peers or learners. Set this parameter in the PD configuration file. The default value is 15. This configuration is persistent.
 
     Use the `pd-ctl` tool to modify `store-balance-rate` and make it persistent.
 
@@ -28,7 +28,7 @@ PD provides the following two methods to configure scheduling rate limits on sto
 
     > **Note:**
     >
-    > The modification only takes effect on stores added after this configuration change, and will be applied to all stores in the  cluster after you restart TiKV. If you want this change to work  immediately on all stores or some individual stores before the change without restarting, combine this configuration with the `pd-ctl` tool method below. See [Sample usages](#sample-usages) for more details.
+    > The modification only takes effect on stores added after this configuration change, and will be applied to all stores in the cluster after you restart TiKV. If you want this change to work immediately on all stores or some individual stores before the change without restarting, combine this configuration with the `pd-ctl` tool method below. See [Sample usages](#sample-usages) for more details.
 
 - Use the `pd-ctl` tool to view or modify the upper limit of the scheduling rate. The commands are:
 
