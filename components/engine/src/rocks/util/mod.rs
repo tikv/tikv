@@ -608,7 +608,7 @@ mod tests {
         TitanDBOptions, Writable, DB,
     };
     use crate::CF_DEFAULT;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_cfs_diff() {
@@ -628,7 +628,10 @@ mod tests {
 
     #[test]
     fn test_new_engine_opt() {
-        let path = TempDir::new("_util_rocksdb_test_check_column_families").expect("");
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_check_column_families")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         // create db when db not exist
@@ -693,7 +696,10 @@ mod tests {
 
     #[test]
     fn test_compression_ratio() {
-        let path = TempDir::new("_util_rocksdb_test_compression_ratio").expect("");
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_compression_ratio")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let opts = DBOptions::new();
@@ -738,10 +744,16 @@ mod tests {
         db_opts: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) {
-        let path = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion").expect("");
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_prepare_sst_for_ingestion")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let sst_dir = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion_sst").expect("");
+        let sst_dir = Builder::new()
+            .prefix("_util_rocksdb_test_prepare_sst_for_ingestion_sst")
+            .tempdir()
+            .unwrap();
         let sst_path = sst_dir.path().join("abc.sst");
         let sst_clone = sst_dir.path().join("abc.sst.clone");
 
@@ -807,7 +819,10 @@ mod tests {
 
     #[test]
     fn test_compact_files_in_range() {
-        let temp_dir = TempDir::new("test_compact_files_in_range").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("test_compact_files_in_range")
+            .tempdir()
+            .unwrap();
 
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);

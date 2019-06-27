@@ -117,7 +117,7 @@ pub fn get_range_properties_cf(
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::rocks;
     use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
@@ -142,7 +142,10 @@ mod tests {
     }
 
     fn test_delete_all_in_range(use_delete_range: bool) {
-        let path = TempDir::new("engine_delete_all_in_range").unwrap();
+        let path = Builder::new()
+            .prefix("engine_delete_all_in_range")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let cfs_opts = ALL_CFS
@@ -199,7 +202,10 @@ mod tests {
 
     #[test]
     fn test_delete_all_files_in_range() {
-        let path = TempDir::new("engine_delete_all_files_in_range").unwrap();
+        let path = Builder::new()
+            .prefix("engine_delete_all_files_in_range")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let cfs_opts = ALL_CFS
@@ -234,7 +240,10 @@ mod tests {
 
     #[test]
     fn test_delete_range_prefix_bloom_case() {
-        let path = TempDir::new("engine_delete_range_prefix_bloom").unwrap();
+        let path = Builder::new()
+            .prefix("engine_delete_range_prefix_bloom")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let mut opts = DBOptions::new();

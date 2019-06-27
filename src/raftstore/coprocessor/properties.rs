@@ -725,7 +725,7 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::rocks::{DBEntryType, TablePropertiesCollector};
     use rand::Rng;
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use test::Bencher;
 
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
@@ -740,7 +740,10 @@ mod tests {
 
     #[test]
     fn test_get_range_entries_and_versions() {
-        let path = TempDir::new("_test_get_range_entries_and_versions").expect("");
+        let path = Builder::new()
+            .prefix("_test_get_range_entries_and_versions")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
