@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::{self, i16, i32, i64, i8, str, u16, u32, u64, u8};
+use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
 use cop_datatype::{self, FieldTypeTp};
 
@@ -391,6 +391,36 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
     }
 }
 
+fn round_int_str<'a, 'b: 'a>(num_next_dot: char, s: &'b str) -> Cow<'a, str> {
+    if num_next_dot < '5' {
+        return Cow::Borrowed(s);
+    }
+
+    let mut int_str = String::new();
+    match s.rfind(|c| c != '9' && c != '+' && c != '-') {
+        Some(idx) => {
+            int_str.push_str(&s[..idx]);
+            let next_char = char::from_u32(s.chars().nth(idx).unwrap() as u32 + 1).unwrap();
+            int_str.push(next_char);
+            let zero_count = s.len() - (idx + 1);
+            if zero_count > 0 {
+                int_str.extend((0..zero_count).map(|_| '0'));
+            }
+        }
+        None => {
+            let zero_count = if s.starts_with('+') || s.starts_with('-') {
+                int_str.push_str(&s[..1]);
+                s.len() - 1
+            } else {
+                s.len()
+            };
+            int_str.push('1');
+            int_str.extend((0..zero_count).map(|_| '0'));
+        }
+    }
+    Cow::Owned(int_str)
+}
+
 /// It converts a valid float string into valid integer string which can be
 /// parsed by `i64::from_str`, we can't parse float first then convert it to string
 /// because precision will be lost.
@@ -427,13 +457,25 @@ fn float_str_to_int_string<'a, 'b: 'a>(
     }
 
     if e_idx.is_none() {
-        if int_cnt == 0 {
-            return Ok(Cow::Borrowed("0"));
+        let dot_idx = dot_idx.unwrap();
+        // NOTE: to make compatible with TiDB, +0.5 -> 1, -0.5 -> -1
+        let int_str = if int_cnt == 0 && valid_float.starts_with('-') {
+            &"-0"
+        } else if int_cnt == 0 {
+            &"0"
+        } else {
+            &valid_float[..dot_idx]
+        };
+        if digits_cnt - int_cnt > 0 {
+            // It's OK to unwrap here because the `dot_idx + 1` will less than the length of `valid_float`
+            let digit_char = valid_float.chars().nth(dot_idx + 1).unwrap();
+            return Ok(round_int_str(digit_char, int_str));
         }
-        return Ok(Cow::Borrowed(&valid_float[..dot_idx.unwrap()]));
+        return Ok(Cow::Borrowed(int_str));
     }
 
-    let exp = box_try!((&valid_float[e_idx.unwrap() + 1..]).parse::<i64>());
+    let e_idx = e_idx.unwrap();
+    let exp = box_try!((&valid_float[e_idx + 1..]).parse::<i64>());
     if exp > 0 && int_cnt > (i64::MAX - exp) {
         // (exp + inc_cnt) overflows MaxInt64. Add warning and return original float string
         ctx.warnings
@@ -441,12 +483,35 @@ fn float_str_to_int_string<'a, 'b: 'a>(
         return Ok(Cow::Owned(valid_float.to_owned()));
     }
     if int_cnt + exp <= 0 {
+        if int_cnt == 0 && digits_cnt > 0 {
+            // NOTE: to make compatible with TiDB (different with +0.5 -> 1), +0.5e0 -> +1, -0.5e0 -> -1
+            let int_str = if valid_float.starts_with('+') {
+                &"+0"
+            } else if valid_float.starts_with('-') {
+                &"-0"
+            } else {
+                &"0"
+            };
+            let digit_char = valid_float.chars().nth(dot_idx.unwrap() + 1).unwrap();
+            return Ok(round_int_str(digit_char, int_str));
+        }
         return Ok(Cow::Borrowed("0"));
     }
 
-    let mut valid_int = String::from(&valid_float[..e_idx.unwrap()]);
-    if dot_idx.is_some() {
-        valid_int.remove(dot_idx.unwrap());
+    let mut valid_int = String::from(&valid_float[..e_idx]);
+    if let Some(idx) = dot_idx {
+        valid_int.remove(idx);
+        let require = if valid_float.starts_with('-') || valid_float.starts_with('+') {
+            (int_cnt + exp) as usize + 1
+        } else {
+            (int_cnt + exp) as usize
+        };
+        if require < valid_int.len() {
+            let digit_char = valid_float.chars().nth(require + 1).unwrap();
+            if digit_char >= '5' {
+                valid_int = round_int_str(digit_char, &valid_int).into_owned();
+            }
+        }
     }
 
     let extra_zero_count = exp + int_cnt - digits_cnt;
@@ -679,6 +744,7 @@ mod tests {
 
         // convert_bytes_to_int
         let cases: Vec<(&[u8], i64, FieldTypeTp)> = vec![
+            (b"127.5", 127, FieldTypeTp::Tiny),
             (b"128.5", 127, FieldTypeTp::Tiny),
             (b"12345", 127, FieldTypeTp::Tiny),
             (b"-12345", -128, FieldTypeTp::Tiny),
@@ -845,6 +911,32 @@ mod tests {
     }
 
     #[test]
+    fn test_round_int_str() {
+        let cases = vec![
+            ("123", '1', "123"),
+            ("123", '4', "123"),
+            ("123", '5', "124"),
+            ("123", '6', "124"),
+            ("999", '6', "1000"),
+            ("998", '6', "999"),
+            ("989", '6', "990"),
+            ("989898979", '6', "989898980"),
+            ("989898999", '6', "989899000"),
+            ("+989898999", '6', "+989899000"),
+            ("-989898999", '6', "-989899000"),
+        ];
+
+        for (s, n, expect) in cases {
+            let got = round_int_str(n, s);
+            assert_eq!(
+                got, expect,
+                "round int str: {}, {}, expect: {}, got: {}",
+                s, n, expect, got
+            )
+        }
+    }
+
+    #[test]
     fn test_invalid_get_valid_int_prefix() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec!["1e21", "1e9223372036854775807"];
@@ -869,12 +961,22 @@ mod tests {
         let cases = vec![
             (".1", "0"),
             (".0", "0"),
+            (".5", "1"),
+            ("+.5", "1"),
+            ("-.5", "-1"),
+            (".5e0", "1"),
+            ("+.5e0", "+1"),
+            ("-.5e0", "-1"),
             ("123", "123"),
+            ("255.5", "256"),
             ("123e1", "1230"),
             ("123.1e2", "12310"),
             ("123.45e5", "12345000"),
+            ("123.55e5", "12355000"),
             ("123.45678e5", "12345678"),
-            ("123.456789e5", "12345678"),
+            ("123.456789e5", "12345679"),
+            ("123.456784e5", "12345678"),
+            ("123.456999e5", "12345700"),
             ("-123.45678e5", "-12345678"),
             ("+123.45678e5", "+12345678"),
             ("9e20", "900000000000000000000"), // TODO: check code validity again on function float_str_to_int_string(),
@@ -883,7 +985,7 @@ mod tests {
 
         for (i, e) in cases {
             let o = super::get_valid_int_prefix(&mut ctx, i);
-            assert_eq!(o.unwrap(), *e);
+            assert_eq!(o.unwrap(), *e, "{}, {}", i, e);
         }
         assert_eq!(ctx.take_warnings().warnings.len(), 0);
     }
