@@ -43,7 +43,7 @@ impl RpnExpressionBuilder {
             ExprType::MysqlDecimal => {}
             ExprType::MysqlJson => {}
             ExprType::ColumnRef => {}
-            _ => return Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+            _ => return Err(box_err!("Blacklist expression type {:?}", c.get_tp())),
         }
 
         Ok(())
