@@ -528,145 +528,128 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
 }
 
 macro_rules! engine_histogram_metrics {
-    ($name:ident, $db:expr, $value:expr) => {
-        concat_idents!(STORE_ENGINE_, $name, _VEC)
-            .with_label_values(&[$db, concat!(stringify!(lower($name)), "_median")])
+    ($metric:ident, $prefix:expr, $db:expr, $value:expr) => {
+        $metric
+            .with_label_values(&[$db, concat!($prefix, "_median")])
             .set($value.median);
-        concat_idents!(STORE_ENGINE_, $name, _VEC)
-            .with_label_values(&[$db, concat!(stringify!(lower($name)), "_percentile95")])
+        $metric
+            .with_label_values(&[$db, concat!($prefix, "_percentile95")])
             .set($value.percentile95);
-        concat_idents!(STORE_ENGINE_, $name, _VEC)
-            .with_label_values(&[$db, concat!(stringify!(lower($name)), "_percentile99")])
+        $metric
+            .with_label_values(&[$db, concat!($prefix, "_percentile99")])
             .set($value.percentile99);
-        concat_idents!(STORE_ENGINE_, $name, _VEC)
-            .with_label_values(&[$db, concat!(stringify!(lower($name)), "_average")])
+        $metric
+            .with_label_values(&[$db, concat!($prefix, "_average")])
             .set($value.average);
-        concat_idents!(STORE_ENGINE_, $name, _VEC)
+        $metric
             .with_label_values(&[
                 $db,
-                concat!(stringify!(lower($name)), "_standard_deviation"),
+                concat!($prefix, "_standard_deviation"),
             ])
             .set($value.standard_deviation);
-        concat_idents!(STORE_ENGINE_, $name, _VEC)
-            .with_label_values(&[$db, concat!(stringify!(lower($name)), "_max")])
+        $metric
+            .with_label_values(&[$db, concat!($prefix, "_max")])
             .set($value.max);
     };
 }
 
-// macro_rules! tickers {
-//     ($(HistType::$x:ident),*) => {
-//         pub const ENGINE_HIST_TYPES: &[HistType] = &[ $( $x ),* ];
-//         tickers!("match", $( $x ),*);
-//     };
-//     ("match", $($x:ident),*) => {
-//         pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &str) {
-//             match t {
-//                 $( HistType::$x => {
-//                     engine_histogram_metrics!(shouty!($x), name, value, );
-//                 } )*
-//                 _ => {}
-//             }
-//         }
-//     }
-// }
-
 pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &str) {
     match t {
         HistType::DbGet => {
-            engine_histogram_metrics!(GET, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_GET_VEC, "get", name, value);
         }
         HistType::DbWrite => {
-            engine_histogram_metrics!(WRITE, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_WRITE_VEC, "write", name, value);
         }
         HistType::CompactionTime => {
-            engine_histogram_metrics!(COMPACTION_TIME, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_COMPACTION_TIME_VEC, "compaction_time", name, value);
         }
         HistType::TableSyncMicros => {
-            engine_histogram_metrics!(TABLE_SYNC, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_TABLE_SYNC_VEC, "table_sync", name, value);
         }
         HistType::CompactionOutfileSyncMicros => {
-            engine_histogram_metrics!(COMPACTION_OUTFILE_SYNC, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_COMPACTION_OUTFILE_SYNC_VEC, "compaction_outfile_sync", name, value);
         }
         HistType::WalFileSyncMicros => {
-            engine_histogram_metrics!(WAL_FILE_SYNC_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC, "wal_file_sync", name, value);
         }
         HistType::ManifestFileSyncMicros => {
-            engine_histogram_metrics!(MANIFEST_FILE_SYNC, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_MANIFEST_FILE_SYNC_VEC, "manifest_file_sync", name, value);
         }
         HistType::StallL0SlowdownCount => {
-            engine_histogram_metrics!(STALL_L0_SLOWDOWN_COUNT, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC, "stall_l0_slowdown_count", name, value);
         }
         HistType::StallMemtableCompactionCount => {
-            engine_histogram_metrics!(STALL_MEMTABLE_COMPACTION_COUNT, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC, "stall_memtable_compaction_count", name, value);
         }
         HistType::StallL0NumFilesCount => {
-            engine_histogram_metrics!(STALL_LO_NUM_FILES_COUNT, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC, "stall_l0_num_files_count", name, value);
         }
         HistType::HardRateLimitDelayCount => {
-            engine_histogram_metrics!(HARD_RATE_LIMIT_DELAY, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC, "hard_rate_limit_delay", name, value);
         }
         HistType::SoftRateLimitDelayCount => {
-            engine_histogram_metrics!(SOFT_RATE_LIMIT_DELAY, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC, "soft_rate_limit_delay", name, value);
         }
         HistType::NumFilesInSingleCompaction => {
-            engine_histogram_metrics!(NUM_FILES_IN_SINGLE_COMPACTION, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC, "num_files_in_single_compaction", name, value);
         }
         HistType::DbSeek => {
-            engine_histogram_metrics!(SEEK_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_SEEK_MICROS_VEC, "seek", name, value);
         }
         HistType::WriteStall => {
-            engine_histogram_metrics!(WRITE_STALL, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_WRITE_STALL_VEC, "write_stall", name, value);
         }
         HistType::SstReadMicros => {
-            engine_histogram_metrics!(SST_READ_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_SST_READ_MICROS_VEC, "sst_read_micros", name, value);
         }
         HistType::NumSubcompactionsScheduled => {
-            engine_histogram_metrics!(NUM_SUBCOMPACTION_SCHEDULED, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC, "num_subcompaction_scheduled", name, value);
         }
         HistType::BytesPerRead => {
-            engine_histogram_metrics!(BYTES_PER_READ, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BYTES_PER_READ_VEC, "bytes_per_read", name, value);
         }
         HistType::BytesPerWrite => {
-            engine_histogram_metrics!(BYTES_PER_WRITE, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BYTES_PER_WRITE_VEC, "bytes_per_write", name, value);
         }
         HistType::BytesCompressed => {
-            engine_histogram_metrics!(BYTES_COMPRESSED, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BYTES_COMPRESSED_VEC, "bytes_compressed", name, value);
         }
         HistType::BytesDecompressed => {
-            engine_histogram_metrics!(BYTES_DECOMPRESSED, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BYTES_DECOMPRESSED_VEC, "bytes_decompressed", name, value);
         }
         HistType::CompressionTimesNanos => {
-            engine_histogram_metrics!(COMPRESSION_TIMES_NANOS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC, "compression_time_nanos", name, value);
         }
         HistType::DecompressionTimesNanos => {
-            engine_histogram_metrics!(DECOMPRESSION_TIMES_NANOS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC, "decompression_time_nanos", name, value);
         }
         HistType::BlobDbKeySize => {
-            engine_histogram_metrics!(BLOB_KEY_SIZE, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_KEY_SIZE_VEC, "blob_key_size", name, value);
         }
         HistType::BlobDbValueSize => {
-            engine_histogram_metrics!(BLOB_VALUE_SIZE, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_VALUE_SIZE_VEC, "blob_value_size", name, value);
         }
         HistType::BlobDbSeekMicros => {
-            engine_histogram_metrics!(BLOB_SEEK_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_SEEK_MICROS_VEC, "blob_seek_micros", name, value);
         }
         HistType::BlobDbNextMicros => {
-            engine_histogram_metrics!(BLOB_NEXT_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_NEXT_MICROS_VEC, "blob_next_micros", name, value);
         }
         HistType::BlobDbPrevMicros => {
-            engine_histogram_metrics!(BLOB_PREV_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_PREV_MICROS_VEC, "blob_prev_micros", name, value);
         }
         HistType::BlobDbBlobFileWriteMicros => {
-            engine_histogram_metrics!(BLOB_FILE_WRITE_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_FILE_WRITE_MICROS_VEC, "blob_file_write_micros", name, value);
         }
         HistType::BlobDbBlobFileReadMicros => {
-            engine_histogram_metrics!(BLOB_FILE_READ_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_FILE_READ_MICROS_VEC, "blob_file_read_micros", name, value);
         }
         HistType::BlobDbBlobFileSyncMicros => {
-            engine_histogram_metrics!(BLOB_FILE_SYNC_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_FILE_SYNC_MICROS_VEC, "blob_file_sync_micros", name, value);
         }
         HistType::BlobDbGcMicros => {
-            engine_histogram_metrics!(BLOB_GC_MICROS, name, value);
+            engine_histogram_metrics!(STORE_ENGINE_BLOB_GC_MICROS_VEC, "blob_gc_micros", name, value);
         }
         _ => {}
     }
@@ -933,7 +916,7 @@ lazy_static! {
         &["db", "cf", "type"]
     ).unwrap();
     pub static ref STORE_ENGINE_BLOB_LOCATE_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_engine_locate",
+        "tikv_engine_blob_locate",
         "Number of calls to blob seek/next/prev",
         &["db", "type"]
     ).unwrap();
