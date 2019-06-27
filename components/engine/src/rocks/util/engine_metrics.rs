@@ -551,10 +551,7 @@ macro_rules! engine_histogram_metrics {
             .with_label_values(&[$db, concat!($prefix, "_average")])
             .set($value.average);
         $metric
-            .with_label_values(&[
-                $db,
-                concat!($prefix, "_standard_deviation"),
-            ])
+            .with_label_values(&[$db, concat!($prefix, "_standard_deviation")])
             .set($value.standard_deviation);
         $metric
             .with_label_values(&[$db, concat!($prefix, "_max")])
@@ -571,37 +568,87 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             engine_histogram_metrics!(STORE_ENGINE_WRITE_VEC, "write", name, value);
         }
         HistType::CompactionTime => {
-            engine_histogram_metrics!(STORE_ENGINE_COMPACTION_TIME_VEC, "compaction_time", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_COMPACTION_TIME_VEC,
+                "compaction_time",
+                name,
+                value
+            );
         }
         HistType::TableSyncMicros => {
             engine_histogram_metrics!(STORE_ENGINE_TABLE_SYNC_VEC, "table_sync", name, value);
         }
         HistType::CompactionOutfileSyncMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_COMPACTION_OUTFILE_SYNC_VEC, "compaction_outfile_sync", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_COMPACTION_OUTFILE_SYNC_VEC,
+                "compaction_outfile_sync",
+                name,
+                value
+            );
         }
         HistType::WalFileSyncMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC, "wal_file_sync", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC,
+                "wal_file_sync",
+                name,
+                value
+            );
         }
         HistType::ManifestFileSyncMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_MANIFEST_FILE_SYNC_VEC, "manifest_file_sync", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_MANIFEST_FILE_SYNC_VEC,
+                "manifest_file_sync",
+                name,
+                value
+            );
         }
         HistType::StallL0SlowdownCount => {
-            engine_histogram_metrics!(STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC, "stall_l0_slowdown_count", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC,
+                "stall_l0_slowdown_count",
+                name,
+                value
+            );
         }
         HistType::StallMemtableCompactionCount => {
-            engine_histogram_metrics!(STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC, "stall_memtable_compaction_count", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC,
+                "stall_memtable_compaction_count",
+                name,
+                value
+            );
         }
         HistType::StallL0NumFilesCount => {
-            engine_histogram_metrics!(STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC, "stall_l0_num_files_count", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC,
+                "stall_l0_num_files_count",
+                name,
+                value
+            );
         }
         HistType::HardRateLimitDelayCount => {
-            engine_histogram_metrics!(STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC, "hard_rate_limit_delay", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC,
+                "hard_rate_limit_delay",
+                name,
+                value
+            );
         }
         HistType::SoftRateLimitDelayCount => {
-            engine_histogram_metrics!(STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC, "soft_rate_limit_delay", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC,
+                "soft_rate_limit_delay",
+                name,
+                value
+            );
         }
         HistType::NumFilesInSingleCompaction => {
-            engine_histogram_metrics!(STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC, "num_files_in_single_compaction", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC,
+                "num_files_in_single_compaction",
+                name,
+                value
+            );
         }
         HistType::DbSeek => {
             engine_histogram_metrics!(STORE_ENGINE_SEEK_MICROS_VEC, "seek", name, value);
@@ -610,55 +657,135 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             engine_histogram_metrics!(STORE_ENGINE_WRITE_STALL_VEC, "write_stall", name, value);
         }
         HistType::SstReadMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_SST_READ_MICROS_VEC, "sst_read_micros", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_SST_READ_MICROS_VEC,
+                "sst_read_micros",
+                name,
+                value
+            );
         }
         HistType::NumSubcompactionsScheduled => {
-            engine_histogram_metrics!(STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC, "num_subcompaction_scheduled", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_NUM_SUBCOMPACTION_SCHEDULED_VEC,
+                "num_subcompaction_scheduled",
+                name,
+                value
+            );
         }
         HistType::BytesPerRead => {
-            engine_histogram_metrics!(STORE_ENGINE_BYTES_PER_READ_VEC, "bytes_per_read", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BYTES_PER_READ_VEC,
+                "bytes_per_read",
+                name,
+                value
+            );
         }
         HistType::BytesPerWrite => {
-            engine_histogram_metrics!(STORE_ENGINE_BYTES_PER_WRITE_VEC, "bytes_per_write", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BYTES_PER_WRITE_VEC,
+                "bytes_per_write",
+                name,
+                value
+            );
         }
         HistType::BytesCompressed => {
-            engine_histogram_metrics!(STORE_ENGINE_BYTES_COMPRESSED_VEC, "bytes_compressed", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BYTES_COMPRESSED_VEC,
+                "bytes_compressed",
+                name,
+                value
+            );
         }
         HistType::BytesDecompressed => {
-            engine_histogram_metrics!(STORE_ENGINE_BYTES_DECOMPRESSED_VEC, "bytes_decompressed", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BYTES_DECOMPRESSED_VEC,
+                "bytes_decompressed",
+                name,
+                value
+            );
         }
         HistType::CompressionTimesNanos => {
-            engine_histogram_metrics!(STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC, "compression_time_nanos", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_COMPRESSION_TIMES_NANOS_VEC,
+                "compression_time_nanos",
+                name,
+                value
+            );
         }
         HistType::DecompressionTimesNanos => {
-            engine_histogram_metrics!(STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC, "decompression_time_nanos", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_DECOMPRESSION_TIMES_NANOS_VEC,
+                "decompression_time_nanos",
+                name,
+                value
+            );
         }
         HistType::BlobDbKeySize => {
             engine_histogram_metrics!(STORE_ENGINE_BLOB_KEY_SIZE_VEC, "blob_key_size", name, value);
         }
         HistType::BlobDbValueSize => {
-            engine_histogram_metrics!(STORE_ENGINE_BLOB_VALUE_SIZE_VEC, "blob_value_size", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_VALUE_SIZE_VEC,
+                "blob_value_size",
+                name,
+                value
+            );
         }
         HistType::BlobDbSeekMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_BLOB_SEEK_MICROS_VEC, "blob_seek_micros", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_SEEK_MICROS_VEC,
+                "blob_seek_micros",
+                name,
+                value
+            );
         }
         HistType::BlobDbNextMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_BLOB_NEXT_MICROS_VEC, "blob_next_micros", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_NEXT_MICROS_VEC,
+                "blob_next_micros",
+                name,
+                value
+            );
         }
         HistType::BlobDbPrevMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_BLOB_PREV_MICROS_VEC, "blob_prev_micros", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_PREV_MICROS_VEC,
+                "blob_prev_micros",
+                name,
+                value
+            );
         }
         HistType::BlobDbBlobFileWriteMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_BLOB_FILE_WRITE_MICROS_VEC, "blob_file_write_micros", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_FILE_WRITE_MICROS_VEC,
+                "blob_file_write_micros",
+                name,
+                value
+            );
         }
         HistType::BlobDbBlobFileReadMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_BLOB_FILE_READ_MICROS_VEC, "blob_file_read_micros", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_FILE_READ_MICROS_VEC,
+                "blob_file_read_micros",
+                name,
+                value
+            );
         }
         HistType::BlobDbBlobFileSyncMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_BLOB_FILE_SYNC_MICROS_VEC, "blob_file_sync_micros", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_FILE_SYNC_MICROS_VEC,
+                "blob_file_sync_micros",
+                name,
+                value
+            );
         }
         HistType::BlobDbGcMicros => {
-            engine_histogram_metrics!(STORE_ENGINE_BLOB_GC_MICROS_VEC, "blob_gc_micros", name, value);
+            engine_histogram_metrics!(
+                STORE_ENGINE_BLOB_GC_MICROS_VEC,
+                "blob_gc_micros",
+                name,
+                value
+            );
         }
         _ => {}
     }
