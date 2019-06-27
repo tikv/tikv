@@ -702,18 +702,18 @@ Example:
 
 ### `stores show limit`
 
-Use this command to view the upper limit of scheduling rate for all stores, in the unit of tasks per second.
+Use this command to view the upper limit of the scheduling rate for all stores, in the unit of tasks per minute.
 
 Example:
 
 ```bash
-» stores show limit // If store-balance-rate is set to 15, the corresponding rate for all stores should be 15 / 60 = 0.25.
+» stores show limit // If store-balance-rate is set to 15, the corresponding rate for all stores should be 15.
 {
  "4": {
-   "rate": 0.25
+   "rate": 15
  },
  "5": {
-   "rate": 0.25
+   "rate": 15
  },
  ...
 }

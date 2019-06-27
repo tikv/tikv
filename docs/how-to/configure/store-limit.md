@@ -28,7 +28,7 @@ PD provides the following two methods to configure scheduling rate limits on sto
 
     > **Note:**
     >
-    > The modification only takes effect on stores added after this configuration change, and will be applied to all stores in the  cluster after you restart TiKV. If you want this change to work  immediately on all stores or some individual stores before the change without restarting, combine this configuration with the following method. See [Sample usages](#sample-usages) for more details.
+    > The modification only takes effect on stores added after this configuration change, and will be applied to all stores in the  cluster after you restart TiKV. If you want this change to work  immediately on all stores or some individual stores before the change without restarting, combine this configuration with the `pd-ctl` tool method below. See [Sample usages](#sample-usages) for more details.
 
 - Use the `pd-ctl` tool to view or modify the upper limit of the scheduling rate. The commands are:
 
@@ -37,13 +37,13 @@ PD provides the following two methods to configure scheduling rate limits on sto
         Example:
 
         ```bash
-        » stores show limit // If store-balance-rate is set to 15, the corresponding rate for all stores should be 15 / 60 = 0.25.
+        » stores show limit // If store-balance-rate is set to 15, the corresponding rate for all stores should be 15.
         {
         "4": {
-        "rate": 0.25
+        "rate": 15
         },
         "5": {
-        "rate": 0.25
+        "rate": 15
         },
         ...
         }
