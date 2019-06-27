@@ -469,6 +469,12 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
         },
+        titan: TitanDBConfig {
+            enabled: true,
+            dirname: "foo".to_owned(),
+            disable_gc: false,
+            max_background_gc: 5,
+        },
     };
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),

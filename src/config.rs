@@ -888,6 +888,7 @@ pub struct RaftDbConfig {
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub defaultcf: RaftDefaultCfConfig,
+    pub titan: TitanDBConfig,
 }
 
 impl Default for RaftDbConfig {
@@ -917,6 +918,7 @@ impl Default for RaftDbConfig {
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
+            titan: TitanDBConfig::default(),
         }
     }
 }
@@ -962,6 +964,9 @@ impl RaftDbConfig {
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         // TODO maybe create a new env for raft engine
 
+        if self.titan.enabled {
+            opts.set_titandb_options(&self.titan.build_opts());
+        }
         opts
     }
 

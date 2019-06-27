@@ -374,6 +374,13 @@ allow-concurrent-memtable-write = true
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 
+
+[raftdb.titan]
+enabled = true
+dirname = "foo"
+disable-gc = false
+max-background-gc = 5
+
 [raftdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
