@@ -8,5 +8,5 @@ lto = "thin"
 debug-assertions = false
 codegen-units = 1
 panic = "abort"
-incremental = false
+incremental = true
 overflow-checks = false
