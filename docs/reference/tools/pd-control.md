@@ -141,7 +141,7 @@ Usage:
     "max-merge-region-size": 20,
     "max-merge-region-keys": 200000,
     "split-merge-interval": "1h0m0s",
-    "enable-two-way-merge": false,
+    "enable-one-way-merge": false,
     "patrol-region-interval": "100ms",
     "max-store-down-time": "30m0s",
     "leader-schedule-limit": 8,
