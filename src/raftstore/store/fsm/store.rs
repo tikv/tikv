@@ -1181,7 +1181,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
-        // Check if the target peer is tomebtone.
+        // Check if the target peer is tombstone.
         let state_key = keys::region_state_key(region_id);
         let local_state: RegionLocalState =
             match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
@@ -1195,7 +1195,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             if util::is_first_vote_msg(msg.get_message()) {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 // Last check on whether target peer is created, otherwise, the
-                // vote message will never be comsumed.
+                // vote message will never be consumed.
                 if meta.regions.contains_key(&region_id) {
                     return Ok(false);
                 }
