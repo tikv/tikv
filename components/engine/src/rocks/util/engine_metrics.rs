@@ -620,7 +620,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
         }
         HistType::StallL0NumFilesCount => {
             engine_histogram_metrics!(
-                STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC,
+                STORE_ENGINE_STALL_L0_NUM_FILES_COUNT_VEC,
                 "stall_l0_num_files_count",
                 name,
                 value
@@ -1163,7 +1163,7 @@ lazy_static! {
         "Histogram of stall memtable compaction count",
         &["db", "type"]
     ).unwrap();
-    pub static ref STORE_ENGINE_STALL_LO_NUM_FILES_COUNT_VEC: GaugeVec = register_gauge_vec!(
+    pub static ref STORE_ENGINE_STALL_L0_NUM_FILES_COUNT_VEC: GaugeVec = register_gauge_vec!(
         "tikv_engine_stall_l0_num_files_count",
         "Histogram of stall l0 num files count",
         &["db", "type"]
