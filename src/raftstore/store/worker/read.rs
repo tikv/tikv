@@ -549,7 +549,7 @@ mod tests {
     use std::thread;
 
     use kvproto::raft_cmdpb::*;
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
     use time::Duration;
 
     use crate::raftstore::store::util::Lease;
@@ -569,7 +569,7 @@ mod tests {
         LocalReader<SyncSender<RaftCommand>>,
         Receiver<RaftCommand>,
     ) {
-        let path = TempDir::new(path).unwrap();
+        let path = Builder::new().prefix(path).tempdir().unwrap();
         let db =
             rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);

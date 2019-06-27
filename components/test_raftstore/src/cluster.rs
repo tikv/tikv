@@ -11,7 +11,7 @@ use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use engine::rocks;
 use engine::rocks::DB;
@@ -129,7 +129,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
-            let dir = TempDir::new("test_cluster").unwrap();
+            let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let kv_path = dir.path().join("kv");
             let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();

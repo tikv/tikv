@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
@@ -182,7 +182,7 @@ impl Simulator for NodeCluster {
                 .snap_paths
                 .contains_key(&node_id)
         {
-            let tmp = TempDir::new("test_cluster").unwrap();
+            let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(router.clone()));
             (snap_mgr, Some(tmp))
         } else {
