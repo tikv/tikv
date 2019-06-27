@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(specialization)]
+
 mod column;
 mod dag;
 mod fixture;

@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::deadlock::Scheduler as DetectorScheduler;
+use super::metrics::*;
+use super::util::extract_raw_key_from_process_result;
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
@@ -10,12 +12,25 @@ use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
+use prometheus::HistogramTimer;
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
+
+// If it is true, there is no need to calculate keys' hashes and wake up waiters.
+pub static WAIT_TABLE_IS_EMPTY: AtomicBool = AtomicBool::new(true);
+
+pub fn store_wait_table_is_empty(is_empty: bool) {
+    WAIT_TABLE_IS_EMPTY.store(is_empty, Ordering::Relaxed);
+}
+
+pub fn wait_table_is_empty() -> bool {
+    WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed)
+}
 
 pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
@@ -70,6 +85,7 @@ struct Waiter {
     cb: StorageCb,
     pr: ProcessResult,
     lock: Lock,
+    _lifetime_timer: HistogramTimer,
 }
 
 type Waiters = Vec<Waiter>;
@@ -88,6 +104,12 @@ impl WaitTable {
     #[allow(unused)]
     fn size(&self) -> usize {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
+    }
+
+    fn set_wait_table_is_empty(&self) {
+        if self.wait_table.is_empty() {
+            store_wait_table_is_empty(true);
+        }
     }
 
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
@@ -112,6 +134,7 @@ impl WaitTable {
             if waiters.is_empty() {
                 self.wait_table.remove(&ts);
             }
+            self.set_wait_table_is_empty();
         }
         ready_waiters
     }
@@ -126,6 +149,7 @@ impl WaitTable {
                 if waiters.is_empty() {
                     self.wait_table.remove(&lock.ts);
                 }
+                self.set_wait_table_is_empty();
                 return Some(waiter);
             }
         }
@@ -265,6 +289,7 @@ impl WaiterManager {
             .borrow_mut()
             .get_ready_waiters(lock_ts, hashes);
         ready_waiters.sort_unstable_by_key(|waiter| waiter.start_ts);
+
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             self.detector_scheduler
                 .clean_up_wait_for(waiter.start_ts, waiter.lock.clone());
@@ -295,12 +320,12 @@ impl WaiterManager {
             .remove_waiter(start_ts, lock)
             .and_then(|waiter| {
                 let pr = ProcessResult::Failed {
-                    err: StorageError::from(MvccError::Deadlock {
+                    err: StorageError::from(TxnError::from(MvccError::Deadlock {
                         start_ts,
                         lock_ts: waiter.lock.ts,
-                        key_hash: waiter.lock.hash,
+                        lock_key: extract_raw_key_from_process_result(&waiter.pr).to_vec(),
                         deadlock_key_hash,
-                    }),
+                    })),
                 };
                 execute_callback(waiter.cb, pr);
                 Some(())
@@ -326,8 +351,10 @@ impl FutureRunnable<Task> for WaiterManager {
                         cb,
                         pr,
                         lock,
+                        _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
                     },
                 );
+                TASK_COUNTER_VEC.wait_for.inc();
             }
             Task::WakeUp {
                 lock_ts,
@@ -335,9 +362,11 @@ impl FutureRunnable<Task> for WaiterManager {
                 commit_ts,
             } => {
                 self.handle_wake_up(handle, lock_ts, hashes, commit_ts);
+                TASK_COUNTER_VEC.wake_up.inc();
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);
+                TASK_COUNTER_VEC.dump.inc();
             }
             Task::Deadlock {
                 start_ts,
@@ -345,6 +374,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 deadlock_key_hash,
             } => {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
+                TASK_COUNTER_VEC.deadlock.inc();
             }
         }
     }
@@ -384,6 +414,7 @@ mod tests {
             cb: StorageCb::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
+            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
         }
     }
 
@@ -463,6 +494,24 @@ mod tests {
     }
 
     #[test]
+    fn test_wait_table_is_empty() {
+        let mut wait_table = WaitTable::new();
+        wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
+        store_wait_table_is_empty(false);
+        assert!(wait_table
+            .remove_waiter(1, Lock { ts: 2, hash: 2 })
+            .is_some());
+        assert_eq!(wait_table_is_empty(), true);
+        wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
+        wait_table.add_waiter(3, dummy_waiter(2, 3, 3));
+        store_wait_table_is_empty(false);
+        wait_table.get_ready_waiters(2, vec![2]);
+        assert_eq!(wait_table_is_empty(), false);
+        wait_table.get_ready_waiters(3, vec![3]);
+        assert_eq!(wait_table_is_empty(), true);
+    }
+
+    #[test]
     fn test_waiter_manager() {
         use crate::tikv_util::worker::FutureWorker;
         use std::sync::mpsc;
@@ -483,7 +532,7 @@ mod tests {
         let pr = ProcessResult::Res;
         waiter_mgr_scheduler.wait_for(0, StorageCb::Boolean(cb), pr, Lock { ts: 0, hash: 0 }, true);
         assert_eq!(
-            rx.recv_timeout(Duration::from_millis(1100))
+            rx.recv_timeout(Duration::from_millis(2000))
                 .unwrap()
                 .unwrap(),
             ()
@@ -503,7 +552,7 @@ mod tests {
         );
         waiter_mgr_scheduler.wake_up(0, vec![3, 1, 2], 1);
         assert!(rx
-            .recv_timeout(Duration::from_millis(100))
+            .recv_timeout(Duration::from_millis(500))
             .unwrap()
             .is_err());
     }

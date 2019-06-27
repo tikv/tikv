@@ -13,18 +13,15 @@ use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::Result;
 
-pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, SimpleAggregationImpl>,
+pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
+    AggregationExecutor<Src, SimpleAggregationImpl>,
 );
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSimpleAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -41,7 +38,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -49,7 +46,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             aggr_defs,
@@ -59,12 +55,16 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
     }
 }
 
-impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         assert_eq!(descriptor.get_group_by().len(), 0);
         let aggr_definitions = descriptor.get_agg_func();
+        if aggr_definitions.is_empty() {
+            return Err(box_err!("Aggregation expression is empty"));
+        }
+
         for def in aggr_definitions {
             AllAggrDefinitionParser.check_supported(def)?;
         }
@@ -72,25 +72,13 @@ impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchE
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor<C, Src> {
-    pub fn new(
-        summary_collector: C,
-        config: Arc<EvalConfig>,
-        src: Src,
-        aggr_defs: Vec<Expr>,
-    ) -> Result<Self> {
-        Self::new_impl(
-            summary_collector,
-            config,
-            src,
-            aggr_defs,
-            AllAggrDefinitionParser,
-        )
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
+    pub fn new(config: Arc<EvalConfig>, src: Src, aggr_defs: Vec<Expr>) -> Result<Self> {
+        Self::new_impl(config, src, aggr_defs, AllAggrDefinitionParser)
     }
 
     #[inline]
     fn new_impl(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         aggr_defs: Vec<Expr>,
@@ -101,7 +89,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         let aggr_impl = SimpleAggregationImpl { states: Vec::new() };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,
@@ -129,9 +116,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
-        mut input: LazyBatchColumnVec,
+        mut input_physical_columns: LazyBatchColumnVec,
+        input_logical_rows: &[usize],
     ) -> Result<()> {
-        let rows_len = input.rows_len();
+        let rows_len = input_logical_rows.len();
 
         assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
 
@@ -140,9 +128,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
             let aggr_expr = &entities.each_aggr_exprs[idx];
             let aggr_fn_input = aggr_expr.eval(
                 &mut entities.context,
-                rows_len,
                 entities.src.schema(),
-                &mut input,
+                &mut input_physical_columns,
+                input_logical_rows,
+                rows_len,
             )?;
 
             match aggr_fn_input {
@@ -150,16 +139,26 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
                     match_template_evaluable! {
                         TT, match value {
                             ScalarValue::TT(scalar_value) => {
-                                aggr_state.update_repeat(&mut entities.context, scalar_value, rows_len)?;
+                                aggr_state.update_repeat(
+                                    &mut entities.context,
+                                    scalar_value,
+                                    rows_len,
+                                )?;
                             },
                         }
                     }
                 }
                 RpnStackNode::Vector { value, .. } => {
+                    let physical_vec = value.as_ref();
+                    let logical_rows = value.logical_rows();
                     match_template_evaluable! {
-                        TT, match &*value {
-                            VectorValue::TT(vector_value) => {
-                                aggr_state.update_vector(&mut entities.context, vector_value)?;
+                        TT, match physical_vec {
+                            VectorValue::TT(vec) => {
+                                aggr_state.update_vector(
+                                    &mut entities.context,
+                                    vec,
+                                    logical_rows,
+                                )?;
                             },
                         }
                     }
@@ -176,13 +175,21 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
         iteratee(entities, &self.states)?;
         Ok(Vec::new())
+    }
+
+    /// Simple aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
     }
 }
 
@@ -340,7 +347,7 @@ mod tests {
                 &self,
                 aggr_def: Expr,
                 _time_zone: &Tz,
-                _max_columns: usize,
+                _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {
@@ -403,38 +410,42 @@ mod tests {
 
         // The scan rows parameter has no effect for mock executor. We don't care.
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 1);
-        assert_eq!(r.data.columns_len(), 12);
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.rows_len(), 1);
+        assert_eq!(r.physical_columns.columns_len(), 12);
         // Foo("abc") for 5 rows, so it is 5*3.
-        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(15)]);
+        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(15)]);
         // Foo(NULL) for 5 rows, so it is 0.
-        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(0)]);
+        assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(0)]);
         // Bar(42.5) for 5 rows, so it is (5, 5, 42.5*5).
-        assert_eq!(r.data[2].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.data[3].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[2].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[3].decoded().as_int_slice(), &[Some(5)]);
         assert_eq!(
-            r.data[4].decoded().as_real_slice(),
+            r.physical_columns[4].decoded().as_real_slice(),
             &[Real::new(212.5).ok()]
         );
         // Bar(NULL) for 5 rows, so it is (5, 0, 0).
-        assert_eq!(r.data[5].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.data[6].decoded().as_int_slice(), &[Some(0)]);
-        assert_eq!(r.data[7].decoded().as_real_slice(), &[Real::new(0.0).ok()]);
-        // Foo([abc, NULL, "", HelloWorld, aaaaa]) => 3+0+0+10+5
-        assert_eq!(r.data[8].decoded().as_int_slice(), &[Some(18)]);
-        // Bar([1.0, 2.0, NULL, 4.5, 4.5]) => (5, 4, 12.0)
-        assert_eq!(r.data[9].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.data[10].decoded().as_int_slice(), &[Some(4)]);
+        assert_eq!(r.physical_columns[5].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[6].decoded().as_int_slice(), &[Some(0)]);
         assert_eq!(
-            r.data[11].decoded().as_real_slice(),
+            r.physical_columns[7].decoded().as_real_slice(),
+            &[Real::new(0.0).ok()]
+        );
+        // Foo([abc, NULL, "", HelloWorld, aaaaa]) => 3+0+0+10+5
+        assert_eq!(r.physical_columns[8].decoded().as_int_slice(), &[Some(18)]);
+        // Bar([1.0, 2.0, NULL, 4.5, 4.5]) => (5, 4, 12.0)
+        assert_eq!(r.physical_columns[9].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[10].decoded().as_int_slice(), &[Some(4)]);
+        assert_eq!(
+            r.physical_columns[11].decoded().as_real_slice(),
             &[Real::new(12.0).ok()]
         );
         assert!(r.is_drained.unwrap());
@@ -486,36 +497,40 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 1);
-        assert_eq!(r.data.columns_len(), 10);
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.rows_len(), 1);
+        assert_eq!(r.physical_columns.columns_len(), 10);
         // COUNT(1) for 5 rows, so it is 5.
-        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(5)]);
         // COUNT(4.5) for 5 rows, so it is 5.
-        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[1].decoded().as_int_slice(), &[Some(5)]);
         // COUNT(NULL) for 5 rows, so it is 0.
-        assert_eq!(r.data[2].decoded().as_int_slice(), &[Some(0)]);
+        assert_eq!(r.physical_columns[2].decoded().as_int_slice(), &[Some(0)]);
         // COUNT([1.0, 2.0, NULL, 4.5, 4.5]) => 4
-        assert_eq!(r.data[3].decoded().as_int_slice(), &[Some(4)]);
+        assert_eq!(r.physical_columns[3].decoded().as_int_slice(), &[Some(4)]);
         // AVG(42.5) for 5 rows, so it is (5, 212.5). Notice that AVG returns sum.
-        assert_eq!(r.data[4].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.physical_columns[4].decoded().as_int_slice(), &[Some(5)]);
         assert_eq!(
-            r.data[5].decoded().as_real_slice(),
+            r.physical_columns[5].decoded().as_real_slice(),
             &[Real::new(212.5).ok()]
         );
         // AVG(NULL) for 5 rows, so it is (0, NULL).
-        assert_eq!(r.data[6].decoded().as_int_slice(), &[Some(0)]);
-        assert_eq!(r.data[7].decoded().as_decimal_slice(), &[None]);
+        assert_eq!(r.physical_columns[6].decoded().as_int_slice(), &[Some(0)]);
+        assert_eq!(r.physical_columns[7].decoded().as_decimal_slice(), &[None]);
         // Foo([NULL, 7.0, NULL, NULL, 1.5]) => (2, 8.5)
-        assert_eq!(r.data[8].decoded().as_int_slice(), &[Some(2)]);
-        assert_eq!(r.data[9].decoded().as_real_slice(), &[Real::new(8.5).ok()]);
+        assert_eq!(r.physical_columns[8].decoded().as_int_slice(), &[Some(2)]);
+        assert_eq!(
+            r.physical_columns[9].decoded().as_real_slice(),
+            &[Real::new(8.5).ok()]
+        );
         assert!(r.is_drained.unwrap());
     }
 
@@ -551,15 +566,19 @@ mod tests {
         }
 
         let src_exec = MockExecutor::new(
-            vec![],
+            vec![FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Int(vec![Some(
+                        5,
+                    )])]),
+                    logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),
                 },
@@ -577,7 +596,7 @@ mod tests {
                 &self,
                 _aggr_def: Expr,
                 _time_zone: &Tz,
-                _max_columns: usize,
+                _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {
@@ -591,14 +610,15 @@ mod tests {
             BatchSimpleAggregationExecutor::new_for_test(src_exec, vec![Expr::new()], MyParser);
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
         let r = exec.next_batch(1);
-        assert_eq!(r.data.rows_len(), 1);
-        assert_eq!(r.data.columns_len(), 1);
-        assert!(r.data[0].is_decoded());
-        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(42)]);
+        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(r.physical_columns.rows_len(), 1);
+        assert_eq!(r.physical_columns.columns_len(), 1);
+        assert!(r.physical_columns[0].is_decoded());
+        assert_eq!(r.physical_columns[0].decoded().as_int_slice(), &[Some(42)]);
         assert!(r.is_drained.unwrap());
     }
 }

@@ -17,6 +17,11 @@ if [[ "`uname`" != "Linux" ]]; then
     exit 0
 fi
 
+if [[ "$ROCKSDB_SYS_SSE" == "0" ]]; then
+	echo "skipping sse4.2 check - sse4.2 disabled"
+	exit 0
+fi
+
 echo "checking bins for sse4.2"
 
 for dir in $dirs; do
@@ -39,8 +44,7 @@ for dir in $dirs; do
             # f2.*0f 38 is the opcode of `crc32`, see Intel® SSE4 Programming Reference
             found=0
             for sym in $fast_crc32; do
-                echo $sym
-                if [[ `gdb -batch -ex "disass/r $sym" $dirfile 2> /dev/null | grep ">:.*f2.*0f 38.*crc32"` ]]; then
+                if [[ `objdump --disassemble="$sym" $dirfile 2> /dev/null | grep ".*f2.*0f 38.*crc32"` ]]; then
                     found=1
                     break
                 fi
@@ -48,6 +52,8 @@ for dir in $dirs; do
             if [[ "$found" -ne 1 ]]; then
                 echo "error: $dirfile does not enable sse4.2"
                 errors=1
+	    else
+                echo -e "$dirfile sse4.2 \e[32menabled\e[0m"
             fi
         fi
     done

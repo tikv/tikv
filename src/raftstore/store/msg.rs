@@ -71,6 +71,13 @@ impl Callback {
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }
+
+    pub fn is_none(&self) -> bool {
+        match self {
+            Callback::None => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Debug for Callback {
@@ -200,6 +207,8 @@ pub enum CasualMessage {
     },
     /// Clear region size cache.
     ClearRegionSize,
+    /// Indicate a target region is overlapped.
+    RegionOverlapped,
 }
 
 impl fmt::Debug for CasualMessage {
@@ -211,9 +220,11 @@ impl fmt::Debug for CasualMessage {
                 index,
                 escape(hash)
             ),
-            CasualMessage::SplitRegion { ref split_keys, .. } => {
-                write!(fmt, "Split region with {}", KeysInfoFormatter(&split_keys))
-            }
+            CasualMessage::SplitRegion { ref split_keys, .. } => write!(
+                fmt,
+                "Split region with {}",
+                KeysInfoFormatter(split_keys.iter())
+            ),
             CasualMessage::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
             }
@@ -238,6 +249,7 @@ impl fmt::Debug for CasualMessage {
                 fmt,
                 "clear region size"
             },
+            CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
         }
     }
 }

@@ -43,6 +43,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
         primary: lock.primary.clone(),
         ts: lock.ts,
         ttl: lock.ttl,
+        txn_size: lock.txn_size,
     }))
 }
 

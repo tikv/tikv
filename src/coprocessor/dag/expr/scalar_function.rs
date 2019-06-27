@@ -371,6 +371,7 @@ impl ScalarFunc {
 
             ScalarFuncSig::AddTimeDateTimeNull
             | ScalarFuncSig::AddTimeDurationNull
+            | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
             | ScalarFuncSig::PI => (0, 0),
@@ -387,7 +388,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
-            | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
@@ -993,6 +993,7 @@ dispatch_call! {
         RpadBinary => rpad_binary,
 
         StringAnyValue => string_any_value,
+        AddTimeStringNull => add_time_string_null,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1457,6 +1458,7 @@ mod tests {
                 vec![
                     ScalarFuncSig::AddTimeDateTimeNull,
                     ScalarFuncSig::AddTimeDurationNull,
+                    ScalarFuncSig::AddTimeStringNull,
                     ScalarFuncSig::SubTimeDateTimeNull,
                     ScalarFuncSig::SubTimeDurationNull,
                     ScalarFuncSig::PI,
@@ -1495,7 +1497,6 @@ mod tests {
             ScalarFuncSig::AddDateStringString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
-            ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,

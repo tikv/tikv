@@ -15,7 +15,7 @@ use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use crate::storage::{BlockCacheConfig, Key, Value};
 use tikv_util::escape;
@@ -89,7 +89,7 @@ impl RocksEngine {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
-                let td = TempDir::new("temp-rocksdb").unwrap();
+                let td = Builder::new().prefix("temp-rocksdb").tempdir().unwrap();
                 (td.path().to_str().unwrap().to_owned(), Some(td))
             }
             _ => (path.to_owned(), None),
@@ -215,15 +215,20 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.put_cf(handle, k.as_encoded(), &v)
                 }
             }
-            Modify::DeleteRange(cf, start_key, end_key) => {
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
                 trace!(
                     "RocksEngine: delete_range_cf";
                     "cf" => cf,
                     "start_key" => %start_key,
-                    "end_key" => %end_key
+                    "end_key" => %end_key,
+                    "notify_only" => notify_only,
                 );
-                let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                if !notify_only {
+                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
+                    wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                } else {
+                    Ok(())
+                }
             }
         };
         // TODO: turn the error into an engine error.
@@ -346,7 +351,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::CFStatistics;
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_rocksdb() {
@@ -377,7 +382,7 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = TempDir::new("rocksdb_test").unwrap();
+        let dir = Builder::new().prefix("rocksdb_test").tempdir().unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())

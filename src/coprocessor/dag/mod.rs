@@ -29,6 +29,7 @@ pub mod builder;
 pub mod exec_summary;
 pub mod executor;
 pub mod expr;
+pub mod expr_util;
 pub mod handler;
 pub mod rpn_expr;
 mod scanner;

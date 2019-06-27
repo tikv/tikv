@@ -94,11 +94,14 @@ mod tests {
     use std::sync::Arc;
     use std::thread::sleep;
     use std::time::Duration;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_metrics_flusher() {
-        let path = TempDir::new("_test_metrics_flusher").unwrap();
+        let path = Builder::new()
+            .prefix("_test_metrics_flusher")
+            .tempdir()
+            .unwrap();
         let raft_path = path.path().join(Path::new("raft"));
         let db_opt = DBOptions::new();
         let cf_opts = ColumnFamilyOptions::new();

@@ -189,9 +189,9 @@ pub enum TimeType {
     Timestamp,
 }
 
-impl Into<FieldTypeTp> for TimeType {
-    fn into(self) -> FieldTypeTp {
-        match self {
+impl From<TimeType> for FieldTypeTp {
+    fn from(time_type: TimeType) -> FieldTypeTp {
+        match time_type {
             TimeType::Date => FieldTypeTp::Date,
             TimeType::DateTime => FieldTypeTp::DateTime,
             TimeType::Timestamp => FieldTypeTp::Timestamp,

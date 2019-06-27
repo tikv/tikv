@@ -221,9 +221,9 @@ impl<'de> Deserialize<'de> for ReadableSize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
-impl Into<Duration> for ReadableDuration {
-    fn into(self) -> Duration {
-        self.0
+impl From<ReadableDuration> for Duration {
+    fn from(readable: ReadableDuration) -> Duration {
+        readable.0
     }
 }
 
@@ -662,7 +662,7 @@ mod check_data_dir {
         use std::fs::File;
         use std::io::Write;
         use std::os::unix::fs::symlink;
-        use tempdir::TempDir;
+        use tempfile::Builder;
 
         use super::*;
 
@@ -674,7 +674,7 @@ mod check_data_dir {
 
         #[test]
         fn test_get_fs_info() {
-            let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
+            let tmp_dir = Builder::new().prefix("test-get-fs-info").tempdir().unwrap();
             let mninfo = br#"tmpfs /home tmpfs rw,nosuid,noexec,relatime,size=1628744k,mode=755 0 0
 /dev/sda4 /home/shirly ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
 /dev/sdb /data1 ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
@@ -704,7 +704,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let ret = check_data_dir("/sys/invalid", "/proc/mounts");
             assert!(ret.is_err());
             // get real path's fs_info
-            let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
+            let tmp_dir = Builder::new().prefix("test-get-fs-info").tempdir().unwrap();
             let data_path = format!("{}/data1", tmp_dir.path().display());
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
@@ -801,7 +801,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use toml;
 
     #[test]
@@ -965,7 +965,10 @@ mod tests {
 
     #[test]
     fn test_canonicalize_path() {
-        let tmp_dir = TempDir::new("test-canonicalize").unwrap();
+        let tmp_dir = Builder::new()
+            .prefix("test-canonicalize")
+            .tempdir()
+            .unwrap();
         let path1 = format!(
             "{}",
             tmp_dir.path().to_path_buf().join("test1.dump").display()

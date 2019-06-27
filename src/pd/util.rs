@@ -354,7 +354,7 @@ pub fn validate_endpoints(
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
-                error!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
+                info!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
                 continue;
             }
         };

@@ -5,7 +5,6 @@ use tikv_util::collections::HashSet;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollector;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
@@ -56,11 +55,10 @@ impl InnerExecutor for TableInnerExecutor {
     }
 }
 
-pub type TableScanExecutor<C, S> = ScanExecutor<C, S, TableInnerExecutor>;
+pub type TableScanExecutor<S> = ScanExecutor<S, TableInnerExecutor>;
 
-impl<C: ExecSummaryCollector, S: Store> TableScanExecutor<C, S> {
+impl<S: Store> TableScanExecutor<S> {
     pub fn table_scan(
-        summary_collector: C,
         mut meta: TableScan,
         key_ranges: Vec<KeyRange>,
         store: S,
@@ -68,7 +66,6 @@ impl<C: ExecSummaryCollector, S: Store> TableScanExecutor<C, S> {
     ) -> Result<Self> {
         let inner = TableInnerExecutor::new(&meta);
         Self::new(
-            summary_collector,
             inner,
             meta.get_desc(),
             meta.take_columns().to_vec(),
@@ -94,7 +91,6 @@ mod tests {
         tests::{get_range, TestStore},
         Executor,
     };
-    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
@@ -147,16 +143,16 @@ mod tests {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner = super::TableScanExecutor::table_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.table_scan,
-            wrapper.ranges,
-            store,
-            true,
-        )
-        .unwrap();
+        let mut table_scanner =
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
-        let row = table_scanner.next().unwrap().unwrap().take_origin();
+        let row = table_scanner
+            .next()
+            .unwrap()
+            .unwrap()
+            .take_origin()
+            .unwrap();
         assert_eq!(row.handle, handle as i64);
         assert_eq!(row.data.len(), wrapper.cols.len());
 
@@ -189,17 +185,17 @@ mod tests {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner = super::TableScanExecutor::table_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.table_scan,
-            wrapper.ranges,
-            store,
-            true,
-        )
-        .unwrap();
+        let mut table_scanner =
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
         for handle in 0..KEY_NUMBER {
-            let row = table_scanner.next().unwrap().unwrap().take_origin();
+            let row = table_scanner
+                .next()
+                .unwrap()
+                .unwrap()
+                .take_origin()
+                .unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -230,18 +226,18 @@ mod tests {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner = super::TableScanExecutor::table_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.table_scan,
-            wrapper.ranges,
-            store,
-            true,
-        )
-        .unwrap();
+        let mut table_scanner =
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
-            let row = table_scanner.next().unwrap().unwrap().take_origin();
+            let row = table_scanner
+                .next()
+                .unwrap()
+                .unwrap()
+                .take_origin()
+                .unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];

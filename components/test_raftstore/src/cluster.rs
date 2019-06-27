@@ -10,12 +10,13 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::RaftMessage;
-use tempdir::TempDir;
+use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
+use tempfile::{Builder, TempDir};
 
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
+use engine::Peekable;
 use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
@@ -24,7 +25,7 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::{escape, HandyRwLock};
+use tikv_util::HandyRwLock;
 
 use super::*;
 
@@ -128,7 +129,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
-            let dir = TempDir::new("test_cluster").unwrap();
+            let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
             let kv_path = dir.path().join("kv");
             let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
@@ -620,7 +621,7 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
-        panic!("find no region for {:?}", escape(key));
+        panic!("find no region for {}", hex::encode_upper(key));
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -716,11 +717,6 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Delete);
     }
 
-    #[allow(dead_code)]
-    pub fn must_delete_range(&mut self, start: &[u8], end: &[u8]) {
-        self.must_delete_range_cf("default", start, end)
-    }
-
     pub fn must_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
         let resp = self.request(
             start,
@@ -728,6 +724,17 @@ impl<T: Simulator> Cluster<T> {
             false,
             Duration::from_secs(5),
         );
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::DeleteRange);
+    }
+
+    pub fn must_notify_delete_range_cf(&mut self, cf: &str, start: &[u8], end: &[u8]) {
+        let mut req = new_delete_range_cmd(cf, start, end);
+        req.mut_delete_range().set_notify_only(true);
+        let resp = self.request(start, vec![req], false, Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
         }
@@ -751,7 +758,7 @@ impl<T: Simulator> Cluster<T> {
             .take_region_epoch()
     }
 
-    pub fn region_detail(&mut self, region_id: u64, store_id: u64) -> RegionDetailResponse {
+    pub fn region_detail(&self, region_id: u64, store_id: u64) -> RegionDetailResponse {
         let status_cmd = new_region_detail_cmd();
         let peer = new_peer(store_id, 0);
         let req = new_status_request(region_id, peer, status_cmd);
@@ -764,6 +771,14 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(status_resp.get_cmd_type(), StatusCmdType::RegionDetail);
         assert!(status_resp.has_region_detail());
         status_resp.take_region_detail()
+    }
+
+    pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
+        self.get_engine(store_id)
+            .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &keys::apply_state_key(region_id))
+            .unwrap()
+            .unwrap()
+            .take_truncated_state()
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
@@ -872,9 +887,9 @@ impl<T: Simulator> Cluster<T> {
 
             if try_cnt > 250 {
                 panic!(
-                    "region {:?} has not been split by {:?}",
+                    "region {:?} has not been split by {}",
                     region,
-                    escape(split_key)
+                    hex::encode_upper(split_key)
                 );
             }
             try_cnt += 1;

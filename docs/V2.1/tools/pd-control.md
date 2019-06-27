@@ -103,7 +103,7 @@ Usage:
   "max-snapshot-count": 3,
   "max-pending-peer-count": 16,
   "max-merge-region-size": 20,
-  "max-merge-region-rows": 200000,
+  "max-merge-region-keys": 200000,
   "split-merge-interval": "1h0m0s",
   "patrol-region-interval": "100ms",
   "max-store-down-time": "1h0m0s",
@@ -175,10 +175,10 @@ Usage:
     >> config set max-merge-region-size 16 // Set the upper limit on the size of Region Merge to 16M
     ```
 
-- `max-merge-region-rows` controls the upper limit on the row count of Region Merge. When `regionRowCount` exceeds the specified value, PD does not merge it with the adjacent Region.
+- `max-merge-region-keys` controls the upper limit on the key count of Region Merge. When `regionKeyCount` exceeds the specified value, PD does not merge it with the adjacent Region.
 
     ```bash
-    >> config set max-merge-region-rows 50000 // Set the the upper limit on rowCount to 50000
+    >> config set max-merge-region-keys 50000 // Set the the upper limit on KeyCount to 50000
     ```
 
 - `split-merge-interval` controls the interval between the `split` and `merge` operations on a same Region. This means the newly split Region won't be merged within a period of time.

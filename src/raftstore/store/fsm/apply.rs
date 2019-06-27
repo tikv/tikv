@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -39,13 +39,15 @@ use crate::raftstore::store::msg::{Callback, PeerMsg};
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
+use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
+use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
-use tikv_util::{escape, MustConsumeVec};
+use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
 use super::{
@@ -107,14 +109,14 @@ pub struct PendingCmdQueue {
 }
 
 impl PendingCmdQueue {
-    fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
             {
                 self.normals.shrink_to_fit();
             }
-            if cmd.term > term {
+            if (cmd.term, cmd.index) > (term, index) {
                 self.normals.push_front(cmd);
                 return None;
             }
@@ -374,10 +376,12 @@ impl ApplyContext {
     }
 
     /// Writes all the changes into RocksDB.
-    pub fn write_to_db(&mut self) {
+    /// If it returns true, all pending writes are persisted in engines.
+    pub fn write_to_db(&mut self) -> bool {
+        let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            write_opts.set_sync(need_sync);
             self.engines
                 .kv
                 .write_opt(self.kv_wb(), &write_opts)
@@ -399,6 +403,7 @@ impl ApplyContext {
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
         }
+        need_sync
     }
 
     /// Finishes `Apply`s for the delegate.
@@ -435,11 +440,13 @@ impl ApplyContext {
         self.kv_wb.as_mut().unwrap()
     }
 
-    pub fn flush(&mut self) {
+    /// Flush all pending writes to engines.
+    /// If it returns true, all pending writes are persisted in engines.
+    pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
             Some(t) => t,
-            None => return,
+            None => return false,
         };
 
         // Write to engine
@@ -447,7 +454,7 @@ impl ApplyContext {
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        self.write_to_db();
+        let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
             for res in self.apply_res.drain(..) {
@@ -469,6 +476,7 @@ impl ApplyContext {
             self.committed_count
         );
         self.committed_count = 0;
+        is_synced
     }
 }
 
@@ -614,6 +622,8 @@ pub struct ApplyDelegate {
 
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
+    /// The counter of pending request snapshots. See more in `Peer`.
+    pending_request_snapshot_count: Arc<AtomicUsize>,
 
     /// Marks the delegate as merged by CommitMerge.
     merged: bool,
@@ -635,6 +645,8 @@ pub struct ApplyDelegate {
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
+    /// The latest synced apply index.
+    last_sync_apply_index: u64,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -647,6 +659,7 @@ impl ApplyDelegate {
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
+            last_sync_apply_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
@@ -658,6 +671,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            pending_request_snapshot_count: reg.pending_request_snapshot_count,
         }
     }
 
@@ -784,14 +798,17 @@ impl ApplyDelegate {
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
 
-        // when a peer become leader, it will send an empty entry.
         let mut state = self.apply_state.clone();
         state.set_applied_index(index);
         self.apply_state = state;
         self.applied_index_term = term;
         assert!(term > 0);
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
-            // apprently, all the callbacks whose term is less than entry's term are stale.
+
+        // 1. When a peer become leader, it will send an empty entry.
+        // 2. When a leader tries to read index during transferring leader,
+        //    it will also propose an empty entry. But that entry will not contain
+        //    any associated callback. So no need to clear callback.
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
             apply_ctx
                 .cbs
                 .last_mut()
@@ -842,13 +859,21 @@ impl ApplyDelegate {
             }
             return None;
         }
-        while let Some(mut head) = self.pending_cmds.pop_normal(term) {
-            if head.index == index && head.term == term {
-                return Some(head.cb.take().unwrap());
+        while let Some(mut head) = self.pending_cmds.pop_normal(index, term) {
+            if head.term == term {
+                if head.index == index {
+                    return Some(head.cb.take().unwrap());
+                } else {
+                    panic!(
+                        "{} unexpected callback at term {}, found index {}, expected {}",
+                        self.tag, term, head.index, index
+                    );
+                }
+            } else {
+                // Because of the lack of original RaftCmdRequest, we skip calling
+                // coprocessor here.
+                notify_stale_command(region_id, peer_id, self.term, head);
             }
-            // Because of the lack of original RaftCmdRequest, we skip calling
-            // coprocessor here.
-            notify_stale_command(region_id, peer_id, self.term, head);
         }
         None
     }
@@ -1156,7 +1181,7 @@ impl ApplyDelegate {
                     panic!(
                         "{} failed to write ({}, {}) to cf {}: {:?}",
                         self.tag,
-                        escape(&key),
+                        hex::encode_upper(&key),
                         escape(value),
                         cf,
                         e
@@ -1167,7 +1192,7 @@ impl ApplyDelegate {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    escape(&key),
+                    hex::encode_upper(&key),
                     escape(value),
                     e
                 );
@@ -1191,7 +1216,12 @@ impl ApplyDelegate {
             rocks::util::get_cf_handle(&ctx.engines.kv, cf)
                 .and_then(|handle| ctx.kv_wb().delete_cf(handle, &key).map_err(Into::into))
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                    panic!(
+                        "{} failed to delete {}: {}",
+                        self.tag,
+                        hex::encode_upper(&key),
+                        e
+                    )
                 });
 
             if cf == CF_LOCK {
@@ -1202,7 +1232,12 @@ impl ApplyDelegate {
             }
         } else {
             ctx.kv_wb().delete(&key).unwrap_or_else(|e| {
-                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                panic!(
+                    "{} failed to delete {}: {}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    e
+                )
             });
             self.metrics.delete_keys_hint += 1;
         }
@@ -1219,6 +1254,7 @@ impl ApplyDelegate {
     ) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
+        let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
                 "invalid delete range command, start_key: {:?}, end_key: {:?}",
@@ -1247,38 +1283,43 @@ impl ApplyDelegate {
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        ctx.engines
-            .kv
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
+        if !notify_only {
+            ctx.engines
+                .kv
+                .delete_files_in_range_cf(
+                    handle, &start_key, &end_key, /* include_end */ false,
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete files in range [{}, {}): {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        e
+                    )
+                });
+
+            // Delete all remaining keys.
+            engine_util::delete_all_in_range_cf(
+                &ctx.engines.kv,
+                cf,
+                &start_key,
+                &end_key,
+                use_delete_range,
+            )
             .unwrap_or_else(|e| {
                 panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                     self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
+                    cf,
                     e
-                )
+                );
             });
+        }
 
-        // Delete all remaining keys.
-        engine_util::delete_all_in_range_cf(
-            &ctx.engines.kv,
-            cf,
-            &start_key,
-            &end_key,
-            use_delete_range,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                self.tag,
-                escape(&start_key),
-                escape(&end_key),
-                cf,
-                e
-            );
-        });
-
+        // TODO: Should this be executed when `notify_only` is set?
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
@@ -1593,7 +1634,7 @@ impl ApplyDelegate {
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "region" => ?derived,
-            "keys" => ?keys
+            "keys" => %KeysInfoFormatter(keys.iter()),
         );
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
@@ -2141,6 +2182,7 @@ pub struct Registration {
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub region: Region,
+    pub pending_request_snapshot_count: Arc<AtomicUsize>,
 }
 
 impl Registration {
@@ -2151,6 +2193,7 @@ impl Registration {
             apply_state: peer.get_store().apply_state().clone(),
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
+            pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
         }
     }
 }
@@ -2213,15 +2256,25 @@ type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
 
 pub struct GenSnapTask {
     region_id: u64,
+    commit_index: u64,
     snap_notifier: SyncSender<RaftSnapshot>,
 }
 
 impl GenSnapTask {
-    pub fn new(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
+    pub fn new(
+        region_id: u64,
+        commit_index: u64,
+        snap_notifier: SyncSender<RaftSnapshot>,
+    ) -> GenSnapTask {
         GenSnapTask {
             region_id,
+            commit_index,
             snap_notifier,
         }
+    }
+
+    pub fn commit_index(&self) -> u64 {
+        self.commit_index
     }
 
     pub fn generate_and_schedule_snapshot(
@@ -2240,6 +2293,15 @@ impl GenSnapTask {
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
+    }
+}
+
+impl Debug for GenSnapTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GenSnapTask")
+            .field("region_id", &self.region_id)
+            .field("commit_index", &self.commit_index)
+            .finish()
     }
 }
 
@@ -2564,30 +2626,60 @@ impl ApplyFsm {
             .force_send(Msg::LogsUpToDate(region_id));
     }
 
+    #[allow(unused_mut)]
     fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext, snap_task: GenSnapTask) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-
-        // Persists any pending changes of this region.
-        let region_id = self.delegate.region_id();
-        if apply_ctx
+        let applied_index = self.delegate.apply_state.get_applied_index();
+        assert!(snap_task.commit_index() <= applied_index);
+        let mut need_sync = apply_ctx
             .apply_res
             .iter()
-            .any(|res| res.region_id == region_id)
-        {
+            .any(|res| res.region_id == self.delegate.region_id())
+            && self.delegate.last_sync_apply_index != applied_index;
+        (|| {
+            fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
+        })();
+        if need_sync {
+            if apply_ctx.timer.is_none() {
+                apply_ctx.timer = Some(SlowTimer::new());
+            }
+            if apply_ctx.kv_wb.is_none() {
+                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            }
+            self.delegate
+                .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+            fail_point!(
+                "apply_on_handle_snapshot_1_1",
+                self.delegate.id == 1 && self.delegate.region_id() == 1,
+                |_| unimplemented!()
+            );
+
             apply_ctx.flush();
+            // For now, it's more like last_flush_apply_index.
+            // TODO: Update it only when `flush()` returns true.
+            self.delegate.last_sync_apply_index = applied_index;
         }
+
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
         {
             error!(
                 "schedule snapshot failed";
                 "error" => ?e,
-                "region_id" => region_id,
+                "region_id" => self.delegate.region_id(),
                 "peer_id" => self.delegate.id()
             );
         }
+        self.delegate
+            .pending_request_snapshot_count
+            .fetch_sub(1, Ordering::SeqCst);
+        fail_point!(
+            "apply_on_handle_snapshot_finish_1_1",
+            self.delegate.id == 1 && self.delegate.region_id() == 1,
+            |_| unimplemented!()
+        );
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
@@ -2719,8 +2811,13 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         expected_msg_count
     }
 
-    fn end(&mut self, _: &mut [Box<ApplyFsm>]) {
-        self.apply_ctx.flush();
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+        let is_synced = self.apply_ctx.flush();
+        if is_synced {
+            for fsm in fsms {
+                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
+            }
+        }
     }
 }
 
@@ -2868,7 +2965,7 @@ mod tests {
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
 
     use crate::import::test_helpers::*;
     use crate::raftstore::store::{Config, RegionTask};
@@ -2877,7 +2974,7 @@ mod tests {
     use super::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
-        let path = TempDir::new(path).unwrap();
+        let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = Arc::new(
             rocks::util::new_engine(
                 path.path().join("db").to_str().unwrap(),
@@ -2896,7 +2993,7 @@ mod tests {
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
-        let dir = TempDir::new(path).unwrap();
+        let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(SSTImporter::new(dir.path()).unwrap());
         (dir, importer)
     }
@@ -2964,6 +3061,29 @@ mod tests {
             ),
         );
         validate_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+
+    // Make sure msgs are handled in the same batch.
+    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg>) {
+        let (notify1, wait1) = mpsc::channel();
+        let (notify2, wait2) = mpsc::channel();
+        router.schedule_task(
+            region_id,
+            Msg::Validate(
+                region_id,
+                Box::new(move |_| {
+                    notify1.send(()).unwrap();
+                    wait2.recv().unwrap();
+                }),
+            ),
+        );
+        wait1.recv().unwrap();
+
+        for msg in msgs {
+            router.schedule_task(region_id, msg);
+        }
+
+        notify2.send(()).unwrap();
     }
 
     fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg>) -> ApplyRes {
@@ -3090,12 +3210,16 @@ mod tests {
             .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
-        router.schedule_task(
-            2,
-            Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
-        );
+        // Make sure Apply and Snapshot are in the same batch.
         let (tx, _) = mpsc::sync_channel(0);
-        router.schedule_task(2, Msg::Snapshot(GenSnapTask::new(2, tx)));
+        batch_messages(
+            &router,
+            2,
+            vec![
+                Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
+                Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
+            ],
+        );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
@@ -3121,6 +3245,10 @@ mod tests {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
+            assert_eq!(
+                delegate.apply_state.get_applied_index(),
+                delegate.last_sync_apply_index
+            );
         });
 
         router.schedule_task(2, Msg::destroy(2));

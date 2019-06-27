@@ -640,6 +640,7 @@ mod tests {
                 primary: vec![],
                 ts: 1,
                 ttl: 2,
+                txn_size: 0,
             })),
         );
         data.insert(Key::from_raw(b"z"), Ok(b"beta".to_vec()));

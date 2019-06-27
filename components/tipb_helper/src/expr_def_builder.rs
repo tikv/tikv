@@ -90,8 +90,8 @@ impl ExprDefBuilder {
     }
 }
 
-impl Into<Expr> for ExprDefBuilder {
-    fn into(self) -> Expr {
-        self.build()
+impl From<ExprDefBuilder> for Expr {
+    fn from(expr_def_builder: ExprDefBuilder) -> Expr {
+        expr_def_builder.build()
     }
 }

@@ -55,24 +55,37 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
-        input: LazyBatchColumnVec,
+        input_physical_columns: LazyBatchColumnVec,
+        input_logical_rows: &[usize],
     ) -> Result<()>;
 
     /// Returns the current number of groups.
+    ///
+    /// Note that this number can be inaccurate because it is a hint for the capacity of the vector.
     fn groups_len(&self) -> usize;
 
-    /// Iterates aggregate function states for each group.
+    /// Iterates aggregate function states for each available group.
     ///
     /// Implementors should call `iteratee` for each group with the aggregate function states of
     /// that group as the argument.
     ///
     /// Implementors may return the content of each group as extra columns in the return value
     /// if there are group by columns.
-    fn iterate_each_group_for_aggregation(
+    ///
+    /// Implementors should not iterate the same group multiple times for the same partial
+    /// input data.
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>>;
+
+    /// Returns whether we can now output partial aggregate results when the source is not drained.
+    ///
+    /// This method is called only when the source is not drained because aggregate result is always
+    /// ready if the source is drained and no error occurs.
+    fn is_partial_results_ready(&self) -> bool;
 }
 
 /// Some common data that need to be accessed by both `AggregationExecutor`
@@ -101,22 +114,14 @@ pub struct Entities<Src: BatchExecutor> {
 
 /// A shared executor implementation for simple aggregation, hash aggregation and
 /// stream aggregation. Implementation differences are further given via `AggregationExecutorImpl`.
-pub struct AggregationExecutor<
-    C: ExecSummaryCollector,
-    Src: BatchExecutor,
-    I: AggregationExecutorImpl<Src>,
-> {
-    summary_collector: C,
+pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> {
     imp: I,
     is_ended: bool,
     entities: Entities<Src>,
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src>>
-    AggregationExecutor<C, Src, I>
-{
+impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
     pub fn new(
-        summary_collector: C,
         mut imp: I,
         src: Src,
         config: Arc<EvalConfig>,
@@ -124,10 +129,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
         let aggr_fn_len = aggr_defs.len();
-        assert!(aggr_fn_len > 0);
-
         let src_schema = src.schema();
-        let src_schema_len = src_schema.len();
 
         let mut schema = Vec::with_capacity(aggr_fn_len * 2);
         let mut each_aggr_fn = Vec::with_capacity(aggr_fn_len);
@@ -141,7 +143,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
             let aggr_fn = aggr_def_parser.parse(
                 aggr_def,
                 &config.tz,
-                src_schema_len,
+                src_schema,
                 &mut schema,
                 &mut each_aggr_exprs,
             )?;
@@ -176,15 +178,15 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
         imp.prepare_entities(&mut entities);
 
         Ok(Self {
-            summary_collector,
             imp,
             is_ended: false,
             entities,
         })
     }
 
+    /// Returns partial results of aggregation if available and whether the source is drained
     #[inline]
-    fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
+    fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
         let src_result = self
@@ -200,23 +202,25 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
 
         // Consume all data from the underlying executor. We directly return when there are errors
         // for the same reason as above.
-        if src_result.data.rows_len() > 0 {
-            self.imp
-                .process_batch_input(&mut self.entities, src_result.data)?;
+        if !src_result.logical_rows.is_empty() {
+            self.imp.process_batch_input(
+                &mut self.entities,
+                src_result.physical_columns,
+                &src_result.logical_rows,
+            )?;
         }
 
-        // Aggregate results if source executor is drained, otherwise just return nothing.
-        if src_is_drained {
-            Ok(Some(self.aggregate()?))
+        // aggregate result is always available when source is drained
+        let result = if src_is_drained || self.imp.is_partial_results_ready() {
+            Some(self.aggregate_partial_results(src_is_drained)?)
         } else {
-            Ok(None)
-        }
+            None
+        };
+        Ok((result, src_is_drained))
     }
 
-    /// Generates aggregation results.
-    ///
-    /// This function is ensured to be called at most once.
-    fn aggregate(&mut self) -> Result<LazyBatchColumnVec> {
+    /// Generates aggregation results of available groups.
+    fn aggregate_partial_results(&mut self, src_is_drained: bool) -> Result<LazyBatchColumnVec> {
         let groups_len = self.imp.groups_len();
         let mut all_result_columns: Vec<_> = self
             .entities
@@ -225,9 +229,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
             .map(|eval_type| VectorValue::with_capacity(groups_len, *eval_type))
             .collect();
 
-        // Aggregate results for each group
-        let group_by_columns = self.imp.iterate_each_group_for_aggregation(
+        // Pull aggregate results of each available group
+        let group_by_columns = self.imp.iterate_available_groups(
             &mut self.entities,
+            src_is_drained,
             |entities, states| {
                 assert_eq!(states.len(), entities.each_aggr_cardinality.len());
 
@@ -261,8 +266,8 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
-    for AggregationExecutor<C, Src, I>
+impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
+    for AggregationExecutor<Src, I>
 {
     #[inline]
     fn schema(&self) -> &[FieldType] {
@@ -273,48 +278,36 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
-        let timer = self.summary_collector.on_start_iterate();
         let result = self.handle_next_batch();
 
-        let ret = match result {
+        match result {
             Err(e) => {
                 // When there are error, we can just return empty data.
                 self.is_ended = true;
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::empty(),
+                    logical_rows: Vec::new(),
                     warnings: self.entities.context.take_warnings(),
                     is_drained: Err(e),
                 }
             }
-            Ok(None) => {
-                // When there is no error and is not drained, we also return empty data.
+            Ok((data, src_is_drained)) => {
+                self.is_ended = src_is_drained;
+                let logical_columns = data.unwrap_or_else(LazyBatchColumnVec::empty);
+                let logical_rows = (0..logical_columns.rows_len()).collect();
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: logical_columns,
+                    logical_rows,
                     warnings: self.entities.context.take_warnings(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(src_is_drained),
                 }
             }
-            Ok(Some(data)) => {
-                // When there is no error and aggregate finished, we return it as data.
-                self.is_ended = true;
-                BatchExecuteResult {
-                    data,
-                    warnings: self.entities.context.take_warnings(),
-                    is_drained: Ok(true),
-                }
-            }
-        };
-
-        self.summary_collector
-            .on_finish_iterate(timer, ret.data.rows_len());
-        ret
+        }
     }
 
     #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.entities.src.collect_statistics(destination);
-        self.summary_collector
-            .collect_into(&mut destination.summary_per_executor);
     }
 }
 
@@ -355,7 +348,7 @@ pub mod tests {
         }
     }
 
-    /// Builds an executor that will return these data:
+    /// Builds an executor that will return these logical data:
     ///
     /// == Schema ==
     /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
@@ -378,37 +371,53 @@ pub mod tests {
             ],
             vec![
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None]),
+                    physical_columns: LazyBatchColumnVec::from(vec![
                         VectorValue::Real(vec![
-                            Real::new(1.0).ok(),
-                            Real::new(2.0).ok(),
+                            None,
+                            None,
+                            None,
+                            Real::new(-5.0).ok(),
+                            Real::new(7.0).ok(),
+                        ]),
+                        VectorValue::Real(vec![
                             None,
                             Real::new(4.5).ok(),
+                            Real::new(1.0).ok(),
+                            None,
+                            Real::new(2.0).ok(),
                         ]),
                         VectorValue::Bytes(vec![
-                            Some(b"abc".to_vec()),
-                            None,
                             Some(vec![]),
                             Some(b"HelloWorld".to_vec()),
+                            Some(b"abc".to_vec()),
+                            None,
+                            None,
                         ]),
-                        VectorValue::Int(vec![Some(1), None, None, None]),
+                        VectorValue::Int(vec![None, None, Some(1), Some(10), None]),
                     ]),
+                    logical_rows: vec![2, 4, 0, 1],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![None]),
+                        VectorValue::Real(vec![Real::new(-10.0).ok()]),
+                        VectorValue::Bytes(vec![Some(b"foo".to_vec())]),
+                        VectorValue::Int(vec![None]),
+                    ]),
+                    logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![Real::new(1.5).ok()]),
-                        VectorValue::Real(vec![Real::new(4.5).ok()]),
-                        VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
-                        VectorValue::Int(vec![Some(5)]),
+                    physical_columns: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![Real::new(5.5).ok(), Real::new(1.5).ok()]),
+                        VectorValue::Real(vec![None, Real::new(4.5).ok()]),
+                        VectorValue::Bytes(vec![None, Some(b"aaaaa".to_vec())]),
+                        VectorValue::Int(vec![None, Some(5)]),
                     ]),
+                    logical_rows: vec![1],
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(true),
                 },

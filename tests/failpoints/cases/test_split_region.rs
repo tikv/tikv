@@ -23,9 +23,9 @@ fn test_follower_slow_split() {
     let region = cluster.get_region(b"");
 
     // Only need peer 1 and 3. Stop node 2 to avoid extra vote messages.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     pd_client.must_remove_peer(1, new_peer(2, 2));
     cluster.stop_node(2);
-    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // Use a channel to retrieve start_key and end_key in pre-vote messages.
     let (range_tx, range_rx) = mpsc::channel();
