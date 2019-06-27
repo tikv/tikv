@@ -21,6 +21,15 @@ make_static_metric! {
             dropped,
             not_leader,
             reconnect_leader,
+            monitor_membership_change,
+            leader_not_found,
+        },
+    }
+
+    pub struct DetectorHistogramVec: Histogram {
+        "type" => {
+            monitor_membership_change,
+            detect,
         },
     }
 }
@@ -46,9 +55,11 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref DETECT_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_lock_manager_detect_duration",
-        "Duration of handling detect requests",
+    pub static ref DETECTOR_HISTOGRAM_VEC: DetectorHistogramVec = register_static_histogram_vec!(
+        DetectorHistogramVec,
+        "tikv_lock_manager_detector_histogram",
+        "Bucketed histogram of deadlock detector",
+        &["type"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();

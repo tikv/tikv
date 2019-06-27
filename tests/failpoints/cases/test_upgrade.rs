@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
-use tempdir::TempDir;
+use tempfile::Builder;
 
 use test_raftstore::*;
 use tikv::config::DbConfig;
@@ -120,7 +120,7 @@ fn write_log_entry(db: &DB, cf: &str, key: &[u8], idx: u64) -> Entry {
 }
 
 fn test_upgrade_from_v2_to_v3(fp: &str) {
-    let tmp_dir = TempDir::new("test_upgrade").unwrap();
+    let tmp_dir = Builder::new().prefix("test_upgrade").tempdir().unwrap();
     let tmp_path_kv = tmp_dir.path().join("kv");
 
     // Create a raft engine.
