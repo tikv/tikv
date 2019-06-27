@@ -16,10 +16,7 @@ use tipb::expression::FieldType;
 ///
 /// It can simplify function signatures without losing performance where only argument values are
 /// needed in most cases.
-///
-/// NOTE: This structure must be very fast to copy because it will be passed by value directly
-/// (i.e. Copy), instead of by reference, for **EACH** function invocation.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RpnFnCallPayload<'a> {
     output_rows: usize,
     raw_args: &'a [RpnStackNode<'a>],
