@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(proc_macro_diagnostic)]
-#![recursion_limit = "128"]
+#![recursion_limit = "256"]
 
 #[macro_use]
 extern crate darling;
