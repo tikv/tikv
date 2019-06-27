@@ -135,7 +135,7 @@ impl ScalarFunc {
             return Ok(Some(true as i64));
         }
 
-        if self.implicit_args.len() > 0 {
+        if !self.implicit_args.is_empty() {
             let is_not_null_col = self.implicit_args[0].i64();
             if is_not_null_col > 0 && arg.unwrap().is_zero() {
                 // From MySQL document:
