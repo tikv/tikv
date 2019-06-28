@@ -121,7 +121,7 @@ dist_release:
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
 build_dist_release:
-	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
+	make x-build-dist
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
