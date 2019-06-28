@@ -1,3 +1,36 @@
+# The TiKV Makefile
+#
+# These are mostly light rules around cargo and in general developers
+# can do daily development using cargo alone. It does do a few key
+# things that developers need to understand:
+#
+# It turns on features that are not on by default in the cargo
+# manifest but that are part of the release build (see the
+# ENABLE_FEATURES variable).
+#
+# The `clippy` rule runs clippy with custom configuration, so
+# is the correct way to run clippy against TiKV.
+#
+# The `test` rule runs tests in configurations that are not covered by `cargo
+# test` by default.
+#
+# Important make rules:
+#
+# - `build` - create a development profile, unoptimized build
+#
+# - `run` - run a development build
+#
+# - `test` - run the test suite in a variety of configurations
+#
+# - `format` - reformat the code with cargo format
+#
+# - `clippy` - run clippy with tikv-specific configuration
+#
+# - `dev` - the rule that needs to pass before submitting a PR. It runs
+#   tests and static analysis including clippy and rustfmt
+#
+# - `release` - create a release profile, optimized build
+
 SHELL := /bin/bash
 ENABLE_FEATURES ?=
 
@@ -37,6 +70,7 @@ BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
 CARGO_TARGET_DIR ?= $(CURDIR)/target
 
+# Build-time environment, captured for reporting by the application binary
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
@@ -54,6 +88,13 @@ default: release
 
 .PHONY: all
 
+clean:
+	cargo clean
+
+
+## Development builds
+## ------------------
+
 all: format build test
 
 dev: format clippy
@@ -62,13 +103,15 @@ dev: format clippy
 build:
 	cargo build  --no-default-features --features "${ENABLE_FEATURES}"
 
-ctl:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
-	@mkdir -p ${BIN_PATH}
-	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
-
 run:
 	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
+
+
+## Release builds (optimized dev builds)
+## ----------------------------
+
+# These builds are heavily optimized, but only use thinLTO, not full
+# LTO, and they don't include debuginfo by default.
 
 # An optimized build suitable for development and benchmarking, by default built
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
@@ -100,6 +143,14 @@ dist_release:
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
 
+
+## Distribution builds (true release builds)
+## -------------------
+
+# These builds are fully optimized, with LTO, and they contain
+# debuginfo. They take a very long time to build, so it is recommended
+# not to use them.
+
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
 build_dist_release:
@@ -123,10 +174,13 @@ dist_prof_release:
 dist_fail_release:
 	FAIL_POINT=1 make dist_release
 
-# unlike test, this target will trace tests and output logs when fail test is detected.
-trace_test:
-	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
 
+## Testing
+## -------
+
+# Run tests under a variety of conditions. This should pass before
+# submitting pull requests. Note though that the CI system tests TiKV
+# through its own scripts and does not use this rule.
 test:
         # When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
         # again here. LOCAL_DIR is defined in .travis.yml.
@@ -145,6 +199,16 @@ test:
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
+
+# Unlike test, this target will trace tests and output logs when fail
+# test is detected.  It's not clear who uses this and for what. It
+# does not seem to be used by CI. If you know please document it.
+trace_test:
+	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
+
+
+## Static analysis
+## ---------------
 
 unset-override:
 	@# unset first in case of any previous overrides
@@ -177,18 +241,30 @@ pre-audit:
 		cargo install cargo-audit --force; \
 	fi
 
+# Check for security vulnerabilities
 audit: pre-audit
 	cargo audit
 
-clean:
-	cargo clean
 
+## Special targets
+## ---------------
+
+# A special target for building just the tikv-ctl binary and release mode and copying it
+# into BIN_PATH. It's not clear who uses this for what. If you know please document it.
+ctl:
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	@mkdir -p ${BIN_PATH}
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
+
+# A special target for testing only "coprocessor::dag::expr"
+# per https://github.com/tikv/tikv/pull/3280
 expression: format clippy
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" --no-default-features -- --nocapture
 
 
-# The driver for script/run-cargo.sh
-#
+## The driver for script/run-cargo.sh
+## ----------------------------------
+
 # Cargo only has two non-test profiles, dev and release, and we have
 # more than two use cases for which a cargo profile is required. This
 # is a hack to manage more cargo profiles, written in
