@@ -149,7 +149,7 @@ mod tests {
 
     use std::fs;
 
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_security() {
@@ -177,7 +177,7 @@ mod tests {
             false,
         );
 
-        let temp = TempDir::new("test_cred").unwrap();
+        let temp = Builder::new().prefix("test_cred").tempdir().unwrap();
         let example_ca = temp.path().join("ca");
         let example_cert = temp.path().join("cert");
         let example_key = temp.path().join("key");
