@@ -210,7 +210,7 @@ expression: format clippy
 #                                   #   (fast build / slow run)
 #     $ make x-build-dev-opt        # A mostly-optimized dev profile
 #                                   #   (slower build / faster run)
-#     $ make x-build-prod           # A release build
+#     $ make x-build-dist           # A release build
 #                                   #   (slowest build / fastest run)
 #     $ make x-bench                # Run benches mostly-optimized
 #                                   #   (slower build / faster run)
@@ -222,8 +222,8 @@ expression: format clippy
 #   testing with fastest turnaround       - dev-nopt-quick
 #   testing                               - dev-nopt-quick
 #   casual benchmarking                   - dev-opt
-#   benchmarking with full release config - prod
-#   building the release for publish      - prod
+#   benchmarking with full release config - dist
+#   building the release for publish      - dist
 #
 # The below rules all rely on using a .cargo/config file to override various
 # profiles. Within those config files we'll experiment with compile-time
@@ -245,7 +245,7 @@ expression: format clippy
 DEV_OPT_CONFIG=etc/cargo.config.dev-opt
 DEV_NOPT_CONFIG=etc/cargo.config.dev-nopt
 DEV_NOPT_QUICK_CONFIG=etc/cargo.config.dev-nopt-quick
-PROD_CONFIG=etc/cargo.config.prod
+DIST_CONFIG=etc/cargo.config.dist
 TEST_CONFIG=etc/cargo.config.test
 BENCH_CONFIG=etc/cargo.config.bench
 
@@ -276,11 +276,11 @@ x-build-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
 x-build-dev-opt:
 	bash scripts/run-cargo.sh
 
-x-build-prod: export X_CARGO_CMD=build
-x-build-prod: export X_CARGO_FEATURES=${ENABLE_FEATURES}
-x-build-prod: export X_CARGO_RELEASE=1
-x-build-prod: export X_CARGO_CONFIG_FILE=${PROD_CONFIG}
-x-build-prod:
+x-build-dist: export X_CARGO_CMD=build
+x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-dist: export X_CARGO_RELEASE=1
+x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
+x-build-dist:
 	bash scripts/run-cargo.sh
 
 # "run" commands for the above
@@ -308,11 +308,11 @@ x-run-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
 x-run-dev-opt:
 	bash scripts/run-cargo.sh
 
-x-run-prod: export X_CARGO_CMD=run
-x-run-prod: export X_CARGO_FEATURES=${ENABLE_FEATURES}
-x-run-prod: export X_CARGO_RELEASE=1
-x-run-prod: export X_CARGO_CONFIG_FILE=${PROD_CONFIG}
-x-run-prod:
+x-run-dist: export X_CARGO_CMD=run
+x-run-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-dist: export X_CARGO_RELEASE=1
+x-run-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
+x-run-dist:
 	bash scripts/run-cargo.sh
 
 # bench and test targets
@@ -340,8 +340,8 @@ x-dev-opt-config:
 x-dev-nopt-config:
 	mkdir -p .cargo && cp -b "${DEV_NOPT_CONFIG}" .cargo/config
 
-x-prod-config:
-	mkdir -p .cargo && cp -b "${PROD_CONFIG}" .cargo/config
+x-dist-config:
+	mkdir -p .cargo && cp -b "${DIST_CONFIG}" .cargo/config
 
 x-clean:
 	-rm -r .cargo
