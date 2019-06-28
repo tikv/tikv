@@ -135,11 +135,11 @@ mod tests {
     use engine::CF_DEFAULT;
     use std::sync::mpsc;
     use std::time::Duration;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_gc_raft_log() {
-        let path = TempDir::new("gc-raft-log-test").unwrap();
+        let path = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
         let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let raft_db = Arc::new(raft_db);
 

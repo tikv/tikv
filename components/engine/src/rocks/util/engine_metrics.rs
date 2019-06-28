@@ -1341,14 +1341,14 @@ lazy_static! {
 mod tests {
     use super::*;
 
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::rocks;
     use crate::ALL_CFS;
 
     #[test]
     fn test_flush() {
-        let dir = TempDir::new("test-flush").unwrap();
+        let dir = Builder::new().prefix("test-flush").tempdir().unwrap();
         let db =
             rocks::util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         for tp in ENGINE_TICKER_TYPES {
