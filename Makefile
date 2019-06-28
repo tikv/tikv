@@ -88,26 +88,26 @@ run:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release:
-	make dist_release
+	make build_release
 
-# Build for optimized development, but without additional sanity
-# checks and file movement.
+# Build for optimized development. This rule only exists for backwards
+# compatibility, and symmetry with the `build_dist_release` rule.
 build_release:
-	make build_dist_release
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
 unportable_release:
-	make dist_unportable_release
+	ROCKSDB_SYS_PORTABLE=0 make release
 
 # An optimized build with jemalloc memory profiling enabled.
 prof_release:
-	make dist_prof_release
+	ENABLE_FEATURES=mem-profiling make release
 
 # An optimized build instrumented with failpoints.
 # This is used for schrodinger chaos testing.
 fail_release:
-	make dist_fail_release
+	FAIL_POINT=1 make release
 
 # The target used by CI/CD to build the distributable release artifacts.
 # Individual developers should only need to use the `dist_` rules when working
