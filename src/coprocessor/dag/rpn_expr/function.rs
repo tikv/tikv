@@ -61,7 +61,6 @@
 //!         self,
 //!         ctx: &mut EvalContext,
 //!         payload: &RpnFnCallPayload<'_>,
-
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
@@ -84,8 +83,8 @@ use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
-#[derive(Clone, Copy)]
 /// Metadata of an RPN function
+#[derive(Clone, Copy)]
 pub struct RpnFnMeta {
     /// The display name of the function.
     pub name: &'static str,

@@ -221,10 +221,7 @@ impl RpnExpression {
 
         for node in self.as_ref() {
             match node {
-                RpnExpressionNode::Constant {
-                    ref value,
-                    ref field_type,
-                } => {
+                RpnExpressionNode::Constant { value, field_type } => {
                     stack.push(RpnStackNode::Scalar {
                         value: &value,
                         field_type,
@@ -243,17 +240,17 @@ impl RpnExpression {
                     });
                 }
                 RpnExpressionNode::FnCall {
-                    ref func,
-                    ref field_type,
-                    ref implicit_args,
+                    func_meta,
+                    field_type,
+                    implicit_args,
                 } => {
                     // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
                     // `[A, B, C, Foo]`.
                     // Now we receives a function call `Foo`, so there are `[A, B, C]` in the stack
                     // as the last several elements. We will directly use the last N (N = number of
                     // arguments) elements in the stack as function arguments.
-                    assert!(stack.len() >= func.args_len);
-                    let stack_slice_begin = stack.len() - func.args_len;
+                    assert!(stack.len() >= func_meta.args_len);
+                    let stack_slice_begin = stack.len() - func_meta.args_len;
                     let stack_slice = &stack[stack_slice_begin..];
                     let call_info = RpnFnCallPayload {
                         output_rows,
@@ -261,7 +258,7 @@ impl RpnExpression {
                         implicit_args,
                         ret_field_type: field_type,
                     };
-                    let ret = (func.fn_ptr)(context, &call_info)?;
+                    let ret = (func_meta.fn_ptr)(context, &call_info)?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {

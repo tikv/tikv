@@ -22,7 +22,7 @@ pub fn get_cast_fn(
 ) -> Result<(RpnFnMeta, Vec<ScalarValue>)> {
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
-    let func = match (from, to) {
+    let func_meta = match (from, to) {
         (EvalType::Int, EvalType::Decimal) => {
             if !from_field_type
                 .as_accessor()
@@ -50,7 +50,7 @@ pub fn get_cast_fn(
     // with all implicit arguments.
     // **Note**: CAST family functions inserted by `Coprocessor` will
     // use empty implicit arguments to avoid memory allocation.
-    Ok((func, vec![]))
+    Ok((func_meta, vec![]))
 }
 
 fn produce_dec_with_specified_tp(
