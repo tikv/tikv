@@ -1,30 +1,14 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftengine::{RaftEngine, Result as RaftEngineResult};
 use crate::raftstore::store::fsm::RaftRouter;
 use crate::raftstore::store::msg::PeerMsg;
-use crate::util::worker::Runnable;
+use raftengine::{RaftEngine, Result as RaftEngineResult};
+use tikv_util::worker::Runnable;
 
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
-
-pub enum Task {
-    RegionTask(RegionTask),
-    EngineTask(EngineTask),
-}
 
 pub struct RegionTask {
     pub raft_engine: Arc<RaftEngine>,
@@ -39,6 +23,11 @@ pub struct EngineTask {
 
 pub struct TaskRes {
     pub collected: u64,
+}
+
+pub enum Task {
+    RegionTask(RegionTask),
+    EngineTask(EngineTask),
 }
 
 impl Display for Task {
@@ -166,15 +155,15 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftengine::{Config as RaftEngineCfg, LogBatch, RaftEngine};
     use raft::eraftpb::Entry;
+    use raftengine::{Config as RaftEngineCfg, LogBatch, RaftEngine};
     use std::sync::mpsc;
     use std::time::Duration;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_gc_raft_log() {
-        let path = TempDir::new("gc-raft-log-test").unwrap();
+        let path = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
         let mut raft_cfg = RaftEngineCfg::new();
         raft_cfg.dir = String::from(path.path().to_str().unwrap());
         let raft_engine = Arc::new(RaftEngine::new(raft_cfg));

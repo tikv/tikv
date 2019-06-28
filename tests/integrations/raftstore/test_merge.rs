@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::iter::*;
 use std::sync::Arc;
@@ -20,13 +9,13 @@ use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
+use engine::Peekable;
+use engine::{CF_RAFT, CF_WRITE};
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::raftstore::store::Peekable;
-use tikv::storage::{CF_RAFT, CF_WRITE};
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
 #[test]
@@ -70,11 +59,11 @@ fn test_node_base_merge() {
     assert_eq!(region.get_id(), right.get_id());
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
-    let orgin_epoch = left.get_region_epoch();
+    let origin_epoch = left.get_region_epoch();
     let new_epoch = region.get_region_epoch();
     // PrepareMerge + CommitMerge, so it should be 2.
-    assert_eq!(new_epoch.get_version(), orgin_epoch.get_version() + 2);
-    assert_eq!(new_epoch.get_conf_ver(), orgin_epoch.get_conf_ver());
+    assert_eq!(new_epoch.get_version(), origin_epoch.get_version() + 2);
+    assert_eq!(new_epoch.get_conf_ver(), origin_epoch.get_conf_ver());
     let get = new_request(
         region.get_id(),
         new_epoch.to_owned(),
@@ -111,6 +100,54 @@ fn test_node_base_merge() {
     }
 
     cluster.must_put(b"k4", b"v4");
+}
+
+#[test]
+fn test_node_merge_with_slow_learner() {
+    let mut cluster = new_node_cluster(0, 2);
+    configure_for_merge(&mut cluster);
+
+    // Create a cluster with peer 1 as leader and peer 2 as learner.
+    let r1 = cluster.run_conf_change();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // Split the region.
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    assert_eq!(region.get_id(), right.get_id());
+    assert_eq!(left.get_end_key(), right.get_start_key());
+    assert_eq!(right.get_start_key(), b"k2");
+
+    // Make sure the leader has received the learner's last index.
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    (0..100).for_each(|i| cluster.must_put(b"k1", format!("v{}", i).as_bytes()));
+
+    // Merge 2 regions under isolation should fail.
+    let merge = new_prepare_merge(right.clone());
+    let req = new_admin_request(left.get_id(), left.get_region_epoch(), merge);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("log gap"));
+
+    cluster.clear_send_filters();
+    cluster.must_put(b"k11", b"v100");
+    must_get_equal(&cluster.get_engine(1), b"k11", b"v100");
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v100");
+    pd_client.must_merge(left.get_id(), right.get_id());
 }
 
 /// Test whether merge will be aborted if prerequisites is not met.

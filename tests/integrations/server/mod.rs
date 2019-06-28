@@ -1,29 +1,18 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod kv_service;
 mod raft_client;
 
 use std::sync::Arc;
 
-use crate::grpc::*;
 use futures::Future;
+use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
 use kvproto::tikvpb::{BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage};
 use kvproto::tikvpb_grpc::{create_tikv, Tikv};
-use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv_util::security::{SecurityConfig, SecurityManager};
 
 macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
@@ -100,6 +89,16 @@ trait MockKvService {
     unary_call!(kv_get, GetRequest, GetResponse);
     unary_call!(kv_scan, ScanRequest, ScanResponse);
     unary_call!(kv_prewrite, PrewriteRequest, PrewriteResponse);
+    unary_call!(
+        kv_pessimistic_lock,
+        PessimisticLockRequest,
+        PessimisticLockResponse
+    );
+    unary_call!(
+        kv_pessimistic_rollback,
+        PessimisticRollbackRequest,
+        PessimisticRollbackResponse
+    );
     unary_call!(kv_commit, CommitRequest, CommitResponse);
     unary_call!(kv_import, ImportRequest, ImportResponse);
     unary_call!(kv_cleanup, CleanupRequest, CleanupResponse);
@@ -147,6 +146,7 @@ trait MockKvService {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
+    unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 
@@ -154,6 +154,16 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(kv_get, GetRequest, GetResponse);
     unary_call_dispatch!(kv_scan, ScanRequest, ScanResponse);
     unary_call_dispatch!(kv_prewrite, PrewriteRequest, PrewriteResponse);
+    unary_call_dispatch!(
+        kv_pessimistic_lock,
+        PessimisticLockRequest,
+        PessimisticLockResponse
+    );
+    unary_call_dispatch!(
+        kv_pessimistic_rollback,
+        PessimisticRollbackRequest,
+        PessimisticRollbackResponse
+    );
     unary_call_dispatch!(kv_commit, CommitRequest, CommitResponse);
     unary_call_dispatch!(kv_import, ImportRequest, ImportResponse);
     unary_call_dispatch!(kv_cleanup, CleanupRequest, CleanupResponse);
@@ -201,6 +211,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call_dispatch!(split_region, SplitRegionRequest, SplitRegionResponse);
+    unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 

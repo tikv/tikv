@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -17,8 +6,8 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use test_raftstore::*;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
     let mut peers = cluster.get_down_peers();
@@ -85,14 +74,19 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_down_peers() {
-    let mut cluster = new_node_cluster(0, 5);
+fn test_server_down_peers_with_hibernate_regions() {
+    let mut cluster = new_server_cluster(0, 5);
+    // When hibernate_regions is enabled, down peers are not detected in time
+    // by design. So here use a short check interval to trigger region heartbeat
+    // more frequently.
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
     test_down_peers(&mut cluster);
 }
 
 #[test]
-fn test_server_down_peers() {
+fn test_server_down_peers_without_hibernate_regions() {
     let mut cluster = new_server_cluster(0, 5);
+    cluster.cfg.raft_store.hibernate_regions = false;
     test_down_peers(&mut cluster);
 }
 

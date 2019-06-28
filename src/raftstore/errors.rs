@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error;
 use std::io;
@@ -20,14 +9,12 @@ use crossbeam::TrySendError;
 use protobuf::{ProtobufError, RepeatedField};
 
 use crate::pd;
-use crate::util::codec;
 use kvproto::{errorpb, metapb};
 use raft;
+use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
-use crate::raftengine;
-use crate::util::escape;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
@@ -68,9 +55,9 @@ quick_error! {
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             description("key is not in region")
             display("key {} is not in region key range [{}, {}) for region {}",
-                    escape(key),
-                    escape(region.get_start_key()),
-                    escape(region.get_end_key()),
+                    hex::encode_upper(key),
+                    hex::encode_upper(region.get_start_key()),
+                    hex::encode_upper(region.get_end_key()),
                     region.get_id())
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
@@ -87,12 +74,10 @@ quick_error! {
             description(err.description())
             display("Io {}", err)
         }
-        // RocksDb uses plain string as the error.
-        // Maybe other libs use this too?
-        RocksDb(msg: String) {
+        Engine(err: engine::Error) {
             from()
-            description("RocksDb error")
-            display("RocksDb {}", msg)
+            description("Engine error")
+            display("Engine {:?}", err)
         }
         Protobuf(err: ProtobufError) {
             from()
@@ -162,12 +147,12 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl Into<errorpb::Error> for Error {
-    fn into(self) -> errorpb::Error {
+impl From<Error> for errorpb::Error {
+    fn from(err: Error) -> errorpb::Error {
         let mut errorpb = errorpb::Error::new();
-        errorpb.set_message(error::Error::description(&self).to_owned());
+        errorpb.set_message(error::Error::description(&err).to_owned());
 
-        match self {
+        match err {
             Error::RegionNotFound(region_id) => {
                 errorpb.mut_region_not_found().set_region_id(region_id);
             }
@@ -215,6 +200,16 @@ impl Into<errorpb::Error> for Error {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::new();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
+            }
+            Error::Engine(engine::Error::NotInRange(key, region_id, start_key, end_key)) => {
+                errorpb.mut_key_not_in_region().set_key(key);
+                errorpb.mut_key_not_in_region().set_region_id(region_id);
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_start_key(start_key.to_vec());
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_end_key(end_key.to_vec());
             }
             _ => {}
         };

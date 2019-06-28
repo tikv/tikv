@@ -1,24 +1,13 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{stream, Future, Stream};
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 use uuid::Uuid;
 
-use crate::grpc::{ChannelBuilder, Environment, Result, WriteFlags};
+use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::import_kvpb::*;
 use kvproto::import_kvpb_grpc::*;
 
@@ -26,7 +15,10 @@ use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
 
 fn new_kv_server() -> (ImportKVServer, ImportKvClient, TempDir) {
-    let temp_dir = TempDir::new("test_import_kv_server").unwrap();
+    let temp_dir = Builder::new()
+        .prefix("test_import_kv_server")
+        .tempdir()
+        .unwrap();
 
     let mut cfg = TiKvConfig::default();
     cfg.server.addr = "127.0.0.1:0".to_owned();

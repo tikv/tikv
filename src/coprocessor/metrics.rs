@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
 
@@ -65,6 +54,17 @@ lazy_static! {
         "tikv_coprocessor_rocksdb_perf",
         "Total number of RocksDB internal operations from PerfContext",
         &["req", "metric"]
+    )
+    .unwrap();
+    pub static ref COPR_DAG_REQ_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_coprocessor_dag_request_count",
+        "Total number of DAG requests",
+        &["vec_type"]
+    )
+    .unwrap();
+    pub static ref COPR_RESP_SIZE: IntCounter = register_int_counter!(
+        "tikv_coprocessor_response_bytes",
+        "Total bytes of response body"
     )
     .unwrap();
     pub static ref COPR_EXECUTOR_COUNT: IntCounterVec = register_int_counter_vec!(

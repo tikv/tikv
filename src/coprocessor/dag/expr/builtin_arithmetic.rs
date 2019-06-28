@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
@@ -1105,20 +1094,23 @@ mod tests {
         ];
 
         let cases = vec![
-            //(flag,sql_mode,strict_sql_mode=>is_ok,has_warning)
-            (0, 0, false, true, true), //warning
+            //(flag,sql_mode,is_ok,has_warning)
+            (Flag::empty(), SqlMode::empty(), true, true), //warning
             (
-                FLAG_IN_UPDATE_OR_DELETE_STMT,
-                MODE_ERROR_FOR_DIVISION_BY_ZERO,
-                true,
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 false,
                 false,
             ), //error
-            (FLAG_IN_UPDATE_OR_DELETE_STMT, 0, true, true, false), //ok
             (
-                FLAG_IN_UPDATE_OR_DELETE_STMT | FLAG_DIVIDED_BY_ZERO_AS_WARNING,
-                MODE_ERROR_FOR_DIVISION_BY_ZERO,
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::STRICT_ALL_TABLES,
                 true,
+                false,
+            ), //ok
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT | Flag::DIVIDED_BY_ZERO_AS_WARNING,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 true,
                 true,
             ), //warning
@@ -1127,11 +1119,9 @@ mod tests {
             let lhs = datum_expr(left);
             let rhs = datum_expr(right);
             let scalar_func = scalar_func_expr(sig, &[lhs, rhs]);
-            for (flag, sql_mode, strict_sql_mode, is_ok, has_warning) in &cases {
+            for (flag, sql_mode, is_ok, has_warning) in &cases {
                 let mut cfg = EvalConfig::new();
-                cfg.set_by_flags(*flag)
-                    .set_sql_mode(*sql_mode)
-                    .set_strict_sql_mode(*strict_sql_mode);
+                cfg.set_flag(*flag).set_sql_mode(*sql_mode);
                 let mut ctx = EvalContext::new(::std::sync::Arc::new(cfg));
                 let op = Expression::build(&ctx, scalar_func.clone()).unwrap();
                 let got = op.eval(&mut ctx, &[]);

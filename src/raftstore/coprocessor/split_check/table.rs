@@ -1,28 +1,17 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 
+use engine::rocks::{SeekKey, DB};
+use engine::CF_WRITE;
+use engine::{IterOption, Iterable};
 use kvproto::metapb::Region;
-use rocksdb::{SeekKey, DB};
+use kvproto::pdpb::CheckPolicy;
 
 use crate::coprocessor::codec::table as table_codec;
-use crate::raftstore::store::engine::{IterOption, Iterable};
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
-use crate::storage::CF_WRITE;
-use crate::util::escape;
-use kvproto::pdpb::CheckPolicy;
+use tikv_util::keybuilder::KeyBuilder;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
@@ -165,9 +154,9 @@ impl SplitCheckObserver for TableCheckObserver {
                 first_encoded_table_prefix = to_encoded_table_prefix(encoded_start_key);
             }
             _ => panic!(
-                "start_key {:?} and end_key {:?} out of order",
-                escape(encoded_start_key),
-                escape(encoded_end_key)
+                "start_key {} and end_key {} out of order",
+                hex::encode_upper(encoded_start_key),
+                hex::encode_upper(encoded_end_key)
             ),
         }
         host.add_checker(Box::new(Checker {
@@ -183,7 +172,11 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
 
-    let iter_opt = IterOption::new(Some(start_key), Some(end_key), false);
+    let iter_opt = IterOption::new(
+        Some(KeyBuilder::from_vec(start_key, 0, 0)),
+        Some(KeyBuilder::from_vec(end_key, 0, 0)),
+        false,
+    );
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
 
     // the last key
@@ -231,17 +224,17 @@ mod tests {
 
     use kvproto::metapb::Peer;
     use kvproto::pdpb::CheckPolicy;
-    use rocksdb::Writable;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::types::Key;
-    use crate::storage::ALL_CFS;
-    use crate::util::codec::number::NumberEncoder;
-    use crate::util::config::ReadableSize;
-    use crate::util::rocksdb_util::new_engine;
-    use crate::util::worker::Runnable;
+    use engine::rocks::util::new_engine;
+    use engine::rocks::Writable;
+    use engine::ALL_CFS;
+    use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::config::ReadableSize;
+    use tikv_util::worker::Runnable;
 
     use super::*;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
@@ -257,7 +250,10 @@ mod tests {
 
     #[test]
     fn test_last_key_of_region() {
-        let path = TempDir::new("test_last_key_of_region").unwrap();
+        let path = Builder::new()
+            .prefix("test_last_key_of_region")
+            .tempdir()
+            .unwrap();
         let engine =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -309,7 +305,10 @@ mod tests {
 
     #[test]
     fn test_table_check_observer() {
-        let path = TempDir::new("test_table_check_observer").unwrap();
+        let path = Builder::new()
+            .prefix("test_table_check_observer")
+            .tempdir()
+            .unwrap();
         let engine =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();

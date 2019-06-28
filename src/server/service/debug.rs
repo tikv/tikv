@@ -1,22 +1,13 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::grpc::{Error as GrpcError, WriteFlags};
-use crate::grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
+use engine::rocks::util::stats as rocksdb_stats;
+use engine::Engines;
 use fail;
 use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
+use grpcio::{Error as GrpcError, WriteFlags};
+use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::*;
 use kvproto::debugpb_grpc;
 use kvproto::raft_cmdpb::{
@@ -26,10 +17,10 @@ use kvproto::raft_cmdpb::{
 use protobuf::text_format::print_to_string;
 
 use crate::raftstore::store::msg::Callback;
-use crate::raftstore::store::Engines;
 use crate::server::debug::{Debugger, Error};
 use crate::server::transport::RaftStoreRouter;
-use crate::util::{metrics, rocksdb_util::stats as rocksdb_stats};
+use tikv_util::metrics;
+
 use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {

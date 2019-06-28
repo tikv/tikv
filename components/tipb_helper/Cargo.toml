@@ -1,0 +1,10 @@
+[package]
+name = "tipb_helper"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+tipb = { git = "https://github.com/pingcap/tipb.git" }
+codec = { path = "../codec" }
+cop_datatype = { path = "../cop_datatype" }

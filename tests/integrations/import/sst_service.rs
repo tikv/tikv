@@ -1,25 +1,14 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use futures::{stream, Future, Stream};
-use tempdir::TempDir;
+use tempfile::Builder;
 use uuid::Uuid;
 
-use crate::grpc::{ChannelBuilder, Environment, Result, WriteFlags};
+use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
@@ -28,7 +17,7 @@ use kvproto::tikvpb_grpc::*;
 use test_raftstore::*;
 use tikv::import::test_helpers::*;
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
@@ -94,7 +83,7 @@ fn test_upload_sst() {
 fn test_ingest_sst() {
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
 
-    let temp_dir = TempDir::new("test_ingest_sst").unwrap();
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
 
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
@@ -139,7 +128,7 @@ fn test_ingest_sst() {
 fn test_cleanup_sst() {
     let (mut cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
 
-    let temp_dir = TempDir::new("test_cleanup_sst").unwrap();
+    let temp_dir = Builder::new().prefix("test_cleanup_sst").tempdir().unwrap();
 
     let sst_path = temp_dir.path().join("test_split.sst");
     let sst_range = (0, 100);

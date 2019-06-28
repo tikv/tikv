@@ -1,20 +1,9 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{black_box, Bencher, Criterion};
+use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
-use tikv::storage::engine::Engine;
+use tikv::storage::kv::Engine;
 use tikv::storage::mvcc::{MvccReader, MvccTxn};
 use tikv::storage::{Key, Mutation, Options};
 
@@ -24,7 +13,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_with_setup(
+    b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> = KvGenerator::with_seed(
                 config.key_length,
@@ -44,6 +33,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
                 txn.prewrite(mutation, &primary, option).unwrap();
             }
         },
+        BatchSize::SmallInput,
     )
 }
 
@@ -52,7 +42,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
     let ctx = Context::new();
     let snapshot = engine.snapshot(&ctx).unwrap();
     let option = Options::default();
-    b.iter_with_setup(
+    b.iter_batched(
         || {
             let mut txn = MvccTxn::new(snapshot.clone(), 1, true).unwrap();
 
@@ -82,6 +72,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
                 black_box(txn.commit(key, 1)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     );
 }
 
@@ -98,7 +89,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
     .map(|(k, _)| Key::from_raw(&k))
     .collect();
 
-    b.iter_with_setup(
+    b.iter_batched(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
             (snapshot, &test_keys)
@@ -116,6 +107,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
                 black_box(reader.load_lock(&key).unwrap());
             }
         },
+        BatchSize::SmallInput,
     );
 }
 
@@ -125,7 +117,7 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    b.iter_with_setup(
+    b.iter_batched(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let test_keys: Vec<Key> = KvGenerator::with_seed(
@@ -152,6 +144,7 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
                 black_box(reader.seek_write(&key, u64::max_value()).unwrap());
             }
         },
+        BatchSize::SmallInput,
     );
 }
 

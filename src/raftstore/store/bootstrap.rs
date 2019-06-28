@@ -1,32 +1,19 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::engine::{Iterable, Mutable};
 use super::keys;
-use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
-use super::util::{new_peer, Engines};
-use crate::raftengine::LogBatch;
+use super::peer_storage::{
+    write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+};
+use super::util::new_peer;
 use crate::raftstore::Result;
-use crate::storage::{CF_DEFAULT, CF_RAFT};
-use crate::util::rocksdb_util;
+use engine::rocks;
+use engine::rocks::Writable;
+use engine::{Engines, Iterable, Mutable, WriteBatch, DB};
+use engine::{CF_DEFAULT, CF_RAFT};
+use raftengine::LogBatch;
+
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-use rocksdb::{Writable, WriteBatch, DB};
-
-/// The initial region epoch version.
-pub const INIT_EPOCH_VER: u64 = 1;
-/// The initial region epoch conf_version.
-pub const INIT_EPOCH_CONF_VER: u64 = 1;
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::new();
@@ -68,7 +55,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     ident.set_store_id(store_id);
 
     engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
-    engines.kv.sync_wal()?;
+    engines.sync_kv()?;
     Ok(())
 }
 
@@ -80,12 +67,12 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     state.set_region(region.clone());
 
     let wb = WriteBatch::new();
-    wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)?;
-    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state)?;
+    box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
+    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
+    box_try!(wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state));
     write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
-    engines.kv.write(wb)?;
-    engines.kv.sync_wal()?;
+    engines.write_kv(&wb)?;
+    engines.sync_kv()?;
 
     let raft_wb = LogBatch::new();
     write_initial_raft_state(&raft_wb, region.get_id())?;
@@ -98,20 +85,20 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
     engines.raft.clean_region(region_id)?;
 
     let wb = WriteBatch::new();
-    wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
+    box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
     // should clear raft initial state too.
-    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    wb.delete_cf(handle, &keys::region_state_key(region_id))?;
-    wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
-    engines.kv.write(wb)?;
-    engines.kv.sync_wal()?;
+    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
+    box_try!(wb.delete_cf(handle, &keys::region_state_key(region_id)));
+    box_try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
+    engines.write_kv(&wb)?;
+    engines.sync_kv()?;
     Ok(())
 }
 
 // Clear prepare key
 pub fn clear_prepare_bootstrap_key(engines: &Engines) -> Result<()> {
-    engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
-    engines.kv.sync_wal()?;
+    box_try!(engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY));
+    engines.sync_kv()?;
     Ok(())
 }
 
@@ -119,21 +106,25 @@ pub fn clear_prepare_bootstrap_key(engines: &Engines) -> Result<()> {
 mod tests {
     use std::path::Path;
     use std::sync::Arc;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use super::*;
-    use crate::raftengine::{Config as RaftEngineCfg, RaftEngine};
     use crate::raftstore::store::engine::Peekable;
-    use crate::raftstore::store::{keys, Engines};
+    use crate::raftstore::store::keys;
     use crate::storage::CF_DEFAULT;
     use crate::util::rocksdb_util;
+    use engine::rocks;
+    use engine::Engines;
+    use engine::Peekable;
+    use engine::CF_DEFAULT;
+    use raftengine::{Config as RaftEngineCfg, RaftEngine};
 
     #[test]
     fn test_bootstrap() {
-        let path = TempDir::new("var").unwrap();
-        let raft_path = path.path().join(Path::new("raft"));
+        let path = Builder::new().prefix("var").tempdir().unwrap();
+        let raft_path = path.path().join("raft");
         let kv_engine = Arc::new(
-            rocksdb_util::new_engine(
+            rocks::util::new_engine(
                 path.path().to_str().unwrap(),
                 None,
                 &[CF_DEFAULT, CF_RAFT],

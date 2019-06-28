@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! A module contains test cases of stale peers gc.
 
@@ -20,9 +9,9 @@ use std::time::*;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
+use engine::*;
 use test_raftstore::*;
-use tikv::raftstore::store::{keys, Peekable};
-use tikv::storage::CF_RAFT;
+use tikv::raftstore::store::keys;
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.

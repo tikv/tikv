@@ -6,8 +6,8 @@ about: Something isn't working as expected
 
 ## Bug Report
 
-**What version of Rust are you using?**
-<!-- You can run `rustc --version` -->
+**What version of TiKV are you using?**
+<!-- You can run `tikv-server --version` -->
 
 **What operating system and CPU are you using?**
 <!-- You can run `cat /proc/cpuinfo` -->

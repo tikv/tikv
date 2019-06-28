@@ -1,0 +1,15 @@
+# Configuration for `cargo bench`, similar to dev-opt.
+# For some reason we override the bench profile by
+# overriding the release profile.
+# See https://github.com/rust-lang/rust/issues/48683#issuecomment-473731715
+
+[profile.release]
+opt-level = 3
+debug = false
+rpath = false
+lto = "thin"
+debug-assertions = false
+codegen-units = 1
+# panic = "unwind" // can't set panic for bench profile
+incremental = true
+overflow-checks = false

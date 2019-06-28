@@ -1,37 +1,26 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
-use rocksdb::{
+use slog::Level;
+
+use engine::rocks::util::config::{BlobRunMode, CompressionType};
+use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use slog::Level;
-use toml;
-
+use raftengine::Config as RaftEngineCfg;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
-use tikv::raftengine::Config as RaftEngineCfg;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::Config as StorageConfig;
-use tikv::util::config::{CompressionType, ReadableDuration, ReadableSize};
-use tikv::util::security::SecurityConfig;
+use tikv::storage::{BlockCacheConfig, Config as StorageConfig};
+use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::security::SecurityConfig;
 
 #[test]
 fn test_toml_serde() {
@@ -81,6 +70,7 @@ fn test_serde_custom_tikv_config() {
         end_point_stream_channel_size: 16,
         end_point_batch_row_limit: 64,
         end_point_stream_batch_row_limit: 4096,
+        end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
@@ -169,10 +159,9 @@ fn test_serde_custom_tikv_config() {
         store_max_batch_size: 21,
         store_pool_size: 3,
         future_poll_size: 2,
+        hibernate_regions: true,
     };
-    value.pd = PdConfig {
-        endpoints: vec!["example.com:443".to_owned()],
-    };
+    value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     value.rocksdb = DbConfig {
         wal_recovery_mode: DBRecoveryMode::AbsoluteConsistency,
         wal_dir: "/var".to_owned(),
@@ -246,7 +235,10 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
+                blob_run_mode: BlobRunMode::ReadOnly,
             },
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -295,7 +287,10 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::Normal,
             },
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -344,7 +339,10 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::Normal,
             },
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -393,7 +391,10 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::Normal,
             },
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
         titan: TitanDBConfig {
             enabled: true,
@@ -420,6 +421,13 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
+        block_cache: BlockCacheConfig {
+            shared: true,
+            capacity: Some(ReadableSize::gb(40)),
+            num_shard_bits: 10,
+            strict_capacity_limit: true,
+            high_pri_pool_ratio: 0.8,
+        },
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,
@@ -445,6 +453,8 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
         max_open_engines: 2,
+        upload_speed_limit: ReadableSize::mb(456),
+        min_available_ratio: 0.05,
     };
     value.panic_when_unexpected_key_or_data = true;
 
@@ -476,4 +486,21 @@ fn test_readpool_default_config() {
     let mut expected = TiKvConfig::default();
     expected.readpool.storage.high_concurrency = 1;
     assert_eq!(cfg, expected);
+}
+
+#[test]
+fn test_block_cache_backward_compatible() {
+    let content = read_file_in_project_dir("tests/integrations/config/test-cache-compatible.toml");
+    let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    assert!(cfg.storage.block_cache.shared);
+    assert!(cfg.storage.block_cache.capacity.is_none());
+    cfg.compatible_adjust();
+    assert!(cfg.storage.block_cache.capacity.is_some());
+    assert_eq!(
+        cfg.storage.block_cache.capacity.unwrap().0,
+        cfg.rocksdb.defaultcf.block_cache_size.0
+            + cfg.rocksdb.writecf.block_cache_size.0
+            + cfg.rocksdb.lockcf.block_cache_size.0
+            + cfg.raftdb.defaultcf.block_cache_size.0
+    );
 }

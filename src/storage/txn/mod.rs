@@ -1,39 +1,28 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod latch;
 mod process;
-mod scheduler;
+pub mod sched_pool;
+pub mod scheduler;
 mod store;
 
 use std::error;
 use std::io::Error as IoError;
 
-pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
-pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
+pub use self::process::{execute_callback, ProcessResult, RESOLVE_LOCK_BATCH_SIZE};
+pub use self::scheduler::{Msg, Scheduler};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store};
-use crate::util::escape;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Engine(err: crate::storage::engine::Error) {
+        Engine(err: crate::storage::kv::Error) {
             from()
             cause(err)
             description(err.description())
         }
-        Codec(err: crate::util::codec::Error) {
+        Codec(err: tikv_util::codec::Error) {
             from()
             cause(err)
             description(err.description())
@@ -70,11 +59,11 @@ quick_error! {
                         lower_bound: Option<Vec<u8>>,
                         upper_bound: Option<Vec<u8>>} {
             description("Invalid request range")
-            display("Request range exceeds bound, request range:[{:?}, end:{:?}), physical bound:[{:?}, {:?})",
-                        start.as_ref().map(|s| escape(&s)),
-                        end.as_ref().map(|e| escape(&e)),
-                        lower_bound.as_ref().map(|s| escape(&s)),
-                        upper_bound.as_ref().map(|s| escape(&s)))
+            display("Request range exceeds bound, request range:[{}, end:{}), physical bound:[{}, {})",
+                        start.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
+                        end.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
+                        lower_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
+                        upper_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()))
         }
     }
 }

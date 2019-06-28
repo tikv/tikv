@@ -27,3 +27,7 @@ tmp
 
 # fuzzing hack, see fuzz/cli.rs
 fuzz-incremental/
+
+# cargo configuration. We presently use this to create custom cargo profiles
+# that should not be checked in at this location.
+.cargo/

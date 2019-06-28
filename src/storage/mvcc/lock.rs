@@ -1,33 +1,26 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::super::types::Value;
 use super::{Error, Result};
-use crate::storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use crate::util::codec::bytes::{self, BytesEncoder};
-use crate::util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use crate::storage::{
+    Mutation, FOR_UPDATE_TS_PREFIX, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
+};
 use byteorder::ReadBytesExt;
+use tikv_util::codec::bytes::{self, BytesEncoder};
+use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
     Put,
     Delete,
     Lock,
+    Pessimistic,
 }
 
 const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
+const FLAG_PESSIMISTIC: u8 = b'S';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
@@ -43,6 +36,7 @@ impl LockType {
             FLAG_PUT => Some(LockType::Put),
             FLAG_DELETE => Some(LockType::Delete),
             FLAG_LOCK => Some(LockType::Lock),
+            FLAG_PESSIMISTIC => Some(LockType::Pessimistic),
             _ => None,
         }
     }
@@ -52,6 +46,7 @@ impl LockType {
             LockType::Put => FLAG_PUT,
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,
+            LockType::Pessimistic => FLAG_PESSIMISTIC,
         }
     }
 }
@@ -63,6 +58,9 @@ pub struct Lock {
     pub ts: u64,
     pub ttl: u64,
     pub short_value: Option<Value>,
+    // If for_update_ts != 0, this lock belongs to a pessimistic transaction
+    pub for_update_ts: u64,
+    pub txn_size: u64,
 }
 
 impl Lock {
@@ -72,6 +70,8 @@ impl Lock {
         ts: u64,
         ttl: u64,
         short_value: Option<Value>,
+        for_update_ts: u64,
+        txn_size: u64,
     ) -> Lock {
         Lock {
             lock_type,
@@ -79,6 +79,8 @@ impl Lock {
             ts,
             ttl,
             short_value,
+            for_update_ts,
+            txn_size,
         }
     }
 
@@ -94,6 +96,14 @@ impl Lock {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);
             b.extend_from_slice(v);
+        }
+        if self.for_update_ts > 0 {
+            b.push(FOR_UPDATE_TS_PREFIX);
+            b.encode_u64(self.for_update_ts).unwrap();
+        }
+        if self.txn_size > 0 {
+            b.push(TXN_SIZE_PREFIX);
+            b.encode_u64(self.txn_size).unwrap();
         }
         b
     }
@@ -112,26 +122,40 @@ impl Lock {
         };
 
         if b.is_empty() {
-            return Ok(Lock::new(lock_type, primary, ts, ttl, None));
+            return Ok(Lock::new(lock_type, primary, ts, ttl, None, 0, 0));
         }
 
-        let flag = b.read_u8()?;
-        assert_eq!(
-            flag, SHORT_VALUE_PREFIX,
-            "invalid flag [{:?}] in write",
-            flag
-        );
-
-        let len = b.read_u8()?;
-        if len as usize != b.len() {
-            panic!(
-                "short value len [{}] not equal to content len [{}]",
-                len,
-                b.len()
-            );
+        let mut short_value = None;
+        let mut for_update_ts = 0;
+        let mut txn_size: u64 = 0;
+        while !b.is_empty() {
+            match b.read_u8()? {
+                SHORT_VALUE_PREFIX => {
+                    let len = b.read_u8()?;
+                    if b.len() < len as usize {
+                        panic!(
+                            "content len [{}] shorter than short value len [{}]",
+                            b.len(),
+                            len,
+                        );
+                    }
+                    short_value = Some(b[..len as usize].to_vec());
+                    b = &b[len as usize..];
+                }
+                FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?,
+                TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
+                flag => panic!("invalid flag [{:?}] in lock", flag),
+            }
         }
-
-        Ok(Lock::new(lock_type, primary, ts, ttl, Some(b.to_vec())))
+        Ok(Lock::new(
+            lock_type,
+            primary,
+            ts,
+            ttl,
+            short_value,
+            for_update_ts,
+            txn_size,
+        ))
     }
 }
 
@@ -186,13 +210,45 @@ mod tests {
     fn test_lock() {
         // Test `Lock::to_bytes()` and `Lock::parse()` works as a pair.
         let mut locks = vec![
-            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0, 0),
             Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1,
                 10,
                 Some(b"short_value".to_vec()),
+                0,
+                0,
+            ),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 10, 0),
+            Lock::new(
+                LockType::Delete,
+                b"pk".to_vec(),
+                1,
+                10,
+                Some(b"short_value".to_vec()),
+                10,
+                0,
+            ),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0, 16),
+            Lock::new(
+                LockType::Delete,
+                b"pk".to_vec(),
+                1,
+                10,
+                Some(b"short_value".to_vec()),
+                0,
+                16,
+            ),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 10, 16),
+            Lock::new(
+                LockType::Delete,
+                b"pk".to_vec(),
+                1,
+                10,
+                Some(b"short_value".to_vec()),
+                10,
+                0,
             ),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
@@ -210,6 +266,8 @@ mod tests {
             1,
             10,
             Some(b"short_value".to_vec()),
+            0,
+            0,
         );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());

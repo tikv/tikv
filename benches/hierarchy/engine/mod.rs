@@ -1,20 +1,9 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{black_box, Bencher, Criterion};
+use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
-use tikv::storage::engine::{Engine, Snapshot};
+use tikv::storage::kv::{Engine, Snapshot};
 use tikv::storage::{Key, Value};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
@@ -25,7 +14,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
-    bencher.iter_with_setup(
+    bencher.iter_batched(
         || {
             let test_kvs: Vec<(Key, Value)> = KvGenerator::with_seed(
                 config.key_length,
@@ -43,6 +32,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
                 black_box(engine.put(ctx, key, value)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     );
 }
 
@@ -72,7 +62,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     .map(|(key, _)| Key::from_raw(&key))
     .collect();
 
-    bencher.iter_with_setup(
+    bencher.iter_batched(
         || {
             let snap = engine.snapshot(&ctx).unwrap();
             (snap, &test_kvs)
@@ -82,6 +72,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
                 black_box(snap.get(key).unwrap());
             }
         },
+        BatchSize::SmallInput,
     );
 }
 

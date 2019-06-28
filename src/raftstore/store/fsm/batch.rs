@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This is the core implementation of a batch system. Generally there will be two
 //! different kind of FSMs in TiKV's FSM system. One is normal FSM, which usually
@@ -17,10 +6,10 @@
 //! that controls how the former is created or metrics are collected.
 
 use super::router::{BasicMailbox, Router};
-use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
+use tikv_util::mpsc;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -28,7 +17,7 @@ pub trait FsmScheduler {
 
     /// Schedule a Fsm for later handles.
     fn schedule(&self, fsm: Box<Self::Fsm>);
-    /// Shutdown the scheduler, which indicates that resouces like
+    /// Shutdown the scheduler, which indicates that resources like
     /// background thread pool should be released.
     fn shutdown(&self);
 }
@@ -66,7 +55,7 @@ enum FsmTypes<N, C> {
 
 // A macro to introduce common definition of scheduler.
 macro_rules! impl_sched {
-    ($name:ident) => {
+    ($name:ident, $ty:path, Fsm = $fsm:tt) => {
         pub struct $name<N, C> {
             sender: channel::Sender<FsmTypes<N, C>>,
         }
@@ -79,52 +68,36 @@ macro_rules! impl_sched {
                 }
             }
         }
+
+        impl<N, C> FsmScheduler for $name<N, C>
+        where
+            $fsm: Fsm,
+        {
+            type Fsm = $fsm;
+
+            #[inline]
+            fn schedule(&self, fsm: Box<Self::Fsm>) {
+                match self.sender.send($ty(fsm)) {
+                    Ok(()) => return,
+                    // TODO: use debug instead.
+                    Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
+                    _ => unreachable!(),
+                }
+            }
+
+            fn shutdown(&self) {
+                // TODO: close it explicitly once it's supported.
+                // Magic number, actually any number greater than poll pool size works.
+                for _ in 0..100 {
+                    let _ = self.sender.send(FsmTypes::Empty);
+                }
+            }
+        }
     };
 }
 
-impl_sched!(NormalScheduler);
-impl_sched!(ControlScheduler);
-
-impl<N: Fsm, C> FsmScheduler for NormalScheduler<N, C> {
-    type Fsm = N;
-
-    #[inline]
-    fn schedule(&self, fsm: Box<N>) {
-        match self.sender.send(FsmTypes::Normal(fsm)) {
-            Ok(()) => return,
-            // TODO: use debug instead.
-            Err(SendError(FsmTypes::Normal(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
-            _ => unreachable!(),
-        }
-    }
-
-    fn shutdown(&self) {
-        // TODO: close it explicitly once it's supported.
-        // Magic number, actually any number greater than poll pool size works.
-        for _ in 0..100 {
-            let _ = self.sender.send(FsmTypes::Empty);
-        }
-    }
-}
-
-impl<N, C: Fsm> FsmScheduler for ControlScheduler<N, C> {
-    type Fsm = C;
-
-    #[inline]
-    fn schedule(&self, fsm: Box<C>) {
-        match self.sender.send(FsmTypes::Control(fsm)) {
-            Ok(()) => return,
-            Err(SendError(FsmTypes::Control(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
-            _ => unreachable!(),
-        }
-    }
-
-    fn shutdown(&self) {
-        for _ in 0..100 {
-            let _ = self.sender.send(FsmTypes::Empty);
-        }
-    }
-}
+impl_sched!(NormalScheduler, FsmTypes::Normal, Fsm = N);
+impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 
 /// A basic struct for a round of polling.
 #[allow(clippy::vec_box)]
@@ -466,24 +439,16 @@ pub mod tests {
     use super::super::router::*;
     use super::*;
     use std::borrow::Cow;
-    use std::boxed::FnBox;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    pub type Message = Option<Box<dyn FnBox(&mut Runner) + Send>>;
+    pub type Message = Option<Box<dyn FnOnce(&mut Runner) + Send>>;
 
     pub struct Runner {
         is_stopped: bool,
         recv: mpsc::Receiver<Message>,
         mailbox: Option<BasicMailbox<Runner>>,
-        pub dropped: Arc<AtomicBool>,
-    }
-
-    impl Drop for Runner {
-        fn drop(&mut self) {
-            self.dropped.store(true, Ordering::SeqCst);
-        }
+        pub sender: Option<mpsc::Sender<()>>,
     }
 
     impl Fsm for Runner {
@@ -509,7 +474,7 @@ pub mod tests {
             is_stopped: false,
             recv: rx,
             mailbox: None,
-            dropped: Arc::default(),
+            sender: None,
         };
         (tx, Box::new(fsm))
     }
@@ -535,7 +500,7 @@ pub mod tests {
             self.local.control += 1;
             while let Ok(r) = control.recv.try_recv() {
                 if let Some(r) = r {
-                    r.call_box((control,));
+                    r(control);
                 }
             }
             Some(0)
@@ -545,7 +510,7 @@ pub mod tests {
             self.local.normal += 1;
             while let Ok(r) = normal.recv.try_recv() {
                 if let Some(r) = r {
-                    r.call_box((normal,));
+                    r(normal);
                 }
             }
             Some(0)

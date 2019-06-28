@@ -1,40 +1,15 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #[macro_use]
 extern crate clap;
-#[macro_use(
-    slog_kv,
-    slog_error,
-    slog_info,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
-extern crate slog;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate vlog;
-
-mod util;
 
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::iter::FromIterator;
 use std::string::ToString;
 use std::sync::Arc;
@@ -48,6 +23,10 @@ use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
+use engine::rocks;
+use engine::rocks::util::security::encrypted_env_from_cipher_file;
+use engine::Engines;
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{DB as DBType, *};
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -56,16 +35,15 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
-
+use raftengine::{Config as RaftEngineCfg, RaftEngine};
+use tikv::binutil as util;
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftengine::{Config as RaftEngineCfg, RaftEngine};
-use tikv::raftstore::store::{keys, Engines};
+use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::util::rocksdb_util;
-use tikv::util::security::{self, SecurityConfig, SecurityManager};
-use tikv::util::{escape, unescape};
+use tikv::storage::Key;
+use tikv_util::security::{SecurityConfig, SecurityManager};
+use tikv_util::{escape, unescape};
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
@@ -86,15 +64,16 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
-            let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
-                    security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
+                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
                 kv_db_opts.set_env(encrypted_env);
             }
-            let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let raft_path = raft_db
                 .map(ToString::to_string)
@@ -106,6 +85,7 @@ fn new_debug_executor(
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
                 Arc::new(raft_db),
+                cache.is_some(),
             ))) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
@@ -239,6 +219,7 @@ trait DebugExecutor {
                 .for_each(move |(key, mvcc)| {
                     if point_query && key != from {
                         v1!("no mvcc infos for {}", escape(&from));
+                        return future::err::<(), String>("no mvcc infos".to_owned());
                     }
 
                     v1!("key: {}", escape(&key));
@@ -480,6 +461,11 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
+    fn set_region_tombstone_force(&self, region_ids: Vec<u64>) {
+        self.check_local_mode();
+        self.set_region_tombstone_by_id(region_ids);
+    }
+
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
@@ -553,6 +539,8 @@ trait DebugExecutor {
     );
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+
+    fn set_region_tombstone_by_id(&self, regions: Vec<u64>);
 
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool);
 
@@ -694,19 +682,23 @@ impl DebugExecutor for DebugClient {
     }
 
     fn set_region_tombstone(&self, _: Vec<Region>) {
+        unimplemented!("only available for local mode");
+    }
+
+    fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
         unimplemented!("only avaliable for local mode");
     }
 
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_all(&self, _: usize, _: bool) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn print_bad_regions(&self) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
@@ -829,6 +821,19 @@ impl DebugExecutor for Debugger {
         }
     }
 
+    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
+        let ret = self
+            .set_region_tombstone_by_id(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
+        if ret.is_empty() {
+            v1!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            ve1!("region: {}, error: {}", region_id, error);
+        }
+    }
+
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
         let ret = self
             .recover_regions(regions, read_only)
@@ -892,7 +897,7 @@ impl DebugExecutor for Debugger {
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
         region.mut_region_epoch().set_version(old_version + 1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         region.peers.clear();
         let mut peer = Peer::new();
@@ -911,7 +916,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!("only avaliable for online mode");
+        unimplemented!("only available for online mode");
     }
 
     fn check_region_consistency(&self, _: u64) {
@@ -1344,7 +1349,6 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("pd")
-                        .required(true)
                         .short("p")
                         .takes_value(true)
                         .multiple(true)
@@ -1352,6 +1356,12 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("force")
+                        .long("force")
+                        .takes_value(false)
+                        .help("force execute without pd"),
                 ),
         )
         .subcommand(
@@ -1678,14 +1688,8 @@ fn main() {
     // Initialize configuration and security manager.
     let cfg_path = matches.value_of("config");
     let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
-        File::open(&path)
-            .and_then(|mut f| {
-                let mut s = String::new();
-                f.read_to_string(&mut s).unwrap();
-                let c = toml::from_str(&s).unwrap();
-                Ok(c)
-            })
-            .unwrap()
+        let s = fs::read_to_string(&path).unwrap();
+        toml::from_str(&s).unwrap()
     });
     let mgr = new_security_mgr(&matches);
 
@@ -1849,13 +1853,18 @@ fn main() {
             .map(str::parse)
             .collect::<Result<Vec<_>, _>>()
             .expect("parse regions fail");
-        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
-        let mut cfg = PdConfig::default();
-        cfg.endpoints = pd_urls;
-        if let Err(e) = cfg.validate() {
-            panic!("invalid pd configuration: {:?}", e);
+        if let Some(pd_urls) = matches.values_of("pd") {
+            let pd_urls = Vec::from_iter(pd_urls.map(ToOwned::to_owned));
+            let mut cfg = PdConfig::default();
+            cfg.endpoints = pd_urls;
+            if let Err(e) = cfg.validate() {
+                panic!("invalid pd configuration: {:?}", e);
+            }
+            debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+        } else {
+            assert!(matches.is_present("force"));
+            debug_executor.set_region_tombstone_force(regions);
         }
-        debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("recover-mvcc") {
         let read_only = matches.is_present("read-only");
         if matches.is_present("all") {
@@ -2059,11 +2068,8 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
 }
 
 fn dump_snap_meta_file(path: &str) {
-    let mut f =
-        File::open(path).unwrap_or_else(|e| panic!("open file {} failed, error {:?}", path, e));
-    let mut content = Vec::new();
-    f.read_to_end(&mut content)
-        .unwrap_or_else(|e| panic!("read meta file error {:?}", e));
+    let content =
+        fs::read(path).unwrap_or_else(|e| panic!("read meta file {} failed, error {:?}", path, e));
 
     let mut meta = SnapshotMeta::new();
     meta.merge_from_bytes(&content)
@@ -2199,10 +2205,10 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let mut opts = cfg.rocksdb.build_opt();
     if !cfg.security.cipher_file.is_empty() {
         let encrypted_env =
-            security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
+            encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
         opts.set_env(encrypted_env);
     }
-    rocksdb::run_ldb_tool(&args, &opts);
+    engine::rocks::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]

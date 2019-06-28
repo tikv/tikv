@@ -1,18 +1,7 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use rand::prelude::*;
-use rand::IsaacRng;
+use rand_isaac::isaac::IsaacRng;
 
 /// A random generator of kv.
 ///
@@ -37,7 +26,7 @@ impl KvGenerator {
         KvGenerator {
             key_len,
             value_len,
-            rng: IsaacRng::new_from_u64(seed),
+            rng: IsaacRng::seed_from_u64(seed),
         }
     }
 
@@ -66,6 +55,7 @@ impl Iterator for KvGenerator {
 mod tests {
     use super::*;
     use test::Bencher;
+
     #[bench]
     fn bench_kv_generator(b: &mut Bencher) {
         let mut g = KvGenerator::new(100, 1000);

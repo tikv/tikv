@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -19,12 +8,12 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
-use crate::coprocessor::codec::datum::Datum;
-use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use crate::coprocessor::Result;
-
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
@@ -70,7 +59,7 @@ impl TopNExecutor {
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<TopNExecutor> {
+    ) -> Result<Self> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -104,7 +93,7 @@ impl TopNExecutor {
         let ctx = Arc::new(RefCell::new(self.eval_ctx.take().unwrap()));
         let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
         while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let cols = row.inflate_cols_with_offsets(&ctx.borrow(), &self.related_cols_offset)?;
             let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(row, ob_values, Arc::clone(&self.order_by.items))?;
@@ -126,10 +115,7 @@ impl Executor for TopNExecutor {
             self.fetch_all()?;
         }
         let iter = self.iter.as_mut().unwrap();
-        match iter.next() {
-            Some(sort_row) => Ok(Some(sort_row)),
-            None => Ok(None),
-        }
+        Ok(iter.next())
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -144,6 +130,14 @@ impl Executor for TopNExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
+
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             if let Some(mut topn_warnings) = self.eval_warnings.take() {
@@ -154,10 +148,6 @@ impl Executor for TopNExecutor {
             self.eval_warnings.take()
         }
     }
-
-    fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
-    }
 }
 
 #[cfg(test)]
@@ -166,22 +156,16 @@ pub mod tests {
     use std::sync::Arc;
 
     use cop_datatype::FieldTypeTp;
-    use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
-    use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
-    use tipb::schema::ColumnInfo;
 
-    use crate::coprocessor::codec::table::{self, RowColsDict};
+    use crate::coprocessor::codec::table::RowColsDict;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::executor::OriginCols;
-    use crate::util::codec::number::NumberEncoder;
-    use crate::util::collections::HashMap;
+    use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::collections::HashMap;
 
-    use crate::storage::SnapshotStore;
-
-    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
-    use super::super::table_scan::TableScanExecutor;
+    use super::super::tests::*;
     use super::*;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
@@ -351,23 +335,6 @@ pub mod tests {
         assert!(topn_heap.into_sorted_vec().is_err());
     }
 
-    // the first column should be i64 since it will be used as row handle
-    pub fn gen_table_data(
-        tid: i64,
-        cis: &[ColumnInfo],
-        rows: &[Vec<Datum>],
-    ) -> Vec<(Vec<u8>, Vec<u8>)> {
-        let mut kv_data = Vec::new();
-        let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
-        for cols in rows.iter() {
-            let col_values: Vec<_> = cols.to_vec();
-            let value = table::encode_row(col_values, &col_ids).unwrap();
-            let key = table::encode_row_key(tid, cols[0].i64());
-            kv_data.push((key, value));
-        }
-        kv_data
-    }
-
     #[test]
     fn test_topn_executor() {
         // prepare data and store
@@ -414,20 +381,11 @@ pub mod tests {
                 Datum::Dec(6.into()),
             ],
         ];
-        let table_data = gen_table_data(tid, &cis, &raw_data);
-        let mut test_store = TestStore::new(&table_data);
-        // init table scan meta
-        let mut table_scan = TableScan::new();
-        table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
         // prepare range
         let range1 = get_range(tid, 0, 4);
         let range2 = get_range(tid, 5, 10);
         let key_ranges = vec![range1, range2];
-        // init TableScan
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, snap, true).unwrap();
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -439,10 +397,10 @@ pub mod tests {
         topn.set_limit(limit);
         // init topn executor
         let mut topn_ect =
-            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), Box::new(ts_ect)).unwrap();
+            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let mut topn_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = topn_ect.next().unwrap() {
-            topn_rows.push(row.take_origin());
+            topn_rows.push(row.take_origin().unwrap());
         }
         assert_eq!(topn_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 3, 2, 6];
@@ -469,19 +427,11 @@ pub mod tests {
             Datum::Bytes(b"a".to_vec()),
             Datum::Dec(7.into()),
         ]];
-        let table_data = gen_table_data(tid, &cis, &raw_data);
-        let mut test_store = TestStore::new(&table_data);
-        // init table scan meta
-        let mut table_scan = TableScan::new();
-        table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
         // prepare range
         let range1 = get_range(tid, 0, 4);
         let range2 = get_range(tid, 5, 10);
         let key_ranges = vec![range1, range2];
-        // init TableScan
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -491,12 +441,8 @@ pub mod tests {
         topn.set_order_by(RepeatedField::from_vec(ob_vec));
         // test with limit=0
         topn.set_limit(0);
-        let mut topn_ect = TopNExecutor::new(
-            topn,
-            Arc::new(EvalConfig::default()),
-            Box::new(TableScanExecutor::new(table_scan, key_ranges, snap, false).unwrap()),
-        )
-        .unwrap();
+        let mut topn_ect =
+            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         assert!(topn_ect.next().unwrap().is_none());
     }
 }

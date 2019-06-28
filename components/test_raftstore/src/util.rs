@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
@@ -17,9 +6,8 @@ use std::time::Duration;
 use std::{thread, u64};
 
 use protobuf;
-use rand::Rng;
-use rocksdb::{CompactionJobInfo, DB};
-use tempdir::TempDir;
+use rand::RngCore;
+use tempfile::{Builder, TempDir};
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
@@ -28,16 +16,18 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
+use engine::rocks::{CompactionJobInfo, DB};
+use engine::*;
+use raftengine::{Config as RaftEngineCfg, RaftEngine};
 use tikv::config::*;
-use tikv::raftengine::{Config as RaftEngineCfg, RaftEngine};
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::{Config as StorageConfig, ALL_CFS, CF_DEFAULT, CF_RAFT};
-use tikv::util::config::*;
-use tikv::util::escape;
-use tikv::util::rocksdb_util::{self, CompactionListener};
+use tikv::storage::kv::CompactionListener;
+use tikv::storage::Config as StorageConfig;
+use tikv_util::config::*;
+use tikv_util::escape;
 
 use super::*;
 
@@ -55,7 +45,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    debug!("last try to get {}", escape(key));
+    debug!("last try to get {}", hex::encode_upper(key));
     let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
@@ -63,9 +53,9 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         return;
     }
     panic!(
-        "can't get value {:?} for key {:?}",
+        "can't get value {:?} for key {}",
         value.map(escape),
-        escape(key)
+        hex::encode_upper(key)
     )
 }
 
@@ -181,6 +171,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     TiKvConfig {
         storage: StorageConfig {
             scheduler_worker_pool_size: 1,
+            scheduler_concurrency: 10,
             ..StorageConfig::default()
         },
         server: new_server_config(cluster_id),
@@ -231,6 +222,12 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
+    cmd
+}
+
+pub fn new_read_index_cmd() -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::ReadIndex);
     cmd
 }
 
@@ -384,7 +381,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
     is_write = cmd.has_admin_request();
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
-            CmdType::Get | CmdType::Snap => is_read = true,
+            CmdType::Get | CmdType::Snap | CmdType::ReadIndex => is_read = true,
             CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
                 is_write = true
             }
@@ -427,6 +424,23 @@ pub fn read_on_peer<T: Simulator>(
     cluster.call_command(request, timeout)
 }
 
+pub fn read_index_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    read_quorum: bool,
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    cluster.call_command(request, timeout)
+}
+
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     if resp.get_header().has_error() {
         panic!("failed to read {:?}", resp);
@@ -449,7 +463,7 @@ pub fn must_read_on_peer<T: Simulator>(
         Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
         other => panic!(
             "read key {}, expect value {:?}, got {:?}",
-            escape(key),
+            hex::encode_upper(key),
             value,
             other
         ),
@@ -468,7 +482,7 @@ pub fn must_error_read_on_peer<T: Simulator>(
             let value = resp.mut_responses()[0].mut_get().take_value();
             panic!(
                 "key {}, expect error but got {}",
-                escape(key),
+                hex::encode_upper(key),
                 escape(&value)
             );
         }
@@ -489,7 +503,7 @@ pub fn create_test_engine(
     let engines = match engines {
         Some(e) => e,
         None => {
-            path = Some(TempDir::new("test_cluster").unwrap());
+            path = Some(Builder::new().prefix("test_cluster").tempdir().unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
             let router = Mutex::new(router);
             let cmpacted_handler = Box::new(move |event| {
@@ -503,9 +517,10 @@ pub fn create_test_engine(
                 cmpacted_handler,
                 Some(dummpy_filter),
             ));
-            let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
+            let cache = cfg.storage.block_cache.build_shared_cache();
+            let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
-                rocksdb_util::new_engine_opt(
+                rocks::util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
                     kv_db_opt,
                     kv_cfs_opt,
@@ -516,7 +531,7 @@ pub fn create_test_engine(
             let mut raft_cfg = RaftEngineCfg::new();
             raft_cfg.dir = String::from(raft_path.to_str().unwrap());
             let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
-            Engines::new(engine, raft_engine)
+            Engines::new(engine, raft_engine, cache.is_some())
         }
     };
     (engines, path)
@@ -534,6 +549,9 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    // When isolated, follower relies on stale check tick to detect failure leader,
+    // choose a smaller number to make it recover faster.
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 }
 
 pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {

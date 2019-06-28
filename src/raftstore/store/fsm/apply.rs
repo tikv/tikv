@@ -1,32 +1,22 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-#[cfg(test)]
-use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
-use protobuf::RepeatedField;
-use rocksdb::rocksdb_options::WriteOptions;
-use rocksdb::{Writable, WriteBatch};
-use uuid::Uuid;
-
+use crossbeam::channel::{TryRecvError, TrySendError};
+use engine::rocks;
+use engine::rocks::Writable;
+use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
+use engine::Engines;
+use engine::{util as engine_util, Mutable, Peekable};
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -36,26 +26,28 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
-use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
+use protobuf::RepeatedField;
+use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use raft::NO_LIMIT;
+use uuid::Uuid;
 
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
-use crate::raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::{Callback, PeerMsg};
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
-use crate::raftstore::store::{cmd_resp, keys, util, Config, Engines};
+use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
-use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use crate::util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use crate::util::time::{duration_to_sec, Instant, SlowTimer};
-use crate::util::Either;
-use crate::util::{escape, rocksdb_util, MustConsumeVec};
-use crossbeam::channel::{TryRecvError, TrySendError};
-use raft::NO_LIMIT;
+use tikv_util::escape;
+use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
+use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
+use tikv_util::worker::Scheduler;
+use tikv_util::Either;
+use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
 use super::{
@@ -63,8 +55,11 @@ use super::{
     PollHandler,
 };
 
+use super::super::RegionTask;
+
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
@@ -114,14 +109,14 @@ pub struct PendingCmdQueue {
 }
 
 impl PendingCmdQueue {
-    fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
             {
                 self.normals.shrink_to_fit();
             }
-            if cmd.term > term {
+            if (cmd.term, cmd.index) > (term, index) {
                 self.normals.push_front(cmd);
                 return None;
             }
@@ -284,6 +279,7 @@ struct ApplyContext {
     timer: Option<SlowTimer>,
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
+    region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
     notifier: Notifier,
     engines: Engines,
@@ -291,9 +287,9 @@ struct ApplyContext {
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
 
-    wb: Option<WriteBatch>,
-    wb_last_bytes: u64,
-    wb_last_keys: u64,
+    kv_wb: Option<WriteBatch>,
+    kv_wb_last_bytes: u64,
+    kv_wb_last_keys: u64,
 
     last_applied_index: u64,
     committed_count: usize,
@@ -311,6 +307,7 @@ impl ApplyContext {
         tag: String,
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
+        region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
         router: BatchRouter<ApplyFsm, ControlFsm>,
         notifier: Notifier,
@@ -321,14 +318,15 @@ impl ApplyContext {
             timer: None,
             host,
             importer,
+            region_scheduler,
             engines,
             router,
             notifier,
-            wb: None,
+            kv_wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             apply_res: vec![],
-            wb_last_bytes: 0,
-            wb_last_keys: 0,
+            kv_wb_last_bytes: 0,
+            kv_wb_last_keys: 0,
             last_applied_index: 0,
             committed_count: 0,
             enable_sync_log: cfg.sync_log,
@@ -344,10 +342,10 @@ impl ApplyContext {
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &ApplyDelegate) {
-        if self.wb.is_none() {
-            self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
-            self.wb_last_bytes = 0;
-            self.wb_last_keys = 0;
+        if self.kv_wb.is_none() {
+            self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            self.kv_wb_last_bytes = 0;
+            self.kv_wb_last_keys = 0;
         }
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
@@ -359,7 +357,7 @@ impl ApplyContext {
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(&self.engines, self.wb.as_mut().unwrap());
+            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
         // force it call `prepare_for` automatically.
@@ -372,33 +370,45 @@ impl ApplyContext {
             self.write_to_db();
             self.prepare_for(delegate);
         }
-        self.wb_last_bytes = self.wb().data_size() as u64;
-        self.wb_last_keys = self.wb().count() as u64;
+        self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
+        self.kv_wb_last_keys = self.kv_wb().count() as u64;
     }
 
     /// Writes all the changes into RocksDB.
-    pub fn write_to_db(&mut self) {
-        if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
-            let wb = self.wb.take().unwrap();
+    /// If it returns true, all pending writes are persisted in engines.
+    pub fn write_to_db(&mut self) -> bool {
+        let need_sync = self.enable_sync_log && self.sync_log_hint;
+        if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            write_opts.set_sync(need_sync);
             self.engines
                 .kv
-                .write_opt(wb, &write_opts)
+                .write_opt(self.kv_wb(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
             self.sync_log_hint = false;
+            let data_size = self.kv_wb().data_size();
+            if data_size > APPLY_WB_SHRINK_SIZE {
+                // Control the memory usage for the WriteBatch.
+                self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            } else {
+                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+                self.kv_wb().clear();
+            }
+            self.kv_wb_last_bytes = 0;
+            self.kv_wb_last_keys = 0;
         }
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
         }
+        need_sync
     }
 
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
         if !delegate.pending_remove {
-            delegate.write_apply_state(&self.engines, self.wb.as_mut().unwrap());
+            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
         }
         self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
@@ -412,28 +422,30 @@ impl ApplyContext {
     }
 
     pub fn delta_bytes(&self) -> u64 {
-        self.wb().data_size() as u64 - self.wb_last_bytes
+        self.kv_wb().data_size() as u64 - self.kv_wb_last_bytes
     }
 
     pub fn delta_keys(&self) -> u64 {
-        self.wb().count() as u64 - self.wb_last_keys
+        self.kv_wb().count() as u64 - self.kv_wb_last_keys
     }
 
     #[inline]
-    pub fn wb(&self) -> &WriteBatch {
-        self.wb.as_ref().unwrap()
+    pub fn kv_wb(&self) -> &WriteBatch {
+        self.kv_wb.as_ref().unwrap()
     }
 
     #[inline]
-    pub fn wb_mut(&mut self) -> &mut WriteBatch {
-        self.wb.as_mut().unwrap()
+    pub fn kv_kv_wb_mut(&mut self) -> &mut WriteBatch {
+        self.kv_wb.as_mut().unwrap()
     }
 
-    pub fn flush(&mut self) {
+    /// Flush all pending writes to engines.
+    /// If it returns true, all pending writes are persisted in engines.
+    pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
             Some(t) => t,
-            None => return,
+            None => return false,
         };
 
         // Write to engine
@@ -441,7 +453,7 @@ impl ApplyContext {
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        self.write_to_db();
+        let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
             for res in self.apply_res.drain(..) {
@@ -463,6 +475,7 @@ impl ApplyContext {
             self.committed_count
         );
         self.committed_count = 0;
+        is_synced
     }
 }
 
@@ -502,7 +515,7 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -516,7 +529,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
 
     // When write batch contains more than `recommended` keys, write the batch
     // to engine.
-    if wb_keys >= WRITE_BATCH_MAX_KEYS {
+    if kv_wb_keys >= WRITE_BATCH_MAX_KEYS {
         return true;
     }
 
@@ -608,6 +621,8 @@ pub struct ApplyDelegate {
 
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
+    /// The counter of pending request snapshots. See more in `Peer`.
+    pending_request_snapshot_count: Arc<AtomicUsize>,
 
     /// Marks the delegate as merged by CommitMerge.
     merged: bool,
@@ -629,6 +644,8 @@ pub struct ApplyDelegate {
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
+    /// The latest synced apply index.
+    last_sync_apply_index: u64,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -641,6 +658,7 @@ impl ApplyDelegate {
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
+            last_sync_apply_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
@@ -652,6 +670,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            pending_request_snapshot_count: reg.pending_request_snapshot_count,
         }
     }
 
@@ -742,7 +761,7 @@ impl ApplyDelegate {
     }
 
     fn write_apply_state(&self, engines: &Engines, wb: &WriteBatch) {
-        rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)
+        rocks::util::get_cf_handle(&engines.kv, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
                 wb.put_msg_cf(
@@ -771,21 +790,24 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.wb().count()) {
+            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
                 apply_ctx.commit(self);
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
 
-        // when a peer become leader, it will send an empty entry.
         let mut state = self.apply_state.clone();
         state.set_applied_index(index);
         self.apply_state = state;
         self.applied_index_term = term;
         assert!(term > 0);
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
-            // apprently, all the callbacks whose term is less than entry's term are stale.
+
+        // 1. When a peer become leader, it will send an empty entry.
+        // 2. When a leader tries to read index during transferring leader,
+        //    it will also propose an empty entry. But that entry will not contain
+        //    any associated callback. So no need to clear callback.
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
             apply_ctx
                 .cbs
                 .last_mut()
@@ -836,13 +858,21 @@ impl ApplyDelegate {
             }
             return None;
         }
-        while let Some(mut head) = self.pending_cmds.pop_normal(term) {
-            if head.index == index && head.term == term {
-                return Some(head.cb.take().unwrap());
+        while let Some(mut head) = self.pending_cmds.pop_normal(index, term) {
+            if head.term == term {
+                if head.index == index {
+                    return Some(head.cb.take().unwrap());
+                } else {
+                    panic!(
+                        "{} unexpected callback at term {}, found index {}, expected {}",
+                        self.tag, term, head.index, index
+                    );
+                }
+            } else {
+                // Because of the lack of original RaftCmdRequest, we skip calling
+                // coprocessor here.
+                notify_stale_command(region_id, peer_id, self.term, head);
             }
-            // Because of the lack of original RaftCmdRequest, we skip calling
-            // coprocessor here.
-            notify_stale_command(region_id, peer_id, self.term, head);
         }
         None
     }
@@ -907,12 +937,15 @@ impl ApplyDelegate {
         assert!(!self.pending_remove);
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
-        ctx.wb_mut().set_save_point();
+        ctx.kv_kv_wb_mut().set_save_point();
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
-            Ok(a) => a,
+            Ok(a) => {
+                ctx.kv_kv_wb_mut().pop_save_point().unwrap();
+                a
+            }
             Err(e) => {
                 // clear dirty values.
-                ctx.wb_mut().rollback_to_save_point().unwrap();
+                ctx.kv_kv_wb_mut().rollback_to_save_point().unwrap();
                 match e {
                     Error::EpochNotMatch(..) => debug!(
                         "epoch not match";
@@ -1092,7 +1125,7 @@ impl ApplyDelegate {
                     );
                     continue;
                 }
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
             }?;
@@ -1141,24 +1174,24 @@ impl ApplyDelegate {
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            rocksdb_util::get_cf_handle(&ctx.engines.kv, cf)
-                .and_then(|handle| ctx.wb().put_cf(handle, &key, value))
+            rocks::util::get_cf_handle(&ctx.engines.kv, cf)
+                .and_then(|handle| ctx.kv_wb().put_cf(handle, &key, value).map_err(Into::into))
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to write ({}, {}) to cf {}: {:?}",
                         self.tag,
-                        escape(&key),
+                        hex::encode_upper(&key),
                         escape(value),
                         cf,
                         e
                     )
                 });
         } else {
-            ctx.wb().put(&key, value).unwrap_or_else(|e| {
+            ctx.kv_wb().put(&key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    escape(&key),
+                    hex::encode_upper(&key),
                     escape(value),
                     e
                 );
@@ -1179,10 +1212,15 @@ impl ApplyDelegate {
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            rocksdb_util::get_cf_handle(&ctx.engines.kv, cf)
-                .and_then(|handle| ctx.wb().delete_cf(handle, &key))
+            rocks::util::get_cf_handle(&ctx.engines.kv, cf)
+                .and_then(|handle| ctx.kv_wb().delete_cf(handle, &key).map_err(Into::into))
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                    panic!(
+                        "{} failed to delete {}: {}",
+                        self.tag,
+                        hex::encode_upper(&key),
+                        e
+                    )
                 });
 
             if cf == CF_LOCK {
@@ -1192,8 +1230,13 @@ impl ApplyDelegate {
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            ctx.wb().delete(&key).unwrap_or_else(|e| {
-                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+            ctx.kv_wb().delete(&key).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete {}: {}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    e
+                )
             });
             self.metrics.delete_keys_hint += 1;
         }
@@ -1210,6 +1253,7 @@ impl ApplyDelegate {
     ) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
+        let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
                 "invalid delete range command, start_key: {:?}, end_key: {:?}",
@@ -1233,37 +1277,48 @@ impl ApplyDelegate {
         if ALL_CFS.iter().find(|x| **x == cf).is_none() {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
-        let handle = rocksdb_util::get_cf_handle(&ctx.engines.kv, cf).unwrap();
+        let handle = rocks::util::get_cf_handle(&ctx.engines.kv, cf).unwrap();
 
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        ctx.engines
-            .kv
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    e
+        if !notify_only {
+            ctx.engines
+                .kv
+                .delete_files_in_range_cf(
+                    handle, &start_key, &end_key, /* include_end */ false,
                 )
-            });
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete files in range [{}, {}): {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        e
+                    )
+                });
 
-        // Delete all remaining keys.
-        util::delete_all_in_range_cf(&ctx.engines.kv, cf, &start_key, &end_key, use_delete_range)
+            // Delete all remaining keys.
+            engine_util::delete_all_in_range_cf(
+                &ctx.engines.kv,
+                cf,
+                &start_key,
+                &end_key,
+                use_delete_range,
+            )
             .unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                     self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
                     cf,
                     e
                 );
             });
+        }
 
+        // TODO: Should this be executed when `notify_only` is set?
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
@@ -1482,8 +1537,8 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        let wb_mut = ctx.wb.as_mut().unwrap();
-        if let Err(e) = write_peer_state(&ctx.engines.kv, wb_mut, &region, state, None) {
+        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        if let Err(e) = write_peer_state(&ctx.engines.kv, kv_wb_mut, &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -1578,7 +1633,7 @@ impl ApplyDelegate {
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "region" => ?derived,
-            "keys" => ?keys
+            "keys" => %KeysInfoFormatter(keys.iter()),
         );
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
@@ -1594,7 +1649,7 @@ impl ApplyDelegate {
             regions.push(derived.clone());
         }
         let kv = &ctx.engines.kv;
-        let wb_mut = ctx.wb.as_mut().unwrap();
+        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::new();
             // TODO: check new region id validation.
@@ -1610,8 +1665,8 @@ impl ApplyDelegate {
             {
                 peer.set_id(*peer_id);
             }
-            write_peer_state(kv, wb_mut, &new_region, PeerState::Normal, None)
-                .and_then(|_| write_initial_apply_state(kv, wb_mut, new_region.get_id()))
+            write_peer_state(kv, kv_wb_mut, &new_region, PeerState::Normal, None)
+                .and_then(|_| write_initial_apply_state(kv, kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} fails to save split region {:?}: {:?}",
@@ -1624,7 +1679,7 @@ impl ApplyDelegate {
             derived.set_start_key(keys.pop_front().unwrap());
             regions.push(derived.clone());
         }
-        write_peer_state(kv, wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state(kv, kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
         let mut resp = AdminResponse::new();
@@ -1677,7 +1732,7 @@ impl ApplyDelegate {
         merging_state.set_commit(exec_ctx.index);
         write_peer_state(
             &ctx.engines.kv,
-            ctx.wb.as_mut().unwrap(),
+            ctx.kv_wb.as_mut().unwrap(),
             &region,
             PeerState::Merging,
             Some(merging_state.clone()),
@@ -1848,15 +1903,15 @@ impl ApplyDelegate {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
         let kv = &ctx.engines.kv;
-        let wb_mut = ctx.wb.as_mut().unwrap();
-        write_peer_state(kv, wb_mut, &region, PeerState::Normal, None)
+        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
                 let mut merging_state = MergeState::new();
                 merging_state.set_target(self.region.clone());
                 write_peer_state(
                     kv,
-                    wb_mut,
+                    kv_wb_mut,
                     source_region,
                     PeerState::Tombstone,
                     Some(merging_state),
@@ -1909,8 +1964,8 @@ impl ApplyDelegate {
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
         let kv = &ctx.engines.kv;
-        let wb_mut = ctx.wb.as_mut().unwrap();
-        write_peer_state(kv, wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
+        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
                 "{} failed to rollback merge {:?}: {:?}",
                 self.tag, rollback, e
@@ -2125,6 +2180,7 @@ pub struct Registration {
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub region: Region,
+    pub pending_request_snapshot_count: Arc<AtomicUsize>,
 }
 
 impl Registration {
@@ -2135,6 +2191,7 @@ impl Registration {
             apply_state: peer.get_store().apply_state().clone(),
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
+            pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
         }
     }
 }
@@ -2195,6 +2252,57 @@ pub struct CatchUpLogs {
 
 type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
 
+pub struct GenSnapTask {
+    region_id: u64,
+    commit_index: u64,
+    snap_notifier: SyncSender<RaftSnapshot>,
+}
+
+impl GenSnapTask {
+    pub fn new(
+        region_id: u64,
+        commit_index: u64,
+        snap_notifier: SyncSender<RaftSnapshot>,
+    ) -> GenSnapTask {
+        GenSnapTask {
+            region_id,
+            commit_index,
+            snap_notifier,
+        }
+    }
+
+    pub fn commit_index(&self) -> u64 {
+        self.commit_index
+    }
+
+    pub fn generate_and_schedule_snapshot(
+        self,
+        engines: &Engines,
+        region_sched: &Scheduler<RegionTask>,
+    ) -> Result<()> {
+        let snapshot = RegionTask::Gen {
+            region_id: self.region_id,
+            notifier: self.snap_notifier,
+            // This snapshot may be held for a long time, which may cause too many
+            // open files in rocksdb.
+            // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
+            // raft_snap: Snapshot::new(engines.raft.clone()),
+            kv_snap: Snapshot::new(engines.kv.clone()),
+        };
+        box_try!(region_sched.schedule(snapshot));
+        Ok(())
+    }
+}
+
+impl Debug for GenSnapTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GenSnapTask")
+            .field("region_id", &self.region_id)
+            .field("commit_index", &self.commit_index)
+            .finish()
+    }
+}
+
 pub enum Msg {
     Apply {
         start: Instant,
@@ -2205,8 +2313,9 @@ pub enum Msg {
     CatchUpLogs(CatchUpLogs),
     LogsUpToDate(u64),
     Destroy(Destroy),
+    Snapshot(GenSnapTask),
     #[cfg(test)]
-    Validate(u64, Box<dyn FnBox(&ApplyDelegate) + Send>),
+    Validate(u64, Box<dyn FnOnce(&ApplyDelegate) + Send>),
 }
 
 impl Msg {
@@ -2237,6 +2346,9 @@ impl Debug for Msg {
             Msg::CatchUpLogs(cul) => write!(f, "{:?}", cul.merge),
             Msg::LogsUpToDate(region_id) => write!(f, "[region {}] logs are updated", region_id),
             Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Msg::Snapshot(GenSnapTask { region_id, .. }) => {
+                write!(f, "[region {}] requests a snapshot", region_id)
+            }
             #[cfg(test)]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -2512,6 +2624,62 @@ impl ApplyFsm {
             .force_send(Msg::LogsUpToDate(region_id));
     }
 
+    #[allow(unused_mut)]
+    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext, snap_task: GenSnapTask) {
+        if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+        let applied_index = self.delegate.apply_state.get_applied_index();
+        assert!(snap_task.commit_index() <= applied_index);
+        let mut need_sync = apply_ctx
+            .apply_res
+            .iter()
+            .any(|res| res.region_id == self.delegate.region_id())
+            && self.delegate.last_sync_apply_index != applied_index;
+        (|| {
+            fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
+        })();
+        if need_sync {
+            if apply_ctx.timer.is_none() {
+                apply_ctx.timer = Some(SlowTimer::new());
+            }
+            if apply_ctx.kv_wb.is_none() {
+                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            }
+            self.delegate
+                .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+            fail_point!(
+                "apply_on_handle_snapshot_1_1",
+                self.delegate.id == 1 && self.delegate.region_id() == 1,
+                |_| unimplemented!()
+            );
+
+            apply_ctx.flush();
+            // For now, it's more like last_flush_apply_index.
+            // TODO: Update it only when `flush()` returns true.
+            self.delegate.last_sync_apply_index = applied_index;
+        }
+
+        if let Err(e) = snap_task
+            .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
+        {
+            error!(
+                "schedule snapshot failed";
+                "error" => ?e,
+                "region_id" => self.delegate.region_id(),
+                "peer_id" => self.delegate.id()
+            );
+        }
+        self.delegate
+            .pending_request_snapshot_count
+            .fetch_sub(1, Ordering::SeqCst);
+        fail_point!(
+            "apply_on_handle_snapshot_finish_1_1",
+            self.delegate.id == 1 && self.delegate.region_id() == 1,
+            |_| unimplemented!()
+        );
+    }
+
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -2532,8 +2700,9 @@ impl ApplyFsm {
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
                 Some(Msg::LogsUpToDate(_)) => {}
+                Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
-                Some(Msg::Validate(_, f)) => f.call_box((&self.delegate,)),
+                Some(Msg::Validate(_, f)) => f(&self.delegate),
                 None => break,
             }
         }
@@ -2640,8 +2809,13 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         expected_msg_count
     }
 
-    fn end(&mut self, _: &mut [Box<ApplyFsm>]) {
-        self.apply_ctx.flush();
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+        let is_synced = self.apply_ctx.flush();
+        if is_synced {
+            for fsm in fsms {
+                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
+            }
+        }
     }
 }
 
@@ -2650,6 +2824,7 @@ pub struct Builder {
     cfg: Arc<Config>,
     coprocessor_host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
+    region_scheduler: Scheduler<RegionTask>,
     engines: Engines,
     sender: Notifier,
     router: ApplyRouter,
@@ -2666,6 +2841,7 @@ impl Builder {
             cfg: builder.cfg.clone(),
             coprocessor_host: builder.coprocessor_host.clone(),
             importer: builder.importer.clone(),
+            region_scheduler: builder.region_scheduler.clone(),
             engines: builder.engines.clone(),
             sender,
             router,
@@ -2683,6 +2859,7 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
                 self.tag.clone(),
                 self.coprocessor_host.clone(),
                 self.importer.clone(),
+                self.region_scheduler.clone(),
                 self.engines.clone(),
                 self.router.clone(),
                 self.sender.clone(),
@@ -2715,6 +2892,13 @@ impl ApplyRouter {
                 Msg::Apply { .. } | Msg::Destroy(_) | Msg::LogsUpToDate(_) => {
                     info!(
                         "target region is not found, drop messages";
+                        "region_id" => region_id
+                    );
+                    return;
+                }
+                Msg::Snapshot(_) => {
+                    warn!(
+                        "region is removed before taking snapshot, are we shutting down?";
                         "region_id" => region_id
                     );
                     return;
@@ -2770,25 +2954,28 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
-    use crate::raftengine::{Config as RaftEngineCfg, RaftEngine};
     use crate::raftstore::coprocessor::*;
     use crate::raftstore::store::msg::WriteResponse;
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
-    use crate::raftstore::store::Config;
+    use engine::rocks::Writable;
+    use engine::{WriteBatch, DB};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
-    use rocksdb::{Writable, WriteBatch, DB};
-    use tempdir::TempDir;
+    use raftengine::{Config as RaftEngineCfg, RaftEngine};
+    use tempfile::{Builder, TempDir};
+
+    use crate::import::test_helpers::*;
+    use crate::raftstore::store::{Config, RegionTask};
+    use tikv_util::worker::dummy_scheduler;
 
     use super::*;
-    use crate::import::test_helpers::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
-        let path = TempDir::new(path).unwrap();
+        let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = Arc::new(
-            rocksdb_util::new_engine(
+            rocks::util::new_engine(
                 path.path().join("db").to_str().unwrap(),
                 None,
                 ALL_CFS,
@@ -2803,7 +2990,7 @@ mod tests {
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
-        let dir = TempDir::new(path).unwrap();
+        let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(SSTImporter::new(dir.path()).unwrap());
         (dir, importer)
     }
@@ -2873,6 +3060,29 @@ mod tests {
         validate_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     }
 
+    // Make sure msgs are handled in the same batch.
+    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg>) {
+        let (notify1, wait1) = mpsc::channel();
+        let (notify2, wait2) = mpsc::channel();
+        router.schedule_task(
+            region_id,
+            Msg::Validate(
+                region_id,
+                Box::new(move |_| {
+                    notify1.send(()).unwrap();
+                    wait2.recv().unwrap();
+                }),
+            ),
+        );
+        wait1.recv().unwrap();
+
+        for msg in msgs {
+            router.schedule_task(region_id, msg);
+        }
+
+        notify2.send(()).unwrap();
+    }
+
     fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg>) -> ApplyRes {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
@@ -2890,6 +3100,7 @@ mod tests {
         let (_tmp, engines) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
+        let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
         let builder = super::Builder {
@@ -2897,6 +3108,7 @@ mod tests {
             cfg,
             coprocessor_host: host,
             importer,
+            region_scheduler,
             sender,
             engines: engines.clone(),
             router: router.clone(),
@@ -2995,9 +3207,15 @@ mod tests {
             .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
-        router.schedule_task(
+        // Make sure Apply and Snapshot are in the same batch.
+        let (tx, _) = mpsc::sync_channel(0);
+        batch_messages(
+            &router,
             2,
-            Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
+            vec![
+                Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
+                Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
+            ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
@@ -3006,12 +3224,14 @@ mod tests {
             },
             e => panic!("unexpected apply result: {:?}", e),
         };
+        let apply_state = match snapshot_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(Some(RegionTask::Gen { kv_snap, .. })) => kv_snap
+                .get_msg_cf(CF_RAFT, &apply_state_key)
+                .unwrap()
+                .unwrap(),
+            e => panic!("unexpected apply result: {:?}", e),
+        };
         assert_eq!(apply_res.region_id, 2);
-        let apply_state: RaftApplyState = engines
-            .kv
-            .get_msg_cf(CF_RAFT, &apply_state_key)
-            .unwrap()
-            .unwrap();
         assert_eq!(apply_res.apply_state, apply_state);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         assert!(apply_res.exec_res.is_empty());
@@ -3022,6 +3242,10 @@ mod tests {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
+            assert_eq!(
+                delegate.apply_state.get_applied_index(),
+                delegate.last_sync_apply_index
+            );
         });
 
         router.schedule_task(2, Msg::destroy(2));
@@ -3220,6 +3444,7 @@ mod tests {
             .register_query_observer(1, Box::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
@@ -3227,6 +3452,7 @@ mod tests {
             tag: "test-store".to_owned(),
             cfg,
             sender,
+            region_scheduler,
             coprocessor_host: Arc::new(host),
             importer: importer.clone(),
             engines: engines.clone(),
@@ -3560,6 +3786,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
         let host = Arc::new(CoprocessorHost::default());
+        let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
         let builder = super::Builder {
@@ -3567,6 +3794,7 @@ mod tests {
             cfg,
             sender,
             importer,
+            region_scheduler,
             coprocessor_host: host,
             engines: engines.clone(),
             router: router.clone(),

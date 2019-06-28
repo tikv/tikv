@@ -5,18 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Command line utility to run fuzz tests.
 //!
@@ -36,7 +25,7 @@ extern crate regex;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use failure::{Error, ResultExt};
 
@@ -98,7 +87,7 @@ impl Fuzzer {
     }
 }
 
-fn main() {
+fn main() -> Result<(), i32> {
     use structopt::StructOpt;
 
     match Cli::from_args() {
@@ -108,9 +97,13 @@ fn main() {
             }
         }
         Cli::Run { fuzzer, target } => {
-            run(fuzzer, &target).unwrap();
+            if let Err(error) = run(fuzzer, &target) {
+                eprintln!("Running fuzzer failed: {}", error);
+                return Err(1);
+            }
         }
     }
+    Ok(())
 }
 
 /// Write the fuzz target source file from corresponding template file.
@@ -183,12 +176,30 @@ fn create_corpus_dir(base: impl AsRef<Path>, target: &str) -> Result<PathBuf, Er
     Ok(corpus_dir)
 }
 
+fn pre_check(command: &mut Command, hint: &str) -> Result<(), Error> {
+    let check = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    if !check.success() {
+        Err(format_err!(
+            "Pre-checking for fuzzing failed. Consider run `{}` before fuzzing.",
+            hint
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Run one target fuzz test using AFL
 fn run_afl(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Afl;
 
     let seed_dir = get_seed_dir(target);
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
+
+    pre_check(Command::new("cargo").args(&["afl"]), "cargo install afl")?;
 
     // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")
@@ -234,6 +245,11 @@ fn run_afl(target: &str) -> Result<(), Error> {
 
 /// Run one target fuzz test using Honggfuzz
 fn run_honggfuzz(target: &str) -> Result<(), Error> {
+    pre_check(
+        Command::new("cargo").args(&["hfuzz", "version"]),
+        "cargo install hfuzz --version 0.5.34",
+    )?;
+
     let fuzzer = Fuzzer::Honggfuzz;
 
     let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();

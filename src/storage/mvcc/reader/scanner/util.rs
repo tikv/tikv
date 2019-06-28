@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::{Error, Result};
@@ -34,8 +23,8 @@ pub enum CheckLockResult {
 /// committed version will be returned for primary key instead of leading to lock conflicts.
 #[inline]
 pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
-    if lock.ts > ts || lock.lock_type == LockType::Lock {
-        // Ignore lock when lock.ts > ts or lock's type is Lock
+    if lock.ts > ts || lock.lock_type == LockType::Lock || lock.lock_type == LockType::Pessimistic {
+        // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
         return Ok(CheckLockResult::NotLocked);
     }
 
@@ -54,6 +43,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
         primary: lock.primary.clone(),
         ts: lock.ts,
         ttl: lock.ttl,
+        txn_size: lock.txn_size,
     }))
 }
 
@@ -82,7 +72,7 @@ where
     assert!(write.short_value.is_none());
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek(&seek_key, &mut statistics.data)?;
-    if !default_cursor.valid()
+    if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
@@ -109,7 +99,7 @@ where
     assert!(write.short_value.is_none());
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
-    if !default_cursor.valid()
+    if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(

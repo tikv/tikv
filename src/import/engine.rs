@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
 use std::fmt;
@@ -25,29 +14,27 @@ use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
-use rocksdb::{
-    BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-    ExternalSstFileInfo, ReadOptions, SequentialFile, SstFileWriter, Writable,
-    WriteBatch as RawBatch, DB,
-};
 
 use crate::config::DbConfig;
+use crate::raftstore::coprocessor::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::raftstore::store::keys;
+use crate::storage::is_short_value;
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
-use crate::storage::{is_short_value, CF_DEFAULT, CF_WRITE};
-use crate::util::config::MB;
-use crate::util::rocksdb_util::{
-    new_engine_opt,
-    properties::{SizeProperties, SizePropertiesCollectorFactory},
-    CFOptions,
+use engine::rocks::util::{new_engine_opt, CFOptions};
+use engine::rocks::{
+    BlockBasedOptions, Cache, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
+    ExternalSstFileInfo, LRUCacheOptions, ReadOptions, SequentialFile, SstFileWriter, Writable,
+    WriteBatch as RawBatch, DB,
 };
+use engine::{CF_DEFAULT, CF_WRITE};
+use tikv_util::config::MB;
 
 use super::common::*;
 use super::Result;
 use crate::import::stream::SSTFile;
-use crate::util::security;
-use crate::util::security::SecurityConfig;
+use engine::rocks::util::security::encrypted_env_from_cipher_file;
+use tikv_util::security::SecurityConfig;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
@@ -96,7 +83,7 @@ impl Engine {
         }
 
         let size = wb.data_size();
-        self.write_without_wal(wb)?;
+        self.write_without_wal(&wb)?;
 
         Ok(size)
     }
@@ -235,25 +222,29 @@ pub struct SSTWriter {
 
 impl SSTWriter {
     pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig, path: &str) -> Result<SSTWriter> {
-        let mut env = Arc::new(Env::default());
+        let mut env = Arc::new(Env::new_mem());
         let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
             base_env = Some(Arc::clone(&env));
-            env = security::encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
+            env = encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
         }
         let uuid = Uuid::new_v4().to_string();
+        // Placeholder. SstFileWriter don't actually use block cache.
+        let cache = None;
 
         // Creates a writer for default CF
         // Here is where we set table_properties_collector_factory, so that we can collect
         // some properties about SST
-        let mut default_opts = db_cfg.defaultcf.build_opt();
+        let mut default_opts = db_cfg.defaultcf.build_opt(&cache);
         default_opts.set_env(Arc::clone(&env));
+        default_opts.compression_per_level(&db_cfg.defaultcf.compression_per_level);
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
-        let mut write_opts = db_cfg.writecf.build_opt();
+        let mut write_opts = db_cfg.writecf.build_opt(&cache);
         write_opts.set_env(Arc::clone(&env));
+        write_opts.compression_per_level(&db_cfg.writecf.compression_per_level);
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
         write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
@@ -352,8 +343,10 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
     db_opts.set_max_background_jobs(opts.max_background_jobs);
 
     // Put index and filter in block cache to restrict memory usage.
+    let mut cache_opts = LRUCacheOptions::new();
+    cache_opts.set_capacity(128 * MB as usize);
     let mut block_base_opts = BlockBasedOptions::new();
-    block_base_opts.set_lru_cache(128 * MB as usize, -1, 0, 0.0);
+    block_base_opts.set_block_cache(&Cache::new_lru_cache(cache_opts));
     block_base_opts.set_cache_index_and_filter_blocks(true);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
@@ -379,21 +372,25 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
 mod tests {
     use super::*;
 
+    use engine::rocks::util::new_engine_opt;
+    use engine::rocks::IngestExternalFileOptions;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use rocksdb::IngestExternalFileOptions;
     use std::fs::File;
     use std::io::{self, Write};
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
 
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
-    use crate::util::file::file_exists;
-    use crate::util::rocksdb_util::new_engine_opt;
-    use crate::util::security::encrypted_env_from_cipher_file;
+    use crate::storage::BlockCacheConfig;
+    use engine::rocks::util::security::encrypted_env_from_cipher_file;
+    use tikv_util::file::file_exists;
 
     fn new_engine() -> (TempDir, Engine) {
-        let dir = TempDir::new("test_import_engine").unwrap();
+        let dir = Builder::new()
+            .prefix("test_import_engine")
+            .tempdir()
+            .unwrap();
         let uuid = Uuid::new_v4();
         let db_cfg = DbConfig::default();
         let security_cfg = SecurityConfig::default();
@@ -438,7 +435,10 @@ mod tests {
         test_sst_writer_with(1, &[CF_WRITE], &SecurityConfig::default());
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &SecurityConfig::default());
 
-        let temp_dir = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("/tmp/encrypted_env_from_cipher_file")
+            .tempdir()
+            .unwrap();
         let security_cfg = create_security_cfg(&temp_dir);
         test_sst_writer_with(1, &[CF_WRITE], &security_cfg);
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &security_cfg);
@@ -456,7 +456,7 @@ mod tests {
     }
 
     fn test_sst_writer_with(value_size: usize, cf_names: &[&str], security_cfg: &SecurityConfig) {
-        let temp_dir = TempDir::new("_test_sst_writer").unwrap();
+        let temp_dir = Builder::new().prefix("_test_sst_writer").tempdir().unwrap();
 
         let cfg = DbConfig::default();
         let mut db_opts = cfg.build_opt();
@@ -464,7 +464,8 @@ mod tests {
             let env = encrypted_env_from_cipher_file(&security_cfg.cipher_file, None).unwrap();
             db_opts.set_env(env);
         }
-        let cfs_opts = cfg.build_cf_opts();
+        let cache = BlockCacheConfig::default().build_shared_cache();
+        let cfs_opts = cfg.build_cf_opts(&cache);
         let db = new_engine_opt(temp_dir.path().to_str().unwrap(), db_opts, cfs_opts).unwrap();
         let db = Arc::new(db);
 

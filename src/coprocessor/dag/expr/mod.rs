@@ -1,31 +1,20 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::convert::TryInto;
 use std::str;
 
-use rand::XorShiftRng;
+use rand_xorshift::XorShiftRng;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::coprocessor::codec::mysql::charset;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use crate::coprocessor::codec::{self, Datum};
-use crate::util::codec::number;
+use crate::coprocessor::codec::{self, datum, Datum};
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
+use tikv_util::codec::number;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -73,6 +62,7 @@ pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     field_type: FieldType,
+    implicit_args: Vec<Datum>,
     cus_rng: CusRng,
 }
 
@@ -280,6 +270,7 @@ impl Expression {
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
                 ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
+                let implicit_args = datum::decode(&mut expr.get_val())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
@@ -289,6 +280,7 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             field_type,
+                            implicit_args,
                             cus_rng: CusRng {
                                 rng: RefCell::new(None),
                             },
@@ -336,7 +328,7 @@ mod tests {
         charset, Decimal, DecimalEncoder, Duration, Json, Time,
     };
     use crate::coprocessor::codec::{mysql, Datum};
-    use crate::util::codec::number::{self, NumberEncoder};
+    use tikv_util::codec::number::{self, NumberEncoder};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
