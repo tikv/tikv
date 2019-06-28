@@ -15,7 +15,7 @@ use time::{Duration, Timespec};
 use super::peer_storage;
 use crate::raftstore::{Error, Result};
 use tikv_util::time::monotonic_raw_now;
-use tikv_util::{escape, Either};
+use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
@@ -578,19 +578,31 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     conf_state
 }
 
-pub struct KeysInfoFormatter<'a>(pub &'a [Vec<u8>]);
+pub struct KeysInfoFormatter<
+    'a,
+    I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
+        + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+        + Clone,
+>(pub I);
 
-impl<'a> fmt::Display for KeysInfoFormatter<'a> {
+impl<
+        'a,
+        I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
+            + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+            + Clone,
+    > fmt::Display for KeysInfoFormatter<'a, I>
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0.len() {
-            0 => write!(f, "no key"),
-            1 => write!(f, "key \"{}\"", escape(self.0.first().unwrap())),
+        let mut it = self.0.clone();
+        match it.len() {
+            0 => write!(f, "(no key)"),
+            1 => write!(f, "key {}", hex::encode_upper(it.next().unwrap())),
             _ => write!(
                 f,
-                "{} keys range from \"{}\" to \"{}\"",
-                self.0.len(),
-                escape(self.0.first().unwrap()),
-                escape(self.0.last().unwrap())
+                "{} keys range from {} to {}",
+                it.len(),
+                hex::encode_upper(it.next().unwrap()),
+                hex::encode_upper(it.next_back().unwrap())
             ),
         }
     }

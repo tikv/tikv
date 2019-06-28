@@ -7,7 +7,7 @@ use std::{thread, u64};
 
 use protobuf;
 use rand::RngCore;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
@@ -44,7 +44,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    debug!("last try to get {}", escape(key));
+    debug!("last try to get {}", hex::encode_upper(key));
     let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
@@ -52,9 +52,9 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         return;
     }
     panic!(
-        "can't get value {:?} for key {:?}",
+        "can't get value {:?} for key {}",
         value.map(escape),
-        escape(key)
+        hex::encode_upper(key)
     )
 }
 
@@ -464,7 +464,7 @@ pub fn must_read_on_peer<T: Simulator>(
         Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
         other => panic!(
             "read key {}, expect value {:?}, got {:?}",
-            escape(key),
+            hex::encode_upper(key),
             value,
             other
         ),
@@ -483,7 +483,7 @@ pub fn must_error_read_on_peer<T: Simulator>(
             let value = resp.mut_responses()[0].mut_get().take_value();
             panic!(
                 "key {}, expect error but got {}",
-                escape(key),
+                hex::encode_upper(key),
                 escape(&value)
             );
         }
@@ -504,7 +504,7 @@ pub fn create_test_engine(
     let engines = match engines {
         Some(e) => e,
         None => {
-            path = Some(TempDir::new("test_cluster").unwrap());
+            path = Some(Builder::new().prefix("test_cluster").tempdir().unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
             let router = Mutex::new(router);
             let cmpacted_handler = Box::new(move |event| {
