@@ -367,7 +367,7 @@ mod tests {
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
     use tikv_util::config::{ReadableDuration, ReadableSize};
-    use tikv_util::{escape, worker};
+    use tikv_util::worker;
 
     use super::*;
 
@@ -399,7 +399,7 @@ mod tests {
         cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
         cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
         cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
-        cfg.rocksdb.defaultcf.titan.min_blob_size = 0;
+        cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
         let kv_db_opts = cfg.rocksdb.build_opt();
         let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
@@ -541,9 +541,8 @@ mod tests {
         let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
         assert_eq!(value, 1);
 
-        let mut io_options = db.get_options();
         let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
-        let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+        let mut writer = SstFileWriter::new(EnvOptions::new(), db.get_options());
         writer.open(&sst_file_path.to_str().unwrap()).unwrap();
         writer
             .delete(&data_key(
