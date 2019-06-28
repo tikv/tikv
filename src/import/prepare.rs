@@ -323,7 +323,7 @@ mod tests {
     use crate::import::test_helpers::*;
 
     use engine::rocks::Writable;
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use uuid::Uuid;
 
     use crate::config::DbConfig;
@@ -340,7 +340,10 @@ mod tests {
 
     #[test]
     fn test_prepare_job() {
-        let dir = TempDir::new("test_import_prepare_job").unwrap();
+        let dir = Builder::new()
+            .prefix("test_import_prepare_job")
+            .tempdir()
+            .unwrap();
         let uuid = Uuid::new_v4();
         let db_cfg = DbConfig::default();
         let security_cfg = SecurityConfig::default();
