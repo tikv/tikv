@@ -1367,6 +1367,7 @@ pub mod tests {
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
     };
     use protobuf::Message;
+    use raftengine::{Config as RaftEngineCfg, RaftEngine};
     use std::path::PathBuf;
     use tempfile::{Builder, TempDir};
 
@@ -1440,11 +1441,11 @@ pub mod tests {
     ) -> Result<Engines> {
         let p = path.path();
         let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
-        let raft = open_test_db(
-            p.join("raft").as_path(),
-            raft_db_opt,
-            raft_cf_opt.map(|opt| vec![opt]),
-        )?;
+
+        let path_raft = p.join("raft").as_path();
+        let mut raft_cfg = RaftEngineCfg::new();
+        raft_cfg.dir = String::from(path_raft.to_str().unwrap());
+        let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
         for &region_id in regions {
             // Put apply state into kv engine.
             let mut apply_state = RaftApplyState::new();
@@ -1463,7 +1464,7 @@ pub mod tests {
         let shared_block_cache = false;
         Ok(Engines {
             kv,
-            raft,
+            raft: raft_engine,
             shared_block_cache,
         })
     }

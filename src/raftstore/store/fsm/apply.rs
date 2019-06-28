@@ -2986,7 +2986,7 @@ mod tests {
         let mut raft_cfg = RaftEngineCfg::new();
         raft_cfg.dir = String::from(path.path().join("raft").to_str().unwrap());
         let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
-        (path, Engines::new(db, raft_engine))
+        (path, Engines::new(db, raft_engine, false))
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {

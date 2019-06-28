@@ -347,12 +347,10 @@ mod tests {
     use kvproto::metapb::{Peer, Region};
     use tempfile::{Builder, TempDir};
 
-    use crate::raftstore::store::engine::*;
     use crate::raftstore::store::keys::*;
     use crate::raftstore::store::PeerStorage;
     use crate::raftstore::Result;
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
-    use crate::util::{escape, worker};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
     use engine::rocks::Writable;
@@ -360,7 +358,7 @@ mod tests {
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
     use raftengine::{Config as RaftEngineCfg, RaftEngine};
-    use tikv_util::worker;
+    use tikv_util::{escape, worker};
 
     use super::*;
 

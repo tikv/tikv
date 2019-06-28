@@ -109,10 +109,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::raftstore::store::engine::Peekable;
     use crate::raftstore::store::keys;
-    use crate::storage::CF_DEFAULT;
-    use crate::util::rocksdb_util;
     use engine::rocks;
     use engine::Engines;
     use engine::Peekable;
@@ -135,7 +132,7 @@ mod tests {
         let mut raft_cfg = RaftEngineCfg::new();
         raft_cfg.dir = String::from(raft_path.to_str().unwrap());
         let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
-        let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
+        let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine), false);
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());

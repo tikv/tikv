@@ -658,7 +658,6 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use crate::raftstore::store::engine::{Mutable, Peekable};
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
@@ -793,16 +792,12 @@ mod tests {
             }
         }
 
-        let raft_dir = TempDir::new("raft_dir").unwrap();
+        let raft_dir = Builder::new().prefix("raft_dir").tempdir().unwrap();
         let mut raft_cfg = RaftEngineCfg::new();
         raft_cfg.dir = String::from(raft_dir.path().to_str().unwrap());
         let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
         let shared_block_cache = false;
-        let engines = Engines::new(
-            Arc::clone(&engine.kv),
-            Arc::clone(&engine.kv),
-            shared_block_cache,
-        );
+        let engines = Engines::new(Arc::clone(&engine.kv), raft_engine, shared_block_cache);
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
@@ -819,7 +814,6 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    raft_snap: Snapshot::new(engines.raft.clone()),
                     kv_snap: Snapshot::new(engines.kv.clone()),
                     notifier: tx,
                 })

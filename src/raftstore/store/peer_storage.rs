@@ -1361,12 +1361,9 @@ mod tests {
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
     use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use crate::storage::ALL_CFS;
-    use crate::util::rocksdb_util::new_engine;
-    use crate::util::worker::{Scheduler, Worker};
     use engine::rocks::util::new_engine;
     use engine::rocks::WriteBatch;
-    use engine::Engines;
+    use engine::{Engines, Iterable};
     use engine::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
@@ -1382,7 +1379,6 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use tikv_util::worker::{Scheduler, Worker};
 
-    use super::super::engine::Iterable;
     use super::*;
 
     fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {

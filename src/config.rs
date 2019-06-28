@@ -1422,13 +1422,11 @@ mod tests {
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::gb(10);
-        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::gb(10);
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::kb(10);
-        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.validate().unwrap();
     }
 

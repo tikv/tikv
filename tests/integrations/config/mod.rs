@@ -501,6 +501,5 @@ fn test_block_cache_backward_compatible() {
         cfg.rocksdb.defaultcf.block_cache_size.0
             + cfg.rocksdb.writecf.block_cache_size.0
             + cfg.rocksdb.lockcf.block_cache_size.0
-            + cfg.raftdb.defaultcf.block_cache_size.0
     );
 }

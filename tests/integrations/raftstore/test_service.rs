@@ -15,11 +15,12 @@ use raft::eraftpb;
 
 use engine::rocks::Writable;
 use engine::*;
+use engine::{Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use raftengine::LogBatch;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::raftstore::store::{keys, Mutable, Peekable};
+use tikv::raftstore::store::keys;
 use tikv::storage::mvcc::{Lock, LockType};
 use tikv::storage::Key;
 use tikv_util::HandyRwLock;

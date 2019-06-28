@@ -1487,7 +1487,6 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::raftstore::store::engine::Mutable;
     use crate::storage::mvcc::{Lock, LockType};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
@@ -1613,7 +1612,7 @@ mod tests {
                 .unwrap(),
         );
         let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
-        let engines = Engines::new(Arc::clone(&engine), raft_engine);
+        let engines = Engines::new(Arc::clone(&engine), raft_engine, false);
         Debugger::new(engines)
     }
 
@@ -1998,7 +1997,7 @@ mod tests {
         }
 
         raft_engine.write(wb1, true).unwrap();
-        kv_engine.write_opt(wb2, &WriteOptions::new()).unwrap();
+        kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);

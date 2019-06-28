@@ -56,7 +56,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::clone(&raft_engine),
         shared_block_cache,
     );
-    let tmp_mgr = TempDir::new("test_cluster").unwrap();
+    let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
 
     let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
