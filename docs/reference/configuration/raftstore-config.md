@@ -9,7 +9,7 @@ category: reference
 Raftstore is TiKV's implementation of [Multi-raft](https://tikv.org/deep-dive/scalability/multi-raft/) to manage multiple Raft consensus groups on one node. Raftstore is comprised of two major components:
 
 - **Raftstore** component writes Raft logs into RaftDB.
-- **Apply** component resolves Raft logs and flush the data in the log into the underlying storage engine. 
+- **Apply** component resolves Raft logs and flush the data in the log into the underlying storage engine.
 
 This section introduces the following features of Raftstore and their configurations:
 
@@ -18,7 +18,7 @@ This section introduces the following features of Raftstore and their configurat
 
 ## Multi-thread Raftstore
 
- Multi-thread support for the Raftstore and the Apply components means higher throughput and lower latency for standalone machines. In the multi-thread mode, each thread obtain peers from the queue in batch, so that small writes of multiple peers can be consolidated into a big write for better throughput.
+ Multi-thread support for the Raftstore and the Apply components means higher throughput and lower latency per each single node. In the multi-thread mode, each thread obtain peers from the queue in batch, so that small writes of multiple peers can be consolidated into a big write for better throughput.
 
 ![Multi-thread Raftstore Model](../../images/multi-thread-raftstore.png)
 
