@@ -83,17 +83,12 @@ ctl:
 run:
 	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
 
-# Build for optimized development. This rule only exists for backwards
-# compatibility, and symmetry with the `build_dist_release` rule.
-build_release:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
-
 # An optimized build suitable for development and benchmarking, by default built
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release:
-	make build_release
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -122,6 +117,11 @@ dist_release:
 # additional sanity checks and file movement.
 build_dist_release:
 	make x-build-dist
+
+# Temporary backwards compatibility
+build_release:
+	@echo "the build_release rule no longer exists. you might want 'build_dist_release' or 'release'"
+	@exit 1
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
