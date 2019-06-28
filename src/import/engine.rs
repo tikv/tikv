@@ -378,7 +378,7 @@ mod tests {
     use kvproto::metapb::{Peer, Region};
     use std::fs::File;
     use std::io::{self, Write};
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
 
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
@@ -387,7 +387,10 @@ mod tests {
     use tikv_util::file::file_exists;
 
     fn new_engine() -> (TempDir, Engine) {
-        let dir = TempDir::new("test_import_engine").unwrap();
+        let dir = Builder::new()
+            .prefix("test_import_engine")
+            .tempdir()
+            .unwrap();
         let uuid = Uuid::new_v4();
         let db_cfg = DbConfig::default();
         let security_cfg = SecurityConfig::default();
@@ -432,7 +435,10 @@ mod tests {
         test_sst_writer_with(1, &[CF_WRITE], &SecurityConfig::default());
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &SecurityConfig::default());
 
-        let temp_dir = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("/tmp/encrypted_env_from_cipher_file")
+            .tempdir()
+            .unwrap();
         let security_cfg = create_security_cfg(&temp_dir);
         test_sst_writer_with(1, &[CF_WRITE], &security_cfg);
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &security_cfg);
@@ -450,7 +456,7 @@ mod tests {
     }
 
     fn test_sst_writer_with(value_size: usize, cf_names: &[&str], security_cfg: &SecurityConfig) {
-        let temp_dir = TempDir::new("_test_sst_writer").unwrap();
+        let temp_dir = Builder::new().prefix("_test_sst_writer").tempdir().unwrap();
 
         let cfg = DbConfig::default();
         let mut db_opts = cfg.build_opt();
