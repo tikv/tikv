@@ -11,33 +11,49 @@ use crate::coprocessor::codec::data_type::{DateTime, Decimal, Duration, Json};
 use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::coprocessor::dag::expr::EvalContext;
 
-/// `integer_unsigned_upper_bound` returns the max u64 values of different mysql types
+/// Returns the max u64 values of different mysql types
+///
+/// # Panics
+///
+/// Panics if the `tp` is not one of `FieldTypeTp::Tiny`, `FieldTypeTp::Short`,
+/// `FieldTypeTp::Int24`, `FieldTypeTp::Long`, `FieldTypeTp::LongLong`,
+/// `FieldTypeTp::Bit`, `FieldTypeTp::Set`, `FieldTypeTp::Enum`
 #[inline]
 pub fn integer_unsigned_upper_bound(tp: FieldTypeTp) -> u64 {
     match tp {
         FieldTypeTp::Tiny => u64::from(u8::MAX),
         FieldTypeTp::Short => u64::from(u16::MAX),
-        FieldTypeTp::Int24 => (1u64 << 24) - 1u64,
+        FieldTypeTp::Int24 => (1 << 24) - 1,
         FieldTypeTp::Long => u64::from(u32::MAX),
         FieldTypeTp::LongLong | FieldTypeTp::Bit | FieldTypeTp::Set | FieldTypeTp::Enum => u64::MAX,
         _ => panic!("input bytes is not a mysql type: {}", tp),
     }
 }
 
-/// `integer_signed_upper_bound` returns the max i64 values of different mysql types
+/// Returns the max i64 values of different mysql types
+///
+/// # Panics
+///
+/// Panics if the `tp` is not one of `FieldTypeTp::Tiny`, `FieldTypeTp::Short`,
+/// `FieldTypeTp::Int24`, `FieldTypeTp::Long`, `FieldTypeTp::LongLong`,
 #[inline]
 pub fn integer_signed_upper_bound(tp: FieldTypeTp) -> i64 {
     match tp {
         FieldTypeTp::Tiny => i64::from(i8::MAX),
         FieldTypeTp::Short => i64::from(i16::MAX),
-        FieldTypeTp::Int24 => (1i64 << 23) - 1i64,
+        FieldTypeTp::Int24 => (1 << 23) - 1,
         FieldTypeTp::Long => i64::from(i32::MAX),
         FieldTypeTp::LongLong => i64::MAX,
         _ => panic!("input bytes is not a mysql type: {}", tp),
     }
 }
 
-/// `integer_signed_lower_bound` returns the min i64 values of different mysql types
+/// Returns the min i64 values of different mysql types
+///
+/// # Panics
+///
+/// Panics if the `tp` is not one of `FieldTypeTp::Tiny`, `FieldTypeTp::Short`,
+/// `FieldTypeTp::Int24`, `FieldTypeTp::Long`, `FieldTypeTp::LongLong`,
 #[inline]
 pub fn integer_signed_lower_bound(tp: FieldTypeTp) -> i64 {
     match tp {
@@ -146,19 +162,16 @@ pub fn convert_float_to_int(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -
 pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp) -> Result<i64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
-    let val = bytes_to_int_without_context(vs.as_bytes());
+    let val = vs.parse::<i64>();
+    // let val = bytes_to_int_without_context(vs.as_bytes());
     match val {
         Ok(val) => convert_int_to_int(ctx, val, tp),
         Err(_) => {
             ctx.handle_overflow(Error::overflow("BIGINT", &vs))?;
-            let val = match vs
-                .as_bytes()
-                .iter()
-                .skip_while(|x| x.is_ascii_whitespace())
-                .next()
-            {
-                Some(&b'-') => integer_signed_lower_bound(tp),
-                _ => integer_signed_upper_bound(tp),
+            let val = if vs.starts_with('-') {
+                integer_signed_lower_bound(tp)
+            } else {
+                integer_signed_upper_bound(tp)
             };
             Ok(val)
         }
@@ -501,17 +514,6 @@ fn float_str_to_int_string<'a, 'b: 'a>(
     let mut valid_int = String::from(&valid_float[..e_idx]);
     if let Some(idx) = dot_idx {
         valid_int.remove(idx);
-        let require = if valid_float.starts_with('-') || valid_float.starts_with('+') {
-            (int_cnt + exp) as usize + 1
-        } else {
-            (int_cnt + exp) as usize
-        };
-        if require < valid_int.len() {
-            let digit_char = valid_float.chars().nth(require + 1).unwrap();
-            if digit_char >= '5' {
-                valid_int = round_int_str(digit_char, &valid_int).into_owned();
-            }
-        }
     }
 
     let extra_zero_count = exp + int_cnt - digits_cnt;
@@ -529,7 +531,18 @@ fn float_str_to_int_string<'a, 'b: 'a>(
         if extra_zero_count >= len as i64 {
             return Ok(Cow::Borrowed("0"));
         }
-        valid_int.truncate((len as i64 + extra_zero_count) as usize);
+        let require = if valid_float.starts_with('-') || valid_float.starts_with('+') {
+            (int_cnt + exp) as usize + 1
+        } else {
+            (int_cnt + exp) as usize
+        };
+        if require < valid_int.len() {
+            let digit_char = valid_float.chars().nth(require + 1).unwrap();
+            if digit_char >= '5' {
+                valid_int = round_int_str(digit_char, &valid_int[..require]).into_owned();
+            }
+        }
+        valid_int.truncate((exp + int_cnt) as usize);
     }
 
     Ok(Cow::Owned(valid_int))
@@ -658,6 +671,52 @@ mod tests {
                 None => assert!(
                     r.is_err(),
                     "from: {}, to tp: {} should be overflow",
+                    from,
+                    tp
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_bytes_to_int() {
+        let tests: Vec<(&[u8], FieldTypeTp, Option<i64>)> = vec![
+            (b"123.1", FieldTypeTp::Tiny, Some(123)),
+            (b"1.231e2", FieldTypeTp::Tiny, Some(123)),
+            (b"1.235e2", FieldTypeTp::Tiny, Some(124)),
+            (b"123.6", FieldTypeTp::Tiny, Some(124)),
+            (b"-123.1", FieldTypeTp::Tiny, Some(-123)),
+            (b"-123.6", FieldTypeTp::Tiny, Some(-124)),
+            (b"256.5", FieldTypeTp::Tiny, None),
+            (b"256.1", FieldTypeTp::Short, Some(256)),
+            (b"256.6", FieldTypeTp::Short, Some(257)),
+            (b"-256.1", FieldTypeTp::Short, Some(-256)),
+            (b"-256.6", FieldTypeTp::Short, Some(-257)),
+            (b"65535.5", FieldTypeTp::Short, None),
+            (b"65536.1", FieldTypeTp::Int24, Some(65536)),
+            (b"65536.5", FieldTypeTp::Int24, Some(65537)),
+            (b"-65536.1", FieldTypeTp::Int24, Some(-65536)),
+            (b"-65536.5", FieldTypeTp::Int24, Some(-65537)),
+            (b"8388610.2", FieldTypeTp::Int24, None),
+            (b"8388610.4", FieldTypeTp::Long, Some(8388610)),
+            (b"8388610.5", FieldTypeTp::Long, Some(8388611)),
+            (b"-8388610.4", FieldTypeTp::Long, Some(-8388610)),
+            (b"-8388610.5", FieldTypeTp::Long, Some(-8388611)),
+            (b"4294967296.8", FieldTypeTp::Long, None),
+            (b"4294967296.8", FieldTypeTp::LongLong, Some(4294967297)),
+            (b"4294967297.1", FieldTypeTp::LongLong, Some(4294967297)),
+            (b"-4294967296.8", FieldTypeTp::LongLong, Some(-4294967297)),
+            (b"-4294967297.1", FieldTypeTp::LongLong, Some(-4294967297)),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (from, tp, to) in tests {
+            let r = convert_bytes_to_int(&mut ctx, from, tp);
+            match to {
+                Some(to) => assert_eq!(to, r.unwrap()),
+                None => assert!(
+                    r.is_err(),
+                    "from: {:?}, to tp: {} should be overflow",
                     from,
                     tp
                 ),
@@ -971,6 +1030,8 @@ mod tests {
             ("255.5", "256"),
             ("123e1", "1230"),
             ("123.1e2", "12310"),
+            ("1.231e2", "123"),
+            ("1.236e2", "124"),
             ("123.45e5", "12345000"),
             ("123.55e5", "12355000"),
             ("123.45678e5", "12345678"),

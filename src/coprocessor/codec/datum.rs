@@ -1669,7 +1669,7 @@ mod tests {
             (Datum::F64(-0.4), Some(false)),
             (Datum::Null, None),
             (b"".as_ref().into(), Some(false)),
-            (b"0.5".as_ref().into(), Some(false)),
+            (b"0.5".as_ref().into(), Some(true)),
             (b"0".as_ref().into(), Some(false)),
             (b"2".as_ref().into(), Some(true)),
             (b"abc".as_ref().into(), Some(false)),
