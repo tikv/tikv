@@ -138,7 +138,7 @@ mod tests {
     use std::path::Path;
 
     use chrono::{Duration, Utc};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use utime;
 
     use super::{rotation_file_path_with_timestamp, RotatingFileLogger};
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_rotating_file_logger() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let log_file = tmp_dir
             .path()
             .join("test_rotating_file_logger.log")
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_failing_to_rotate_file_will_not_cause_panic() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let log_file = tmp_dir.path().join("test_rotating_file_logger.log");
         let mut logger = RotatingFileLogger::new(&log_file, Duration::days(1)).unwrap();
         // trigger fail point

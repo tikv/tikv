@@ -81,13 +81,13 @@ mod tests {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::iter;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use super::*;
 
     #[test]
     fn test_get_file_size() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 
         // Ensure it works to get the size of an empty file.
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_file_exists() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 
         assert_eq!(file_exists(&dir_path), false);
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_delete_file_if_exist() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 
         let existent_file = dir_path.join("empty_file");
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_calc_crc32() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let small_file = tmp_dir.path().join("small.txt");
         let small_checksum = gen_rand_file(&small_file, 1024);
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_create_delete_dir() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let subdir = tmp_dir.path().join("subdir");
 
         assert!(!delete_dir_if_exist(&subdir).unwrap());
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_sync_dir() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         sync_dir(tmp_dir.path()).unwrap();
         let non_existent_file = tmp_dir.path().join("non_existent_file");
         sync_dir(non_existent_file).unwrap_err();
