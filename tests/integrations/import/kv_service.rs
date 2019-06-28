@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{stream, Future, Stream};
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 use uuid::Uuid;
 
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
@@ -15,7 +15,10 @@ use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
 
 fn new_kv_server() -> (ImportKVServer, ImportKvClient, TempDir) {
-    let temp_dir = TempDir::new("test_import_kv_server").unwrap();
+    let temp_dir = Builder::new()
+        .prefix("test_import_kv_server")
+        .tempdir()
+        .unwrap();
 
     let mut cfg = TiKvConfig::default();
     cfg.server.addr = "127.0.0.1:0".to_owned();

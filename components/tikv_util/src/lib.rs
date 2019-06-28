@@ -576,18 +576,24 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_panic_mark_file_path() {
-        let dir = TempDir::new("test_panic_mark_file_path").unwrap();
+        let dir = Builder::new()
+            .prefix("test_panic_mark_file_path")
+            .tempdir()
+            .unwrap();
         let panic_mark_file = panic_mark_file_path(dir.path());
         assert_eq!(panic_mark_file, dir.path().join(PANIC_MARK_FILE))
     }
 
     #[test]
     fn test_panic_mark_file_exists() {
-        let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
+        let dir = Builder::new()
+            .prefix("test_panic_mark_file_exists")
+            .tempdir()
+            .unwrap();
         create_panic_mark_file(dir.path());
         assert!(panic_mark_file_exists(dir.path()));
     }
