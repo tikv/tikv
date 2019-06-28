@@ -54,7 +54,7 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinit
         ExprType::Max => Ok(Box::new(AggrFnDefinitionParserExtremum::<Max>::new())),
         ExprType::Min => Ok(Box::new(AggrFnDefinitionParserExtremum::<Min>::new())),
         v => Err(box_err!(
-            "Aggregation function expr type {:?} is not supported in batch mode",
+            "Aggregation function meet blacklist aggr function {:?}",
             v
         )),
     }
@@ -70,7 +70,7 @@ impl AggrDefinitionParser for AllAggrDefinitionParser {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp())?;
         parser.check_supported(aggr_def).map_err(|e| {
             Error::Other(box_err!(
-                "Aggregation function for expr type {:?} is not supported: {}",
+                "Aggregation function meet blacklist expr type {:?}: {}",
                 aggr_def.get_tp(),
                 e
             ))

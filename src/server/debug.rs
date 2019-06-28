@@ -1481,7 +1481,7 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use super::*;
     use crate::storage::mvcc::{Lock, LockType};
@@ -1584,7 +1584,7 @@ mod tests {
     }
 
     fn new_debugger() -> Debugger {
-        let tmp = TempDir::new("test_debug").unwrap();
+        let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
             rocks::util::new_engine_opt(
@@ -2166,7 +2166,10 @@ mod tests {
             ));
         }
 
-        let path = TempDir::new("test_mvcc_checker").expect("");
+        let path = Builder::new()
+            .prefix("test_mvcc_checker")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let cfs_opts = ALL_CFS
             .iter()

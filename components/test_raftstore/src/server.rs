@@ -8,7 +8,7 @@ use std::{thread, usize};
 use grpcio::{EnvBuilder, Error as GrpcError};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use engine::Engines;
 use tikv::config::TiKvConfig;
@@ -107,7 +107,7 @@ impl Simulator for ServerCluster {
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
-            let p = TempDir::new("test_cluster").unwrap();
+            let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
             (p.path().to_str().unwrap().to_owned(), Some(p))
         } else {
             let p = self.snap_paths[&node_id].path().to_str().unwrap();

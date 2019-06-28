@@ -1504,7 +1504,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use super::*;
     use slog::Level;
@@ -1543,7 +1543,7 @@ mod tests {
 
     #[test]
     fn test_persist_cfg() {
-        let dir = TempDir::new("test_persist_cfg").unwrap();
+        let dir = Builder::new().prefix("test_persist_cfg").tempdir().unwrap();
         let path_buf = dir.path().join(LAST_CONFIG_FILE);
         let file = path_buf.as_path().to_str().unwrap();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
@@ -1568,7 +1568,10 @@ mod tests {
 
     #[test]
     fn test_create_parent_dir_if_missing() {
-        let root_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
+        let root_path = Builder::new()
+            .prefix("test_create_parent_dir_if_missing")
+            .tempdir()
+            .unwrap();
         let path = root_path.path().join("not_exist_dir");
 
         let mut tikv_cfg = TiKvConfig::default();
