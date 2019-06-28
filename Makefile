@@ -90,6 +90,11 @@ run:
 release:
 	make dist_release
 
+# Build for optimized development, but without additional sanity
+# checks and file movement.
+build_release:
+	make build_dist_release
+
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
 unportable_release:
@@ -108,10 +113,15 @@ fail_release:
 # Individual developers should only need to use the `dist_` rules when working
 # on the CI/CD system.
 dist_release:
-	make build_release
+	make build_dist_release
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
+
+# Build with release flag as if it were for distribution, but without
+# additional sanity checks and file movement.
+build_dist_release:
+	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
@@ -125,10 +135,6 @@ dist_prof_release:
 # This is used for schrodinger chaos testing.
 dist_fail_release:
 	FAIL_POINT=1 make dist_release
-
-# Build with release flag
-build_release:
-	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
