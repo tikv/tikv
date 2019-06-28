@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::Result;
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
@@ -8,8 +9,6 @@ use syn::{
     parse2, parse_str, FnArg, GenericArgument, Ident, ItemFn, Lifetime, LifetimeDef, PathArguments,
     Type, TypePath,
 };
-
-use super::Result;
 
 pub struct RpnFnGenerator {
     meta: Vec<Ident>,
