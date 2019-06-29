@@ -345,7 +345,7 @@ mod tests {
     use std::sync::Arc;
 
     use kvproto::metapb::{Peer, Region};
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
 
     use crate::raftstore::store::keys::*;
     use crate::raftstore::store::PeerStorage;
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_peekable() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
@@ -477,7 +477,7 @@ mod tests {
     #[allow(clippy::type_complexity)]
     #[test]
     fn test_seek_and_seek_prev() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, _) = load_default_dataset(engines.clone());
         let snap = RegionSnapshot::new(&store);
@@ -560,7 +560,7 @@ mod tests {
         check_seek_result(&snap, Some(b"a8"), None, &seek_table);
         check_seek_result(&snap, Some(b"a7"), Some(b"a2"), &seek_table);
 
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, _) = load_multiple_levels_dataset(engines.clone());
         let snap = RegionSnapshot::new(&store);
@@ -588,7 +588,7 @@ mod tests {
     #[allow(clippy::type_complexity)]
     #[test]
     fn test_iterate() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, base_data) = load_default_dataset(engines.clone());
 
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_reverse_iterate() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, test_data) = load_default_dataset(engines.clone());
 
@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_reverse_iterate_with_lower_bound() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
         let (store, test_data) = load_default_dataset(engines);
 

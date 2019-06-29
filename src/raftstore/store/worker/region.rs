@@ -676,7 +676,7 @@ mod tests {
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::time;
     use tikv_util::timer::Timer;
     use tikv_util::worker::Worker;
@@ -761,7 +761,10 @@ mod tests {
 
     #[test]
     fn test_pending_applies() {
-        let temp_dir = TempDir::new("test_pending_applies").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("test_pending_applies")
+            .tempdir()
+            .unwrap();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
@@ -802,7 +805,7 @@ mod tests {
             Arc::clone(&engine.kv),
             shared_block_cache,
         );
-        let snap_dir = TempDir::new("snap_dir").unwrap();
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();

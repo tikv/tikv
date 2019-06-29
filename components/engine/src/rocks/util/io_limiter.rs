@@ -110,7 +110,7 @@ mod tests {
     use std::fs::{self, File};
     use std::io::Write;
     use std::sync::Arc;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use super::{IOLimiter, LimitWriter, SNAP_MAX_BYTES_PER_TIME};
 
@@ -132,7 +132,10 @@ mod tests {
 
     #[test]
     fn test_limit_writer() {
-        let dir = TempDir::new("_test_limit_writer").expect("");
+        let dir = Builder::new()
+            .prefix("_test_limit_writer")
+            .tempdir()
+            .unwrap();
         let path = dir.path().join("test-file");
         let mut file = File::create(&path).unwrap();
         let mut limit_writer = LimitWriter::new(Some(Arc::new(IOLimiter::new(1024))), &mut file);
