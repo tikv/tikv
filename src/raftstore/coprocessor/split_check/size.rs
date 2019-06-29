@@ -11,7 +11,6 @@ use engine::{util, Range};
 use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use tikv_util::escape;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 
@@ -287,8 +286,8 @@ fn get_approximate_split_keys_cf(
             split_size,
             collection.len(),
             cfname,
-            escape(&start),
-            escape(&end)
+            hex::encode_upper(&start),
+            hex::encode_upper(&end)
         ));
     }
     keys.sort();
@@ -359,7 +358,7 @@ pub mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::{iter, u64};
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
 
@@ -396,7 +395,7 @@ pub mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -534,7 +533,10 @@ pub mod tests {
 
     #[test]
     fn test_get_approximate_split_keys_error() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();
@@ -570,7 +572,10 @@ pub mod tests {
 
     #[test]
     fn test_get_approximate_split_keys() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();
@@ -684,7 +689,10 @@ pub mod tests {
 
     #[test]
     fn test_region_approximate_size() {
-        let path = TempDir::new("_test_raftstore_region_approximate_size").expect("");
+        let path = Builder::new()
+            .prefix("_test_raftstore_region_approximate_size")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -721,8 +729,10 @@ pub mod tests {
 
     #[test]
     fn test_region_maybe_inaccurate_approximate_size() {
-        let path =
-            TempDir::new("_test_raftstore_region_maybe_inaccurate_approximate_size").expect("");
+        let path = Builder::new()
+            .prefix("_test_raftstore_region_maybe_inaccurate_approximate_size")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();

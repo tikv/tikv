@@ -135,11 +135,9 @@ mod profiling {
 
     #[cfg(test)]
     mod tests {
-        extern crate tempdir;
-
-        use self::tempdir::TempDir;
         use jemallocator;
         use std::fs;
+        use tempfile::Builder;
 
         const OPT_PROF: &'static [u8] = b"opt.prof\0";
 
@@ -170,7 +168,10 @@ mod profiling {
             // Make sure somebody has turned on profiling
             assert!(is_profiling_on(), r#"Set MALLOC_CONF="prof:true""#);
 
-            let dir = TempDir::new("test_profiling_memory").unwrap();
+            let dir = Builder::new()
+                .prefix("test_profiling_memory")
+                .tempdir()
+                .unwrap();
 
             let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();

@@ -15,7 +15,6 @@ use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
-use tikv_util::escape;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
@@ -56,9 +55,9 @@ quick_error! {
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             description("key is not in region")
             display("key {} is not in region key range [{}, {}) for region {}",
-                    escape(key),
-                    escape(region.get_start_key()),
-                    escape(region.get_end_key()),
+                    hex::encode_upper(key),
+                    hex::encode_upper(region.get_start_key()),
+                    hex::encode_upper(region.get_end_key()),
                     region.get_id())
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {

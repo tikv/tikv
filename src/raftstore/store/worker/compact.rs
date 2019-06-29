@@ -10,7 +10,6 @@ use engine::rocks;
 use engine::rocks::util::compact_range;
 use engine::CF_WRITE;
 use engine::DB;
-use tikv_util::escape;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -43,8 +42,11 @@ impl Display for Task {
             } => f
                 .debug_struct("Compact")
                 .field("cf_name", cf_name)
-                .field("start_key", &start_key.as_ref().map(|k| escape(k)))
-                .field("end_key", &end_key.as_ref().map(|k| escape(k)))
+                .field(
+                    "start_key",
+                    &start_key.as_ref().map(|k| hex::encode_upper(k)),
+                )
+                .field("end_key", &end_key.as_ref().map(|k| hex::encode_upper(k)))
                 .finish(),
             Task::CheckAndCompact {
                 ref cf_names,
@@ -57,8 +59,8 @@ impl Display for Task {
                 .field(
                     "ranges",
                     &(
-                        ranges.first().as_ref().map(|k| escape(k)),
-                        ranges.last().as_ref().map(|k| escape(k)),
+                        ranges.first().as_ref().map(|k| hex::encode_upper(k)),
+                        ranges.last().as_ref().map(|k| hex::encode_upper(k)),
                     ),
                 )
                 .field("tombstones_num_threshold", &tombstones_num_threshold)
@@ -249,7 +251,7 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
     use engine::{WriteBatch, DB};
     use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
@@ -263,7 +265,10 @@ mod tests {
 
     #[test]
     fn test_compact_range() {
-        let path = TempDir::new("compact-range-test").unwrap();
+        let path = Builder::new()
+            .prefix("compact-range-test")
+            .tempdir()
+            .unwrap();
         let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let db = Arc::new(db);
 
@@ -341,7 +346,7 @@ mod tests {
 
     #[test]
     fn test_check_space_redundancy() {
-        let p = TempDir::new("test").unwrap();
+        let p = Builder::new().prefix("test").tempdir().unwrap();
         let engine = open_db(p.path().to_str().unwrap());
         let cf = get_cf_handle(&engine, CF_WRITE).unwrap();
 
