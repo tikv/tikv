@@ -124,7 +124,7 @@ impl RegionChangeObserver for RegionEventListener {
 }
 
 impl RoleObserver for RegionEventListener {
-    fn on_role_change(&self, context: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, context: &mut ObserverContext<'_>, _: u64, role: StateRole) {
         let region = context.region().clone();
         let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler

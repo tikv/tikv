@@ -18,7 +18,8 @@ use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
 use crate::server::{create_raft_storage, Node, Server};
 use crate::storage::lock_manager::{
-    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
+    Detector, DetectorScheduler, LeaderChangeNotifier, Service as DeadlockService, WaiterManager,
+    WaiterMgrScheduler,
 };
 use crate::storage::{self, AutoGCConfig, RaftKv, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks;
@@ -273,6 +274,17 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
     region_info_accessor.start();
 
+    let leader_change_notifier = if cfg.pessimistic_txn.enabled {
+        Some(LeaderChangeNotifier::new(
+            Arc::clone(&pd_client),
+            resolver,
+            cfg.pessimistic_txn.monitor_membership_interval,
+            &mut coprocessor_host,
+        ))
+    } else {
+        None
+    };
+
     node.start(
         engines.clone(),
         trans,
@@ -310,18 +322,19 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Start waiter manager and deadlock detector
     if cfg.pessimistic_txn.enabled {
+        let detector_scheduler =
+            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler());
         let waiter_mgr_runner = WaiterManager::new(
-            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
+            detector_scheduler.clone(),
             cfg.pessimistic_txn.wait_for_lock_timeout,
             cfg.pessimistic_txn.wake_up_delay_duration,
         );
         let detector_runner = Detector::new(
             node.id(),
+            leader_change_notifier.unwrap(),
+            detector_scheduler,
             WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
             Arc::clone(&security_mgr),
-            pd_client,
-            resolver,
-            cfg.pessimistic_txn.monitor_membership_interval,
         );
         waiter_mgr_worker
             .as_mut()

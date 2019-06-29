@@ -3,6 +3,7 @@
 mod client;
 mod config;
 pub mod deadlock;
+mod leader_change_notifier;
 mod metrics;
 mod util;
 pub mod waiter_manager;
@@ -11,6 +12,7 @@ pub use self::config::Config;
 pub use self::deadlock::{
     DetectType, Detector, Scheduler as DetectorScheduler, Service, Task as DetectTask,
 };
+pub use self::leader_change_notifier::Notifier as LeaderChangeNotifier;
 pub use self::util::{extract_lock_from_result, gen_key_hash, gen_key_hashes};
 pub use self::waiter_manager::{
     store_wait_table_is_empty, wait_table_is_empty, Scheduler as WaiterMgrScheduler,
@@ -21,6 +23,7 @@ use futures::future::Future;
 use futures::Canceled;
 use std::error;
 use std::result;
+use std::time::Duration;
 
 type DeadlockFuture<T> = Box<dyn Future<Item = T, Error = Error>>;
 
@@ -39,10 +42,6 @@ quick_error! {
             display("{:?}", err)
             description(err.description())
         }
-        Deadlock {
-            display("deadlock")
-            description("deadlock")
-        }
         Canceled(err: Canceled) {
             from()
             cause(err)
@@ -54,6 +53,10 @@ quick_error! {
             cause(err)
             display("{:?}", err)
             description(err.description())
+        }
+        Timeout(d: Duration) {
+            description("request timeout")
+            display("timeout after {:?}", d)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()

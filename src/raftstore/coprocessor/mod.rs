@@ -126,7 +126,7 @@ pub trait RoleObserver: Coprocessor {
     /// Please note that, this hook is not called at realtime. There maybe a
     /// situation that the hook is not called yet, however the role of some peers
     /// have changed.
-    fn on_role_change(&self, _: &mut ObserverContext<'_>, _: StateRole) {}
+    fn on_role_change(&self, _: &mut ObserverContext<'_>, _leader_id: u64, _: StateRole) {}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

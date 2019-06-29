@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::client::Client;
+use super::leader_change_notifier::LeaderChangeNotifier;
 use super::metrics::*;
 use super::util::extract_physical_timestamp;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use super::{Error, Lock, Result};
-use crate::pd::{RpcClient, INVALID_ID};
-use crate::server::resolve::StoreAddrResolver;
+use super::{Error, Lock};
+use crate::pd::INVALID_ID;
 use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::future::paired_future_callback;
 use crate::tikv_util::security::SecurityManager;
@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
 
@@ -121,6 +121,10 @@ pub enum Task {
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     },
+    LeaderChange {
+        id: u64,
+        addr: String,
+    },
 }
 
 impl Display for Task {
@@ -132,6 +136,9 @@ impl Display for Task {
                 tp, txn_ts, lock
             ),
             Task::DetectRpc { .. } => write!(f, "detect rpc"),
+            Task::LeaderChange { id, addr } => {
+                write!(f, "LeaderChange {{ id: {}, addr: {} }}", id, addr)
+            }
         }
     }
 }
@@ -171,6 +178,13 @@ impl Scheduler {
             tp: DetectType::CleanUp,
             txn_ts,
             lock: Lock::default(),
+        });
+    }
+
+    pub fn leader_change(&self, leader_id: u64, leader_addr: String) {
+        self.notify_scheduler(Task::LeaderChange {
+            id: leader_id,
+            addr: leader_addr,
         });
     }
 }
@@ -247,6 +261,7 @@ impl Inner {
         }
     }
 
+    // TODO: get leader info from leader_change_notifier when reconnecting.
     fn reconnect_leader(&mut self, handle: &Handle) {
         assert!(self.leader_client.is_none());
         ERROR_COUNTER_VEC.reconnect_leader.inc();
@@ -276,86 +291,52 @@ impl Inner {
     }
 }
 
-pub struct Detector<S: StoreAddrResolver + 'static> {
-    pd_client: Arc<RpcClient>,
-    resolver: S,
+pub struct Detector<L: LeaderChangeNotifier + 'static> {
+    leader_change_notifier: L,
+    scheduler: Option<Scheduler>,
     inner: Rc<RefCell<Inner>>,
-    monitor_membership_interval: u64,
     is_initialized: bool,
 }
 
-unsafe impl<S: StoreAddrResolver + 'static> Send for Detector<S> {}
+unsafe impl<L: LeaderChangeNotifier + 'static> Send for Detector<L> {}
 
-impl<S: StoreAddrResolver + 'static> Detector<S> {
+impl<L: LeaderChangeNotifier + 'static> Detector<L> {
     pub fn new(
         store_id: u64,
+        leader_change_notifier: L,
+        scheduler: Scheduler,
         waiter_mgr_scheduler: WaiterMgrScheduler,
         security_mgr: Arc<SecurityManager>,
-        pd_client: Arc<RpcClient>,
-        resolver: S,
-        monitor_membership_interval: u64,
     ) -> Self {
         assert!(store_id != INVALID_ID);
         Self {
-            pd_client,
-            resolver,
+            leader_change_notifier,
+            scheduler: Some(scheduler),
             inner: Rc::new(RefCell::new(Inner::new(
                 store_id,
                 waiter_mgr_scheduler,
                 security_mgr,
             ))),
-            monitor_membership_interval,
             is_initialized: false,
         }
     }
 
-    fn monitor_membership_change(
-        pd_client: &Arc<RpcClient>,
-        resolver: &S,
-        inner: &Rc<RefCell<Inner>>,
-    ) -> Result<()> {
-        let _timer = DETECTOR_HISTOGRAM_VEC
-            .monitor_membership_change
-            .start_coarse_timer();
-        let (_, leader) = pd_client.get_region_and_leader(b"")?;
-        if let Some(leader) = leader {
-            let leader_id = leader.get_store_id();
-            return match wait_op!(|cb| resolver
-                .resolve(leader_id, cb)
-                .map_err(|e| Error::Other(box_err!(e))))
-            {
-                Some(ref addr) if addr.is_ok() => {
-                    inner
-                        .borrow_mut()
-                        .change_role_if_needed(leader_id, addr.as_ref().unwrap().to_owned());
-                    Ok(())
-                }
-                _ => Err(box_err!("failed to resolve leader address")),
-            };
-        }
-        warn!("leader not found");
-        ERROR_COUNTER_VEC.leader_not_found.inc();
-        Ok(())
-    }
-
-    fn schedule_membership_change_monitor(&self, handle: &Handle) {
-        info!("schedule membership change monitor");
-        let pd_client = Arc::clone(&self.pd_client);
-        let resolver = self.resolver.clone();
-        let inner = Rc::clone(&self.inner);
-        let timer = Interval::new(
-            Instant::now(),
-            Duration::from_millis(self.monitor_membership_interval),
-        )
-        .for_each(move |_| {
-            if let Err(e) = Self::monitor_membership_change(&pd_client, &resolver, &inner) {
-                error!("monitor membership change failed"; "err" => ?e);
-                ERROR_COUNTER_VEC.monitor_membership_change.inc();
+    /// Starts the leader change notifier and gets leader info from it immediately.
+    fn start_leader_change_notifier(&mut self) {
+        info!("start leader change notifier");
+        let scheduler = self.scheduler.take().unwrap();
+        self.leader_change_notifier.start(Box::new(move |res| {
+            if let Ok((leader_id, leader_addr)) = res {
+                scheduler.leader_change(leader_id, leader_addr);
             }
-            Ok(())
-        })
-        .map_err(|e| panic!("unexpected err: {:?}", e));
-        handle.spawn(timer);
+        }));
+        // Gets the leader info immediately and initializes the leader change notifier.
+        if let Ok((leader_id, leader_addr)) = self
+            .leader_change_notifier
+            .get_leader_info(Duration::from_secs(3))
+        {
+            self.handle_leader_change(leader_id, leader_addr);
+        }
     }
 
     fn schedule_detect_table_expiration(&self, handle: &Handle) {
@@ -376,9 +357,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
     fn initialize(&mut self, handle: &Handle) {
         assert!(!self.is_initialized);
-        // Get leader info now because tokio_timer::Interval can't execute immediately.
-        let _ = Self::monitor_membership_change(&self.pd_client, &self.resolver, &self.inner);
-        self.schedule_membership_change_monitor(handle);
+        self.start_leader_change_notifier();
         self.schedule_detect_table_expiration(handle);
         self.is_initialized = true;
     }
@@ -407,6 +386,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             }
         } else {
             for _ in 0..2 {
+                // TODO: get leader info
                 if inner.leader_client.is_none() && inner.leader_info.is_some() {
                     inner.reconnect_leader(handle);
                 }
@@ -458,7 +438,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                 let mut inner = inner.borrow_mut();
                 if !inner.is_leader() {
                     ERROR_COUNTER_VEC.not_leader.inc();
-                    return Err(Error::Other(box_err!("leader changed")));
+                    return Err(box_err!("leader changed"));
                 }
 
                 let WaitForEntry {
@@ -504,9 +484,15 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                 .map_err(|_| ()),
         );
     }
+
+    fn handle_leader_change(&self, leader_id: u64, leader_addr: String) {
+        self.inner
+            .borrow_mut()
+            .change_role_if_needed(leader_id, leader_addr);
+    }
 }
 
-impl<S: StoreAddrResolver + 'static> FutureRunnable<Task> for Detector<S> {
+impl<L: LeaderChangeNotifier + 'static> FutureRunnable<Task> for Detector<L> {
     fn run(&mut self, task: Task, handle: &Handle) {
         if !self.is_initialized {
             self.initialize(handle);
@@ -519,7 +505,13 @@ impl<S: StoreAddrResolver + 'static> FutureRunnable<Task> for Detector<S> {
             Task::DetectRpc { stream, sink } => {
                 self.handle_detect_rpc(handle, stream, sink);
             }
+            Task::LeaderChange { id, addr } => self.handle_leader_change(id, addr),
         }
+    }
+
+    /// Stop the leader change notifier, When the detector is stopped.
+    fn shutdown(&mut self) {
+        self.leader_change_notifier.stop();
     }
 }
 

@@ -963,7 +963,7 @@ impl Peer {
                 _ => {}
             }
             ctx.coprocessor_host
-                .on_role_change(self.region(), ss.raft_state);
+                .on_role_change(self.region(), ss.leader_id, ss.raft_state);
         }
     }
 
