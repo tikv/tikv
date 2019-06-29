@@ -224,7 +224,7 @@ mod tests {
 
     use kvproto::metapb::Peer;
     use kvproto::pdpb::CheckPolicy;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
@@ -250,7 +250,10 @@ mod tests {
 
     #[test]
     fn test_last_key_of_region() {
-        let path = TempDir::new("test_last_key_of_region").unwrap();
+        let path = Builder::new()
+            .prefix("test_last_key_of_region")
+            .tempdir()
+            .unwrap();
         let engine =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -302,7 +305,10 @@ mod tests {
 
     #[test]
     fn test_table_check_observer() {
-        let path = TempDir::new("test_table_check_observer").unwrap();
+        let path = Builder::new()
+            .prefix("test_table_check_observer")
+            .tempdir()
+            .unwrap();
         let engine =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
