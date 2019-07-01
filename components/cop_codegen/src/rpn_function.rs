@@ -258,7 +258,8 @@ fn parse_arg_type(arg: &FnArg) -> Result<TypePath> {
 
 fn check_attr(meta: &[Ident], item_fn: &ItemFn) -> Result<()> {
     if item_fn.decl.inputs.len() < meta.len() {
-        return Err(meta[0]
+        let arg_num = item_fn.decl.inputs.len();
+        return Err(meta[arg_num]
             .span()
             .unwrap()
             .error("The attrs of `#[rpn_fn]` are more than the params of the function."));
