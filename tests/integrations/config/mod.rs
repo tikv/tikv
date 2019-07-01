@@ -235,7 +235,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
-                blob_run_mode: BlobRunMode::ReadOnly,
+                blob_run_mode: BlobRunMode::Fallback,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -279,7 +279,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: 1024, // default value
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -287,7 +287,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
-                blob_run_mode: BlobRunMode::Normal,
+                blob_run_mode: BlobRunMode::ReadOnly,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -331,7 +331,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: 1024, // default value
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -339,7 +339,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
-                blob_run_mode: BlobRunMode::Normal,
+                blob_run_mode: BlobRunMode::ReadOnly, // default value
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -383,7 +383,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: 1024, // default value
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -391,7 +391,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
-                blob_run_mode: BlobRunMode::Normal,
+                blob_run_mode: BlobRunMode::ReadOnly, // default value
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
