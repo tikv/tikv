@@ -6,6 +6,8 @@ use std::i64;
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::coprocessor::codec::mysql::Decimal;
 use crate::coprocessor::codec::Datum;
+use cop_datatype::{FieldTypeAccessor, FieldTypeFlag};
+use crate::coprocessor::dag::expr::Expression;
 
 impl ScalarFunc {
     pub fn logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -131,7 +133,27 @@ impl ScalarFunc {
 
     pub fn time_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_time(ctx, row)?;
-        Ok(Some(arg.is_none() as i64))
+        if arg.is_none() {
+            return Ok(Some(true as i64));
+        }
+        
+        if !self.children.is_empty() {
+            match self.children[0] {
+                Expression::ColumnRef(_) => {
+                    //	Description below are from MySQL document:
+                    //		For DATE and DATETIME columns that are declared as NOT NULL,
+                    //		you can find the special date '0000-00-00' by using a statement like this:
+                    //		"SELECT * FROM tbl_name WHERE date_column IS NULL"
+                    if self.children[0].field_type().flag().contains(FieldTypeFlag::NOT_NULL) &&
+                        arg.unwrap().is_zero() {
+                        return Ok(Some(true as i64));
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        Ok(Some(false as i64))
     }
 
     pub fn duration_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -186,12 +208,13 @@ impl ScalarFunc {
 mod tests {
     use crate::coprocessor::codec::mysql::Duration;
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{
-        check_overflow, datum_expr, scalar_func_expr, str2dec,
-    };
+    use crate::coprocessor::dag::expr::tests::{check_overflow, datum_expr, scalar_func_expr, str2dec, col_expr};
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
     use tipb::expression::ScalarFuncSig;
+    use cop_datatype::{FieldTypeAccessor, FieldTypeFlag};
+    use crate::coprocessor::codec::mysql::{Time, time::zero_datetime, Tz, UNSPECIFIED_FSP};
+    use tipb::expression::ScalarFuncSig::TimeIsNull;
 
     #[test]
     fn test_logic_op() {
@@ -430,6 +453,30 @@ mod tests {
             let op = Expression::build(&ctx, scalar_func_expr(op, &[arg])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
+        }
+    }
+    
+    #[test]
+    fn test_time_is_null() {
+        let tests = vec![
+            (Datum::Time(Time::parse_utc_datetime("17011801101", UNSPECIFIED_FSP).unwrap()), true, Some(0)),
+            (Datum::Time(Time::parse_utc_datetime("17011801101", UNSPECIFIED_FSP).unwrap()), false, Some(0)),
+            (Datum::Time(zero_datetime(&Tz::utc())), true, Some(1)),
+            (Datum::Time(zero_datetime(&Tz::utc())), false, Some(0)),
+            (Datum::Null, true, Some(1)),
+            (Datum::Null, false, Some(1)),
+        ];
+        
+        let mut ctx = EvalContext::default();
+        for (argument, not_null, exp) in tests {
+            let mut col = col_expr(0);
+            if not_null {
+                col.mut_field_type().as_mut_accessor().set_flag(FieldTypeFlag::NOT_NULL);
+            }
+            
+            let op = Expression::build(&ctx, scalar_func_expr(TimeIsNull, &[col])).unwrap();
+            let got = op.eval_int(&mut ctx, &[argument]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 
