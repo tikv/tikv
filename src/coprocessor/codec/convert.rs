@@ -110,7 +110,7 @@ macro_rules! overflow {
     }};
 }
 
-/// Converts an int value to a diferent int value.
+/// Converts an int value to a different int value.
 #[inline]
 pub fn convert_int_to_int(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> Result<i64> {
     let lower_bound = integer_signed_lower_bound(tp);
@@ -495,7 +495,7 @@ fn float_str_to_int_string<'a, 'b: 'a>(
     let e_idx = e_idx.unwrap();
     let exp = box_try!((&valid_float[e_idx + 1..]).parse::<i64>());
     if exp > 0 && int_cnt > (i64::MAX - exp) {
-        // (exp + inc_cnt) overflows MaxInt64. Add warning and return original float string
+        // (exp + int_cnt) overflows MaxInt64. Add warning and return original float string
         ctx.warnings
             .append_warning(Error::overflow("BIGINT", &valid_float));
         return Ok(Cow::Owned(valid_float.to_owned()));
@@ -562,7 +562,7 @@ mod tests {
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
-    use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE,WARN_DATA_TRUNCATED};
+    use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
     use crate::coprocessor::dag::expr::Flag;
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 
@@ -862,14 +862,18 @@ mod tests {
         let val = convert_bytes_to_int(&mut ctx, bs, FieldTypeTp::LongLong);
         assert_eq!(val.unwrap(), 123i64);
         assert_eq!(ctx.warnings.warning_cnt, 1);
-        
+
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val = convert_bytes_to_int(&mut ctx, &invalid_utf8, FieldTypeTp::LongLong);
         assert_eq!(val.unwrap(), 123i64);
-        // note: 
+        // note:
         // warning 1: vec!['1' as u8, '2' as u8, '3' as u8, 0, 159, 146, 150] -> utf8
         // warning 2: vec!['1' as u8, '2' as u8, '3' as u8, 0] -> float
-        assert_eq!(ctx.warnings.warning_cnt, 2, "unexpected warning: {:?}", ctx.warnings.warnings);
+        assert_eq!(
+            ctx.warnings.warning_cnt, 2,
+            "unexpected warning: {:?}",
+            ctx.warnings.warnings
+        );
     }
 
     #[test]
