@@ -138,22 +138,19 @@ impl ScalarFunc {
         }
 
         if !self.children.is_empty() {
-            match self.children[0] {
-                Expression::ColumnRef(_) => {
-                    //	Description below are from MySQL document:
-                    //		For DATE and DATETIME columns that are declared as NOT NULL,
-                    //		you can find the special date '0000-00-00' by using a statement like this:
-                    //		"SELECT * FROM tbl_name WHERE date_column IS NULL"
-                    if self.children[0]
-                        .field_type()
-                        .flag()
-                        .contains(FieldTypeFlag::NOT_NULL)
-                        && arg.unwrap().is_zero()
-                    {
-                        return Ok(Some(true as i64));
-                    }
+            if let Expression::ColumnRef(_) = self.children[0] {
+                //	Description below are from MySQL document:
+                //		For DATE and DATETIME columns that are declared as NOT NULL,
+                //		you can find the special date '0000-00-00' by using a statement like this:
+                //		"SELECT * FROM tbl_name WHERE date_column IS NULL"
+                if self.children[0]
+                    .field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::NOT_NULL)
+                    && arg.unwrap().is_zero()
+                {
+                    return Ok(Some(true as i64));
                 }
-                _ => {}
             }
         }
 
