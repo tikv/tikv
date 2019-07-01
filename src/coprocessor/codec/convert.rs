@@ -100,7 +100,7 @@ pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
     Res::Ok(f)
 }
 
-/// `overflow` returns an overflowed error.
+/// Returns an overflowed error.
 macro_rules! overflow {
     ($val:ident, $bound:tt) => {{
         Error::Eval(
@@ -110,7 +110,7 @@ macro_rules! overflow {
     }};
 }
 
-/// `convert_int_to_int` converts an int value to a diferent int value.
+/// Converts an int value to a diferent int value.
 #[inline]
 pub fn convert_int_to_int(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> Result<i64> {
     let lower_bound = integer_signed_lower_bound(tp);
@@ -127,7 +127,7 @@ pub fn convert_int_to_int(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> R
     Ok(val)
 }
 
-/// `convert_uint_to_int` converts an uint value to an int value.
+/// Converts an uint value to an int value.
 #[inline]
 pub fn convert_uint_to_int(ctx: &mut EvalContext, val: u64, tp: FieldTypeTp) -> Result<i64> {
     let upper_bound = integer_signed_upper_bound(tp);
@@ -138,8 +138,7 @@ pub fn convert_uint_to_int(ctx: &mut EvalContext, val: u64, tp: FieldTypeTp) -> 
     Ok(val as i64)
 }
 
-/// `convert_float_to_int` converts an f64 value to an i64 value.
-///  Returns the overflow error if the value exceeds the boundary.
+/// Converts an f64 value to an i64 value.
 #[inline]
 pub fn convert_float_to_int(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -> Result<i64> {
     // TODO any performance problem to use round directly?
@@ -158,12 +157,19 @@ pub fn convert_float_to_int(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -
     Ok(val as i64)
 }
 
-/// `convert_bytes_to_int` converts a byte arrays to an i64 in best effort.
+/// Converts a byte arrays to an i64 in best effort.
 pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp) -> Result<i64> {
-    let s = str::from_utf8(bytes)?.trim();
+    let s = match str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(err) => {
+            ctx.handle_truncate(true)?;
+            let (valid, _) = bytes.split_at(err.valid_up_to());
+            unsafe { str::from_utf8_unchecked(valid) }
+        }
+    };
+    let s = s.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     let val = vs.parse::<i64>();
-    // let val = bytes_to_int_without_context(vs.as_bytes());
     match val {
         Ok(val) => convert_int_to_int(ctx, val, tp),
         Err(_) => {
@@ -178,7 +184,7 @@ pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp
     }
 }
 
-/// `convert_datetime_to_int` converts a `DateTime` to an i64 value
+/// Converts a `DateTime` to an i64 value
 #[inline]
 pub fn convert_datetime_to_int(
     ctx: &mut EvalContext,
@@ -192,7 +198,7 @@ pub fn convert_datetime_to_int(
     convert_int_to_int(ctx, val, tp)
 }
 
-/// `convert_duration_to_int` converts a `Duration` to an i64 value
+/// Converts a `Duration` to an i64 value
 #[inline]
 pub fn convert_duration_to_int(
     ctx: &mut EvalContext,
@@ -205,7 +211,7 @@ pub fn convert_duration_to_int(
     convert_int_to_int(ctx, val, tp)
 }
 
-/// `convert_decimal_to_int` converts a `Decimal` to an i64 value
+/// Converts a `Decimal` to an i64 value
 #[inline]
 pub fn convert_decimal_to_int(
     ctx: &mut EvalContext,
@@ -228,15 +234,14 @@ pub fn convert_decimal_to_int(
     convert_int_to_int(ctx, val, tp)
 }
 
-/// `convert_json_to_int` converts a `Json` to an i64 value
+/// Converts a `Json` to an i64 value
 #[inline]
 pub fn convert_json_to_int(ctx: &mut EvalContext, json: &Json, tp: FieldTypeTp) -> Result<i64> {
     let val = json.cast_to_int();
     convert_int_to_int(ctx, val, tp)
 }
 
-/// `convert_float_to_uint` converts a f64 value to a u64 value.
-/// Returns the overflow error if the value exceeds the boundary.
+/// Converts a f64 value to a u64 value.
 #[inline]
 pub fn convert_float_to_uint(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -> Result<u64> {
     // TODO any performance problem to use round directly?
@@ -396,7 +401,7 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
             valid_len = i + 1;
         }
     }
-    box_try!(ctx.handle_truncate(valid_len < s.len()));
+    ctx.handle_truncate(valid_len < s.len())?;
     if valid_len == 0 {
         Ok("0")
     } else {
@@ -552,13 +557,12 @@ const MAX_ZERO_COUNT: i64 = 20;
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
     use std::f64::EPSILON;
     use std::fmt::Debug;
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
-    use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
+    use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE,WARN_DATA_TRUNCATED};
     use crate::coprocessor::dag::expr::Flag;
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 
@@ -832,25 +836,40 @@ mod tests {
         let mut ctx = EvalContext::default();
         let bs = b"123bb";
         let val = convert_bytes_to_int(&mut ctx, bs, FieldTypeTp::LongLong);
-        match val {
-            Err(e) => assert!(
-                e.description().contains("Data Truncated"),
-                "expect data truncated, but got {:?}",
-                e
-            ),
-            res => panic!("expect convert {:?} to truncated, but got {:?}", bs, res),
-        };
+        assert!(val.is_err());
+        assert_eq!(val.unwrap_err().code(), WARN_DATA_TRUNCATED);
+
+        // Invalid UTF8 chars
+        let mut ctx = EvalContext::default();
+        let val = convert_bytes_to_int(&mut ctx, &[0, 159, 146, 150], FieldTypeTp::LongLong);
+        assert!(val.is_err());
+        assert_eq!(val.unwrap_err().code(), WARN_DATA_TRUNCATED);
 
         // IGNORE_TRUNCATE
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IGNORE_TRUNCATE)));
         let val = convert_bytes_to_int(&mut ctx, bs, FieldTypeTp::LongLong);
         assert_eq!(val.unwrap(), 123i64);
+        assert_eq!(ctx.warnings.warning_cnt, 0);
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IGNORE_TRUNCATE)));
+        let invalid_utf8 = vec!['1' as u8, '2' as u8, '3' as u8, 0, 159, 146, 150];
+        let val = convert_bytes_to_int(&mut ctx, &invalid_utf8, FieldTypeTp::LongLong);
+        assert_eq!(val.unwrap(), 123i64);
+        assert_eq!(ctx.warnings.warning_cnt, 0);
 
         // TRUNCATE_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val = convert_bytes_to_int(&mut ctx, bs, FieldTypeTp::LongLong);
         assert_eq!(val.unwrap(), 123i64);
-        assert_eq!(ctx.warnings.warnings.len(), 1);
+        assert_eq!(ctx.warnings.warning_cnt, 1);
+        
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
+        let val = convert_bytes_to_int(&mut ctx, &invalid_utf8, FieldTypeTp::LongLong);
+        assert_eq!(val.unwrap(), 123i64);
+        // note: 
+        // warning 1: vec!['1' as u8, '2' as u8, '3' as u8, 0, 159, 146, 150] -> utf8
+        // warning 2: vec!['1' as u8, '2' as u8, '3' as u8, 0] -> float
+        assert_eq!(ctx.warnings.warning_cnt, 2, "unexpected warning: {:?}", ctx.warnings.warnings);
     }
 
     #[test]
