@@ -156,11 +156,6 @@ dist_release:
 build_dist_release:
 	make x-build-dist
 
-# Temporary backwards compatibility
-build_release:
-	@echo "the build_release rule no longer exists. you might want 'build_dist_release' or 'release'"
-	@exit 1
-
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
