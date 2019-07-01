@@ -3,6 +3,7 @@
 use byteorder::WriteBytesExt;
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
 use std::str::FromStr;
@@ -330,7 +331,7 @@ impl Datum {
                 d.as_f64()
             }
             Datum::Dur(d) => {
-                let d = d.to_decimal()?;
+                let d = Decimal::try_from(d)?;
                 d.as_f64()
             }
             Datum::Dec(d) => d.as_f64(),
@@ -356,7 +357,7 @@ impl Datum {
                 d.as_i64().into()
             }
             Datum::Dur(d) => {
-                let d = d.round_frac(mysql::DEFAULT_FSP)?.to_decimal()?;
+                let d = Decimal::try_from(d.round_frac(mysql::DEFAULT_FSP)?)?;
                 d.as_i64().into()
             }
             Datum::Dec(d) => {
@@ -418,7 +419,7 @@ impl Datum {
                 Ok(Datum::Dec(dec))
             }
             Datum::Dur(d) => {
-                let dec = d.to_decimal()?;
+                let dec = Decimal::try_from(d)?;
                 if d.fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
@@ -432,7 +433,7 @@ impl Datum {
     pub fn into_dec(self) -> Result<Decimal> {
         match self {
             Datum::Time(t) => t.to_decimal().map_err(From::from),
-            Datum::Dur(d) => d.to_decimal().map_err(From::from),
+            Datum::Dur(d) => Decimal::try_from(d).map_err(From::from),
             d => match d.coerce_to_dec()? {
                 Datum::Dec(d) => Ok(d),
                 d => Err(box_err!("failed to conver {} to decimal", d)),

@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::{i64, str, u64};
 
 use cop_datatype::prelude::*;
@@ -107,7 +107,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec = Decimal::try_from(val)?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
@@ -170,7 +170,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let val = val.to_decimal()?;
+        let val = Decimal::try_from(val)?;
         let res = val.as_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
@@ -254,7 +254,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec = Decimal::try_from(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }

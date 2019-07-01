@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::{i64, str, u64};
@@ -497,11 +498,6 @@ impl Duration {
         Ok(Duration::new(neg, hour, minute, second, micros, fsp))
     }
 
-    // TODO: impl TryFrom/TryInto instead
-    pub fn to_decimal(self) -> Result<Decimal> {
-        self.format("").parse()
-    }
-
     /// Rounds fractional seconds precision with new FSP and returns a new one.
     /// We will use the “round half up” rule, e.g, >= 0.5 -> 1, < 0.5 -> 0,
     /// so 10:10:10.999999 round with fsp: 1 -> 10:10:11.0
@@ -650,6 +646,13 @@ impl Duration {
         }
 
         string
+    }
+}
+
+impl TryFrom<Duration> for Decimal {
+    type Error = crate::coprocessor::codec::Error;
+    fn try_from(duration: Duration) -> Result<Decimal> {
+        duration.format("").parse()
     }
 }
 
@@ -905,7 +908,7 @@ mod tests {
 
         for (input, fsp, exp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
-            let res = format!("{}", t.to_decimal().unwrap());
+            let res = format!("{}", Decimal::try_from(t).unwrap());
             assert_eq!(exp, res);
         }
     }
@@ -1033,7 +1036,7 @@ mod benches {
         let duration = Duration::parse(b"-12:34:56.123456", 6).unwrap();
         b.iter(|| {
             let duration = test::black_box(duration);
-            let _ = test::black_box(duration.to_decimal().unwrap());
+            let _ = test::black_box(Decimal::try_from(duration).unwrap());
         })
     }
 
