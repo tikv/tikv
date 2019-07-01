@@ -266,7 +266,7 @@ fn check_attr(meta: &[Ident], item_fn: &ItemFn) -> Result<()> {
     }
     for m in meta {
         if m != "ctx" && m != "payload" {
-            return Err(meta[0]
+            return Err(m
                 .span()
                 .unwrap()
                 .error("The attr of `#[rpn_fn]` can only be `ctx` or `payload`."));
@@ -618,7 +618,7 @@ mod tests {
                 let item_fn: ItemFn = parse_str(src).unwrap();
                 assert!(check_attr(&meta, &item_fn).is_ok());
             } else {
-                // It will panic when occur `Err(meta[0].span().unwrap().error())`.
+                // It will panic when occur statement such as `Err(meta[0].span().unwrap().error())`.
                 // Because 'proc_macro::Span is only available in procedural macros'
                 let r = panic::catch_unwind(move || {
                     let item_fn: ItemFn = parse_str(src).unwrap();
