@@ -198,7 +198,6 @@ impl StatusServer {
         let res = match serde_json::to_string(config.as_ref()) {
             Ok(json) => {
                 Response::builder()
-//                    .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(json))
                     .unwrap()
