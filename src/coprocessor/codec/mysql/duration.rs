@@ -16,6 +16,7 @@ use bitfield::bitfield;
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const MICROS_PER_SEC: i64 = 1_000_000;
 pub const NANO_WIDTH: usize = 9;
+pub const MICRO_WIDTH: usize = 6;
 
 const SECS_PER_HOUR: u32 = 3600;
 const SECS_PER_MINUTE: u32 = 60;
@@ -78,7 +79,7 @@ fn check_micros(micros: u32) -> Result<u32> {
 }
 
 mod parser {
-    use super::{check_hour, check_minute, check_second, TEN_POW};
+    use super::{check_hour, check_minute, check_second, MICRO_WIDTH, TEN_POW};
     use nom::character::complete::{digit1, multispace0, multispace1};
     use nom::{
         alt, call, char, complete, cond, do_parse, eof, map, map_res, opt, peek, preceded, tag,
@@ -133,7 +134,7 @@ mod parser {
             } else {
                 (buf_to_int(&buf[..=fsp]), fsp + 1)
             };
-            fraction * TEN_POW[6usize.checked_sub(len).unwrap_or(0)]
+            fraction * TEN_POW[MICRO_WIDTH.checked_sub(len).unwrap_or(0)]
         })
     }
 
@@ -275,6 +276,7 @@ bitfield! {
 }
 
 /// Rounds `micros` with `fsp` and handles the carry.
+#[inline]
 fn round(
     hours: &mut u32,
     minutes: &mut u32,
@@ -286,10 +288,12 @@ fn round(
         *micros *= 10;
     }
 
-    *micros = if fsp == 6 {
+    let fsp = usize::from(fsp);
+
+    *micros = if fsp == MICRO_WIDTH {
         (*micros + 5) / 10
     } else {
-        let mask = TEN_POW[usize::from(6 - fsp)];
+        let mask = TEN_POW[MICRO_WIDTH - fsp];
         (*micros / mask + 5) / 10 * mask
     };
 
@@ -425,8 +429,8 @@ impl Duration {
         let secs = (micros / MICROS_PER_SEC).abs();
         let mut micros = (micros % MICROS_PER_SEC).abs() as u32;
 
-        let mut hours = (secs / 3600) as u32;
-        let mut minutes = (secs % 3600 / 60) as u32;
+        let mut hours = (secs / i64::from(SECS_PER_HOUR)) as u32;
+        let mut minutes = (secs % i64::from(SECS_PER_HOUR) / i64::from(SECS_PER_MINUTE)) as u32;
         let mut secs = (secs % 60) as u32;
 
         round(&mut hours, &mut minutes, &mut secs, &mut micros, fsp)?;
@@ -500,8 +504,8 @@ impl Duration {
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
     /// We will use the “round half up” rule, e.g, >= 0.5 -> 1, < 0.5 -> 0,
-    /// so 10:10:10.999999 round 1 -> 10:10:11
-    /// and 10:10:10.000000 round 0 -> 10:10:10
+    /// so 10:10:10.999999 round with fsp: 1 -> 10:10:11.0
+    /// and 10:10:10.000000 round with fsp: 0 -> 10:10:11
     pub fn round_frac(mut self, fsp: i8) -> Result<Self> {
         let fsp = check_fsp(fsp)?;
 
@@ -616,28 +620,33 @@ impl Duration {
     }
 
     fn format(self, sep: &str) -> String {
+        use std::fmt::Write;
         let mut string = String::new();
         if self.get_neg() {
             string.push('-');
         }
 
-        string.push_str(&format!(
+        write!(
+            &mut string,
             "{:02}{}{:02}{}{:02}",
             self.hours(),
             sep,
             self.minutes(),
             sep,
             self.secs()
-        ));
+        )
+        .unwrap();
 
         let fsp = usize::from(self.fsp());
 
         if self.fsp() > 0 {
-            string.push_str(&format!(
+            write!(
+                &mut string,
                 ".{:0width$}",
-                self.micros() / TEN_POW[6 - fsp],
+                self.micros() / TEN_POW[MICRO_WIDTH - fsp],
                 width = fsp
-            ));
+            )
+            .unwrap();
         }
 
         string
