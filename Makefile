@@ -165,15 +165,6 @@ build_release:
 dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
 
-# Distributable bins with jemalloc memory profiling
-dist_prof_release:
-	ENABLE_FEATURES=mem-profiling make dist_release
-
-# Distributable bins instrumented with failpoints.
-# This is used for schrodinger chaos testing.
-dist_fail_release:
-	FAIL_POINT=1 make dist_release
-
 
 ## Testing
 ## -------
