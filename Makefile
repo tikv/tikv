@@ -134,6 +134,14 @@ prof_release:
 fail_release:
 	FAIL_POINT=1 make release
 
+
+## Distribution builds (true release builds)
+## -------------------
+
+# These builds are fully optimized, with LTO, and they contain
+# debuginfo. They take a very long time to build, so it is recommended
+# not to use them.
+
 # The target used by CI/CD to build the distributable release artifacts.
 # Individual developers should only need to use the `dist_` rules when working
 # on the CI/CD system.
@@ -142,14 +150,6 @@ dist_release:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
-
-
-## Distribution builds (true release builds)
-## -------------------
-
-# These builds are fully optimized, with LTO, and they contain
-# debuginfo. They take a very long time to build, so it is recommended
-# not to use them.
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
