@@ -184,43 +184,76 @@ impl BufferVec {
     ///
     /// Panics if `retain_arr` is not long enough.
     pub fn retain_by_array(&mut self, retain_arr: &[bool]) {
-        // TODO: Optimize to move multiple contiguous slots.
-        unsafe {
-            let len = self.len();
-            assert!(retain_arr.len() >= len);
-
-            if len > 0 {
-                let mut data_write_offset = 0;
-                let mut offsets_write_offset = 0;
-                for i in 0..len - 1 {
-                    if retain_arr[i] {
-                        let write_len = self.offsets[i + 1] - self.offsets[i];
-                        std::ptr::copy(
-                            self.data.as_ptr().add(self.offsets[i]),
-                            self.data.as_mut_ptr().add(data_write_offset),
-                            write_len,
-                        );
-                        self.offsets[offsets_write_offset] = data_write_offset;
-                        offsets_write_offset += 1;
-                        data_write_offset += write_len;
-                    }
-                }
-                // The last buffer does not have an ending offset
-                if retain_arr[len - 1] {
-                    let write_len = self.data.len() - self.offsets[len - 1];
-                    std::ptr::copy(
-                        self.data.as_ptr().add(self.offsets[len - 1]),
-                        self.data.as_mut_ptr().add(data_write_offset),
-                        write_len,
-                    );
-                    self.offsets[offsets_write_offset] = data_write_offset;
-                    offsets_write_offset += 1;
-                    data_write_offset += write_len;
-                }
-                self.offsets.set_len(offsets_write_offset);
-                self.data.set_len(data_write_offset);
+        #[inline]
+        /// return (ok, left, right), if ok, the interval is [left, right)
+        fn get_interval(arr: &[bool], begin: usize) -> (bool, usize, usize) {
+            debug_assert!(begin <= arr.len());
+            if begin >= arr.len() {
+                return (false, 0, 0);
             }
+            let arr_len = arr.len();
+            let (mut left, mut right) = (arr_len, arr_len);
+            for i in begin..arr_len {
+                if arr[i] {
+                    left = i;
+                    break;
+                }
+            }
+            if left == arr_len {
+                return (false, 0, 0);
+            }
+            for i in (left + 1)..arr_len {
+                if !arr[i] {
+                    right = i;
+                    break;
+                }
+            }
+            return (true, left, right);
         }
+
+        let len = self.len();
+        assert!(retain_arr.len() >= len);
+        if len <= 0 {
+            return;
+        }
+        let mut data_write_offset = 0;
+        let mut offsets_write_offset = 0;
+        let mut retain_arr_idx = 0;
+        loop {
+            let (ok, left, right) = get_interval(retain_arr, retain_arr_idx);
+            if !ok {
+                break;
+            }
+            let data_interval_size = if right == len {
+                self.data.len() - self.offsets[left]
+            } else {
+                self.offsets[right] - self.offsets[left]
+            };
+            let offset_interval_size = right - left;
+            unsafe {
+                std::ptr::copy(
+                    self.data.as_ptr().add(self.offsets[left]),
+                    self.data.as_mut_ptr().add(data_write_offset),
+                    data_interval_size,
+                );
+            }
+            let sub = self.offsets[left] - data_write_offset;
+            for i in left..right {
+                self.offsets[i] -= sub;
+            }
+            unsafe {
+                std::ptr::copy(
+                    self.offsets.as_ptr().add(left),
+                    self.offsets.as_mut_ptr().add(offsets_write_offset),
+                    offset_interval_size,
+                )
+            }
+            data_write_offset += data_interval_size;
+            offsets_write_offset += offset_interval_size;
+            retain_arr_idx = right;
+        }
+        self.offsets.truncate(offsets_write_offset);
+        self.data.truncate(data_write_offset);
     }
 
     /// Returns an iterator over the `BufferVec`.
