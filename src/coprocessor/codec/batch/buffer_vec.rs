@@ -213,7 +213,7 @@ impl BufferVec {
 
         let len = self.len();
         assert!(retain_arr.len() >= len);
-        if len <= 0 {
+        if len == 0 {
             return;
         }
         let mut data_write_offset = 0;
@@ -292,7 +292,6 @@ impl std::ops::Index<usize> for BufferVec {
 }
 
 // TODO: Implement Index<XxxRange>
-
 #[derive(Clone, Copy)]
 pub struct Iter<'a> {
     data: &'a [u8],
