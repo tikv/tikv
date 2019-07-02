@@ -29,11 +29,11 @@ mod tests {
     use crate::{Iterable, Mutable, Peekable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_base() {
-        let path = TempDir::new("var").unwrap();
+        let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine =
             Arc::new(util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap());
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_peekable() {
-        let path = TempDir::new("var").unwrap();
+        let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine = util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap();
 
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let path = TempDir::new("var").unwrap();
+        let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine =
             Arc::new(util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap());

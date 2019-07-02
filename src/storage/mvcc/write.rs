@@ -50,11 +50,28 @@ impl WriteType {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Clone)]
 pub struct Write {
     pub write_type: WriteType,
     pub start_ts: u64,
     pub short_value: Option<Value>,
+}
+
+impl std::fmt::Debug for Write {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Write")
+            .field("write_type", &self.write_type)
+            .field("start_ts", &self.start_ts)
+            .field(
+                "short_value",
+                &self
+                    .short_value
+                    .as_ref()
+                    .map(|v| hex::encode_upper(v))
+                    .unwrap_or_else(|| "None".to_owned()),
+            )
+            .finish()
+    }
 }
 
 impl Write {

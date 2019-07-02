@@ -1,188 +1,78 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cop_codegen::RpnFunction;
+use cop_codegen::rpn_fn;
 
-use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 2)]
-pub struct RpnFnLogicalAnd;
-
-impl RpnFnLogicalAnd {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg0: &Option<i64>,
-        arg1: &Option<i64>,
-    ) -> Result<Option<i64>> {
-        // The mapping from Rust to SQL logic is:
-        //
-        // * None => null
-        // * Some(0) => false
-        // * Some(x != 0) => true
-        Ok(match (arg0, arg1) {
-            (Some(0), _) | (_, Some(0)) => Some(0),
-            (None, _) | (_, None) => None,
-            _ => Some(1),
-        })
-    }
+#[rpn_fn]
+#[inline]
+pub fn logical_and(lhs: &Option<i64>, rhs: &Option<i64>) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (Some(0), _) | (_, Some(0)) => Some(0),
+        (None, _) | (_, None) => None,
+        _ => Some(1),
+    })
 }
 
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 2)]
-pub struct RpnFnLogicalOr;
-
-impl RpnFnLogicalOr {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg0: &Option<i64>,
-        arg1: &Option<i64>,
-    ) -> Result<Option<i64>> {
-        // This is a standard Kleene OR used in SQL where
-        // `null OR false == null` and `null OR true == true`
-        Ok(match (arg0, arg1) {
-            (Some(0), Some(0)) => Some(0),
-            (None, None) | (None, Some(0)) | (Some(0), None) => None,
-            _ => Some(1),
-        })
-    }
+#[rpn_fn]
+#[inline]
+pub fn logical_or(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>> {
+    // This is a standard Kleene OR used in SQL where
+    // `null OR false == null` and `null OR true == true`
+    Ok(match (arg0, arg1) {
+        (Some(0), Some(0)) => Some(0),
+        (None, None) | (None, Some(0)) | (Some(0), None) => None,
+        _ => Some(1),
+    })
 }
 
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnUnaryNot;
-
-impl RpnFnUnaryNot {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg: &Option<i64>,
-    ) -> Result<Option<i64>> {
-        Ok(arg.map(|v| (v == 0) as i64))
-    }
+#[rpn_fn]
+#[inline]
+pub fn unary_not(arg: &Option<i64>) -> Result<Option<i64>> {
+    Ok(arg.map(|v| (v == 0) as i64))
 }
 
-#[derive(Clone, Debug, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnIsNull<T: Evaluable> {
-    _phantom: std::marker::PhantomData<T>,
+#[rpn_fn]
+#[inline]
+pub fn is_null<T: Evaluable>(arg: &Option<T>) -> Result<Option<i64>> {
+    Ok(Some(arg.is_none() as i64))
 }
 
-impl<T: Evaluable> Copy for RpnFnIsNull<T> {}
-
-impl<T: Evaluable> RpnFnIsNull<T> {
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg: &Option<T>,
-    ) -> Result<Option<i64>> {
-        Ok(Some(arg.is_none() as i64))
-    }
+#[rpn_fn]
+#[inline]
+pub fn int_is_true(arg: &Option<Int>) -> Result<Option<i64>> {
+    Ok(Some(arg.map_or(0, |v| (v != 0) as i64)))
 }
 
-#[derive(Clone, Copy, Debug, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnIntIsTrue;
-
-impl RpnFnIntIsTrue {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg: &Option<Int>,
-    ) -> Result<Option<i64>> {
-        Ok(Some(arg.map_or(0, |v| (v != 0) as i64)))
-    }
+#[rpn_fn]
+#[inline]
+pub fn real_is_true(arg: &Option<Real>) -> Result<Option<i64>> {
+    Ok(Some(arg.map_or(0, |v| (v.into_inner() != 0f64) as i64)))
 }
 
-#[derive(Clone, Copy, Debug, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnRealIsTrue;
-
-impl RpnFnRealIsTrue {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg: &Option<Real>,
-    ) -> Result<Option<i64>> {
-        Ok(Some(arg.map_or(0, |v| (v.into_inner() != 0f64) as i64)))
-    }
+#[rpn_fn]
+#[inline]
+pub fn decimal_is_true(arg: &Option<Decimal>) -> Result<Option<i64>> {
+    Ok(Some(arg.as_ref().map_or(0, |v| !v.is_zero() as i64)))
 }
 
-#[derive(Clone, Copy, Debug, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnDecimalIsTrue;
-
-impl RpnFnDecimalIsTrue {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg: &Option<Decimal>,
-    ) -> Result<Option<i64>> {
-        Ok(Some(arg.as_ref().map_or(0, |v| !v.is_zero() as i64)))
-    }
+#[rpn_fn]
+#[inline]
+pub fn int_is_false(arg: &Option<Int>) -> Result<Option<i64>> {
+    Ok(Some(arg.map_or(0, |v| (v == 0) as i64)))
 }
 
-#[derive(Clone, Copy, Debug, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnIntIsFalse;
-
-impl RpnFnIntIsFalse {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg: &Option<Int>,
-    ) -> Result<Option<i64>> {
-        Ok(Some(arg.map_or(0, |v| (v == 0) as i64)))
-    }
+#[rpn_fn]
+#[inline]
+pub fn real_is_false(arg: &Option<Real>) -> Result<Option<i64>> {
+    Ok(Some(arg.map_or(0, |v| (v.into_inner() == 0f64) as i64)))
 }
 
-#[derive(Clone, Copy, Debug, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnRealIsFalse;
-
-impl RpnFnRealIsFalse {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg: &Option<Real>,
-    ) -> Result<Option<i64>> {
-        Ok(Some(arg.map_or(0, |v| (v.into_inner() == 0f64) as i64)))
-    }
-}
-
-#[derive(Clone, Copy, Debug, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnDecimalIsFalse;
-
-impl RpnFnDecimalIsFalse {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg: &Option<Decimal>,
-    ) -> Result<Option<i64>> {
-        Ok(Some(arg.as_ref().map_or(0, |v| v.is_zero() as i64)))
-    }
+#[rpn_fn]
+#[inline]
+fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
+    Ok(Some(arg.as_ref().map_or(0, |v| v.is_zero() as i64)))
 }
 
 #[cfg(test)]

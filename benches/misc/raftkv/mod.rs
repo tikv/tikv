@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::test;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb::Region;
@@ -84,7 +84,7 @@ impl RaftStoreRouter for SyncBenchRouter {
 }
 
 fn new_engine() -> (TempDir, Arc<DB>) {
-    let dir = TempDir::new("bench_rafkv").unwrap();
+    let dir = Builder::new().prefix("bench_rafkv").tempdir().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = rocks::util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))

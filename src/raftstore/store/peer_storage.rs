@@ -1647,7 +1647,7 @@ mod tests {
     use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
-    use tempdir::*;
+    use tempfile::{Builder, TempDir};
     use tikv_util::worker::{Scheduler, Worker};
 
     use super::*;
@@ -1764,7 +1764,7 @@ mod tests {
             (5, Ok(5)),
         ];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
-            let td = TempDir::new("tikv-store-test").unwrap();
+            let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
@@ -1818,7 +1818,7 @@ mod tests {
 
     #[test]
     fn test_storage_clear_meta() {
-        let td = TempDir::new("tikv-store").unwrap();
+        let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
@@ -1896,7 +1896,7 @@ mod tests {
         ];
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
-            let td = TempDir::new("tikv-store-test").unwrap();
+            let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
@@ -1920,7 +1920,7 @@ mod tests {
             (5, Ok(())),
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
-            let td = TempDir::new("tikv-store-test").unwrap();
+            let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
@@ -1948,8 +1948,8 @@ mod tests {
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
-        let td = TempDir::new("tikv-store-test").unwrap();
-        let snap_dir = TempDir::new("snap_dir").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
@@ -2112,7 +2112,7 @@ mod tests {
             ),
         ];
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
-            let td = TempDir::new("tikv-store-test").unwrap();
+            let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
             let sched = worker.scheduler();
             let mut store = new_storage_from_ents(sched, &td, &ents);
@@ -2128,7 +2128,7 @@ mod tests {
     #[test]
     fn test_storage_cache_fetch() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let td = TempDir::new("tikv-store-test").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
@@ -2171,7 +2171,7 @@ mod tests {
     #[test]
     fn test_storage_cache_update() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let td = TempDir::new("tikv-store-test").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
@@ -2265,8 +2265,8 @@ mod tests {
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
-        let td1 = TempDir::new("tikv-store-test").unwrap();
-        let snap_dir = TempDir::new("snap").unwrap();
+        let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
@@ -2292,7 +2292,7 @@ mod tests {
         assert_eq!(s1.truncated_term(), 3);
         worker.stop().unwrap().join().unwrap();
 
-        let td2 = TempDir::new("tikv-store-test").unwrap();
+        let td2 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let mut s2 = new_storage(sched.clone(), &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
@@ -2309,7 +2309,7 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         validate_cache(&s2, &[]);
 
-        let td3 = TempDir::new("tikv-store-test").unwrap();
+        let td3 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let ents = &[new_entry(3, 3), new_entry(4, 3)];
         let mut s3 = new_storage_from_ents(sched, &td3, ents);
         validate_cache(&s3, &ents[1..]);
@@ -2329,7 +2329,7 @@ mod tests {
 
     #[test]
     fn test_canceling_snapshot() {
-        let td = TempDir::new("tikv-store-test").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage(sched, &td);
@@ -2375,7 +2375,7 @@ mod tests {
 
     #[test]
     fn test_try_finish_snapshot() {
-        let td = TempDir::new("tikv-store-test").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage(sched, &td);

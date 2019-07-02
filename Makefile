@@ -21,6 +21,7 @@ ENABLE_FEATURES += portable
 endif
 
 # Enable sse4.2 by default unless disable explicitly
+# Note this env var is also tested by scripts/check-sse4_2.sh
 ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
