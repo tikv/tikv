@@ -6,8 +6,7 @@ use cop_datatype::builder::FieldTypeBuilder;
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, FieldType};
 
-use crate::coprocessor::dag::rpn_expr::impl_cast::get_cast_fn;
-use crate::coprocessor::dag::rpn_expr::types::RpnExpressionNode;
+use crate::coprocessor::dag::rpn_expr::impl_cast::get_cast_fn_rpn_node;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
@@ -50,12 +49,8 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
             .decimal(cop_datatype::UNSPECIFIED_LENGTH)
             .build(),
     };
-    let (func_meta, implicit_args) = get_cast_fn(ret_field_type, &new_ret_field_type)?;
-    exp.push(RpnExpressionNode::FnCall {
-        func_meta,
-        field_type: new_ret_field_type,
-        implicit_args,
-    });
+    let node = get_cast_fn_rpn_node(ret_field_type, new_ret_field_type)?;
+    exp.push(node);
     Ok(())
 }
 
@@ -72,11 +67,7 @@ pub fn rewrite_exp_for_bit_op(schema: &[FieldType], exp: &mut RpnExpression) -> 
             .flag(FieldTypeFlag::UNSIGNED)
             .build(),
     };
-    let (func_meta, implicit_args) = get_cast_fn(ret_field_type, &new_ret_field_type)?;
-    exp.push(RpnExpressionNode::FnCall {
-        func_meta,
-        field_type: new_ret_field_type,
-        implicit_args,
-    });
+    let node = get_cast_fn_rpn_node(ret_field_type, new_ret_field_type)?;
+    exp.push(node);
     Ok(())
 }
