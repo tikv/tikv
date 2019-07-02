@@ -1,13 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
 use futures::future::{err, ok};
 use futures::sync::oneshot::{Receiver, Sender};
 #[cfg(not(feature = "no-fail"))]
 use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
-use hyper::{self, Body, Method, Request, Response, Server, StatusCode, header};
+use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio_threadpool::{Builder, ThreadPool};
 
@@ -15,11 +15,11 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
+use crate::config::TiKvConfig;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use crate::config::TiKvConfig;
 
 mod profiler_guard {
     use tikv_alloc::error::ProfResult;
@@ -100,7 +100,7 @@ impl StatusServer {
         }
     }
 
-    pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item=Vec<u8>, Error=ProfError> + Send> {
+    pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
         let lock = match profiler_guard::ProfLock::new() {
             Err(e) => return Box::new(err(e)),
             Ok(lock) => lock,
@@ -112,7 +112,7 @@ impl StatusServer {
             timer
                 .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
                 .then(
-                    move |_| -> Box<dyn Future<Item=Vec<u8>, Error=ProfError> + Send> {
+                    move |_| -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
                         let tmp_dir = match TempDir::new() {
                             Ok(tmp_dir) => tmp_dir,
                             Err(e) => return Box::new(err(e.into())),
@@ -146,7 +146,7 @@ impl StatusServer {
 
     pub fn dump_prof_to_resp(
         req: Request<Body>,
-    ) -> Box<dyn Future<Item=Response<Body>, Error=hyper::Error> + Send> {
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
@@ -194,20 +194,18 @@ impl StatusServer {
         )
     }
 
-    fn config_handler(config: Arc<TiKvConfig>) -> Box<dyn Future<Item=Response<Body>, Error=hyper::Error> + Send> {
+    fn config_handler(
+        config: Arc<TiKvConfig>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let res = match serde_json::to_string(config.as_ref()) {
-            Ok(json) => {
-                Response::builder()
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(json))
-                    .unwrap()
-            }
-            Err(_) => {
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from("Internal Server Error"))
-                    .unwrap()
-            }
+            Ok(json) => Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json))
+                .unwrap(),
+            Err(_) => Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("Internal Server Error"))
+                .unwrap(),
         };
         Box::new(ok(res))
     }
@@ -220,35 +218,37 @@ impl StatusServer {
         let config = self.config.clone();
 
         // Start to serve.
-        let server = builder.serve(move || {
-            let config = config.clone();
-            // Create a status service.
-            service_fn(
-                move |req: Request<Body>| -> Box<dyn Future<Item=Response<Body>, Error=hyper::Error> + Send> {
-                    let path = req.uri().path().to_owned();
-                    let method = req.method().to_owned();
+        let server =
+            builder.serve(move || {
+                let config = config.clone();
+                // Create a status service.
+                service_fn(
+                    move |req: Request<Body>| -> Box<
+                        dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
+                    > {
+                        let path = req.uri().path().to_owned();
+                        let method = req.method().to_owned();
 
-                    #[cfg(not(feature = "no-fail"))]
+                        #[cfg(not(feature = "no-fail"))]
                         {
                             if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
                                 return handle_fail_points_request(req);
                             }
                         }
 
-                    match (method, path.as_ref()) {
-                        (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
-                        (Method::GET, "/status") => Box::new(ok(Response::default())),
-                        (Method::GET, "/pprof/profile") => Self::dump_prof_to_resp(req),
-                        (Method::GET, "/config") => Self::config_handler(config.clone()),
-                        _ => {
-                            Box::new(ok(Response::builder()
+                        match (method, path.as_ref()) {
+                            (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
+                            (Method::GET, "/status") => Box::new(ok(Response::default())),
+                            (Method::GET, "/pprof/profile") => Self::dump_prof_to_resp(req),
+                            (Method::GET, "/config") => Self::config_handler(config.clone()),
+                            _ => Box::new(ok(Response::builder()
                                 .status(StatusCode::NOT_FOUND)
                                 .body(Body::empty())
-                                .unwrap()))
+                                .unwrap())),
                         }
-                    }
-                })
-        });
+                    },
+                )
+            });
         self.addr = Some(server.local_addr());
         let graceful = server
             .with_graceful_shutdown(self.rx.take().unwrap())
@@ -277,7 +277,7 @@ impl StatusServer {
 #[cfg(not(feature = "no-fail"))]
 fn handle_fail_points_request(
     req: Request<Body>,
-) -> Box<dyn Future<Item=Response<Body>, Error=hyper::Error> + Send> {
+) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
     let path = req.uri().path().to_owned();
     let method = req.method().to_owned();
     let fail_path = format!("{}/", FAIL_POINTS_REQUEST_PATH);
@@ -353,12 +353,12 @@ fn handle_fail_points_request(
 mod tests {
     use std::sync::{Mutex, MutexGuard};
 
+    use crate::config::TiKvConfig;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
     #[cfg(not(feature = "no-fail"))]
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
-    use crate::config::TiKvConfig;
 
     lazy_static! {
         static ref LOCK: Mutex<()> = Mutex::new(());
@@ -424,11 +424,10 @@ mod tests {
                     serde_json::to_string(&cfg)
                         .map(|cfg_json| {
                             assert_eq!(resp_json, cfg_json);
-                        }).expect("Could not convert TiKvConfig to string");
+                        })
+                        .expect("Could not convert TiKvConfig to string");
                 })
-                .map_err(|err| {
-                    panic!("response status is not OK: {:?}", err)
-                })
+                .map_err(|err| panic!("response status is not OK: {:?}", err))
         }));
         handle.wait().unwrap();
         status_server.stop();
