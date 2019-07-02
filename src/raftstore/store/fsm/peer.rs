@@ -1328,27 +1328,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // If it's not a request snapshot, then go on.
             return true;
         }
-        let mut reject_reason = "";
-        if !self.fsm.peer.is_leader() {
-            // Only leader can handle request snapshot.
-            reject_reason = "not_leader";
-        } else if self.fsm.peer.is_merging() || self.fsm.peer.is_splitting() {
-            // Can not handle request snapshot in merging and splitting.
-            reject_reason = "split_merge";
-        } else if self.fsm.peer.get_store().committed_index() < request_index {
-            // Can not handle request snapshot if request index is larger than
-            // committed index
-            reject_reason = "stale_commit";
-        }
-        if reject_reason.is_empty() {
-            true
-        } else {
-            info!("can not handle request snapshot";
-                "reason" => reject_reason,
-                "region_id" => self.fsm.peer.region().get_id(),
-                "peer_id" => self.fsm.peer.peer_id());
-            false
-        }
+        self.fsm
+            .peer
+            .ready_to_handle_request_snapshot(request_index)
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {

@@ -332,6 +332,8 @@ pub struct Peer {
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
+    /// The index of the latest proposed prepare merge command.
+    last_proposed_prepare_merge_idx: u64,
     /// The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
@@ -401,6 +403,7 @@ impl Peer {
             pending_remove: false,
             pending_merge_state: None,
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
+            last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag,
@@ -1007,14 +1010,45 @@ impl Peer {
     }
 
     #[inline]
-    pub fn is_splitting(&self) -> bool {
+    fn is_splitting(&self) -> bool {
         self.last_committed_split_idx > self.get_store().applied_index()
     }
 
     #[inline]
-    pub fn is_merging(&self) -> bool {
+    fn is_merging(&self) -> bool {
         self.last_committed_prepare_merge_idx > self.get_store().applied_index()
             || self.pending_merge_state.is_some()
+    }
+
+    fn is_merging_strict(&self) -> bool {
+        self.last_proposed_prepare_merge_idx > self.get_store().committed_index()
+            || self.is_merging()
+    }
+
+    // Check if this peer can handle request_snapshot.
+    pub fn ready_to_handle_request_snapshot(&mut self, request_index: u64) -> bool {
+        let reject_reason = if !self.is_leader() {
+            // Only leader can handle request snapshot.
+            "not_leader"
+        } else if self.get_store().applied_index_term() != self.term() {
+            // Reject if there are any unapplied raft log.
+            // We don't want to handle request snapshot if there are on-going
+            // merge, because peer may be destory soon. This check prevents
+            // handling request snapshot while merging.
+            "stale_apply"
+        } else if self.is_merging_strict() || self.is_splitting() {
+            // Reject if it is merging or splitting.
+            "split_merge"
+        } else {
+            return true;
+        };
+
+        info!("can not handle request snapshot";
+            "reason" => reject_reason,
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.peer_id(),
+            "request_index" => request_index);
+        false
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -1902,7 +1936,9 @@ impl Peer {
         let mut min = None;
         if let Some(progress) = self.raft_group.status_ref().progress {
             for (id, pr) in progress.iter() {
-                if pr.state == ProgressState::Snapshot {
+                if pr.state == ProgressState::Snapshot
+                    || pr.pending_request_snapshot != INVALID_INDEX
+                {
                     return Err(box_err!(
                         "there is a pending snapshot peer {} [{:?}], skip merge",
                         id,
@@ -2050,6 +2086,10 @@ impl Peer {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
+        }
+
+        if ctx.contains(ProposalContext::PREPARE_MERGE) {
+            self.last_proposed_prepare_merge_idx = propose_index;
         }
 
         Ok(propose_index)
