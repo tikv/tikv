@@ -1,15 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::convert::AsRef;
 use std::convert::TryFrom;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
+use chrono::Datelike;
+use chrono::Timelike;
 use cop_datatype::{self, FieldTypeTp};
 
 use super::mysql::{Res, RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
 use crate::coprocessor::codec::data_type::{DateTime, Decimal, Duration, Json};
 use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
+use crate::coprocessor::codec::mysql::duration::MICRO_WIDTH;
+use crate::coprocessor::codec::mysql::TimeType;
+use crate::coprocessor::codec::TEN_POW;
 use crate::coprocessor::dag::expr::EvalContext;
 
 /// Returns the max u64 values of different mysql types
@@ -373,6 +379,54 @@ pub fn convert_decimal_to_uint(
 pub fn convert_json_to_uint(ctx: &mut EvalContext, json: &Json, tp: FieldTypeTp) -> Result<u64> {
     let val = json.cast_to_uint(ctx)?;
     convert_uint_to_uint(ctx, val, tp)
+}
+
+/// Converts a `DateTime` to printable string representation
+#[inline]
+pub fn convert_datetime_to_numeric_string(dt: &DateTime) -> String {
+    let time = dt.as_ref();
+    if dt.get_time_type() == TimeType::Date {
+        if dt.is_zero() {
+            String::from("00000000")
+        } else {
+            format!("{:04}{:02}{:02}", time.year(), time.month(), time.day())
+        }
+    } else {
+        let s = if dt.is_zero() {
+            String::from("00000000000000")
+        } else {
+            format!("{}", time.format("%Y%m%d%H%M%S"))
+        };
+        let fsp = dt.get_fsp();
+        if fsp > 0 {
+            // Do we need to round the result?
+            let nanos = time.nanosecond() / TEN_POW[9 - fsp as usize];
+            format!("{}.{1:02$}", s, nanos, fsp as usize)
+        } else {
+            s
+        }
+    }
+}
+
+/// Converts a `Duration` to printable numberic string representation
+#[inline]
+pub fn convert_duration_to_numeric_string(dur: Duration) -> String {
+    let mut buf = String::with_capacity(13);
+    if dur.neg() {
+        buf.push_str("-");
+    }
+    buf.push_str(&format!(
+        "{:02}{:02}{:02}",
+        dur.hours(),
+        dur.minutes(),
+        dur.secs(),
+    ));
+    let fsp = dur.fsp();
+    if fsp > 0 {
+        let nanos = dur.subsec_micros() / (10u32.pow(MICRO_WIDTH as u32 - u32::from(fsp)));
+        buf.push_str(&format!(".{:01$}", nanos, fsp as usize));
+    }
+    buf
 }
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
@@ -1310,6 +1364,43 @@ mod tests {
         let val = convert_bytes_to_uint(&mut ctx, bs, FieldTypeTp::LongLong);
         assert_eq!(val.unwrap(), 123);
         assert_eq!(ctx.warnings.warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_convert_datetime_to_numeric_string() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "00000000000000"),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let get = convert_datetime_to_numeric_string(&t);
+            assert_eq!(get, expect);
+        }
+    }
+
+    #[test]
+    fn test_convert_duration_to_numeric_string() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "113045"),
+            ("2012-12-31 11:30:45.999999", 0, "113046"),
+            ("2017-01-05 08:40:59.575601", 0, "084100"),
+            ("2017-01-05 23:59:59.575601", 0, "000000"),
+            ("0000-00-00 00:00:00", 6, "000000"),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let du = t.to_duration().unwrap();
+            let get = convert_duration_to_numeric_string(du);
+            assert_eq!(get, expect);
+        }
     }
 
     #[test]

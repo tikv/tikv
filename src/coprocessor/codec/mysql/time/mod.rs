@@ -5,28 +5,27 @@ mod tz;
 pub mod weekmode;
 
 use std::cmp::{min, Ordering};
-use std::convert::{TryFrom, TryInto};
+use std::convert::{AsRef, TryFrom, TryInto};
 use std::fmt::Write;
 use std::fmt::{self, Display, Formatter};
 use std::{mem, str};
 
 use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
-
 use cop_datatype::FieldTypeTp;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
 
+use crate::coprocessor::codec::convert::convert_datetime_to_numeric_string;
 use crate::coprocessor::codec::mysql::duration::{
     Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
 };
 use crate::coprocessor::codec::mysql::{self, Decimal};
 use crate::coprocessor::codec::{Error, Result, TEN_POW};
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::BytesSlice;
 
 pub use self::extension::*;
-pub use self::weekmode::WeekMode;
-
 pub use self::tz::Tz;
+pub use self::weekmode::WeekMode;
 
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
@@ -265,35 +264,22 @@ impl Time {
         self.time = time
     }
 
-    fn to_numeric_str(&self) -> String {
-        if self.time_type == TimeType::Date {
-            // TODO: pure calculation should be enough.
-            format!("{}", self.time.format("%Y%m%d"))
-        } else {
-            let s = self.time.format("%Y%m%d%H%M%S");
-            if self.fsp > 0 {
-                // Do we need to round the result?
-                let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
-                format!("{}.{1:02$}", s, nanos, self.fsp as usize)
-            } else {
-                format!("{}", s)
-            }
-        }
-    }
-
+    /// Returns the `Decimal` representation of the `DateTime/Date`
+    /// TODO: remove this method after implementing `convert_datetime_to_decimal`
     pub fn to_decimal(&self) -> Result<Decimal> {
         if self.is_zero() {
             return Ok(0.into());
         }
-        let dec: Decimal = box_try!(self.to_numeric_str().parse());
-        Ok(dec)
+
+        convert_datetime_to_numeric_string(&self).parse()
     }
 
+    /// TODO: remove this method after implementing `convert_datetime_to_f64`
     pub fn to_f64(&self) -> Result<f64> {
         if self.is_zero() {
             return Ok(0f64);
         }
-        let f: f64 = box_try!(self.to_numeric_str().parse());
+        let f: f64 = box_try!(convert_datetime_to_numeric_string(&self).parse());
         Ok(f)
     }
 
@@ -794,6 +780,12 @@ impl Time {
         } else {
             None
         }
+    }
+}
+
+impl AsRef<DateTime<Tz>> for Time {
+    fn as_ref(&self) -> &DateTime<Tz> {
+        &self.time
     }
 }
 

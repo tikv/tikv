@@ -4,13 +4,14 @@ use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
-use std::{i64, str, u64};
+use std::{i64, u64};
+
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use super::super::{Result, TEN_POW};
-use super::MAX_FSP;
 use super::{check_fsp, Decimal};
+use crate::coprocessor::codec::mysql::MAX_FSP;
+use crate::coprocessor::codec::{Result, TEN_POW};
 
 use bitfield::bitfield;
 
@@ -320,6 +321,11 @@ impl Duration {
     #[inline]
     pub fn to_bits(self) -> u64 {
         self.0
+    }
+
+    #[inline]
+    pub fn neg(self) -> bool {
+        self.get_neg()
     }
 
     #[inline]
@@ -872,7 +878,9 @@ mod tests {
                     expect,
                     &format!(
                         "{}",
-                        got.unwrap_or_else(|_| panic!(str::from_utf8(input).unwrap().to_string()))
+                        got.unwrap_or_else(|_| panic!(std::str::from_utf8(input)
+                            .unwrap()
+                            .to_string()))
                     )
                 );
             } else {
@@ -880,7 +888,7 @@ mod tests {
                     got.is_err(),
                     format!(
                         "{} should not be passed, got {:?}",
-                        str::from_utf8(input).unwrap(),
+                        std::str::from_utf8(input).unwrap(),
                         got
                     )
                 );
