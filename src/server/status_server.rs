@@ -218,11 +218,10 @@ impl StatusServer {
         let config = self.config.clone();
 
         // Start to serve.
-        let server =
-            builder.serve(move || {
-                let config = config.clone();
-                // Create a status service.
-                service_fn(
+        let server = builder.serve(move || {
+            let config = config.clone();
+            // Create a status service.
+            service_fn(
                     move |req: Request<Body>| -> Box<
                         dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
                     > {
@@ -248,7 +247,7 @@ impl StatusServer {
                         }
                     },
                 )
-            });
+        });
         self.addr = Some(server.local_addr());
         let graceful = server
             .with_graceful_shutdown(self.rx.take().unwrap())
