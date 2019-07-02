@@ -1149,7 +1149,8 @@ impl PeerStorage {
             }
         }
 
-        if ctx.raft_state != self.raft_state {
+        // Save raft state if it has changed or peer has applied a snapshot.
+        if ctx.raft_state != self.raft_state || snapshot_index != 0 {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
             if snapshot_index > 0 {
                 // in case of restart happen when we just write region state to Applying,
@@ -1165,7 +1166,7 @@ impl PeerStorage {
         }
 
         // only when apply snapshot
-        if ctx.apply_state != self.apply_state {
+        if snapshot_index != 0 {
             ctx.save_apply_state_to(&self.engines.kv, &mut ready_ctx.kv_wb_mut())?;
         }
 

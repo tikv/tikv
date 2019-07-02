@@ -3,19 +3,16 @@
 use std::fs;
 use std::io;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::*;
 
 use fail;
-use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
-use tikv::raftstore::store::fsm::PeerFsm;
 use tikv::raftstore::store::*;
-use tikv::raftstore::Result;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -229,10 +226,7 @@ fn test_node_request_snapshot_on_split() {
     let _guard = crate::setup();
 
     let mut cluster = new_node_cluster(0, 3);
-    // We don't want to generate snapshots due to compact log.
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    configure_for_request_snapshot(&mut cluster);
     cluster.run();
 
     let region = cluster.get_region(b"");
@@ -259,26 +253,14 @@ fn test_node_request_snapshot_on_split() {
         .unwrap_err();
 
     // Request snapshot.
-    let (request_tx, request_rx) = mpsc::channel();
-    let router = cluster.sim.rl().get_router(2).unwrap();
-    router
-        .send(
-            region.get_id(),
-            PeerMsg::CasualMessage(CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
-                let idx = peer.peer.raft_group.get_store().committed_index();
-                peer.peer.raft_group.request_snapshot(idx).unwrap();
-                request_tx.send(idx).unwrap();
-            }))),
-        )
-        .unwrap();
-    let committed_index = request_rx.recv().unwrap();
+    let committed_index = cluster.must_request_snapshot(2, region.get_id());
 
     // Install snapshot filter after requesting snapshot.
     let (tx, rx) = mpsc::channel();
     let notifier = Mutex::new(Some(tx));
     cluster.sim.wl().add_recv_filter(
         2,
-        Box::new(SnapshotFilter {
+        Box::new(RecvSnapshotFilter {
             notifier,
             region_id: region.get_id(),
         }),
@@ -299,24 +281,4 @@ fn test_node_request_snapshot_on_split() {
         m,
         committed_index
     );
-}
-
-/// Pause Snap and wait till first append message arrives.
-pub struct SnapshotFilter {
-    notifier: Mutex<Option<Sender<RaftMessage>>>,
-    region_id: u64,
-}
-
-impl Filter for SnapshotFilter {
-    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        for msg in msgs {
-            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot
-                && msg.get_region_id() == self.region_id
-            {
-                let tx = self.notifier.lock().unwrap().take().unwrap();
-                tx.send(msg.clone()).unwrap();
-            }
-        }
-        Ok(())
-    }
 }
