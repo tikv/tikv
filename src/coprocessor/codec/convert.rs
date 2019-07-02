@@ -852,7 +852,7 @@ mod tests {
         assert_eq!(ctx.warnings.warning_cnt, 0);
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IGNORE_TRUNCATE)));
-        let invalid_utf8 = vec!['1' as u8, '2' as u8, '3' as u8, 0, 159, 146, 150];
+        let invalid_utf8 = vec![b'1', b'2', b'3', 0, 159, 146, 150];
         let val = convert_bytes_to_int(&mut ctx, &invalid_utf8, FieldTypeTp::LongLong);
         assert_eq!(val.unwrap(), 123i64);
         assert_eq!(ctx.warnings.warning_cnt, 0);
