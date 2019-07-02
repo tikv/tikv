@@ -1032,12 +1032,15 @@ impl Peer {
             "not_leader"
         } else if self.get_store().applied_index_term() != self.term() {
             // Reject if there are any unapplied raft log.
-            // We don't want to handle request snapshot if there are on-going
-            // merge, because peer may be destory soon. This check prevents
-            // handling request snapshot while merging.
+            // We don't want to handle request snapshot if there is any ongoing
+            // merge, because it is going to be destroyed. This check prevents
+            // handling request snapshot after leadership being transferred.
             "stale_apply"
         } else if self.is_merging_strict() || self.is_splitting() {
             // Reject if it is merging or splitting.
+            // `is_merging_strict` also checks last proposed prepare merge, it
+            // prevents handling request snapshot while a prepare merge going
+            // to be committed.
             "split_merge"
         } else {
             return true;
