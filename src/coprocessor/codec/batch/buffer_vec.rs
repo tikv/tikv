@@ -208,7 +208,7 @@ impl BufferVec {
                     break;
                 }
             }
-            return (true, left, right);
+            (true, left, right)
         }
 
         let len = self.len();
