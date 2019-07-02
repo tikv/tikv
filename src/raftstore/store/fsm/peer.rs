@@ -1323,27 +1323,32 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     // Check if this peer can handle request_snapshot.
     fn check_request_snapshot(&mut self, msg: &RaftMessage) -> bool {
         let m = msg.get_message();
-        if m.get_request_snapshot() == raft::INVALID_INDEX {
+        let request_index = m.get_request_snapshot();
+        if request_index == raft::INVALID_INDEX {
             // If it's not a request snapshot, then go on.
             return true;
         }
+        let mut reject_reason = "";
         if !self.fsm.peer.is_leader() {
             // Only leader can handle request snapshot.
+            reject_reason = "not_leader";
+        } else if self.fsm.peer.is_merging() || self.fsm.peer.is_splitting() {
+            // Can not handle request snapshot in merging and splitting.
+            reject_reason = "split_merge";
+        } else if self.fsm.peer.get_store().committed_index() < request_index {
+            // Can not handle request snapshot if request index is larger than
+            // committed index
+            reject_reason = "stale_commit";
+        }
+        if reject_reason.is_empty() {
+            true
+        } else {
             info!("can not handle request snapshot";
-                "reason" => "not_leader",
+                "reason" => reject_reason,
                 "region_id" => self.fsm.peer.region().get_id(),
                 "peer_id" => self.fsm.peer.peer_id());
-            return false;
+            false
         }
-        // Can not handle request snapshot in merging and splitting.
-        if self.fsm.peer.is_merging() || self.fsm.peer.is_splitting() {
-            info!("can not handle request snapshot";
-                "reason" => "split_merge",
-                "region_id" => self.fsm.peer.region().get_id(),
-                "peer_id" => self.fsm.peer.peer_id());
-            return false;
-        }
-        true
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {

@@ -790,6 +790,7 @@ impl PeerStorage {
             "requesting snapshot";
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
+            "request_index" => request_index,
         );
         *tried_cnt += 1;
         let (tx, rx) = mpsc::sync_channel(1);
