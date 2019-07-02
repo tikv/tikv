@@ -115,6 +115,7 @@ impl TitanCfConfig {
         opts.set_discardable_ratio(self.discardable_ratio);
         opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
+        opts.set_blob_run_mode(self.blob_run_mode.into());
         opts
     }
 }
@@ -404,8 +405,9 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4);
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -478,8 +480,9 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4);
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -534,8 +537,9 @@ cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4);
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -1507,7 +1511,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use super::*;
     use slog::Level;
@@ -1546,7 +1550,7 @@ mod tests {
 
     #[test]
     fn test_persist_cfg() {
-        let dir = TempDir::new("test_persist_cfg").unwrap();
+        let dir = Builder::new().prefix("test_persist_cfg").tempdir().unwrap();
         let path_buf = dir.path().join(LAST_CONFIG_FILE);
         let file = path_buf.as_path().to_str().unwrap();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
@@ -1571,7 +1575,10 @@ mod tests {
 
     #[test]
     fn test_create_parent_dir_if_missing() {
-        let root_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
+        let root_path = Builder::new()
+            .prefix("test_create_parent_dir_if_missing")
+            .tempdir()
+            .unwrap();
         let path = root_path.path().join("not_exist_dir");
 
         let mut tikv_cfg = TiKvConfig::default();

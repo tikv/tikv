@@ -2,7 +2,6 @@
 
 use super::{DeadlockFuture, Error, Result};
 use crate::tikv_util::security::SecurityManager;
-use futures::future;
 use futures::unsync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
 use grpcio::{ChannelBuilder, EnvBuilder, WriteFlags};
@@ -43,16 +42,6 @@ impl Client {
         }
     }
 
-    pub fn get_wait_for_entries(&self) -> DeadlockFuture<WaitForEntriesResponse> {
-        match self
-            .client
-            .get_wait_for_entries_async(&WaitForEntriesRequest::new())
-        {
-            Ok(f) => Box::new(f.map_err(Error::Grpc)),
-            Err(e) => Box::new(future::err(Error::Grpc(e))),
-        }
-    }
-
     pub fn register_detect_handler(
         &mut self,
         cb: Callback,
@@ -87,6 +76,6 @@ impl Client {
             .as_ref()
             .unwrap()
             .unbounded_send(req)
-            .map_err(|e| Error::Other(Box::new(e)))
+            .map_err(|e| Error::Other(box_err!(e)))
     }
 }

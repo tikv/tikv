@@ -81,9 +81,10 @@ impl PendingCmd {
 impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
-            panic!(
+            safe_panic!(
                 "callback of pending command at [index: {}, term: {}] is leak",
-                self.index, self.term
+                self.index,
+                self.term
             );
         }
     }
@@ -2965,7 +2966,7 @@ mod tests {
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
 
     use crate::import::test_helpers::*;
     use crate::raftstore::store::{Config, RegionTask};
@@ -2974,7 +2975,7 @@ mod tests {
     use super::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
-        let path = TempDir::new(path).unwrap();
+        let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = Arc::new(
             rocks::util::new_engine(
                 path.path().join("db").to_str().unwrap(),
@@ -2993,7 +2994,7 @@ mod tests {
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
-        let dir = TempDir::new(path).unwrap();
+        let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(SSTImporter::new(dir.path()).unwrap());
         (dir, importer)
     }
@@ -3937,5 +3938,23 @@ mod tests {
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
+    }
+
+    #[test]
+    fn pending_cmd_leak() {
+        let res = panic_hook::recover_safe(|| {
+            let _cmd = PendingCmd::new(1, 1, Callback::None);
+        });
+        res.unwrap_err();
+    }
+
+    #[test]
+    fn pending_cmd_leak_dtor_not_abort() {
+        let res = panic_hook::recover_safe(|| {
+            let _cmd = PendingCmd::new(1, 1, Callback::None);
+            panic!("Don't abort");
+            // It would abort and fail if there was a double-panic in PendingCmd dtor.
+        });
+        res.unwrap_err();
     }
 }

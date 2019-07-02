@@ -1368,7 +1368,7 @@ pub mod tests {
     };
     use protobuf::Message;
     use std::path::PathBuf;
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
 
     use super::{
         ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
@@ -1571,7 +1571,10 @@ pub mod tests {
 
     #[test]
     fn test_display_path() {
-        let dir = TempDir::new("test-display-path").unwrap();
+        let dir = Builder::new()
+            .prefix("test-display-path")
+            .tempdir()
+            .unwrap();
         let key = SnapKey::new(1, 1, 1);
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         let display_path = Snap::get_display_path(dir.path(), &prefix);
@@ -1593,11 +1596,17 @@ pub mod tests {
     fn test_snap_file(get_db: DBBuilder, db_opt: Option<DBOptions>) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
-        let src_db_dir = TempDir::new("test-snap-file-db-src").unwrap();
+        let src_db_dir = Builder::new()
+            .prefix("test-snap-file-db-src")
+            .tempdir()
+            .unwrap();
         let db = get_db(&src_db_dir.path(), db_opt.clone(), None).unwrap();
         let snapshot = DbSnapshot::new(Arc::clone(&db));
 
-        let src_dir = TempDir::new("test-snap-file-src").unwrap();
+        let src_dir = Builder::new()
+            .prefix("test-snap-file-db-src")
+            .tempdir()
+            .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
@@ -1647,7 +1656,10 @@ pub mod tests {
         // TODO check meta data correct.
         let _ = s2.meta().unwrap();
 
-        let dst_dir = TempDir::new("test-snap-file-dst").unwrap();
+        let dst_dir = Builder::new()
+            .prefix("test-snap-file-dst")
+            .tempdir()
+            .unwrap();
 
         let mut s3 = Snap::new_for_receiving(
             dst_dir.path(),
@@ -1681,7 +1693,10 @@ pub mod tests {
             Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).unwrap();
         assert!(s4.exists());
 
-        let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
+        let dst_db_dir = Builder::new()
+            .prefix("test-snap-file-dst")
+            .tempdir()
+            .unwrap();
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
@@ -1719,11 +1734,17 @@ pub mod tests {
     fn test_snap_validation(get_db: DBBuilder) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
-        let db_dir = TempDir::new("test-snap-validation-db").unwrap();
+        let db_dir = Builder::new()
+            .prefix("test-snap-validation-db")
+            .tempdir()
+            .unwrap();
         let db = get_db(&db_dir.path(), None, None).unwrap();
         let snapshot = DbSnapshot::new(Arc::clone(&db));
 
-        let dir = TempDir::new("test-snap-validation").unwrap();
+        let dir = Builder::new()
+            .prefix("test-snap-validation")
+            .tempdir()
+            .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
@@ -1902,11 +1923,17 @@ pub mod tests {
     fn test_snap_corruption_on_size_or_checksum() {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
-        let db_dir = TempDir::new("test-snap-corruption-db").unwrap();
+        let db_dir = Builder::new()
+            .prefix("test-snap-corruption-db")
+            .tempdir()
+            .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
         let snapshot = DbSnapshot::new(db);
 
-        let dir = TempDir::new("test-snap-corruption").unwrap();
+        let dir = Builder::new()
+            .prefix("test-snap-corruption")
+            .tempdir()
+            .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
@@ -1959,7 +1986,10 @@ pub mod tests {
         .unwrap();
         assert!(s2.exists());
 
-        let dst_dir = TempDir::new("test-snap-corruption-dst").unwrap();
+        let dst_dir = Builder::new()
+            .prefix("test-snap-corruption-dst")
+            .tempdir()
+            .unwrap();
         copy_snapshot(
             &dir,
             &dst_dir,
@@ -1982,7 +2012,10 @@ pub mod tests {
         .unwrap();
         assert!(s5.exists());
 
-        let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
+        let dst_db_dir = Builder::new()
+            .prefix("test-snap-corruption-dst-db")
+            .tempdir()
+            .unwrap();
         let dst_db = open_test_empty_db(&dst_db_dir.path(), None, None).unwrap();
         let options = ApplyOptions {
             db: Arc::clone(&dst_db),
@@ -2015,11 +2048,17 @@ pub mod tests {
     fn test_snap_corruption_on_meta_file() {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
-        let db_dir = TempDir::new("test-snapshot-corruption-meta-db").unwrap();
+        let db_dir = Builder::new()
+            .prefix("test-snapshot-corruption-meta-db")
+            .tempdir()
+            .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
         let snapshot = DbSnapshot::new(db);
 
-        let dir = TempDir::new("test-snap-corruption-meta").unwrap();
+        let dir = Builder::new()
+            .prefix("test-snap-corruption-meta")
+            .tempdir()
+            .unwrap();
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
@@ -2072,7 +2111,10 @@ pub mod tests {
         .unwrap();
         assert!(s2.exists());
 
-        let dst_dir = TempDir::new("test-snap-corruption-meta-dst").unwrap();
+        let dst_dir = Builder::new()
+            .prefix("test-snap-corruption-meta-dst")
+            .tempdir()
+            .unwrap();
         copy_snapshot(
             &dir,
             &dst_dir,
@@ -2105,7 +2147,10 @@ pub mod tests {
     #[test]
     fn test_snap_mgr_create_dir() {
         // Ensure `mgr` creates the specified directory when it does not exist.
-        let temp_dir = TempDir::new("test-snap-mgr-create-dir").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("test-snap-mgr-create-dir")
+            .tempdir()
+            .unwrap();
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
@@ -2123,13 +2168,16 @@ pub mod tests {
 
     #[test]
     fn test_snap_mgr_v2() {
-        let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
+        let temp_dir = Builder::new().prefix("test-snap-mgr-v2").tempdir().unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
         let mgr = SnapManager::new(path.clone(), None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
-        let db_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2-db").unwrap();
+        let db_dir = Builder::new()
+            .prefix("test-snap-mgr-delete-temp-files-v2-db")
+            .tempdir()
+            .unwrap();
         let snapshot = DbSnapshot::new(open_test_db(&db_dir.path(), None, None).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
@@ -2215,12 +2263,18 @@ pub mod tests {
 
     #[test]
     fn test_snap_deletion_on_registry() {
-        let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
+        let src_temp_dir = Builder::new()
+            .prefix("test-snap-deletion-on-registry-src")
+            .tempdir()
+            .unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
         let src_mgr = SnapManager::new(src_path.clone(), None);
         src_mgr.init().unwrap();
 
-        let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
+        let src_db_dir = Builder::new()
+            .prefix("test-snap-deletion-on-registry-src-db")
+            .tempdir()
+            .unwrap();
         let db = open_test_db(&src_db_dir.path(), None, None).unwrap();
         let snapshot = DbSnapshot::new(db);
 
@@ -2251,7 +2305,10 @@ pub mod tests {
         let mut s2 = src_mgr.get_snapshot_for_sending(&key).unwrap();
         let expected_size = s2.total_size().unwrap();
 
-        let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
+        let dst_temp_dir = Builder::new()
+            .prefix("test-snap-deletion-on-registry-dst")
+            .tempdir()
+            .unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
         let dst_mgr = SnapManager::new(dst_path.clone(), None);
         dst_mgr.init().unwrap();
@@ -2282,10 +2339,16 @@ pub mod tests {
     #[test]
     fn test_snapshot_max_total_size() {
         let regions: Vec<u64> = (0..20).collect();
-        let kv_path = TempDir::new("test-snapshot-max-total-size-db").unwrap();
+        let kv_path = Builder::new()
+            .prefix("test-snapshot-max-total-size-db")
+            .tempdir()
+            .unwrap();
         let engine = get_test_db_for_regions(&kv_path, None, None, None, None, &regions).unwrap();
 
-        let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
+        let snapfiles_path = Builder::new()
+            .prefix("test-snapshot-max-total-size-snapshots")
+            .tempdir()
+            .unwrap();
         let max_total_size = 10240;
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
