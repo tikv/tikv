@@ -343,11 +343,11 @@ impl fmt::Debug for EngineFile {
 mod tests {
     use super::*;
 
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_kv_importer() {
-        let temp_dir = TempDir::new("test_kv_importer").unwrap();
+        let temp_dir = Builder::new().prefix("test_kv_importer").tempdir().unwrap();
 
         let mut cfg = Config::default();
         cfg.import_dir = temp_dir.path().to_str().unwrap().to_owned();
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_engine_file() {
-        let temp_dir = TempDir::new("test_engine_file").unwrap();
+        let temp_dir = Builder::new().prefix("test_engine_file").tempdir().unwrap();
 
         let uuid = Uuid::new_v4();
         let db_cfg = DbConfig::default();

@@ -174,7 +174,7 @@ mod tests {
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::raftstore::coprocessor::properties::{
         RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let cfs_opts = ALL_CFS
@@ -246,7 +246,10 @@ mod tests {
 
     #[test]
     fn test_get_region_approximate_middle_cf() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();

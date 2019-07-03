@@ -455,7 +455,7 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// assert_eq!(true, validate_log_source_file("<unknown>", "<unknown>"));
     /// assert_eq!(true, validate_log_source_file("mod.rs:1", "mod.rs:1"));
     /// assert_eq!(true, validate_log_source_file("mod.rs:1", "mod.rs:100"));
