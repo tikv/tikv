@@ -5,8 +5,8 @@ use tipb::expression::{Expr, FieldType, ScalarFuncSig};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue};
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
+use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::Result;
 
 /// Helper utility to evaluate RPN function over scalar inputs.
@@ -91,7 +91,7 @@ impl RpnFnScalarEvaluator {
 
         let expr = self
             .rpn_expr_builder
-            .push_fn_call(func, return_field_type)
+            .push_fn_call(func, children_ed.len(), return_field_type)
             .build();
 
         let mut columns = LazyBatchColumnVec::empty();

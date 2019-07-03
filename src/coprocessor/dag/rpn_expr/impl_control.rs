@@ -18,7 +18,7 @@ fn if_null<T: Evaluable>(lhs: &Option<T>, rhs: &Option<T>) -> Result<Option<T>> 
 mod tests {
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use crate::coprocessor::dag::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_if_null() {
