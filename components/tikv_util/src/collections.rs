@@ -1,5 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
-extern crate fxhash;
+use fxhash;
 pub type HashMap<K, V> =
     std::collections::HashMap<K, V, std::hash::BuildHasherDefault<fxhash::FxHasher>>;
 pub type HashSet<T> = std::collections::HashSet<T, std::hash::BuildHasherDefault<fxhash::FxHasher>>;
