@@ -16,7 +16,7 @@ use crate::coprocessor::dag::batch::executors::util::hash_aggr_helper::HashAggre
 use crate::coprocessor::dag::batch::executors::util::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalConfig;
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
+use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
@@ -397,7 +397,7 @@ mod tests {
             RpnExpressionBuilder::new()
                 .push_column_ref(0)
                 .push_constant(1.0)
-                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), FieldTypeTp::Double)
+                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
                 .build(),
         ];
 

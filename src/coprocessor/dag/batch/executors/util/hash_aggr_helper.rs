@@ -5,7 +5,7 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::aggr_fn::AggrFunctionState;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
+use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::Result;
 
 pub struct HashAggregationHelper;
