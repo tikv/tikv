@@ -805,7 +805,10 @@ mod tests {
 
     #[test]
     fn test_delete_files_in_range_for_titan() {
-        let path = TempDir::new("test-titan-delete-files-in-range").unwrap();
+        let path = Builder::new()
+            .prefix("test-titan-delete-files-in-range")
+            .tempdir()
+            .unwrap();
 
         // Set configs and create engines
         let mut cfg = TiKvConfig::default();
@@ -1015,7 +1018,10 @@ mod tests {
         .unwrap();
 
         // Apply the snapshot to other DB.
-        let dir1 = TempDir::new("test-snap-cf-db-apply").unwrap();
+        let dir1 = Builder::new()
+            .prefix("test-snap-cf-db-apply")
+            .tempdir()
+            .unwrap();
         let engines1 = new_temp_engine(&dir1);
         apply_sst_cf_file(
             &default_sst_file_path.to_str().unwrap(),
