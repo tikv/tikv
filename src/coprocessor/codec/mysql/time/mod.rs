@@ -464,7 +464,7 @@ impl Time {
         Time::new(t, time_type, fsp as i8)
     }
 
-    pub fn from_duration(tz: &Tz, time_type: TimeType, d: &MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: &Tz, time_type: TimeType, d: MyDuration) -> Result<Time> {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
             .with_timezone(tz)
@@ -529,7 +529,7 @@ impl Time {
         }
         // TODO:support case month or day is 0(2012-00-00 12:12:12)
         let nanos = self.time.nanosecond();
-        let base = 10u32.pow(NANO_WIDTH - u32::from(fsp));
+        let base = TEN_POW[NANO_WIDTH - usize::from(fsp)];
         let expect_nanos = ((f64::from(nanos) / f64::from(base)).round() as u32) * base;
         let diff = i64::from(nanos) - i64::from(expect_nanos);
         let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));
@@ -763,7 +763,7 @@ impl Time {
     }
 
     /// Checked time addition. Computes self + rhs, returning None if overflow occurred.
-    pub fn checked_add(self, rhs: &MyDuration) -> Option<Time> {
+    pub fn checked_add(self, rhs: MyDuration) -> Option<Time> {
         if let Some(add) = self
             .time
             .checked_add_signed(Duration::nanoseconds(rhs.to_nanos()))
@@ -780,7 +780,7 @@ impl Time {
     }
 
     /// Checked time subtraction. Computes self - rhs, returning None if overflow occurred.
-    pub fn checked_sub(self, rhs: &MyDuration) -> Option<Time> {
+    pub fn checked_sub(self, rhs: MyDuration) -> Option<Time> {
         if let Some(sub) = self
             .time
             .checked_sub_signed(Duration::nanoseconds(rhs.to_nanos()))
@@ -1478,7 +1478,7 @@ mod tests {
         let tz = Tz::utc();
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
-            let get = Time::from_duration(&tz, TimeType::DateTime, &d).unwrap();
+            let get = Time::from_duration(&tz, TimeType::DateTime, d).unwrap();
             let get_today = get
                 .time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
@@ -1624,23 +1624,23 @@ mod tests {
         for (lhs, rhs, exp) in cases.clone() {
             let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
             let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
-            let res = lhs.checked_add(&rhs).unwrap();
+            let res = lhs.checked_add(rhs).unwrap();
             let exp = Time::parse_utc_datetime(exp, 6).unwrap();
             assert_eq!(res, exp);
         }
         for (exp, rhs, lhs) in cases {
             let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
             let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
-            let res = lhs.checked_sub(&rhs).unwrap();
+            let res = lhs.checked_sub(rhs).unwrap();
             let exp = Time::parse_utc_datetime(exp, 6).unwrap();
             assert_eq!(res, exp);
         }
 
         let lhs = Time::parse_utc_datetime("9999-12-31 23:59:59", 6).unwrap();
         let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
-        assert_eq!(lhs.checked_add(&rhs), None);
+        assert_eq!(lhs.checked_add(rhs), None);
         let lhs = Time::parse_utc_datetime("0000-01-01 00:00:01", 6).unwrap();
         let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
-        assert_eq!(lhs.checked_sub(&rhs), None);
+        assert_eq!(lhs.checked_sub(rhs), None);
     }
 }

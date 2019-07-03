@@ -889,7 +889,7 @@ mod tests {
             ScalarValue::Bytes(Some(b"from TiDB".to_vec())),
             ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
             ScalarValue::Json(Some(Json::Boolean(false))),
-            ScalarValue::Duration(Some(Duration::from_nanos(10000, 3).unwrap())),
+            ScalarValue::Duration(Some(Duration::from_micros(10, 6).unwrap())),
         ];
         match vec.into_iter().skip(2).next().unwrap() {
             RpnExpressionNode::FnCall { implicit_args, .. } => {
