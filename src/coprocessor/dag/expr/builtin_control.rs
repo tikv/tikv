@@ -95,7 +95,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         if_null(|i| self.children[i].eval_duration(ctx, row))
     }
 
@@ -151,7 +151,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         if_condition(self, ctx, row, |i, ctx| {
             self.children[i].eval_duration(ctx, row)
         })
@@ -203,7 +203,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         case_when(self, ctx, row, |v, ctx| v.eval_duration(ctx, row))
     }
 
@@ -291,15 +291,15 @@ mod tests {
             ),
             (
                 ScalarFuncSig::IfNullDuration,
-                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
-                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
-                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
+                Datum::Dur(Duration::from_millis(123, 1).unwrap()),
+                Datum::Dur(Duration::from_millis(345, 2).unwrap()),
+                Datum::Dur(Duration::from_millis(123, 1).unwrap()),
             ),
             (
                 ScalarFuncSig::IfNullDuration,
                 Datum::Null,
-                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
-                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+                Datum::Dur(Duration::from_millis(345, 2).unwrap()),
+                Datum::Dur(Duration::from_millis(345, 2).unwrap()),
             ),
             (
                 ScalarFuncSig::IfNullTime,
@@ -414,23 +414,23 @@ mod tests {
             (
                 ScalarFuncSig::IfDuration,
                 Datum::I64(1),
-                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
-                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
-                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
+                Datum::Dur(Duration::from_millis(123, 1).unwrap()),
+                Datum::Dur(Duration::from_millis(345, 2).unwrap()),
+                Datum::Dur(Duration::from_millis(123, 1).unwrap()),
             ),
             (
                 ScalarFuncSig::IfDuration,
                 Datum::Null,
-                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
-                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
-                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+                Datum::Dur(Duration::from_millis(123, 1).unwrap()),
+                Datum::Dur(Duration::from_millis(345, 2).unwrap()),
+                Datum::Dur(Duration::from_millis(345, 2).unwrap()),
             ),
             (
                 ScalarFuncSig::IfDuration,
                 Datum::I64(0),
-                Datum::Dur(Duration::from_nanos(123, 1).unwrap()),
-                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
-                Datum::Dur(Duration::from_nanos(345, 2).unwrap()),
+                Datum::Dur(Duration::from_millis(123, 1).unwrap()),
+                Datum::Dur(Duration::from_millis(345, 2).unwrap()),
+                Datum::Dur(Duration::from_millis(345, 2).unwrap()),
             ),
             (
                 ScalarFuncSig::IfTime,

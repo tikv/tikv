@@ -370,7 +370,7 @@ mod tests {
         let group_by_exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
             .push_column_ref(1)
-            .push_fn_call(arithmetic_fn_meta::<RealPlus>(), FieldTypeTp::Double)
+            .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
             .build();
 
         let aggr_definitions = vec![
