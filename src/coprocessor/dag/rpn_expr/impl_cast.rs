@@ -144,7 +144,7 @@ fn cast_duration_as_real(val: &Option<Duration>) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = val.to_decimal()?.as_f64()?;
+            let val = Decimal::try_from(*val)?.as_f64()?;
             Ok(Real::new(val).ok())
         }
     }
