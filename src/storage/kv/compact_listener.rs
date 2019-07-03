@@ -66,8 +66,8 @@ impl EventListener for CompactionListener {
             }
         }
 
-        let mut input_files = HashSet::with_capacity(info.input_file_count());
-        let mut output_files = HashSet::with_capacity(info.output_file_count());
+        let mut input_files = HashSet::default();
+        let mut output_files = HashSet::default();
         for i in 0..info.input_file_count() {
             info.input_file_at(i)
                 .to_str()

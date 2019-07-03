@@ -97,7 +97,7 @@ struct WaitTable {
 impl WaitTable {
     fn new() -> Self {
         Self {
-            wait_table: HashMap::new(),
+            wait_table: HashMap::default(),
         }
     }
 

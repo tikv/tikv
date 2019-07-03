@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use hashbrown::hash_map::Entry;
+use std::collections::hash_map::Entry;
 use tikv_util::collections::HashMap;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, FieldType};
@@ -449,27 +449,27 @@ mod tests {
             .unwrap();
         assert_eq!(
             r.physical_columns[3].decoded().as_int_slice(),
-            &[Some(5), None, None, Some(1)]
+            &[Some(5), Some(1), None, None]
         );
         r.physical_columns[4]
             .ensure_all_decoded(&Tz::utc(), &exec.schema()[4])
             .unwrap();
         assert_eq!(
             r.physical_columns[4].decoded().as_real_slice(),
-            &[Real::new(2.5).ok(), Real::new(8.0).ok(), None, None]
+            &[Real::new(2.5).ok(), None, Real::new(8.0).ok(), None]
         );
 
         assert_eq!(
             r.physical_columns[0].decoded().as_int_slice(),
-            &[Some(1), Some(1), Some(2), Some(1)]
+            &[Some(1), Some(1), Some(1), Some(2)]
         );
         assert_eq!(
             r.physical_columns[1].decoded().as_int_slice(),
-            &[Some(1), Some(1), Some(0), Some(0)]
+            &[Some(1), Some(0), Some(1), Some(0)]
         );
         assert_eq!(
             r.physical_columns[2].decoded().as_real_slice(),
-            &[Real::new(6.5).ok(), Real::new(12.0).ok(), None, None]
+            &[Real::new(6.5).ok(), None, Real::new(12.0).ok(), None]
         );
     }
 }

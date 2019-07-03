@@ -74,8 +74,8 @@ impl MockClient {
     pub fn new() -> MockClient {
         MockClient {
             counter: Arc::new(AtomicUsize::new(1)),
-            regions: Arc::new(Mutex::new(HashMap::new())),
-            scatter_regions: Arc::new(Mutex::new(HashMap::new())),
+            regions: Arc::new(Mutex::new(HashMap::default())),
+            scatter_regions: Arc::new(Mutex::new(HashMap::default())),
         }
     }
 
