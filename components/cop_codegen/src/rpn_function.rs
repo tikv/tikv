@@ -159,26 +159,22 @@ impl parse::Parse for RpnFnSignatureReturnType {
     }
 }
 
-pub struct RpnFn;
+pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
+    let attr = parse2::<RpnFnAttr>(attr)?;
+    let item_fn = parse2::<ItemFn>(item_fn)?;
 
-impl RpnFn {
-    pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
-        let attr = parse2::<RpnFnAttr>(attr)?;
-        let item_fn = parse2::<ItemFn>(item_fn)?;
+    // FIXME: The macro cannot handle lifetime definitions now
+    if let Some(lifetime) = item_fn.decl.generics.lifetimes().next() {
+        return Err(Error::new_spanned(
+            lifetime,
+            "Lifetime definition is not allowed",
+        ));
+    }
 
-        // FIXME: The macro cannot handle lifetime definitions now
-        if let Some(lifetime) = item_fn.decl.generics.lifetimes().next() {
-            return Err(Error::new_spanned(
-                lifetime,
-                "Lifetime definition is not allowed",
-            ));
-        }
-
-        if attr.is_varg {
-            Ok(VargsRpnFn::new(attr, item_fn)?.generate())
-        } else {
-            Ok(NormalRpnFn::new(attr, item_fn)?.generate())
-        }
+    if attr.is_varg {
+        Ok(VargsRpnFn::new(attr, item_fn)?.generate())
+    } else {
+        Ok(NormalRpnFn::new(attr, item_fn)?.generate())
     }
 }
 
@@ -252,22 +248,24 @@ impl VargsRpnFn {
                     output_rows: usize,
                     args: &[crate::coprocessor::dag::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::coprocessor::dag::rpn_expr::RpnFnCallExtra<'_>,
-                    vargs_buffer: &mut [usize],
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> #where_clause {
-                    let args_len = args.len();
-                    assert_eq!(vargs_buffer.len(), args_len);
-                    let mut result = Vec::with_capacity(output_rows);
-                    for row_index in 0..output_rows {
-                        for arg_index in 0..args_len {
-                            let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
-                            let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
-                            vargs_buffer[arg_index] = arg as *const _ as usize;
+                    crate::coprocessor::dag::rpn_expr::function::VARG_PARAM_BUF.with(|mut vargs_buf| {
+                        let mut vargs_buf = vargs_buf.borrow_mut();
+                        let args_len = args.len();
+                        vargs_buf.resize(args_len, 0);
+                        let mut result = Vec::with_capacity(output_rows);
+                        for row_index in 0..output_rows {
+                            for arg_index in 0..args_len {
+                                let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
+                                let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
+                                vargs_buf[arg_index] = arg as *const _ as usize;
+                            }
+                            result.push(#fn_ident(unsafe {
+                                &*(vargs_buf.as_slice() as *const _ as *const [&Option<#arg_type>])
+                            })?);
                         }
-                        result.push(#fn_ident(unsafe {
-                            &*(vargs_buffer as *const _ as *const [&Option<#arg_type>])
-                        })?);
-                    }
-                    Ok(Evaluable::into_vector_value(result))
+                        Ok(Evaluable::into_vector_value(result))
+                    })
                 }
                 crate::coprocessor::dag::rpn_expr::RpnFnMeta {
                     name: #fn_name,
@@ -474,7 +472,6 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::coprocessor::dag::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::coprocessor::dag::rpn_expr::RpnFnCallExtra<'_>,
-                    vargs_buffer: &mut [usize],
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> #where_clause {
                     use crate::coprocessor::dag::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     #evaluator.eval(Null, ctx, output_rows, args, extra)
@@ -617,7 +614,6 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::coprocessor::dag::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::coprocessor::dag::rpn_expr::RpnFnCallExtra<'_>,
-                    vargs_buffer: &mut [usize],
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> {
                     use crate::coprocessor::dag::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     ArgConstructor::new(
@@ -769,7 +765,6 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::coprocessor::dag::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::coprocessor::dag::rpn_expr::RpnFnCallExtra<'_>,
-                    vargs_buffer: &mut [usize],
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue>
                 where B: N<M> {
                     use crate::coprocessor::dag::rpn_expr::function::{ArgConstructor, Evaluator, Null};

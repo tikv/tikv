@@ -17,7 +17,7 @@
 //! itself. Instead, it creates a `foo_fn_meta()` function (simply add `_fn_meta` to the original
 //! function name) that generates an `RpnFnMeta` struct.
 //!
-//! In case of needing other parameters:
+//! In case of needing other parameters like `ctx`, `output_rows`, `args` and `extra`:
 //!
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
@@ -26,8 +26,6 @@
 //!     // Your RPN function logic
 //! }
 //! ```
-//!
-//! All available parameters are: `ctx`, `output_rows`, `args`, `extra`.
 //!
 //! A trait whose name looks like `CamelCasedFnName_Fn` is created by the macro. If you need to
 //! customize the execution logic for specific argument type, you may implement it on your own.
@@ -84,9 +82,9 @@ pub struct RpnFnMeta {
     /// The display name of the RPN function. Mainly used in tests.
     pub name: &'static str,
 
-    /// Validator against input expression tree.
+    // TODO: Use validator ptr to verify input expression.
+    // /// Validator against input expression tree.
     // pub validator_ptr: fn(expr: &Expr) -> Result<()>,
-
     #[allow(clippy::type_complexity)]
     /// The RPN function.
     pub fn_ptr: fn(
@@ -96,8 +94,6 @@ pub struct RpnFnMeta {
         args: &[RpnStackNode<'_>],
         // Uncommon arguments are grouped together
         extra: &mut RpnFnCallExtra<'_>,
-        // Buffer for evaluating vargs.
-        vargs_buffer: &mut [usize],
     ) -> Result<VectorValue>,
 }
 
@@ -267,4 +263,9 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
             }
         }
     }
+}
+
+thread_local! {
+    pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<usize>> =
+        std::cell::RefCell::new(Vec::with_capacity(20));
 }

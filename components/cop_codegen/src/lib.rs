@@ -30,7 +30,7 @@ pub fn aggr_function_derive(input: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn rpn_fn(attr: TokenStream, input: TokenStream) -> TokenStream {
-    match rpn_function::RpnFn::transform(attr.into(), input.into()) {
+    match rpn_function::transform(attr.into(), input.into()) {
         Ok(tokens) => TokenStream::from(tokens),
         Err(e) => TokenStream::from(e.to_compile_error()),
     }

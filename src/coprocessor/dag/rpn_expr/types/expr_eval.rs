@@ -214,7 +214,6 @@ impl RpnExpression {
     ) -> Result<RpnStackNode<'a>> {
         assert!(output_rows > 0);
         let mut stack = Vec::with_capacity(self.len());
-        let mut vargs_buffer = vec![0; self.len()];
         // Logical rows for generated columns
         // TODO: Eliminate allocation
         let identity_logical_rows: Vec<_> = (0..output_rows).collect();
@@ -258,13 +257,7 @@ impl RpnExpression {
                         ret_field_type,
                         implicit_args,
                     };
-                    let ret = (func_meta.fn_ptr)(
-                        ctx,
-                        output_rows,
-                        stack_slice,
-                        &mut call_extra,
-                        &mut vargs_buffer[..*args_len],
-                    )?;
+                    let ret = (func_meta.fn_ptr)(ctx, output_rows, stack_slice, &mut call_extra)?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {
