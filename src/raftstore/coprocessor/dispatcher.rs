@@ -229,7 +229,13 @@ impl CoprocessorHost {
     }
 
     pub fn on_role_change(&self, region: &Region, leader_id: u64, role: StateRole) {
-        loop_ob!(region, &self.registry.role_observers, on_role_change, leader_id, role);
+        loop_ob!(
+            region,
+            &self.registry.role_observers,
+            on_role_change,
+            leader_id,
+            role
+        );
     }
 
     pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole) {
@@ -327,7 +333,7 @@ mod tests {
     }
 
     impl RoleObserver for TestCoprocessor {
-        fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: StateRole, _: u64) {
+        fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: u64, _: StateRole) {
             self.called.fetch_add(7, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -394,7 +400,7 @@ mod tests {
         host.post_apply(&region, &mut RaftCmdResponse::new());
         assert_all!(&[&ob.called], &[21]);
 
-        host.on_role_change(&region, StateRole::Leader);
+        host.on_role_change(&region, 1, StateRole::Leader);
         assert_all!(&[&ob.called], &[28]);
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
