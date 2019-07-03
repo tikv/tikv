@@ -81,7 +81,7 @@ mod tests {
     use tipb::expression::ScalarFuncSig;
 
     use crate::coprocessor::codec::mysql::{time, Tz};
-    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use crate::coprocessor::dag::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_logical_and() {
