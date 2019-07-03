@@ -186,12 +186,6 @@ test:
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
-# Unlike test, this target will trace tests and output logs when fail
-# test is detected.  It's not clear who uses this and for what. It
-# does not seem to be used by CI. If you know please document it.
-trace_test:
-	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
-
 
 ## Static analysis
 ## ---------------
