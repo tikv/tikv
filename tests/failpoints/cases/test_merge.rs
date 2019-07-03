@@ -8,6 +8,7 @@ use std::time::*;
 use fail;
 use futures::Future;
 
+use kvproto::metapb::Region;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
@@ -367,10 +368,7 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     must_get_equal(&cluster.get_engine(3), b"k9", b"v9");
 }
 
-// Test if request snapshot is rejected during merging.
-#[test]
-fn test_node_merge_request_snapshot() {
-    let _guard = crate::setup();
+fn prepare_request_snapshot_cluster() -> (Cluster<NodeCluster>, Region, Region) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -389,6 +387,15 @@ fn test_node_merge_request_snapshot() {
 
     // Make sure peer 1 is the leader.
     cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+
+    (cluster, region, target_region)
+}
+
+// Test if request snapshot is rejected during merging.
+#[test]
+fn test_node_merge_reject_request_snapshot() {
+    let _guard = crate::setup();
+    let (mut cluster, region, target_region) = prepare_request_snapshot_cluster();
 
     let apply_prepare_merge_fp = "apply_before_prepare_merge";
     fail::cfg(apply_prepare_merge_fp, "pause").unwrap();
@@ -420,4 +427,44 @@ fn test_node_merge_request_snapshot() {
     cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
     rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
     fail::remove(apply_prepare_merge_fp);
+}
+
+// Test if merge is rejected during requesting snapshot.
+#[test]
+fn test_node_request_snapshot_reject_merge() {
+    let _guard = crate::setup();
+    let (cluster, region, target_region) = prepare_request_snapshot_cluster();
+
+    // Pause generating snapshot.
+    let region_gen_snap_fp = "region_gen_snap";
+    fail::cfg(region_gen_snap_fp, "pause").unwrap();
+
+    // Install snapshot filter before requesting snapshot.
+    let (tx, rx) = mpsc::channel();
+    let notifier = Mutex::new(Some(tx));
+    cluster.sim.wl().add_recv_filter(
+        2,
+        Box::new(RecvSnapshotFilter {
+            notifier,
+            region_id: region.get_id(),
+        }),
+    );
+    cluster.must_request_snapshot(2, region.get_id());
+    // Leader can not generate a snapshot.
+    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+
+    let prepare_merge = new_prepare_merge(target_region.clone());
+    let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), prepare_merge);
+    req.mut_header().set_peer(new_peer(1, 1));
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, req, Callback::None)
+        .unwrap();
+    sleep_ms(200);
+
+    // Merge will never happen.
+    let target = cluster.get_region(target_region.get_start_key());
+    assert_eq!(target, target_region);
+    fail::remove(region_gen_snap_fp);
 }
