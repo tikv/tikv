@@ -1020,9 +1020,12 @@ impl Peer {
             || self.pending_merge_state.is_some()
     }
 
+    // Checks merge strictly, it checks whether there is any onging merge by
+    // tracking last proposed prepare merge.
+    // TODO: There is a false positives, proposed prepare merge may never be
+    //       committed.
     fn is_merging_strict(&self) -> bool {
-        self.last_proposed_prepare_merge_idx > self.get_store().committed_index()
-            || self.is_merging()
+        self.last_proposed_prepare_merge_idx > self.get_store().applied_index() || self.is_merging()
     }
 
     // Check if this peer can handle request_snapshot.
@@ -1030,7 +1033,9 @@ impl Peer {
         let reject_reason = if !self.is_leader() {
             // Only leader can handle request snapshot.
             "not_leader"
-        } else if self.get_store().applied_index_term() != self.term() {
+        } else if self.get_store().applied_index_term() != self.term()
+            || self.get_store().applied_index() < request_index
+        {
             // Reject if there are any unapplied raft log.
             // We don't want to handle request snapshot if there is any ongoing
             // merge, because it is going to be destroyed. This check prevents
@@ -1935,6 +1940,7 @@ impl Peer {
         true
     }
 
+    // For now, it is only used in merge.
     pub fn get_min_progress(&self) -> Result<u64> {
         let mut min = None;
         if let Some(progress) = self.raft_group.status_ref().progress {
