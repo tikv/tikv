@@ -14,15 +14,9 @@ extern crate proc_macro;
 mod aggr_function;
 mod rpn_function;
 
-use self::rpn_function::RpnFnGenerator;
-
 use darling::FromDeriveInput;
-use proc_macro::{Diagnostic, TokenStream};
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{DeriveInput, Ident, ItemFn};
-
-type Result<T> = std::result::Result<T, Diagnostic>;
+use proc_macro::TokenStream;
+use syn::DeriveInput;
 
 #[proc_macro_derive(AggrFunction, attributes(aggr_function))]
 pub fn aggr_function_derive(input: TokenStream) -> TokenStream {
@@ -36,16 +30,8 @@ pub fn aggr_function_derive(input: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn rpn_fn(attr: TokenStream, input: TokenStream) -> TokenStream {
-    let meta_parser = Punctuated::<Ident, Token![,]>::parse_terminated;
-    let meta = meta_parser.parse(attr).unwrap().into_iter().collect();
-    let item_fn = parse_macro_input!(input as ItemFn);
-
-    let input = RpnFnGenerator::new(meta, item_fn);
-    match input.map(RpnFnGenerator::generate) {
+    match rpn_function::transform(attr.into(), input.into()) {
         Ok(tokens) => TokenStream::from(tokens),
-        Err(e) => {
-            e.emit();
-            TokenStream::new()
-        }
+        Err(e) => TokenStream::from(e.to_compile_error()),
     }
 }
