@@ -9,7 +9,7 @@ use tipb::expression::FieldType;
 use super::super::interface::*;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
+use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
@@ -115,10 +115,10 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
 fn update_logical_rows_by_scalar_value(
     logical_rows: &mut Vec<usize>,
-    context: &mut EvalContext,
+    ctx: &mut EvalContext,
     value: &ScalarValue,
 ) -> Result<()> {
-    let b = value.as_mysql_bool(context)?;
+    let b = value.as_mysql_bool(ctx)?;
     if !b {
         // No rows should be preserved
         logical_rows.clear();
@@ -128,7 +128,7 @@ fn update_logical_rows_by_scalar_value(
 
 fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
     logical_rows: &mut Vec<usize>,
-    context: &mut EvalContext,
+    ctx: &mut EvalContext,
     eval_result: &[Option<T>],
     eval_result_logical_rows: &[usize],
 ) -> Result<()> {
@@ -142,7 +142,7 @@ fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
         let eval_result_physical_index = eval_result_logical_rows[logical_index];
         logical_index += 1;
 
-        match eval_result[eval_result_physical_index].as_mysql_bool(context) {
+        match eval_result[eval_result_physical_index].as_mysql_bool(ctx) {
             Err(e) => {
                 if err_result.is_ok() {
                     err_result = Err(e);
@@ -234,7 +234,7 @@ mod tests {
         let mut exec = BatchSelectionExecutor::new_for_test(
             src_exec,
             vec![RpnExpressionBuilder::new()
-                .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+                .push_fn_call(foo_fn_meta(), 0, FieldTypeTp::LongLong)
                 .build()],
         );
 
@@ -448,7 +448,7 @@ mod tests {
 
         let predicate = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(is_even_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
             .build();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
@@ -473,7 +473,7 @@ mod tests {
 
         let predicate = RpnExpressionBuilder::new()
             .push_column_ref(1)
-            .push_fn_call(is_even_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
             .build();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
@@ -500,7 +500,7 @@ mod tests {
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(is_even_fn_meta(), FieldTypeTp::LongLong)
+                    .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
                     .build()
             })
             .collect();
@@ -533,7 +533,7 @@ mod tests {
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(is_even_fn_meta(), FieldTypeTp::LongLong)
+                    .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
                     .build()
             })
             .collect();
@@ -623,7 +623,7 @@ mod tests {
             .map(|offset| {
                 RpnExpressionBuilder::new()
                     .push_column_ref(offset)
-                    .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+                    .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
                     .build()
             })
             .collect();

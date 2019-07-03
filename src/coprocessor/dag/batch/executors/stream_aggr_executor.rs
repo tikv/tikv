@@ -14,7 +14,7 @@ use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::executors::util::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
+use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
@@ -346,7 +346,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
 }
 
 fn update_current_states(
-    context: &mut EvalContext,
+    ctx: &mut EvalContext,
     states: &mut [Box<dyn AggrFunctionState>],
     aggr_fn_len: usize,
     aggr_expr_results: &[RpnStackNode<'_>],
@@ -365,7 +365,7 @@ fn update_current_states(
                         TT, match value {
                             ScalarValue::TT(scalar_value) => {
                                 state.update_repeat(
-                                    context,
+                                    ctx,
                                     scalar_value,
                                     end_logical_row - start_logical_row,
                                 )?;
@@ -380,7 +380,7 @@ fn update_current_states(
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
                                 state.update_vector(
-                                    context,
+                                    ctx,
                                     vec,
                                     &logical_rows[start_logical_row..end_logical_row],
                                 )?;
@@ -423,7 +423,7 @@ mod tests {
             RpnExpressionBuilder::new()
                 .push_column_ref(1)
                 .push_constant(2.0)
-                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), FieldTypeTp::Double)
+                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
                 .build(),
         ];
 
