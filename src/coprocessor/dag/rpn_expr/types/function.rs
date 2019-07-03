@@ -17,22 +17,12 @@
 //! itself. Instead, it creates a `foo_fn_meta()` function (simply add `_fn_meta` to the original
 //! function name) that generates an `RpnFnMeta` struct.
 //!
-//! If you needs `EvalContext` or the raw `RpnFnCallPayload`, just put it ahead of the function
-//! parameters, and add `ctx` or `payload` argument to the attribute. For example:
+//! In case of needing other parameters like `ctx`, `output_rows`, `args` and `extra`:
 //!
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
-//! #[rpn_fn(ctx)]
+//! #[rpn_fn(capture = [ctx])]
 //! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
-//!     // Your RPN function logic
-//! }
-//!
-//! // This generates `with_ctx_and_payload_fn_meta() -> RpnFnMeta`
-//! #[rpn_fn(ctx, payload)]
-//! fn with_ctx_and_payload(
-//!     ctx: &mut EvalContext,
-//!     payload: &RpnFnCallPayload<'_>
-//! ) -> Result<Option<Int>> {
 //!     // Your RPN function logic
 //! }
 //! ```
@@ -60,14 +50,14 @@
 //!     fn eval(
 //!         self,
 //!         ctx: &mut EvalContext,
-//!         payload: &RpnFnCallPayload<'_>,
-
+//          output_rows: usize,
+//          args: &[RpnStackNode<'_>],
+//          extra: &mut RpnFnCallExtra<'_>,
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
-//!         let rows = payload.output_rows();
-//!         let mut result = Vec::with_capacity(rows);
-//!         for row in 0..rows {
+//!         let mut result = Vec::with_capacity(output_rows);
+//!         for row in 0..output_rows {
 //!             let (text, _) = arg.extract(row);
 //!             result.push(regex_match_impl(&regex, text)?);
 //!         }
@@ -79,33 +69,47 @@
 //! If you are curious about what code the macro will generate, check the test code
 //! in `components/cop_codegen/src/rpn_function.rs`.
 
-use super::types::{RpnFnCallPayload, RpnStackNode};
+use tipb::expression::FieldType;
+
+use super::RpnStackNode;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
+/// Metadata of an RPN function.
 #[derive(Clone, Copy)]
-/// Metadata of an RPN function
 pub struct RpnFnMeta {
-    /// The display name of the function.
+    /// The display name of the RPN function. Mainly used in tests.
     pub name: &'static str,
 
-    /// The accepted argument length of this RPN function.
-    ///
-    /// Currently we do not support variable arguments.
-    pub args_len: usize,
-
-    /// The function receiving raw argument.
-    ///
-    /// The first parameter is the evaluation context and the second one is the payload containing
-    /// the output rows count, the argument value and the argument field type.
-    pub fn_ptr: fn(&mut EvalContext, &RpnFnCallPayload<'_>) -> Result<VectorValue>,
+    // TODO: Use validator ptr to verify input expression.
+    // /// Validator against input expression tree.
+    // pub validator_ptr: fn(expr: &Expr) -> Result<()>,
+    #[allow(clippy::type_complexity)]
+    /// The RPN function.
+    pub fn_ptr: fn(
+        // Common arguments
+        ctx: &mut EvalContext,
+        output_rows: usize,
+        args: &[RpnStackNode<'_>],
+        // Uncommon arguments are grouped together
+        extra: &mut RpnFnCallExtra<'_>,
+    ) -> Result<VectorValue>,
 }
 
 impl std::fmt::Debug for RpnFnMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({} args)", self.name, self.args_len)
+        write!(f, "{}", self.name)
     }
+}
+
+/// Extra information about an RPN function call.
+pub struct RpnFnCallExtra<'a> {
+    /// The field type of the return value.
+    pub ret_field_type: &'a FieldType,
+
+    /// Implicit constant arguments.
+    pub implicit_args: &'a [ScalarValue],
 }
 
 /// A single argument of an RPN function.
@@ -198,8 +202,10 @@ pub trait Evaluator {
     fn eval(
         self,
         def: impl ArgDef,
-        context: &mut EvalContext,
-        payload: &RpnFnCallPayload<'_>,
+        ctx: &mut EvalContext,
+        output_rows: usize,
+        args: &[RpnStackNode<'_>],
+        extra: &mut RpnFnCallExtra<'_>,
     ) -> Result<VectorValue>;
 }
 
@@ -219,10 +225,12 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
     fn eval(
         self,
         def: impl ArgDef,
-        context: &mut EvalContext,
-        payload: &RpnFnCallPayload<'_>,
+        ctx: &mut EvalContext,
+        output_rows: usize,
+        args: &[RpnStackNode<'_>],
+        extra: &mut RpnFnCallExtra<'_>,
     ) -> Result<VectorValue> {
-        match payload.raw_arg_at(self.arg_index) {
+        match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
                 match_template_evaluable! {
                     TT, match value {
@@ -231,7 +239,7 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
                                 arg: ScalarArg(v),
                                 rem: def,
                             };
-                            self.inner.eval(new_def, context, payload)
+                            self.inner.eval(new_def, ctx, output_rows, args, extra)
                         }
                     }
                 }
@@ -248,11 +256,16 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
                                 },
                                 rem: def,
                             };
-                            self.inner.eval(new_def, context, payload)
+                            self.inner.eval(new_def, ctx, output_rows, args, extra)
                         }
                     }
                 }
             }
         }
     }
+}
+
+thread_local! {
+    pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<usize>> =
+        std::cell::RefCell::new(Vec::with_capacity(20));
 }

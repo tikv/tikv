@@ -117,33 +117,37 @@ impl RpnExpressionBuilder {
         Self(Vec::new())
     }
 
+    /// Pushes a `FnCall` node.
     #[cfg(test)]
-    pub fn push_fn_call_with_implicit_args(
+    pub fn push_fn_call(
         mut self,
-        func: RpnFnMeta,
+        func_meta: RpnFnMeta,
+        args_len: usize,
         return_field_type: impl Into<FieldType>,
-        implicit_args: Vec<ScalarValue>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
-            func,
+            func_meta,
+            args_len,
             field_type: return_field_type.into(),
-            implicit_args,
+            implicit_args: vec![],
         };
         self.0.push(node);
         self
     }
 
-    /// Pushes a `FnCall` node.
     #[cfg(test)]
-    pub fn push_fn_call(
+    pub fn push_fn_call_with_implicit_args(
         mut self,
-        func: RpnFnMeta,
+        func_meta: RpnFnMeta,
+        args_len: usize,
         return_field_type: impl Into<FieldType>,
+        implicit_args: Vec<ScalarValue>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
-            func,
+            func_meta,
+            args_len,
             field_type: return_field_type.into(),
-            implicit_args: vec![],
+            implicit_args,
         };
         self.0.push(node);
         self
@@ -294,8 +298,14 @@ where
     F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
     // Map pb func to `RpnFnMeta`.
-    let func = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
+    let func_meta = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
+
+    // Validate the input expression.
+    // (func_meta.validator_ptr)(&tree_node)
+    //     .map_err(|e| Error::Other(box_err!("Invalid function signature: {}", e)))?;
+
     let args = tree_node.take_children().into_vec();
+    let args_len = args.len();
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
     let datums = datum::decode(&mut tree_node.get_val())?;
@@ -314,19 +324,13 @@ where
         implicit_args.push(arg);
     }
 
-    if func.args_len != args.len() {
-        return Err(box_err!(
-            "Unexpected arguments, expect {}, received {}",
-            func.args_len,
-            args.len()
-        ));
-    }
     // Visit children first, then push current node, so that it is a post-order traversal.
     for arg in args {
         append_rpn_nodes_recursively(arg, rpn_nodes, time_zone, fn_mapper, max_columns)?;
     }
     rpn_nodes.push(RpnExpressionNode::FnCall {
-        func,
+        func_meta,
+        args_len,
         field_type: tree_node.take_field_type(),
         implicit_args,
     });
