@@ -28,7 +28,10 @@ impl parse::Parse for RpnFnAttr {
                             if let Expr::Array(ExprArray { elems, .. }) = *right {
                                 captures = elems.into_iter().collect();
                             } else {
-                                return Err(Error::new_spanned(right, "Expect array expression"));
+                                return Err(Error::new_spanned(
+                                    right,
+                                    "Expect array expression for `capture`",
+                                ));
                             }
                         }
                         _ => {
