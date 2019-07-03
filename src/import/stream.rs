@@ -204,7 +204,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine::rocks::{DBIterator, DBOptions, ReadOptions, Writable, DB};
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::config::DbConfig;
     use crate::storage::types::Key;
@@ -268,7 +268,10 @@ mod tests {
 
     #[test]
     fn test_range_iterator() {
-        let dir = TempDir::new("_tikv_test_tmp_db").unwrap();
+        let dir = Builder::new()
+            .prefix("_tikv_test_tmp_db")
+            .tempdir()
+            .unwrap();
         let db = open_db(dir.path());
 
         for i in 0..100 {
@@ -370,7 +373,10 @@ mod tests {
 
     #[test]
     fn test_sst_file_stream() {
-        let dir = TempDir::new("test_import_sst_file_stream").unwrap();
+        let dir = Builder::new()
+            .prefix("test_import_sst_file_stream")
+            .tempdir()
+            .unwrap();
         let uuid = Uuid::new_v4();
         let db_cfg = DbConfig::default();
         let security_cfg = SecurityConfig::default();
