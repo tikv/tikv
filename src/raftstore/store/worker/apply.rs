@@ -18,6 +18,7 @@ use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+use std::u64;
 
 use protobuf::RepeatedField;
 use rocksdb::rocksdb_options::WriteOptions;
@@ -649,7 +650,7 @@ impl ApplyDelegate {
         // 2. When a leader tries to read index during transferring leader,
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
             apply_ctx
                 .cbs
                 .last_mut()
@@ -714,7 +715,7 @@ impl ApplyDelegate {
             } else {
                 // Because of the lack of original RaftCmdRequest, we skip calling
                 // coprocessor here.
-                notify_stale_command(region_id, peer_id, self.term, head);
+                notify_stale_command(&self.tag, self.term, head);
             }
         }
         None
