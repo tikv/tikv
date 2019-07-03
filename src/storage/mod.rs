@@ -193,7 +193,6 @@ pub enum Command {
     ///
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
     /// before safe point.
-    ///
     ResolveLock {
         ctx: Context,
         /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
