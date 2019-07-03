@@ -113,10 +113,7 @@ impl WaitTable {
     }
 
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
-        self.wait_table
-            .entry(ts)
-            .or_insert_with(|| vec![])
-            .push(waiter);
+        self.wait_table.entry(ts).or_default().push(waiter);
         true
     }
 

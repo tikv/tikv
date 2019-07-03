@@ -62,7 +62,7 @@ impl DetectTable {
     }
 
     pub fn register(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
-        let locks = self.wait_for_map.entry(txn_ts).or_insert_with(|| vec![]);
+        let locks = self.wait_for_map.entry(txn_ts).or_default();
         let lock = Lock {
             ts: lock_ts,
             hash: lock_hash,
