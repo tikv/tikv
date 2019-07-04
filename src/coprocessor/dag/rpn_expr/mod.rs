@@ -82,6 +82,15 @@ fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
+    match (lhs_is_unsigned, rhs_is_unsigned) {
+        (false, false) => arithmetic_fn_meta::<IntDivideInt>(),
+        (false, true) => arithmetic_fn_meta::<IntDivideUint>(),
+        (true, false) => arithmetic_fn_meta::<UintDivideInt>(),
+        (true, true) => arithmetic_fn_meta::<UintDivideUint>(),
+    }
+}
+
 #[rustfmt::skip]
 fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
     Ok(match value {
@@ -168,7 +177,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfNullTime => if_null_fn_meta::<DateTime>(),
         ScalarFuncSig::IfNullDuration => if_null_fn_meta::<Duration>(),
         ScalarFuncSig::IfNullJson => if_null_fn_meta::<Json>(),
-        ScalarFuncSig::IntDivideInt => arithmetic_fn_meta::<IntDivideInt>(),
+        ScalarFuncSig::IntDivideInt => map_int_sig(value, children, divide_mapper)?,
         ScalarFuncSig::IntDivideDecimal => arithmetic_fn_meta::<IntDivideDecimal>(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),

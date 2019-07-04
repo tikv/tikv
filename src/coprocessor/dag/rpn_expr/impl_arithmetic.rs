@@ -326,6 +326,39 @@ impl ArithmeticOp for IntDivideInt {
 }
 
 #[derive(Debug)]
+pub struct IntDivideUint;
+
+impl ArithmeticOp for IntDivideUint {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
+pub struct UintDivideUint;
+
+impl ArithmeticOp for UintDivideUint {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
+pub struct UintDivideInt;
+
+impl ArithmeticOp for UintDivideInt {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
 pub struct IntDivideDecimal;
 
 impl ArithmeticOp for IntDivideDecimal {
