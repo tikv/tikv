@@ -1945,6 +1945,9 @@ impl Peer {
         let mut min = None;
         if let Some(progress) = self.raft_group.status_ref().progress {
             for (id, pr) in progress.iter() {
+                // Reject merge if there is any pending request snapshot,
+                // because a target region may merge a source region which is in
+                // an invalid state.
                 if pr.state == ProgressState::Snapshot
                     || pr.pending_request_snapshot != INVALID_INDEX
                 {
