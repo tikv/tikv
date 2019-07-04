@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::{i64, str, u64};
 
 use cop_datatype::prelude::*;
@@ -107,7 +107,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec = Decimal::try_from(val)?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
@@ -170,7 +170,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let val = val.to_decimal()?;
+        let val = Decimal::try_from(val)?;
         let res = val.as_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
@@ -254,7 +254,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec = Decimal::try_from(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -409,8 +409,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val =
-            Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
+        let mut val = Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val)?;
         val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
@@ -429,12 +428,12 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
-            Ok(dur) => Ok(Some(Cow::Owned(dur))),
+            Ok(dur) => Ok(Some(dur)),
             Err(e) => {
                 if e.is_overflow() {
                     ctx.handle_overflow(e)?;
@@ -450,68 +449,66 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
         let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        Ok(Some(dur))
     }
 
     pub fn cast_decimal_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
         let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        Ok(Some(dur))
     }
 
     pub fn cast_str_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let dur = Duration::parse(val.as_ref(), self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        Ok(Some(dur))
     }
 
     pub fn cast_time_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let res = val
             .to_duration()?
             .round_frac(self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(res)))
+        Ok(Some(res))
     }
 
     pub fn cast_duration_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let res = val
-            .into_owned()
-            .round_frac(self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(res)))
+        let res = val.round_frac(self.field_type.decimal() as i8)?;
+        Ok(Some(res))
     }
 
     pub fn cast_json_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
         // TODO: tidb would handle truncate here
         let d = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(d)))
+        Ok(Some(d))
     }
 
     pub fn cast_int_as_json<'a, 'b: 'a>(
@@ -589,9 +586,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = val.into_owned();
-        val.set_fsp(mysql::MAX_FSP as u8);
+        let mut val = try_opt!(self.children[0].eval_duration(ctx, row));
+        val = val.maximize_fsp();
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))
     }
@@ -1640,10 +1636,10 @@ mod tests {
                 .set_decimal(isize::from(to_fsp));
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_duration(&mut ctx, col).unwrap();
-            let data = res.unwrap().into_owned();
+            let data = res.unwrap();
             let mut expt = *exp;
             if to_fsp != mysql::UNSPECIFIED_FSP {
-                expt.set_fsp(to_fsp as u8);
+                expt = expt.round_frac(to_fsp).expect("fail to round");
             }
             assert_eq!(
                 data.to_string(),

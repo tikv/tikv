@@ -1584,14 +1584,13 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        let apply_before_split = || {
+        (|| {
             fail_point!(
                 "apply_before_split_1_3",
                 { self.id == 3 && self.region_id() == 1 },
                 |_| {}
             );
-        };
-        apply_before_split();
+        })();
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["batch-split", "all"])
@@ -1702,6 +1701,8 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
+        fail_point!("apply_before_prepare_merge");
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "all"])
             .inc();

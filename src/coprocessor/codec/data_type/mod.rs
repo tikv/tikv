@@ -69,6 +69,9 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     /// Borrows this concrete type from a `ScalarValue` in the same type.
     fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self>;
 
+    /// Borrows this concrete type from a `ScalarValueRef` in the same type.
+    fn borrow_scalar_value_ref<'a>(v: &'a ScalarValueRef<'a>) -> &'a Option<Self>;
+
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type.
     fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>];
 
@@ -83,6 +86,11 @@ macro_rules! impl_evaluable_type {
 
             #[inline]
             fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self> {
+                v.as_ref()
+            }
+
+            #[inline]
+            fn borrow_scalar_value_ref<'a>(v: &'a ScalarValueRef<'a>) -> &'a Option<Self> {
                 v.as_ref()
             }
 
