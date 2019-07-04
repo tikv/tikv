@@ -369,7 +369,7 @@ impl ArithmeticOp for IntDivideDecimal {
 
         let overflow = Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs));
 
-        let s: Result<Option<Decimal>> = match lhs.to_owned() / rhs.to_owned() {
+        let s: Result<Option<Decimal>> = match lhs / rhs {
             Some(v) => match v {
                 Res::Ok(v) => match v.as_i64() {
                     Res::Ok(v_i64) => Ok(Some(Decimal::from_f64(v_i64 as f64).unwrap())),

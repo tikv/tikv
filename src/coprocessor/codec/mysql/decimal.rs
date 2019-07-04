@@ -2172,6 +2172,22 @@ impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     }
 }
 
+impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
+    type Output = Option<Res<Decimal>>;
+
+    fn div(self, rhs: &'a Decimal) -> Self::Output {
+        let result_frac_cnt = cmp::min(
+            self.result_frac_cnt.saturating_add(DEFAULT_DIV_FRAC_INCR),
+            MAX_FRACTION,
+        );
+        let mut res = do_div_mod_impl(self, rhs, DEFAULT_DIV_FRAC_INCR, false);
+        if let Some(ref mut dec) = res {
+            dec.result_frac_cnt = result_frac_cnt;
+        }
+        res
+    }
+}
+
 impl Div for Decimal {
     type Output = Option<Res<Decimal>>;
 
