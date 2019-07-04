@@ -539,6 +539,13 @@ pub fn create_test_engine(
     (engines, path)
 }
 
+pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+    // We don't want to generate snapshots due to compact log.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+}
+
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
