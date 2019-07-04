@@ -26,11 +26,10 @@ fn abs_uint(arg: &Option<Int>) -> Result<Option<Int>> {
 #[inline]
 fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
     // abs returns NAN if the number is NAN, so don't worry about it
+    use num_traits::sign::Signed;
+
     match arg {
-        Some(arg) => {
-            let f = arg.abs();
-            Ok(Some(Real::new(f).unwrap()))
-        }
+        Some(arg) => Ok(Some(<Real as Signed>::abs(arg))),
         None => Ok(None),
     }
 }
