@@ -25,7 +25,7 @@ fn abs_uint(arg: &Option<Int>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
-    // abs returns NAN if the number is NAN, so don't worry about it
+    // arg is never nan
     match arg {
         Some(arg) => Ok(Some(num_traits::Signed::abs(arg))),
         None => Ok(None),
@@ -55,21 +55,34 @@ mod tests {
     #[test]
     fn test_abs_int() {
         let test_cases = vec![
-            (ScalarFuncSig::AbsInt, -3, Some(3)),
-            (ScalarFuncSig::AbsInt, std::i64::MAX, Some(std::i64::MAX)),
+            (ScalarFuncSig::AbsInt, -3, Some(3), false),
+            (ScalarFuncSig::AbsInt, std::i64::MAX, Some(std::i64::MAX), false),
             (
                 ScalarFuncSig::AbsUInt,
                 std::u64::MAX as i64,
                 Some(std::u64::MAX as i64),
+                false
             ),
+            (
+                ScalarFuncSig::AbsInt,
+                std::i64::MIN,
+                Some(0),
+                true
+            )
         ];
 
-        for (sig, arg, expect_output) in test_cases {
+        for (sig, arg, expect_output, is_err) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(sig)
-                .unwrap();
-            assert_eq!(output, expect_output, "{:?}", arg);
+                .evaluate(sig);
+
+            if is_err {
+                assert!(output.is_err());
+            } else {
+                let output = output.unwrap();
+                assert_eq!(output, expect_output, "{:?}", arg);
+            }
+
         }
     }
 
