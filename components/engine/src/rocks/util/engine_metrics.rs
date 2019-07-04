@@ -494,12 +494,12 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         }
         TickerType::BlobDbGcNumFiles => {
             STORE_ENGINE_BLOB_GC_FILE_VEC
-                .with_label_values(&[name, "blob_db_num_seek"])
+                .with_label_values(&[name, "gc_input_files_count"])
                 .inc_by(v);
         }
         TickerType::BlobDbGcNumNewFiles => {
             STORE_ENGINE_BLOB_GC_FILE_VEC
-                .with_label_values(&[name, "blob_db_num_seek"])
+                .with_label_values(&[name, "gc_output_files_count"])
                 .inc_by(v);
         }
         TickerType::BlobDbBytesWritten => {
