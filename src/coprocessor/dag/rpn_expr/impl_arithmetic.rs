@@ -3,7 +3,7 @@
 use cop_codegen::rpn_fn;
 
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::{self, div_i64, Error};
+use crate::coprocessor::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
 use crate::coprocessor::Result;
 
 #[rpn_fn]
@@ -332,7 +332,7 @@ impl ArithmeticOp for IntDivideUint {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
-        unimplemented!()
+        Ok(Some(div_i64_with_u64(*lhs, *rhs as u64).map(|r| r as i64)?))
     }
 }
 
@@ -343,7 +343,7 @@ impl ArithmeticOp for UintDivideUint {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
-        unimplemented!()
+        Ok(Some(((*lhs as u64) / (*rhs as u64)) as i64))
     }
 }
 
@@ -354,7 +354,7 @@ impl ArithmeticOp for UintDivideInt {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
-        unimplemented!()
+        Ok(Some(div_u64_with_i64(*lhs as u64, *rhs).map(|r| r as i64)?))
     }
 }
 
@@ -765,6 +765,8 @@ mod tests {
             (3, -5, Some(0), false),
             (std::i64::MIN + 1, -1, Some(std::i64::MAX), false),
             (std::i64::MIN, 1, Some(std::i64::MIN), false),
+            (std::i64::MAX, 1, Some(std::i64::MAX), false),
+            (std::u64::MAX as i64, 1, Some(std::u64::MAX as i64), false),
         ];
 
         for (lhs, rhs, expected, is_err) in test_cases {
