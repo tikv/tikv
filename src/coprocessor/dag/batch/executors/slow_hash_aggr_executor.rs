@@ -4,8 +4,8 @@ use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use std::collections::hash_map::Entry;
 use tikv_util::collections::HashMap;
+use tikv_util::collections::HashMapEntry;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, FieldType};
 
@@ -251,7 +251,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
             let group_len = self.groups.len();
             let group_index = match self.groups.entry(group_key_ref_unsafe) {
-                Entry::Vacant(entry) => {
+                HashMapEntry::Vacant(entry) => {
                     // if it's a new group, the group index is the current group count
                     entry.insert(group_len);
                     for aggr_fn in &entities.each_aggr_fn {
@@ -259,7 +259,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     }
                     group_len
                 }
-                Entry::Occupied(entry) => {
+                HashMapEntry::Occupied(entry) => {
                     // remove the duplicated group key
                     self.group_key_buffer.truncate(offset_begin);
                     self.group_key_offsets
