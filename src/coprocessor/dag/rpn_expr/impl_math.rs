@@ -1,7 +1,7 @@
 use cop_codegen::rpn_fn;
 
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::Error;
+use crate::coprocessor::codec::{self, Error};
 use crate::coprocessor::Result;
 
 #[rpn_fn]
@@ -26,10 +26,8 @@ fn abs_uint(arg: &Option<Int>) -> Result<Option<Int>> {
 #[inline]
 fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
     // abs returns NAN if the number is NAN, so don't worry about it
-    use num_traits::sign::Signed;
-
     match arg {
-        Some(arg) => Ok(Some(<Real as Signed>::abs(arg))),
+        Some(arg) => Ok(Some(num_traits::Signed::abs(arg))),
         None => Ok(None),
     }
 }
@@ -37,14 +35,11 @@ fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
 #[rpn_fn]
 #[inline]
 fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
-    use crate::coprocessor::codec::mysql::Res;
-
     match arg {
-        Some(arg) => match arg.to_owned().abs() {
-            Res::Ok(v) => Ok(Some(v)),
-            Res::Truncated(_) => Err(Error::truncated())?,
-            Res::Overflow(_) => Err(Error::overflow("DECIMAL", &format!("abs({})", arg)))?,
-        },
+        Some(arg) => {
+            let res: codec::Result<Decimal> = arg.to_owned().abs().into();
+            Ok(Some(res?))
+        }
         None => Ok(None),
     }
 }
@@ -80,23 +75,15 @@ mod tests {
 
     #[test]
     fn test_abs_real() {
-        let test_cases: Vec<(ScalarFuncSig, Real, Option<Real>)> = vec![
-            (
-                ScalarFuncSig::AbsReal,
-                Real::new(3.5).unwrap(),
-                Real::new(3.5).ok(),
-            ),
-            (
-                ScalarFuncSig::AbsReal,
-                Real::new(-3.5).unwrap(),
-                Real::new(3.5).ok(),
-            ),
+        let test_cases: Vec<(Real, Option<Real>)> = vec![
+            (Real::new(3.5).unwrap(), Real::new(3.5).ok()),
+            (Real::new(-3.5).unwrap(), Real::new(3.5).ok()),
         ];
 
-        for (sig, arg, expect_output) in test_cases {
+        for (arg, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(sig)
+                .evaluate(ScalarFuncSig::AbsReal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
