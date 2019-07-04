@@ -313,67 +313,6 @@ impl ArithmeticOp for DecimalMultiply {
     }
 }
 
-#[rpn_fn]
-#[inline]
-fn abs_int(arg: &Option<Int>) -> Result<Option<Int>> {
-    match arg {
-        Some(arg) => {
-            if *arg == std::i64::MIN {
-                return Err(Error::overflow("BIGINT", &format!("abs({})", arg)))?;
-            }
-
-            Ok(Some(arg.to_owned().abs()))
-        },
-        None => Ok(None)
-    }
-
-}
-
-#[rpn_fn]
-#[inline]
-fn abs_uint(arg: &Option<Int>) -> Result<Option<Int>> {
-    // TODO: make clear if it's ok
-    match arg {
-        Some(arg) => Ok(Some(*arg)),
-        None => Ok(None)
-    }
-}
-
-#[rpn_fn]
-#[inline]
-fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
-    // abs returns NAN if the number is NAN, so don't worry about it
-    match arg {
-        Some(arg) => {
-            let f = arg.abs();
-            Ok(Some(Real::new(f).unwrap()))
-        },
-        None => Ok(None)
-    }
-
-}
-
-#[rpn_fn]
-#[inline]
-fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
-    use crate::coprocessor::codec::mysql::Res;
-
-    match arg {
-        Some(arg) => {
-            match arg.to_owned().abs() {
-                Res::Ok(v) => Ok(Some(v)),
-                Res::Truncated(_) => Err(Error::truncated())?,
-                Res::Overflow(_) => {
-                    Err(Error::overflow("DECIMAL", &format!("abs({})", arg)))?
-                }
-            }
-        },
-        None => Ok(None)
-    }
-
-}
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,67 +670,6 @@ mod tests {
                 .evaluate(ScalarFuncSig::MultiplyDecimal)
                 .unwrap();
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
-        }
-    }
-
-    #[test]
-    fn test_abs_int() {
-        let test_cases = vec![
-            (ScalarFuncSig::AbsInt, -3, Some(3)),
-            (
-                ScalarFuncSig::AbsInt,
-                std::i64::MAX.into(),
-                Some(std::i64::MAX),
-            ),
-            (
-                ScalarFuncSig::AbsUInt,
-                (std::u64::MAX as i64).into(),
-                Some(std::u64::MAX as i64),
-            ),
-        ];
-
-        for (sig, arg, expect_output) in test_cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
-                .evaluate(sig)
-                .unwrap();
-            assert_eq!(output, expect_output, "{:?}, {:?}", arg, sig);
-        }
-    }
-
-    #[test]
-    fn test_abs_real() {
-        let test_cases: Vec<(ScalarFuncSig, Real, Option<Real>)>  = vec![
-            (ScalarFuncSig::AbsReal, Real::new(3.5).unwrap(), Real::new(3.5).ok()),
-            (ScalarFuncSig::AbsReal, Real::new(-3.5).unwrap(), Real::new(3.5).ok()),
-        ];
-
-        for (sig, arg, expect_output) in test_cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
-                .evaluate(sig)
-                .unwrap();
-            assert_eq!(output, expect_output, "{:?}, {:?}", arg, sig);
-        }
-    }
-
-
-
-    #[test]
-    fn test_abs_decimal() {
-        let test_cases = vec![
-            (ScalarFuncSig::AbsDecimal, "1.1", "1.1"),
-            (ScalarFuncSig::AbsDecimal, "-1.1", "1.1"),
-        ];
-
-        for (sig, arg, expect_output) in test_cases {
-            let arg = arg.parse::<Decimal>().ok();
-            let expect_output = expect_output.parse::<Decimal>().ok();
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
-                .evaluate(sig)
-                .unwrap();
-            assert_eq!(output, expect_output, "{:?}, {:?}", arg, sig);
         }
     }
 }
