@@ -56,25 +56,23 @@ mod tests {
     fn test_abs_int() {
         let test_cases = vec![
             (ScalarFuncSig::AbsInt, -3, Some(3), false),
-            (ScalarFuncSig::AbsInt, std::i64::MAX, Some(std::i64::MAX), false),
+            (
+                ScalarFuncSig::AbsInt,
+                std::i64::MAX,
+                Some(std::i64::MAX),
+                false,
+            ),
             (
                 ScalarFuncSig::AbsUInt,
                 std::u64::MAX as i64,
                 Some(std::u64::MAX as i64),
-                false
+                false,
             ),
-            (
-                ScalarFuncSig::AbsInt,
-                std::i64::MIN,
-                Some(0),
-                true
-            )
+            (ScalarFuncSig::AbsInt, std::i64::MIN, Some(0), true),
         ];
 
         for (sig, arg, expect_output, is_err) in test_cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(arg)
-                .evaluate(sig);
+            let output = RpnFnScalarEvaluator::new().push_param(arg).evaluate(sig);
 
             if is_err {
                 assert!(output.is_err());
@@ -82,7 +80,6 @@ mod tests {
                 let output = output.unwrap();
                 assert_eq!(output, expect_output, "{:?}", arg);
             }
-
         }
     }
 
