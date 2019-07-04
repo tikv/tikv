@@ -6,25 +6,36 @@ use super::util::extract_physical_timestamp;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
 use crate::pd::{RpcClient, INVALID_ID};
+use crate::raftstore::coprocessor::{Coprocessor, CoprocessorHost, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
 use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::future::paired_future_callback;
 use crate::tikv_util::security::SecurityManager;
-use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
+use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, FutureWorker, Stopped};
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink, WriteFlags,
 };
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
+use kvproto::metapb::Region;
 use protobuf::RepeatedField;
+use raft::StateRole;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
+
+/// The leader of the region containing the LEADER_KEY is the leader of deadlock detector.
+const LEADER_KEY: &[u8] = b"";
+
+/// Returns true if the region containing the LEADER_KEY.
+fn is_leader_region(region: &'_ Region) -> bool {
+    region.get_start_key() <= LEADER_KEY && LEADER_KEY < region.get_end_key()
+}
 
 // 2 mins
 const TXN_DETECT_INFO_TTL: u64 = 120000;
@@ -104,7 +115,7 @@ impl DetectTable {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum DetectType {
     Detect,
     CleanUpWaitFor,
@@ -112,15 +123,23 @@ pub enum DetectType {
 }
 
 pub enum Task {
+    /// The detect request of itself.
     Detect {
         tp: DetectType,
         txn_ts: u64,
         lock: Lock,
     },
+    /// The detect request of other nodes.
     DetectRpc {
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     },
+    /// If the node has the leader region, and the role of the node changes,
+    /// a `ChangeRole` task will be scheduled.
+    ///
+    /// It's the only way to change the node from leader to follower and it
+    /// can speed up changing the node from follower to leader.
+    ChangeRole(StateRole),
 }
 
 impl Display for Task {
@@ -132,10 +151,13 @@ impl Display for Task {
                 tp, txn_ts, lock
             ),
             Task::DetectRpc { .. } => write!(f, "detect rpc"),
+            Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
         }
     }
 }
 
+/// `Scheduler` is the wrapper of the `FutureScheduler<Task>` to simplify scheduling tasks
+/// to the deadlock detector.
 #[derive(Clone)]
 pub struct Scheduler(FutureScheduler<Task>);
 
@@ -145,6 +167,8 @@ impl Scheduler {
     }
 
     fn notify_scheduler(&self, task: Task) {
+        // Only when the deadlock detector is stopped, an error will return.
+        // So there is no need to handle the error.
         if let Err(Stopped(task)) = self.0.schedule(task) {
             error!("failed to send task to deadlock_detector"; "task" => %task);
         }
@@ -173,84 +197,207 @@ impl Scheduler {
             lock: Lock::default(),
         });
     }
+
+    pub fn change_role(&self, role: StateRole) {
+        self.notify_scheduler(Task::ChangeRole(role));
+    }
 }
 
-#[derive(Clone)]
+impl Coprocessor for Scheduler {}
+
+/// Implements observer traits for `Scheduler`.
+/// If the role of the node in the leader region changes, notifys the deadlock detector.
+///
+/// If the leader region is merged or splited in the node, the role of the node won't change.
+/// If the leader region is removed and the node is the leader, it will change to follower first.
+/// So there is no need to observe region change events.
+impl RoleObserver for Scheduler {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+        if is_leader_region(ctx.region()) {
+            self.change_role(role)
+        }
+    }
+}
+
+/// Creates the `Scheduler` and registers it to the CoprocessorHost.
+pub fn register_role_change_observer(host: &mut CoprocessorHost, worker: &FutureWorker<Task>) {
+    let scheduler = Scheduler::new(worker.scheduler());
+    host.registry.register_role_observer(1, Box::new(scheduler));
+}
+
+#[derive(Default)]
 struct Inner {
-    store_id: u64,
-    // (leader_id, leader_addr)
-    leader_info: Option<(u64, String)>,
-    leader_client: Option<Client>,
-    detect_table: Rc<RefCell<DetectTable>>,
-    waiter_mgr_scheduler: WaiterMgrScheduler,
-    security_mgr: Arc<SecurityManager>,
+    /// The role of the deadlock detector. Default is `StateRole::Follower`.
+    role: StateRole,
+    detect_table: DetectTable,
+    /// Max transaction's timestamp the deadlock detector received.
+    /// Used to remove out of date entries in detect table.
     max_ts: u64,
 }
 
-impl Inner {
-    fn new(
+/// Detector is used to detect deadlock between transactions. There is a leader
+/// in the cluster which collects all `wait_for_entry` from other followers.
+pub struct Detector<S: StoreAddrResolver + 'static> {
+    /// The store id of the node.
+    store_id: u64,
+    /// The leader's id and address if exists.
+    leader_info: Option<(u64, String)>,
+    /// The connection to the leader.
+    leader_client: Option<Client>,
+    /// Used to get the leader of leader region from PD.
+    pd_client: Arc<RpcClient>,
+    /// Used to resolve store address.
+    resolver: S,
+    /// Used to connect other nodes.
+    security_mgr: Arc<SecurityManager>,
+    /// Used to schedule Deadlock msgs to the waiter manager.
+    waiter_mgr_scheduler: WaiterMgrScheduler,
+
+    inner: Rc<RefCell<Inner>>,
+    is_initialized: bool,
+}
+
+unsafe impl<S: StoreAddrResolver + 'static> Send for Detector<S> {}
+
+impl<S: StoreAddrResolver + 'static> Detector<S> {
+    pub fn new(
         store_id: u64,
-        waiter_mgr_scheduler: WaiterMgrScheduler,
+        pd_client: Arc<RpcClient>,
+        resolver: S,
         security_mgr: Arc<SecurityManager>,
+        waiter_mgr_scheduler: WaiterMgrScheduler,
     ) -> Self {
+        assert!(store_id != INVALID_ID);
         Self {
             store_id,
             leader_info: None,
             leader_client: None,
-            detect_table: Rc::new(RefCell::new(DetectTable::default())),
-            waiter_mgr_scheduler,
+            pd_client,
+            resolver,
             security_mgr,
-            max_ts: 0,
+            waiter_mgr_scheduler,
+            inner: Rc::new(RefCell::new(Inner::default())),
+            is_initialized: false,
         }
     }
 
-    fn leader_id(&self) -> u64 {
-        self.leader_info.as_ref().unwrap().0
+    fn initialize_if_needed(&mut self, handle: &Handle) {
+        if !self.is_initialized {
+            self.schedule_detect_table_expiration(handle);
+            self.is_initialized = true;
+        }
     }
 
-    fn leader_addr(&self) -> &str {
-        &self.leader_info.as_ref().unwrap().1
+    // TODO: If the performance of the `Delay` timer is good, register the `Delay` timer to
+    // cleanup out of date entries and there is no need to send clean up msgs to the leader when
+    // waiters time out. I will bench it.
+    /// Schedules timer to remove out of date entries in the detect table periodically.
+    fn schedule_detect_table_expiration(&self, handle: &Handle) {
+        info!("schedule detect table expiration");
+        let inner = Rc::clone(&self.inner);
+        let timer = Interval::new_interval(Duration::from_millis(TXN_DETECT_INFO_TTL))
+            .for_each(move |_| {
+                let max_ts = extract_physical_timestamp(inner.borrow().max_ts);
+                inner.borrow_mut().detect_table.expire(|ts| {
+                    let ts = extract_physical_timestamp(ts);
+                    ts + TXN_DETECT_INFO_TTL <= max_ts
+                });
+                Ok(())
+            })
+            .map_err(|e| panic!("unexpected err: {:?}", e));
+        handle.spawn(timer);
     }
 
+    /// Returns true if it is the leader of the deadlock detector.
     fn is_leader(&self) -> bool {
-        self.leader_info.is_some() && self.leader_id() == self.store_id
+        self.inner.borrow().role == StateRole::Leader
     }
 
-    fn update_max_ts_if_needed(&mut self, ts: u64) {
-        if ts > self.max_ts {
-            self.max_ts = ts;
+    /// Refreshes the leader info and changes role if needed.
+    fn refresh_leader_info(&mut self) {
+        match self.get_leader_info() {
+            Ok((leader_id, leader_addr)) => {
+                self.update_leader_info(leader_id, leader_addr);
+            }
+            Err(e) => {
+                error!("get leader info failed"; "err" => ?e);
+            }
         }
     }
 
-    fn reset(&mut self) {
-        self.leader_client.take();
-        self.detect_table.borrow_mut().clear();
+    /// Gets leader info from PD.
+    fn get_leader_info(&self) -> Result<(u64, String)> {
+        let (_, leader) = self.pd_client.get_region_and_leader(LEADER_KEY)?;
+        match leader {
+            Some(leader) => {
+                let leader_id = leader.get_store_id();
+                let leader_addr = self.resolve_store_address(leader_id)?;
+                Ok((leader_id, leader_addr))
+            }
+
+            None => {
+                ERROR_COUNTER_VEC.leader_not_found.inc();
+                Err(Error::NoLeader)
+            }
+        }
     }
 
-    fn change_role_if_needed(&mut self, leader_id: u64, leader_addr: String) {
+    /// Resolves store address.
+    fn resolve_store_address(&self, store_id: u64) -> Result<String> {
+        match wait_op!(|cb| self
+            .resolver
+            .resolve(store_id, cb)
+            .map_err(|e| Error::Other(box_err!(e))))
+        {
+            Some(Ok(addr)) => Ok(addr),
+            _ => Err(box_err!("failed to resolve store address")),
+        }
+    }
+
+    /// Updates leader info and changes role if needed.
+    fn update_leader_info(&mut self, leader_id: u64, leader_addr: String) {
         match self.leader_info {
             Some((id, ref addr)) if id == leader_id && *addr == leader_addr => {
                 debug!("leader not change"; "leader_id" => leader_id, "leader_addr" => leader_addr);
             }
             _ => {
-                if self.store_id == leader_id {
-                    info!("become the leader of deadlock detector!"; "self_id" => self.store_id);
+                info!("leader changed"; "leader_id" => leader_id, "leader_addr" => %leader_addr);
+                let role = if leader_id == self.store_id {
+                    StateRole::Leader
                 } else {
-                    if self.is_leader() {
-                        info!("changed from leader to follower"; "self_id" => self.store_id);
-                    }
-                    info!("leader changed"; "leader_id" => leader_id);
-                }
-                self.reset();
+                    StateRole::Follower
+                };
+                self.change_role(role);
                 self.leader_info.replace((leader_id, leader_addr));
             }
         }
     }
 
+    /// Reset state if role changes.
+    fn change_role(&mut self, role: StateRole) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.role != role {
+            if role == StateRole::Leader {
+                info!("became the leader of deadlock detector!");
+            } else {
+                info!("changed from leader to follower");
+            }
+            inner.detect_table.clear();
+            inner.role = role;
+            self.leader_client.take();
+            self.leader_info.take();
+        }
+    }
+
+    /// Reconnects the leader.
     fn reconnect_leader(&mut self, handle: &Handle) {
-        assert!(self.leader_client.is_none());
+        assert!(self.leader_client.is_none() && self.leader_info.is_some());
         ERROR_COUNTER_VEC.reconnect_leader.inc();
-        let mut leader_client = Client::new(Arc::clone(&self.security_mgr), self.leader_addr());
+
+        let (leader_id, leader_addr) = self.leader_info.as_ref().unwrap();
+        // Create the connection to the leader and registers the callback to receive
+        // the deadlock response.
+        let mut leader_client = Client::new(Arc::clone(&self.security_mgr), leader_addr);
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
             let WaitForEntry {
@@ -271,183 +418,120 @@ impl Inner {
         handle.spawn(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
         // No need to log it again.
         handle.spawn(recv.map_err(|_| ()));
+
         self.leader_client = Some(leader_client);
-        info!("reconnect leader succeeded"; "leader_id" => self.leader_id());
-    }
-}
-
-pub struct Detector<S: StoreAddrResolver + 'static> {
-    pd_client: Arc<RpcClient>,
-    resolver: S,
-    inner: Rc<RefCell<Inner>>,
-    monitor_membership_interval: u64,
-    is_initialized: bool,
-}
-
-unsafe impl<S: StoreAddrResolver + 'static> Send for Detector<S> {}
-
-impl<S: StoreAddrResolver + 'static> Detector<S> {
-    pub fn new(
-        store_id: u64,
-        waiter_mgr_scheduler: WaiterMgrScheduler,
-        security_mgr: Arc<SecurityManager>,
-        pd_client: Arc<RpcClient>,
-        resolver: S,
-        monitor_membership_interval: u64,
-    ) -> Self {
-        assert!(store_id != INVALID_ID);
-        Self {
-            pd_client,
-            resolver,
-            inner: Rc::new(RefCell::new(Inner::new(
-                store_id,
-                waiter_mgr_scheduler,
-                security_mgr,
-            ))),
-            monitor_membership_interval,
-            is_initialized: false,
-        }
+        info!("reconnect leader succeeded"; "leader_id" => leader_id);
     }
 
-    fn monitor_membership_change(
-        pd_client: &Arc<RpcClient>,
-        resolver: &S,
-        inner: &Rc<RefCell<Inner>>,
+    /// If the client is None, reconnects the leader first. Then sends the request to the leader.
+    /// If send failed, sets the client to None for retry.
+    fn send_request_to_leader(
+        &mut self,
+        handle: &Handle,
+        tp: DetectType,
+        txn_ts: u64,
+        lock: Lock,
     ) -> Result<()> {
-        let _timer = DETECTOR_HISTOGRAM_VEC
-            .monitor_membership_change
-            .start_coarse_timer();
-        let (_, leader) = pd_client.get_region_and_leader(b"")?;
-        if let Some(leader) = leader {
-            let leader_id = leader.get_store_id();
-            return match wait_op!(|cb| resolver
-                .resolve(leader_id, cb)
-                .map_err(|e| Error::Other(box_err!(e))))
-            {
-                Some(ref addr) if addr.is_ok() => {
-                    inner
-                        .borrow_mut()
-                        .change_role_if_needed(leader_id, addr.as_ref().unwrap().to_owned());
-                    Ok(())
-                }
-                _ => Err(box_err!("failed to resolve leader address")),
-            };
+        assert!(!self.is_leader());
+
+        if self.leader_client.is_none() && self.leader_info.is_some() {
+            self.reconnect_leader(handle);
         }
-        warn!("leader not found");
-        ERROR_COUNTER_VEC.leader_not_found.inc();
-        Ok(())
-    }
-
-    fn schedule_membership_change_monitor(&self, handle: &Handle) {
-        info!("schedule membership change monitor");
-        let pd_client = Arc::clone(&self.pd_client);
-        let resolver = self.resolver.clone();
-        let inner = Rc::clone(&self.inner);
-        let timer = Interval::new(
-            Instant::now(),
-            Duration::from_millis(self.monitor_membership_interval),
-        )
-        .for_each(move |_| {
-            if let Err(e) = Self::monitor_membership_change(&pd_client, &resolver, &inner) {
-                error!("monitor membership change failed"; "err" => ?e);
-                ERROR_COUNTER_VEC.monitor_membership_change.inc();
-            }
-            Ok(())
-        })
-        .map_err(|e| panic!("unexpected err: {:?}", e));
-        handle.spawn(timer);
-    }
-
-    fn schedule_detect_table_expiration(&self, handle: &Handle) {
-        info!("schedule detect table expiration");
-        let inner = Rc::clone(&self.inner);
-        let timer = Interval::new_interval(Duration::from_millis(TXN_DETECT_INFO_TTL))
-            .for_each(move |_| {
-                let max_ts = extract_physical_timestamp(inner.borrow().max_ts);
-                inner.borrow().detect_table.borrow_mut().expire(|ts| {
-                    let ts = extract_physical_timestamp(ts);
-                    ts + TXN_DETECT_INFO_TTL <= max_ts
-                });
+        if let Some(leader_client) = &self.leader_client {
+            let tp = match tp {
+                DetectType::Detect => DeadlockRequestType::Detect,
+                DetectType::CleanUpWaitFor => DeadlockRequestType::CleanUpWaitFor,
+                DetectType::CleanUp => DeadlockRequestType::CleanUp,
+            };
+            let mut entry = WaitForEntry::new();
+            entry.set_txn(txn_ts);
+            entry.set_wait_for_txn(lock.ts);
+            entry.set_key_hash(lock.hash);
+            let mut req = DeadlockRequest::new();
+            req.set_tp(tp);
+            req.set_entry(entry);
+            if leader_client.detect(req).is_ok() {
                 Ok(())
-            })
-            .map_err(|e| panic!("unexpected err: {:?}", e));
-        handle.spawn(timer);
-    }
-
-    fn initialize(&mut self, handle: &Handle) {
-        assert!(!self.is_initialized);
-        // Get leader info now because tokio_timer::Interval can't execute immediately.
-        let _ = Self::monitor_membership_change(&self.pd_client, &self.resolver, &self.inner);
-        self.schedule_membership_change_monitor(handle);
-        self.schedule_detect_table_expiration(handle);
-        self.is_initialized = true;
-    }
-
-    fn handle_detect(&self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
-        let mut inner = self.inner.borrow_mut();
-        if inner.is_leader() {
-            inner.update_max_ts_if_needed(txn_ts);
-            match tp {
-                DetectType::Detect => {
-                    if let Some(deadlock_key_hash) = inner
-                        .detect_table
-                        .borrow_mut()
-                        .detect(txn_ts, lock.ts, lock.hash)
-                    {
-                        inner
-                            .waiter_mgr_scheduler
-                            .deadlock(txn_ts, lock, deadlock_key_hash);
-                    }
-                }
-                DetectType::CleanUpWaitFor => inner
-                    .detect_table
-                    .borrow_mut()
-                    .clean_up_wait_for(txn_ts, lock.ts, lock.hash),
-                DetectType::CleanUp => inner.detect_table.borrow_mut().clean_up(txn_ts),
+            } else {
+                // The client is disconnected. Take it for retry.
+                self.leader_client.take();
+                Err(box_err!("leader client failed"))
             }
         } else {
-            for _ in 0..2 {
-                if inner.leader_client.is_none() && inner.leader_info.is_some() {
-                    inner.reconnect_leader(handle);
-                }
-                if let Some(leader_client) = &inner.leader_client {
-                    let tp = match tp {
-                        DetectType::Detect => DeadlockRequestType::Detect,
-                        DetectType::CleanUpWaitFor => DeadlockRequestType::CleanUpWaitFor,
-                        DetectType::CleanUp => DeadlockRequestType::CleanUp,
-                    };
-                    let mut entry = WaitForEntry::new();
-                    entry.set_txn(txn_ts);
-                    entry.set_wait_for_txn(lock.ts);
-                    entry.set_key_hash(lock.hash);
-                    let mut req = DeadlockRequest::new();
-                    req.set_tp(tp);
-                    req.set_entry(entry);
-                    if leader_client.detect(req).is_ok() {
-                        return;
-                    }
-                    inner.leader_client.take();
-                }
-            }
-            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" =>  txn_ts, "lock" => ?lock);
-            ERROR_COUNTER_VEC.dropped.inc();
+            Err(Error::NoLeader)
         }
     }
 
+    fn handle_detect_locally(&self, tp: DetectType, txn_ts: u64, lock: Lock) {
+        let mut inner = self.inner.borrow_mut();
+        if txn_ts > inner.max_ts {
+            inner.max_ts = txn_ts;
+        }
+        match tp {
+            DetectType::Detect => {
+                if let Some(deadlock_key_hash) =
+                    inner.detect_table.detect(txn_ts, lock.ts, lock.hash)
+                {
+                    self.waiter_mgr_scheduler
+                        .deadlock(txn_ts, lock, deadlock_key_hash);
+                }
+            }
+            DetectType::CleanUpWaitFor => inner
+                .detect_table
+                .clean_up_wait_for(txn_ts, lock.ts, lock.hash),
+            DetectType::CleanUp => inner.detect_table.clean_up(txn_ts),
+        }
+    }
+
+    /// Handles detect requests of itself.
+    fn handle_detect(&mut self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
+        // Send a request first to check client validation due to asynchronous mode.
+        if !self.is_leader()
+            && self
+                .send_request_to_leader(handle, tp, txn_ts, lock)
+                .is_ok()
+        {
+            return;
+        }
+
+        // Refresh leader info when the connection to the leader is disconnected.
+        // It's possible changes to leader here.
+        if !self.is_leader() && self.leader_client.is_none() {
+            // TODO: If the leader hasn't been elected, it requests Pd for
+            // each detect request. Maybe need flow control here.
+            self.refresh_leader_info();
+        }
+
+        if self.is_leader() {
+            self.handle_detect_locally(tp, txn_ts, lock);
+        } else {
+            if let Err(e) = self.send_request_to_leader(handle, tp, txn_ts, lock) {
+                error!("send detect request failed"; "err" => ?e);
+                warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
+                ERROR_COUNTER_VEC.dropped.inc();
+            }
+        }
+    }
+
+    /// Handles detect requests of other nodes.
     fn handle_detect_rpc(
-        &self,
+        &mut self,
         handle: &Handle,
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
-        if !self.inner.borrow().is_leader() {
-            let status = RpcStatus::new(
-                RpcStatusCode::FailedPrecondition,
-                Some("i'm not the leader of deadlock detector".to_string()),
-            );
-            handle.spawn(sink.fail(status).map_err(|_| ()));
-            ERROR_COUNTER_VEC.not_leader.inc();
-            return;
+        if !self.is_leader() {
+            // Somebody thought I am the leader. Check it.
+            self.refresh_leader_info();
+            if !self.is_leader() {
+                let status = RpcStatus::new(
+                    RpcStatusCode::FailedPrecondition,
+                    Some("I'm not the leader of deadlock detector".to_string()),
+                );
+                handle.spawn(sink.fail(status).map_err(|_| ()));
+                ERROR_COUNTER_VEC.not_leader.inc();
+                return;
+            }
         }
 
         let inner = Rc::clone(&self.inner);
@@ -456,7 +540,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             .and_then(move |mut req| {
                 // It's possible the leader changes after registering this handler.
                 let mut inner = inner.borrow_mut();
-                if !inner.is_leader() {
+                if inner.role != StateRole::Leader {
                     ERROR_COUNTER_VEC.not_leader.inc();
                     return Err(Error::Other(box_err!("leader changed")));
                 }
@@ -468,8 +552,10 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                     ..
                 } = req.get_entry();
 
-                inner.update_max_ts_if_needed(*txn);
-                let mut detect_table = inner.detect_table.borrow_mut();
+                if *txn > inner.max_ts {
+                    inner.max_ts = *txn;
+                }
+                let detect_table = &mut inner.detect_table;
                 let res = match req.get_tp() {
                     DeadlockRequestType::Detect => {
                         if let Some(deadlock_key_hash) =
@@ -504,21 +590,32 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                 .map_err(|_| ()),
         );
     }
+
+    fn handle_change_role(&mut self, role: StateRole) {
+        debug!("handle change role"; "role" => ?role);
+        let role = match role {
+            StateRole::Leader => StateRole::Leader,
+            // Change Follower|Candidate|PreCandidate to Follower.
+            _ => StateRole::Follower,
+        };
+        self.change_role(role);
+    }
 }
 
 impl<S: StoreAddrResolver + 'static> FutureRunnable<Task> for Detector<S> {
     fn run(&mut self, task: Task, handle: &Handle) {
-        if !self.is_initialized {
-            self.initialize(handle);
-        }
-
         match task {
             Task::Detect { tp, txn_ts, lock } => {
+                // Schedules timer only when the pessimistic transaction is used.
+                self.initialize_if_needed(handle);
                 self.handle_detect(handle, tp, txn_ts, lock);
             }
             Task::DetectRpc { stream, sink } => {
+                // Schedules timer only when the pessimistic transaction is used.
+                self.initialize_if_needed(handle);
                 self.handle_detect_rpc(handle, stream, sink);
             }
+            Task::ChangeRole(role) => self.handle_change_role(role),
         }
     }
 }
