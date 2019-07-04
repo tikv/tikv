@@ -72,7 +72,7 @@
 use tipb::expression::FieldType;
 
 use super::RpnStackNode;
-use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
+use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
@@ -267,5 +267,8 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
 
 thread_local! {
     pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<usize>> =
+        std::cell::RefCell::new(Vec::with_capacity(20));
+
+    pub static RAW_VARG_PARAM_BUF: std::cell::RefCell<Vec<ScalarValueRef<'static>>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 }

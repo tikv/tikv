@@ -10,23 +10,25 @@ use syn::*;
 #[derive(Debug, Default)]
 struct RpnFnAttr {
     is_varg: bool,
+    is_raw_varg: bool,
     captures: Vec<Expr>,
 }
 
 impl parse::Parse for RpnFnAttr {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let mut is_varg = false;
+        let mut is_raw_varg = false;
         let mut captures = Vec::new();
 
         let config_items = Punctuated::<Expr, Token![,]>::parse_terminated(input).unwrap();
-        for item in config_items {
+        for item in &config_items {
             match item {
                 Expr::Assign(ExprAssign { left, right, .. }) => {
-                    let left_str = format!("{}", (&left).into_token_stream());
+                    let left_str = format!("{}", left.into_token_stream());
                     match left_str.as_ref() {
                         "capture" => {
-                            if let Expr::Array(ExprArray { elems, .. }) = *right {
-                                captures = elems.into_iter().collect();
+                            if let Expr::Array(ExprArray { elems, .. }) = &**right {
+                                captures = elems.clone().into_iter().collect();
                             } else {
                                 return Err(Error::new_spanned(
                                     right,
@@ -43,10 +45,13 @@ impl parse::Parse for RpnFnAttr {
                     }
                 }
                 Expr::Path(ExprPath { path, .. }) => {
-                    let path_str = format!("{}", (&path).into_token_stream());
+                    let path_str = format!("{}", path.into_token_stream());
                     match path_str.as_ref() {
                         "varg" => {
                             is_varg = true;
+                        }
+                        "raw_varg" => {
+                            is_raw_varg = true;
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -64,7 +69,18 @@ impl parse::Parse for RpnFnAttr {
                 }
             }
         }
-        Ok(Self { is_varg, captures })
+        if is_varg && is_raw_varg {
+            return Err(Error::new_spanned(
+                config_items,
+                "`varg` and `raw_varg` conflicts to each other",
+            ));
+        }
+
+        Ok(Self {
+            is_varg,
+            is_raw_varg,
+            captures,
+        })
     }
 }
 
@@ -176,6 +192,8 @@ pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream>
 
     if attr.is_varg {
         Ok(VargsRpnFn::new(attr, item_fn)?.generate())
+    } else if attr.is_raw_varg {
+        Ok(RawVargsRpnFn::new(attr, item_fn)?.generate())
     } else {
         Ok(NormalRpnFn::new(attr, item_fn)?.generate())
     }
@@ -252,7 +270,7 @@ impl VargsRpnFn {
                     args: &[crate::coprocessor::dag::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::coprocessor::dag::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> #where_clause {
-                    crate::coprocessor::dag::rpn_expr::function::VARG_PARAM_BUF.with(|mut vargs_buf| {
+                    crate::coprocessor::dag::rpn_expr::function::VARG_PARAM_BUF.with(|vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, 0);
@@ -266,6 +284,97 @@ impl VargsRpnFn {
                             result.push(#fn_ident(unsafe {
                                 &*(vargs_buf.as_slice() as *const _ as *const [&Option<#arg_type>])
                             })?);
+                        }
+                        Ok(Evaluable::into_vector_value(result))
+                    })
+                }
+                crate::coprocessor::dag::rpn_expr::RpnFnMeta {
+                    name: #fn_name,
+                    fn_ptr: run #ty_generics_turbofish,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RawVargsRpnFn {
+    captures: Vec<Expr>,
+    item_fn: ItemFn,
+    ret_type: TypePath,
+}
+
+impl RawVargsRpnFn {
+    pub fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
+        if item_fn.decl.inputs.len() != attr.captures.len() + 1 {
+            return Err(Error::new_spanned(
+                item_fn.decl.inputs,
+                format!("Expect {} parameters", attr.captures.len() + 1),
+            ));
+        }
+
+        let ret_type =
+            parse2::<RpnFnSignatureReturnType>((&item_fn.decl.output).into_token_stream())
+                .map_err(|_| {
+                    Error::new_spanned(
+                        &item_fn.decl.output,
+                        "Expect return type to be like `Result<Option<T>>`",
+                    )
+                })?;
+        Ok(Self {
+            captures: attr.captures,
+            item_fn,
+            ret_type: ret_type.eval_type,
+        })
+    }
+
+    pub fn generate(self) -> TokenStream {
+        vec![
+            self.generate_constructor(),
+            self.item_fn.into_token_stream(),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    fn generate_constructor(&self) -> TokenStream {
+        let constructor_ident = Ident::new(
+            &format!("{}_fn_meta", &self.item_fn.ident),
+            Span::call_site(),
+        );
+        let (impl_generics, ty_generics, where_clause) =
+            self.item_fn.decl.generics.split_for_impl();
+        let ty_generics_turbofish = ty_generics.as_turbofish();
+        let fn_ident = &self.item_fn.ident;
+        let fn_name = self.item_fn.ident.to_string();
+        quote! {
+            pub const fn #constructor_ident #impl_generics ()
+            -> crate::coprocessor::dag::rpn_expr::RpnFnMeta
+            #where_clause
+            {
+                #[inline]
+                fn run #impl_generics (
+                    ctx: &mut crate::coprocessor::dag::expr::EvalContext,
+                    output_rows: usize,
+                    args: &[crate::coprocessor::dag::rpn_expr::RpnStackNode<'_>],
+                    extra: &mut crate::coprocessor::dag::rpn_expr::RpnFnCallExtra<'_>,
+                ) -> crate::coprocessor::Result<crate::coprocessor::codec::data_type::VectorValue> #where_clause {
+                    crate::coprocessor::dag::rpn_expr::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
+                        let mut vargs_buf = vargs_buf.borrow_mut();
+                        let args_len = args.len();
+                        let mut result = Vec::with_capacity(output_rows);
+                        for row_index in 0..output_rows {
+                            vargs_buf.clear();
+                            for arg_index in 0..args_len {
+                                let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
+                                let scalar_arg = unsafe {
+                                    std::mem::transmute::<ScalarValueRef<'_>, ScalarValueRef<'static>>(
+                                        scalar_arg,
+                                    )
+                                };
+                                vargs_buf.push(scalar_arg);
+                            }
+                            result.push(#fn_ident #ty_generics_turbofish(vargs_buf.as_slice())?);
                         }
                         Ok(Evaluable::into_vector_value(result))
                     })
@@ -798,6 +907,7 @@ mod tests_normal {
         NormalRpnFn::new(
             RpnFnAttr {
                 is_varg: false,
+                is_raw_varg: false,
                 captures: vec![parse_str("ctx").unwrap()],
             },
             item_fn,
