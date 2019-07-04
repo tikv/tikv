@@ -205,7 +205,6 @@ pub fn convert_duration_to_int(
     dur: Duration,
     tp: FieldTypeTp,
 ) -> Result<i64> {
-    // It's OK to clone because duration only occupies 8 bytes after #4858 merged
     let dur = dur.round_frac(DEFAULT_FSP)?;
     let val = Decimal::try_from(dur)?.as_i64_with_ctx(ctx)?;
     convert_int_to_int(ctx, val, tp)
