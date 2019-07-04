@@ -114,7 +114,13 @@ mod tests {
                 .push_param(arg.clone())
                 .evaluate(ScalarFuncSig::AbsDecimal)
                 .unwrap();
-            assert_eq!(output, expect_output, "{:?} {:?}", arg, ScalarFuncSig::AbsDecimal);
+            assert_eq!(
+                output,
+                expect_output,
+                "{:?} {:?}",
+                arg,
+                ScalarFuncSig::AbsDecimal
+            );
         }
     }
 }
