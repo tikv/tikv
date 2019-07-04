@@ -320,7 +320,9 @@ impl ArithmeticOp for IntDivideInt {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
-        // check divide by zero
+        if *rhs == 0 {
+            return Ok(None);
+        }
         Ok(Some(div_i64(*lhs, *rhs)?))
     }
 }
@@ -332,6 +334,9 @@ impl ArithmeticOp for IntDivideUint {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
         Ok(Some(div_i64_with_u64(*lhs, *rhs as u64).map(|r| r as i64)?))
     }
 }
@@ -343,6 +348,9 @@ impl ArithmeticOp for UintDivideUint {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
         Ok(Some(((*lhs as u64) / (*rhs as u64)) as i64))
     }
 }
@@ -354,6 +362,9 @@ impl ArithmeticOp for UintDivideInt {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
         Ok(Some(div_u64_with_i64(*lhs as u64, *rhs).map(|r| r as i64)?))
     }
 }
@@ -750,7 +761,7 @@ mod tests {
 
     #[test]
     fn test_int_divide_int() {
-        let test_cases: Vec<(Int, Int, Option<Int>, bool)> = vec![
+        let test_cases = vec![
             (13, 11, Some(1), false),
             (13, -11, Some(-1), false),
             (-13, 11, Some(-1), false),
@@ -759,8 +770,8 @@ mod tests {
             (33, -11, Some(-3), false),
             (-33, 11, Some(-3), false),
             (-33, -11, Some(3), false),
-            (11, 0, None, true),
-            (-11, 0, None, true),
+            (11, 0, None, false),
+            (-11, 0, None, false),
             (-3, 5, Some(0), false),
             (3, -5, Some(0), false),
             (std::i64::MIN + 1, -1, Some(std::i64::MAX), false),
