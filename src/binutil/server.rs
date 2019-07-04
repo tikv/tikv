@@ -13,7 +13,6 @@ use crate::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use crate::raftstore::store::{fsm, LocalReader};
 use crate::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
 use crate::server::resolve;
-use crate::server::status_server::StatusServer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
 use crate::server::{create_raft_storage, Node, Server};
@@ -26,6 +25,7 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use http_server;
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -345,10 +345,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create a status server.
     // TODO: How to keep cfg updated?
-    let mut status_server = StatusServer::new(server_cfg.status_thread_pool_size, cfg.clone());
+    let mut http_server = http_server::HttpServer::new(server_cfg.status_thread_pool_size); // TODO add cfg.clone()
+
     if status_enabled {
-        // Start the status server.
-        if let Err(e) = status_server.start(server_cfg.status_addr) {
+        // Start the http server.
+        if let Err(e) = http_server.start(server_cfg.status_addr) {
             error!(
                 "failed to bind addr for status service";
                 "err" => %e
@@ -365,8 +366,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
     if status_enabled {
-        // Stop the status server.
-        status_server.stop()
+        // Stop the http server.
+        http_server.stop()
     }
 
     metrics_flusher.stop();
