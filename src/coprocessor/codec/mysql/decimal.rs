@@ -724,8 +724,8 @@ fn do_div_mod_impl(
     Some(res)
 }
 
-fn do_div_mod(lhs: Decimal, rhs: Decimal, frac_incr: u8, do_mod: bool) -> Option<Res<Decimal>> {
-    do_div_mod_impl(&lhs, &rhs, frac_incr, do_mod)
+fn do_div_mod(lhs: &Decimal, rhs: &Decimal, frac_incr: u8, do_mod: bool) -> Option<Res<Decimal>> {
+    do_div_mod_impl(lhs, rhs, frac_incr, do_mod)
 }
 
 /// `do_mul` multiplies two decimals.
@@ -1691,7 +1691,7 @@ impl Decimal {
         dec_encoded_len(&[prec, frac]).unwrap_or(3)
     }
 
-    fn div(self, rhs: Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
+    fn div(&self, rhs: &Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
         let result_frac_cnt =
             cmp::min(self.result_frac_cnt.saturating_add(frac_incr), MAX_FRACTION);
         let mut res = do_div_mod(self, rhs, frac_incr, false);
@@ -2176,15 +2176,7 @@ impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn div(self, rhs: &'a Decimal) -> Self::Output {
-        let result_frac_cnt = cmp::min(
-            self.result_frac_cnt.saturating_add(DEFAULT_DIV_FRAC_INCR),
-            MAX_FRACTION,
-        );
-        let mut res = do_div_mod_impl(self, rhs, DEFAULT_DIV_FRAC_INCR, false);
-        if let Some(ref mut dec) = res {
-            dec.result_frac_cnt = result_frac_cnt;
-        }
-        res
+        <Decimal>::div(self, rhs, DEFAULT_DIV_FRAC_INCR)
     }
 }
 
@@ -2192,7 +2184,7 @@ impl Div for Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn div(self, rhs: Decimal) -> Option<Res<Decimal>> {
-        self.div(rhs, DEFAULT_DIV_FRAC_INCR)
+        <Decimal>::div(&self, &rhs, DEFAULT_DIV_FRAC_INCR)
     }
 }
 
@@ -3256,11 +3248,12 @@ mod tests {
         for (frac_incr, lhs_str, rhs_str, div_exp, rem_exp) in cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res = super::do_div_mod(lhs.clone(), rhs.clone(), frac_incr, false)
-                .map(|d| d.unwrap().to_string());
+            let res =
+                super::do_div_mod(&lhs, &rhs, frac_incr, false).map(|d| d.unwrap().to_string());
             assert_eq!(res, div_exp.map(|s| s.to_owned()));
 
-            let res = super::do_div_mod(lhs, rhs, frac_incr, true).map(|d| d.unwrap().to_string());
+            let res =
+                super::do_div_mod(&lhs, &rhs, frac_incr, true).map(|d| d.unwrap().to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
         }
 
