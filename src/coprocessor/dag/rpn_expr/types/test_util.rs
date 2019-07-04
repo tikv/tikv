@@ -36,6 +36,17 @@ impl RpnFnScalarEvaluator {
         self
     }
 
+    pub fn push_params<T, S>(mut self, values: S) -> Self
+    where
+        T: Into<ScalarValue>,
+        S: std::iter::IntoIterator<Item = T>,
+    {
+        for value in values {
+            self.rpn_expr_builder = self.rpn_expr_builder.push_constant(value);
+        }
+        self
+    }
+
     /// Pushes a parameter as the value of an argument for evaluation using a specified field type.
     pub fn push_param_with_field_type(
         mut self,
