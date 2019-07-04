@@ -27,6 +27,7 @@ extern crate slog_global;
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
+#[cfg(test)]
 #[macro_use]
 extern crate fail;
 
