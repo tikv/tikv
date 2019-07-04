@@ -71,6 +71,7 @@ pub struct RaftMessageMetrics {
     pub vote: u64,
     pub vote_resp: u64,
     pub snapshot: u64,
+    pub request_snapshot: u64,
     pub heartbeat: u64,
     pub heartbeat_resp: u64,
     pub transfer_leader: u64,
@@ -122,6 +123,12 @@ impl RaftMessageMetrics {
                 .with_label_values(&["snapshot"])
                 .inc_by(self.snapshot as i64);
             self.snapshot = 0;
+        }
+        if self.request_snapshot > 0 {
+            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
+                .with_label_values(&["request_snapshot"])
+                .inc_by(self.request_snapshot as i64);
+            self.request_snapshot = 0;
         }
         if self.heartbeat > 0 {
             STORE_RAFT_SENT_MESSAGE_COUNTER_VEC
