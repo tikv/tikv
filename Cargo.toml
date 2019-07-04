@@ -209,12 +209,11 @@ debug-assertions = false
 overflow-checks = false
 rpath = false
 
-# The release profile, used for `cargo build --release`
 [profile.release]
 opt-level = 3
-debug = true
-codegen-units = 1 # TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
-lto = true
+debug = false
+codegen-units = 1
+lto = "thin"
 incremental = false
 panic = 'abort'
 debug-assertions = false
