@@ -92,7 +92,7 @@ fn test_batch_raft_fallback() {
 
 
 #[test]
-fn test_batch_raft_network_isolation() {
+fn test_batch_raft_server_drop() {
     #[derive(Clone)]
     struct MockKvForRaft(Arc<AtomicUsize>);
 
@@ -117,7 +117,7 @@ fn test_batch_raft_network_isolation() {
         fn batch_raft(
             &mut self,
             ctx: RpcContext<'_>,
-stream: RequestStream<BatchRaftMessage>,
+            stream: RequestStream<BatchRaftMessage>,
             sink: ClientStreamingSink<Done>,
         ) {
             // let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
@@ -147,7 +147,7 @@ stream: RequestStream<BatchRaftMessage>,
         let mut mock_server = match mock_kv_service(kv_service, "localhost", port) {
             Ok(s) => s,
             Err(_) => continue,
-};
+        };
         println!("port is {}",port);
         mock_server.start();
 
@@ -178,7 +178,8 @@ stream: RequestStream<BatchRaftMessage>,
 
         println!("counter {:?}",counter.load(Ordering::SeqCst));
         thread::sleep(time::Duration::from_millis(1000));
-println!("start server begin");
+        println!("start server begin");
+        
         for i in 0..100 {
             let kv_service = MockKv(MockKvForRaft(Arc::clone(&counter)));
             let port = 50000 + i;
