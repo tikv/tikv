@@ -216,11 +216,17 @@ impl BufferVec {
         if len == 0 {
             return;
         }
+        let mut retain_arr = retain_arr;
+        if retain_arr.len() > len {
+            retain_arr = &retain_arr[..len];
+        }
         let mut data_write_offset = 0;
         let mut offsets_write_offset = 0;
         let mut retain_arr_idx = 0;
         loop {
             let (ok, left, right) = get_interval(retain_arr, retain_arr_idx);
+            debug_assert!(left < len);
+            debug_assert!(right <= len);
             if !ok {
                 break;
             }
@@ -229,7 +235,6 @@ impl BufferVec {
             } else {
                 self.offsets[right] - self.offsets[left]
             };
-            let offset_interval_size = right - left;
             unsafe {
                 std::ptr::copy(
                     self.data.as_ptr().add(self.offsets[left]),
@@ -239,21 +244,17 @@ impl BufferVec {
             }
             let sub = self.offsets[left] - data_write_offset;
             for i in left..right {
-                self.offsets[i] -= sub;
-            }
-            unsafe {
-                std::ptr::copy(
-                    self.offsets.as_ptr().add(left),
-                    self.offsets.as_mut_ptr().add(offsets_write_offset),
-                    offset_interval_size,
-                )
+                self.offsets[offsets_write_offset] = self.offsets[i] - sub;
+                offsets_write_offset += 1;
             }
             data_write_offset += data_interval_size;
-            offsets_write_offset += offset_interval_size;
             retain_arr_idx = right;
         }
-        self.offsets.truncate(offsets_write_offset);
-        self.data.truncate(data_write_offset);
+        unsafe {
+            // According to benchmark, `set_len` seems faster than `truncate`.
+            self.offsets.set_len(offsets_write_offset);
+            self.data.set_len(data_write_offset);
+        }
     }
 
     /// Returns an iterator over the `BufferVec`.
@@ -801,5 +802,106 @@ mod tests {
         assert_eq!(it.count(), 0);
         assert_eq!(it.next(), None);
         assert_eq!(it.nth(1), None);
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    extern crate test;
+
+    use super::*;
+    use crate::coprocessor::codec::batch::BufferVec;
+
+    fn make_buffer_vec(buf_cnt: usize, buf_size: usize) -> BufferVec {
+        let mut bv = BufferVec::new();
+        for _i in 0..buf_cnt {
+            let mut v = vec![];
+            for j in 0..buf_size {
+                v.push(j as u8);
+            }
+            bv.push(v);
+        }
+        bv
+    }
+
+    fn make_retain_array(cnt: usize) -> Vec<bool> {
+        let mut v = vec![];
+        for _i in (0..(cnt - 5)).step_by(5) {
+            v.push(true);
+            v.push(true);
+            v.push(true);
+            v.push(true);
+            v.push(false);
+        }
+        for _i in (cnt / 5 * 5)..cnt {
+            v.push(true);
+        }
+        v
+    }
+
+    #[bench]
+    fn test_retain_by_array(b: &mut test::Bencher) {
+        let buf_cnt = 1024;
+        let buf_size = 1024;
+        let bv = make_buffer_vec(buf_cnt, buf_size);
+        let ra = make_retain_array(bv.len());
+        b.iter(|| {
+            let mut nvb = bv.clone();
+            nvb.retain_by_array(&ra);
+        });
+    }
+
+    impl BufferVec {
+        pub fn retain_by_array_origin(&mut self, retain_arr: &[bool]) {
+            // TODO: Optimize to move multiple contiguous slots.
+            unsafe {
+                let len = self.len();
+                assert!(retain_arr.len() >= len);
+
+                if len > 0 {
+                    let mut data_write_offset = 0;
+                    let mut offsets_write_offset = 0;
+                    for i in 0..len - 1 {
+                        if retain_arr[i] {
+                            let write_len = self.offsets[i + 1] - self.offsets[i];
+                            std::ptr::copy(
+                                self.data.as_ptr().add(self.offsets[i]),
+                                self.data.as_mut_ptr().add(data_write_offset),
+                                write_len,
+                            );
+                            self.offsets[offsets_write_offset] = data_write_offset;
+                            offsets_write_offset += 1;
+                            data_write_offset += write_len;
+                        }
+                    }
+                    // The last buffer does not have an ending offset
+                    if retain_arr[len - 1] {
+                        let write_len = self.data.len() - self.offsets[len - 1];
+                        std::ptr::copy(
+                            self.data.as_ptr().add(self.offsets[len - 1]),
+                            self.data.as_mut_ptr().add(data_write_offset),
+                            write_len,
+                        );
+                        self.offsets[offsets_write_offset] = data_write_offset;
+                        offsets_write_offset += 1;
+                        data_write_offset += write_len;
+                    }
+                    self.offsets.set_len(offsets_write_offset);
+                    self.data.set_len(data_write_offset);
+                }
+            }
+        }
+    }
+
+    #[bench]
+    fn test_retain_by_array_origin(b: &mut test::Bencher) {
+        let buf_cnt = 1024;
+        let buf_size = 1024;
+        let bv = make_buffer_vec(buf_cnt, buf_size);
+        let ra = make_retain_array(bv.len());
+        b.iter(|| {
+            let mut nvb = bv.clone();
+            nvb.retain_by_array_origin(&ra);
+        });
     }
 }
