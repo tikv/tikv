@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::convert::TryFrom;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
 use cop_datatype::{self, FieldTypeTp};
@@ -141,7 +142,6 @@ pub fn convert_uint_to_int(ctx: &mut EvalContext, val: u64, tp: FieldTypeTp) -> 
 /// Converts an f64 value to an i64 value.
 #[inline]
 pub fn convert_float_to_int(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -> Result<i64> {
-    // TODO any performance problem to use round directly?
     let val = fval.round();
     let lower_bound = integer_signed_lower_bound(tp);
     if val < lower_bound as f64 {
@@ -202,12 +202,12 @@ pub fn convert_datetime_to_int(
 #[inline]
 pub fn convert_duration_to_int(
     ctx: &mut EvalContext,
-    dur: &Duration,
+    dur: Duration,
     tp: FieldTypeTp,
 ) -> Result<i64> {
     // It's OK to clone because duration only occupies 8 bytes after #4858 merged
-    let dur = dur.clone().round_frac(DEFAULT_FSP)?;
-    let val = dur.to_decimal()?.as_i64_with_ctx(ctx)?;
+    let dur = dur.round_frac(DEFAULT_FSP)?;
+    let val = Decimal::try_from(dur)?.as_i64_with_ctx(ctx)?;
     convert_int_to_int(ctx, val, tp)
 }
 
@@ -244,11 +244,14 @@ pub fn convert_json_to_int(ctx: &mut EvalContext, json: &Json, tp: FieldTypeTp) 
 /// Converts a f64 value to a u64 value.
 #[inline]
 pub fn convert_float_to_uint(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -> Result<u64> {
-    // TODO any performance problem to use round directly?
     let val = fval.round();
     if val < 0f64 {
         ctx.handle_overflow(overflow!(val, 0))?;
-        return Ok(0);
+        if ctx.should_clip_to_zero() {
+            return Ok(0);
+        } else {
+            return Ok(val as i64 as u64);
+        }
     }
 
     let upper_bound = integer_unsigned_upper_bound(tp);
@@ -409,7 +412,7 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
     }
 }
 
-fn round_int_str<'a, 'b: 'a>(num_next_dot: char, s: &'b str) -> Cow<'a, str> {
+fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
     if num_next_dot < '5' {
         return Cow::Borrowed(s);
     }
@@ -445,9 +448,9 @@ fn round_int_str<'a, 'b: 'a>(num_next_dot: char, s: &'b str) -> Cow<'a, str> {
 ///
 /// When the float string indicating a value that is overflowing the i64,
 /// the original float string is returned and an overflow warning is attached
-fn float_str_to_int_string<'a, 'b: 'a>(
+fn float_str_to_int_string<'a>(
     ctx: &mut EvalContext,
-    valid_float: &'b str,
+    valid_float: &'a str,
 ) -> Result<Cow<'a, str>> {
     let mut dot_idx = None;
     let mut e_idx = None;
@@ -1082,6 +1085,12 @@ mod tests {
         let v = convert_float_to_uint(&mut ctx, 0.1, FieldTypeTp::LongLong).unwrap();
         assert_eq!(v, 0);
         // TODO port tests from tidb(tidb haven't implemented now)
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
+            Flag::OVERFLOW_AS_WARNING | Flag::IN_INSERT_STMT,
+        )));
+        let v = convert_float_to_uint(&mut ctx, -1.0, FieldTypeTp::LongLong).unwrap();
+        assert_eq!(v, 0);
     }
 
     #[test]
