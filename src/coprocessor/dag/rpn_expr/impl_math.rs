@@ -25,7 +25,6 @@ fn abs_uint(arg: &Option<Int>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
-    // arg is never nan
     match arg {
         Some(arg) => Ok(Some(num_traits::Signed::abs(arg))),
         None => Ok(None),
