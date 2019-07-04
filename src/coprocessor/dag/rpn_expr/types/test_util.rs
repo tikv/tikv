@@ -39,7 +39,7 @@ impl RpnFnScalarEvaluator {
     pub fn push_params<T, S>(mut self, values: S) -> Self
     where
         T: Into<ScalarValue>,
-        S: std::iter::IntoIterator<Item = T>,
+        S: IntoIterator<Item = T>,
     {
         for value in values {
             self.rpn_expr_builder = self.rpn_expr_builder.push_constant(value);
