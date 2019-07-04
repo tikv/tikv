@@ -48,7 +48,7 @@ Determines the number of threads. The value must be a positive integer. For bett
 
 ## Hibernate Region
 
-Hibernate Region is a Raftstore feature to reduce the extra overhead caused by heartbeat messages between the Raft leader and the followers for idle regions. With this feature enabled, a region idle for a long time is automatically set as hibernated. The heartbeat interval for the leader to maintain its lease becomes much longer, and followers do not initiate a re-selection simply because they cannot receive heartbeats from the leader.
+Hibernate Region is a Raftstore feature to reduce the extra overhead caused by heartbeat messages between the Raft leader and the followers for idle regions. With this feature enabled, a region idle for a long time is automatically set as hibernated. The heartbeat interval for the leader to maintain its lease becomes much longer, and the followers do not initiate elections simply because they cannot receive heartbeats from the leader.
 
 > **Note:**
 >
