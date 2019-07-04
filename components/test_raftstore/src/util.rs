@@ -7,7 +7,7 @@ use std::{thread, u64};
 
 use protobuf;
 use rand::RngCore;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
@@ -504,7 +504,7 @@ pub fn create_test_engine(
     let engines = match engines {
         Some(e) => e,
         None => {
-            path = Some(TempDir::new("test_cluster").unwrap());
+            path = Some(Builder::new().prefix("test_cluster").tempdir().unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
             let router = Mutex::new(router);
             let cmpacted_handler = Box::new(move |event| {

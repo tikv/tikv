@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use futures::{stream, Future, Stream};
-use tempdir::TempDir;
+use tempfile::Builder;
 use uuid::Uuid;
 
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
@@ -83,7 +83,7 @@ fn test_upload_sst() {
 fn test_ingest_sst() {
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
 
-    let temp_dir = TempDir::new("test_ingest_sst").unwrap();
+    let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
 
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
@@ -128,7 +128,7 @@ fn test_ingest_sst() {
 fn test_cleanup_sst() {
     let (mut cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
 
-    let temp_dir = TempDir::new("test_cleanup_sst").unwrap();
+    let temp_dir = Builder::new().prefix("test_cleanup_sst").tempdir().unwrap();
 
     let sst_path = temp_dir.path().join("test_split.sst");
     let sst_range = (0, 100);

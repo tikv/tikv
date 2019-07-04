@@ -3,7 +3,7 @@
 use cop_codegen::rpn_fn;
 
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::{self, Error};
+use crate::coprocessor::codec::{self, div_i64, Error};
 use crate::coprocessor::Result;
 
 #[rpn_fn]
@@ -321,13 +321,7 @@ impl ArithmeticOp for IntDivideInt {
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         // check divide by zero
-        if *rhs == 0i64 {
-            return Err(Error::division_by_zero())?;
-        }
-        lhs.checked_div(*rhs).
-            ok_or_else(|| Error::overflow("UNSIGNED BIGINT",
-                                          &format!("({} + {})", lhs, rhs)).into())
-            .map(Some)
+        Ok(Some(div_i64(*lhs, *rhs)?))
     }
 }
 
@@ -338,7 +332,26 @@ impl ArithmeticOp for IntDivideDecimal {
     type T = Decimal;
 
     fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        unimplemented!()
+        use crate::coprocessor::codec::mysql::Res;
+
+        let overflow = Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs));
+
+        let s: Result<Option<Decimal>> = match lhs.to_owned() / rhs.to_owned() {
+            Some(v) => match v {
+                Res::Ok(v) => match v.as_i64() {
+                    Res::Ok(v_i64) => Ok(Some(Decimal::from_f64(v_i64 as f64).unwrap())),
+                    Res::Truncated(v_i64) => Ok(Some(Decimal::from_f64(v_i64 as f64).unwrap())),
+                    Res::Overflow(_) => {
+                        Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
+                    }
+                },
+                Res::Truncated(_) => Err(Error::truncated())?,
+                Res::Overflow(_) => Err(overflow)?,
+            },
+            None => Err(Error::division_by_zero())?,
+        };
+
+        s
     }
 }
 
@@ -704,41 +717,65 @@ mod tests {
 
     #[test]
     fn test_int_divide_int() {
-        // migrate from
-        let test_cases_ok: Vec<(Int, Int, Option<Int>)> = vec![
-            (13 , 11, Some(1)),
-            (13, -11, Some(-1)),
-            (-13, 11, Some(-1)),
-            (-13, -11, Some(1)),
-
-            (33, 11, Some(3)),
-            (33, -11, Some(-3)),
-            (-33, 11, Some(-3)),
-            (-33, -11, Some(3)),
-
-//            (11, 0, None),
-//            (-11, 0, None),
-
-            (-3, 5, Some(0)),
-            (3, -5, Some(0)),
-
-            (std::i64::MIN + 1, -1, Some(std::i64::MAX)),
-            (std::i64::MIN, 1, Some(std::i64::MIN)),
+        let test_cases: Vec<(Int, Int, Option<Int>, bool)> = vec![
+            (13, 11, Some(1), false),
+            (13, -11, Some(-1), false),
+            (-13, 11, Some(-1), false),
+            (-13, -11, Some(1), false),
+            (33, 11, Some(3), false),
+            (33, -11, Some(-3), false),
+            (-33, 11, Some(-3), false),
+            (-33, -11, Some(3), false),
+            (11, 0, None, true),
+            (-11, 0, None, true),
+            (-3, 5, Some(0), false),
+            (3, -5, Some(0), false),
+            (std::i64::MIN + 1, -1, Some(std::i64::MAX), false),
+            (std::i64::MIN, 1, Some(std::i64::MIN), false),
         ];
 
-        // TODO: make clear if this is ok
-        for (lhs, rhs, expected) in test_cases_ok {
+        for (lhs, rhs, expected, is_err) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs)
                 .push_param(rhs)
-                .evaluate(ScalarFuncSig::IntDivideInt)
-                .unwrap();
-            assert_eq!(expected, output, "lhs={:?}, rhs={:?}", lhs, rhs);
+                .evaluate(ScalarFuncSig::IntDivideInt);
+
+            if is_err {
+                assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
+            } else {
+                let output = output.unwrap();
+                assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+            }
         }
     }
 
     #[test]
     fn test_int_divide_decimal() {
-        unimplemented!()
+        let test_cases = vec![
+            ("11.01", "1.1", "10", false),
+            ("-11.01", "1.1", "-10", false),
+            ("11.01", "-1.1", "-10", false),
+            ("-11.01", "-1.1", "10", false),
+            ("123", "", "", false),
+            ("", "123", "", false),
+            // divide by zero
+            ("0.0", "0", "", true),
+            ("", "", "", false),
+        ];
+
+        for (lhs, rhs, expected, is_err) in test_cases {
+            let expected = expected.parse::<Decimal>().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs.parse::<Decimal>().ok())
+                .push_param(rhs.parse::<Decimal>().ok())
+                .evaluate(ScalarFuncSig::IntDivideDecimal);
+
+            if is_err {
+                assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
+            } else {
+                let output = output.unwrap();
+                assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+            }
+        }
     }
 }
