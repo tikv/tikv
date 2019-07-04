@@ -489,7 +489,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         }
         TickerType::BlobDbBlobFileSynced => {
             STORE_ENGINE_BLOB_FILE_SYNCED
-                .with_label_values(&[name, "file_sync"])
+                .with_label_values(&[name])
                 .inc_by(v);
         }
         TickerType::BlobDbGcNumFiles => {
