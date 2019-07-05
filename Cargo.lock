@@ -1021,7 +1021,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/birdstorm/kvproto.git?branch=refresh-ttl-3.0#cff6a88941e61f19cb67097fa47c3fdbd63d570b"
+source = "git+https://github.com/birdstorm/kvproto.git?branch=refresh-ttl-3.0#83526dc84b35f53d31857b79082f5ab7144d5cdb"
 dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",

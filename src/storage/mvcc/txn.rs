@@ -533,7 +533,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(is_pessimistic_txn)
     }
 
-    pub fn refresh_lock(&mut self, key: Key, options: &Options) -> Result<u64> {
+    pub fn refresh_lock(&mut self, key: Key, options: &mut Options) -> Result<u64> {
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 // locked by another transaction
@@ -544,13 +544,16 @@ impl<S: Snapshot> MvccTxn<S> {
                 );
 
                 return Err(Error::KeyIsLocked {
-                    key: key.to_raw()?,
+                    key: key.into_raw()?,
                     primary: lock.primary,
                     ts: lock.ts,
                     ttl: lock.ttl,
-                    txn_size: options.txn_size,
+                    txn_size: lock.txn_size,
                 });
             }
+
+            options.txn_size = lock.txn_size;
+            options.for_update_ts = lock.for_update_ts;
             // does not consider pessimistic lock for now.
             self.lock_key(key, lock.lock_type, lock.primary, lock.short_value, options);
             Ok(options.lock_ttl)
@@ -560,11 +563,11 @@ impl<S: Snapshot> MvccTxn<S> {
                 "lock not found for key";
                 "start_ts" => self.start_ts,
             );
-            return Err(Error::TxnLockNotFound {
+            Err(Error::TxnLockNotFound {
                 start_ts: self.start_ts,
                 commit_ts: u64::max_value(),
                 key: key.as_encoded().to_owned(),
-            });
+            })
         }
     }
 

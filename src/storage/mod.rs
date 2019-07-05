@@ -84,6 +84,7 @@ pub enum StorageCb {
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
+    LockTTL(Callback<u64>),
 }
 
 pub enum Command {
@@ -1195,7 +1196,7 @@ impl<E: Engine> Storage<E> {
         key: Vec<u8>,
         start_ts: u64,
         options: Options,
-        callback: Callback<()>,
+        callback: Callback<u64>,
     ) -> Result<()> {
         let cmd = Command::RefreshLock {
             ctx,
@@ -1203,7 +1204,7 @@ impl<E: Engine> Storage<E> {
             start_ts,
             options,
         };
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCb::LockTTL(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.refresh_lock.inc();
         Ok(())
     }

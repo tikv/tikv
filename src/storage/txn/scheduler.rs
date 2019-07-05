@@ -521,9 +521,10 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         Command::Commit { ref keys, .. }
         | Command::Rollback { ref keys, .. }
         | Command::PessimisticRollback { ref keys, .. } => latches.gen_lock(keys),
-        Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
+        Command::Cleanup { ref key, .. } | Command::RefreshLock { ref key, .. } => {
+            latches.gen_lock(&[key])
+        }
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
-        Command::RefreshLock { ref key, .. } => latches.gen_lock(&[key]),
         _ => Lock::new(vec![]),
     }
 }

@@ -321,38 +321,19 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     fn kv_refresh_lock(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: RefreshLockRequest,
+        req: RefreshLockRequest,
         sink: UnarySink<RefreshLockResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_refresh_lock.start_coarse_timer();
 
-        let (cb, f) = paired_future_callback();
-        let mut options = Options::default();
-        options.lock_ttl = req.get_ttl();
-        options.txn_size = req.get_txn_size();
-        let res = self.storage.async_refresh_lock(
-            req.take_context(),
-            req.take_key(),
-            req.get_start_version(),
-            options,
-            cb,
-        );
-        let future = AndThenWith::new(res, f.map_err(Error::from))
-            .and_then(move |v| {
-                let mut resp = RefreshLockResponse::new();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    match v {
-                        Ok(()) => resp.set_ttl(req.get_ttl()),
-                        Err(e) => resp.set_error(extract_key_error(&e)),
-                    }
-                }
-                sink.success(resp).map_err(Error::from)
-            })
+        let future = future_refresh_lock(&self.storage, req)
+            .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("{} failed: {:?}", "kv_refresh_lock", e);
+                debug!("kv rpc failed";
+                    "request" => "kv_refresh_lock",
+                    "err" => ?e
+                );
                 GRPC_MSG_FAIL_COUNTER.kv_refresh_lock.inc();
             });
 
@@ -1184,6 +1165,15 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
+        Some(BatchCommandsRequest_Request_oneof_cmd::RefreshLock(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_refresh_lock.start_coarse_timer();
+            let resp = future_refresh_lock(&storage, req)
+                .map(oneof!(
+                    BatchCommandsResponse_Response_oneof_cmd::RefreshLock
+                ))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_refresh_lock.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
         Some(BatchCommandsRequest_Request_oneof_cmd::GC(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
             let resp = future_gc(&storage, req)
@@ -1650,6 +1640,35 @@ fn future_resolve_lock<E: Engine>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(extract_key_error(&e));
+        }
+        resp
+    })
+}
+
+fn future_refresh_lock<E: Engine>(
+    storage: &Storage<E>,
+    mut req: RefreshLockRequest,
+) -> impl Future<Item = RefreshLockResponse, Error = Error> {
+    let (cb, f) = paired_future_callback();
+    let mut options = Options::default();
+    options.lock_ttl = req.get_ttl();
+    let res = storage.async_refresh_lock(
+        req.take_context(),
+        req.take_key(),
+        req.get_start_version(),
+        options,
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RefreshLockResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(ttl) => resp.set_ttl(ttl),
+                Err(e) => resp.set_error(extract_key_error(&e)),
+            }
         }
         resp
     })

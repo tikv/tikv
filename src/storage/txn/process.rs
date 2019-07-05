@@ -34,6 +34,7 @@ pub enum ProcessResult {
     MvccKey { mvcc: MvccInfo },
     MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
     Locks { locks: Vec<LockInfo> },
+    LockTTL { ttl: u64 },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
 }
@@ -63,6 +64,11 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
         },
         StorageCb::Locks(cb) => match pr {
             ProcessResult::Locks { locks } => cb(Ok(locks)),
+            ProcessResult::Failed { err } => cb(Err(err)),
+            _ => panic!("process result mismatch"),
+        },
+        StorageCb::LockTTL(cb) => match pr {
+            ProcessResult::LockTTL { ttl } => cb(Ok(ttl)),
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
@@ -827,25 +833,22 @@ fn process_write_impl<S: Snapshot>(
             ctx,
             key,
             start_ts,
-            options,
+            mut options,
         } => {
-            // start_ts + 1 because we want to read a lock with ts = start_ts
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts + 1, !ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             // may be possible to refresh multiple locks later?
-            let mut locks = vec![];
-            match txn.refresh_lock(key, &options) {
-                Ok(lock) => locks.push(lock),
+            match txn.refresh_lock(key, &mut options) {
+                Ok(lock_ttl) => {
+                    statistics.add(&txn.take_statistics());
+                    (
+                        ProcessResult::LockTTL { ttl: lock_ttl },
+                        txn.into_modifies(),
+                        1,
+                        ctx,
+                        None,
+                    )
+                }
                 Err(e) => return Err(Error::from(e)),
-            }
-
-            statistics.add(&txn.take_statistics());
-            if locks.is_empty() {
-                // Skip write stage if no lock is found.
-                let pr = ProcessResult::Res;
-                (pr, vec![], 0, ctx, None)
-            } else {
-                let pr = ProcessResult::Res;
-                (pr, txn.into_modifies(), 1, ctx, None)
             }
         }
         Command::Pause { ctx, duration, .. } => {
