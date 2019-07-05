@@ -509,11 +509,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                     // Return if the leader doesn't exist.
                     return;
                 }
-                // Because the client is asynchronous, it won't be closed until failing to send a
-                // request. So retry to refresh the leader info and send it again.
                 if self.send_request_to_leader(handle, tp, txn_ts, lock) {
                     return;
                 }
+                // Because the client is asynchronous, it won't be closed until failing to send a
+                // request. So retry to refresh the leader info and send it again.
             }
             warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
             ERROR_COUNTER_VEC.dropped.inc();
@@ -522,7 +522,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
     /// Handles detect requests of other nodes.
     fn handle_detect_rpc(
-        &mut self,
+        &self,
         handle: &Handle,
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
