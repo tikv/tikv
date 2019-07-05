@@ -313,11 +313,25 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         self.inner.borrow().role == StateRole::Leader
     }
 
+    /// Resets to the initial state.
+    fn reset(&mut self, role: StateRole) {
+        let mut inner = self.inner.borrow_mut();
+        inner.detect_table.clear();
+        inner.role = role;
+        self.leader_client.take();
+        self.leader_info.take();
+    }
+
     /// Refreshes the leader info and changes role if needed.
     fn refresh_leader_info(&mut self) {
         match self.get_leader_info() {
-            Ok((leader_id, leader_addr)) => {
+            Ok(Some((leader_id, leader_addr))) => {
                 self.update_leader_info(leader_id, leader_addr);
+            }
+            Ok(None) => {
+                // The leader is gone, change to follower and reset state.
+                info!("no leader");
+                self.reset(StateRole::Follower);
             }
             Err(e) => {
                 error!("get leader info failed"; "err" => ?e);
@@ -326,18 +340,18 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     }
 
     /// Gets leader info from PD.
-    fn get_leader_info(&self) -> Result<(u64, String)> {
+    fn get_leader_info(&self) -> Result<Option<(u64, String)>> {
         let (_, leader) = self.pd_client.get_region_and_leader(LEADER_KEY)?;
         match leader {
             Some(leader) => {
                 let leader_id = leader.get_store_id();
                 let leader_addr = self.resolve_store_address(leader_id)?;
-                Ok((leader_id, leader_addr))
+                Ok(Some((leader_id, leader_addr)))
             }
 
             None => {
                 ERROR_COUNTER_VEC.leader_not_found.inc();
-                Err(Error::NoLeader)
+                Ok(None)
             }
         }
     }
@@ -358,7 +372,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     fn update_leader_info(&mut self, leader_id: u64, leader_addr: String) {
         match self.leader_info {
             Some((id, ref addr)) if id == leader_id && *addr == leader_addr => {
-                debug!("leader not change"; "leader_id" => leader_id, "leader_addr" => leader_addr);
+                debug!("leader not change"; "leader_id" => leader_id, "leader_addr" => %leader_addr);
             }
             _ => {
                 info!("leader changed"; "leader_id" => leader_id, "leader_addr" => %leader_addr);
@@ -373,19 +387,15 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         }
     }
 
-    /// Reset state if role changes.
+    /// Resets state if role changes.
     fn change_role(&mut self, role: StateRole) {
-        let mut inner = self.inner.borrow_mut();
-        if inner.role != role {
+        if self.inner.borrow().role != role {
             if role == StateRole::Leader {
                 info!("became the leader of deadlock detector!");
             } else {
                 info!("changed from leader to follower");
             }
-            inner.detect_table.clear();
-            inner.role = role;
-            self.leader_client.take();
-            self.leader_info.take();
+            self.reset(role);
         }
     }
 
