@@ -66,6 +66,27 @@
 //! }
 //! ```
 //!
+//! If the RPN function accepts variable number of arguments and all arguments have the same eval
+//! type, like RPN function `coalesce`, you can use `#[rpn_fn(varg)]` like:
+//!
+//! ```ignore
+//! #[rpn_fn(varg)]
+//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
+//! In case of variable number of arguments and eval types are not the same, like RPN function
+//! `case_when`, you can use `#[rpn_fn(raw_varg)]` instead, receiving `ScalarValueRef` as
+//! the argument:
+//!
+//! ```ignore
+//! #[rpn_fn(raw_varg)]
+//! pub fn foo(args: &[ScalarValueRef<'_>]) -> Result<Option<Real>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
 //! If you are curious about what code the macro will generate, check the test code
 //! in `components/cop_codegen/src/rpn_function.rs`.
 
