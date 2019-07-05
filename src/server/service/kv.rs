@@ -1304,7 +1304,27 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
+        Some(BatchCommandsRequest_Request_oneof_cmd::Empty(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
+            let resp = future_handle_empty(req)
+                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Empty))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
     }
+}
+
+fn future_handle_empty(
+    req: BatchCommandsEmptyRequest,
+) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
+    tikv_util::timer::GLOBAL_TIMER_HANDLE
+        .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
+        .map(move |_| {
+            let mut res = BatchCommandsEmptyResponse::new();
+            res.set_test_id(req.get_test_id());
+            res
+        })
+        .map_err(|_| unreachable!())
 }
 
 fn future_get<E: Engine>(

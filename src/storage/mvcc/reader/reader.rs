@@ -506,7 +506,7 @@ mod tests {
     use kvproto::metapb::{Peer, Region};
     use std::sync::Arc;
     use std::u64;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -684,7 +684,10 @@ mod tests {
 
     #[test]
     fn test_need_gc() {
-        let path = TempDir::new("_test_storage_mvcc_reader").expect("");
+        let path = Builder::new()
+            .prefix("test_storage_mvcc_reader")
+            .tempdir()
+            .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![0], vec![10]);
         test_without_properties(path, &region);
@@ -781,7 +784,10 @@ mod tests {
 
     #[test]
     fn test_get_txn_commit_info() {
-        let path = TempDir::new("_test_storage_mvcc_reader_get_txn_commit_info").expect("");
+        let path = Builder::new()
+            .prefix("_test_storage_mvcc_reader_get_txn_commit_info")
+            .tempdir()
+            .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
@@ -849,7 +855,10 @@ mod tests {
 
     #[test]
     fn test_get_write() {
-        let path = TempDir::new("_test_storage_mvcc_reader_get_write").expect("");
+        let path = Builder::new()
+            .prefix("_test_storage_mvcc_reader_get_write")
+            .tempdir()
+            .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);

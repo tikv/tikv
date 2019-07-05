@@ -106,7 +106,7 @@ pub fn clear_prepare_bootstrap_key(engines: &Engines) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use super::*;
     use crate::raftstore::store::keys;
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_bootstrap() {
-        let path = TempDir::new("var").unwrap();
+        let path = Builder::new().prefix("var").tempdir().unwrap();
         let raft_path = path.path().join("raft");
         let kv_engine = Arc::new(
             rocks::util::new_engine(

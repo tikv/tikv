@@ -36,4 +36,4 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 package = "rocksdb"
 
 [dev-dependencies]
-tempdir = "0.3"
+tempfile = "3.0"
