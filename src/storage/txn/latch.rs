@@ -3,7 +3,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
-use std::usize;
+use std::{fmt, mem, usize};
 
 use spin::Mutex;
 
@@ -152,6 +152,41 @@ impl Latches {
         let mut s = DefaultHasher::new();
         key.hash(&mut s);
         (s.finish() as usize) & (self.size - 1)
+    }
+
+    pub fn dump_memory_info(&self) -> LatchMemoryInfo {
+        let mut mem_info = LatchMemoryInfo::default();
+        for i in 0..self.size {
+            let latch = self.slots[i].lock();
+            mem_info.total_mem_usage += latch.waiting.capacity() * mem::size_of::<u64>();
+            mem_info.total_waiting += latch.waiting.len();
+            if mem_info.largest_slot_len < latch.waiting.len() {
+                mem_info.largest_slot_len = latch.waiting.len();
+            }
+            if mem_info.largest_slot_capacity < latch.waiting.capacity() {
+                mem_info.largest_slot_capacity = latch.waiting.capacity();
+            }
+        }
+        mem_info
+    }
+}
+
+#[derive(Default)]
+pub struct LatchMemoryInfo {
+    pub total_mem_usage: usize,
+    pub total_waiting: usize,
+    pub largest_slot_len: usize,
+    pub largest_slot_capacity: usize,
+}
+
+impl fmt::Debug for LatchMemoryInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LatchMemoryInfo")
+            .field("total_mem_usage", &self.total_mem_usage)
+            .field("total_waiting", &self.total_waiting)
+            .field("largest_slot_len", &self.largest_slot_len)
+            .field("largest_slot_capacity", &self.largest_slot_capacity)
+            .finish()
     }
 }
 

@@ -559,6 +559,8 @@ trait DebugExecutor {
     fn dump_metrics(&self, tags: Vec<&str>);
 
     fn dump_region_properties(&self, region_id: u64);
+
+    fn dump_memory_info(&self);
 }
 
 impl DebugExecutor for DebugClient {
@@ -744,6 +746,14 @@ impl DebugExecutor for DebugClient {
         for prop in resp.get_props() {
             v1!("{}: {}", prop.get_name(), prop.get_value());
         }
+    }
+
+    fn dump_memory_info(&self) {
+        let req = DumpMemoryInfoRequest::new();
+        let resp = self
+            .dump_memory_info(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::dump_memory_info", e));
+        v1!("{}", resp.get_infos());
     }
 }
 
@@ -944,6 +954,11 @@ impl DebugExecutor for Debugger {
         for (name, value) in props {
             v1!("{}: {}", name, value);
         }
+    }
+
+    fn dump_memory_info(&self) {
+        ve1!("only support remote mode");
+        process::exit(-1);
     }
 }
 
@@ -1638,6 +1653,10 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("dump-memory-info")
+                .about("Dump the memory information")
+        )
+        .subcommand(
             SubCommand::with_name("fail")
                 .about("Inject failures to TiKV and recovery")
                 .subcommand(
@@ -2001,6 +2020,8 @@ fn main() {
             let resp = client.list_fail_points_opt(&list_req, option).unwrap();
             v1!("{:?}", resp.get_entries());
         }
+    } else if let Some(_matches) = matches.subcommand_matches("dump-memory-info") {
+        debug_executor.dump_memory_info();
     } else {
         let _ = app.print_help();
     }

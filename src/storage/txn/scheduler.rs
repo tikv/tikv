@@ -34,7 +34,7 @@ use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{
     self, store_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
 };
-use crate::storage::txn::latch::{Latches, Lock};
+use crate::storage::txn::latch::{LatchMemoryInfo, Latches, Lock};
 use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
@@ -232,6 +232,10 @@ impl SchedulerInner {
         }
         false
     }
+
+    fn dump_latch_memory_info(&self) -> LatchMemoryInfo {
+        self.latches.dump_memory_info()
+    }
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
@@ -287,6 +291,10 @@ impl<E: Engine> Scheduler<E> {
 
     pub fn run_cmd(&self, cmd: Command, callback: StorageCb) {
         self.on_receive_new_cmd(cmd, callback);
+    }
+
+    pub fn dump_latch_memory_info(&self) -> LatchMemoryInfo {
+        self.inner.dump_latch_memory_info()
     }
 }
 

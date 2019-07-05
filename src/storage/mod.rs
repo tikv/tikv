@@ -43,7 +43,7 @@ pub use self::readpool_impl::*;
 use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
-pub use self::types::{Key, KvPair, MvccInfo, Value};
+pub use self::types::{Key, KvPair, MemoryInfo, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
@@ -1761,6 +1761,13 @@ impl<E: Engine> Storage<E> {
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
+    }
+
+    pub fn dump_memory_info(&self) -> MemoryInfo {
+        let latch_mem_info = self.sched.dump_latch_memory_info();
+        let mut mem_info = MemoryInfo::default();
+        mem_info.latch_mem_info = latch_mem_info;
+        mem_info
     }
 }
 

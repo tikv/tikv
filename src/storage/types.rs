@@ -9,6 +9,7 @@ use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 
 use crate::storage::mvcc::{Lock, Write};
+use crate::storage::txn::LatchMemoryInfo;
 use tikv_util::codec;
 use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;
@@ -31,6 +32,12 @@ pub struct MvccInfo {
     pub writes: Vec<(u64, Write)>,
     /// start_ts and value
     pub values: Vec<(u64, Value)>,
+}
+
+/// `LatchInfo` stores scheduler latches memory usage and other information.
+#[derive(Debug, Default)]
+pub struct MemoryInfo {
+    pub latch_mem_info: LatchMemoryInfo,
 }
 
 /// Key type.

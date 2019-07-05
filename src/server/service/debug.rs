@@ -1,5 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::raftstore::store::msg::Callback;
+use crate::server::debug::{Debugger, Error};
+use crate::server::transport::RaftStoreRouter;
+use crate::storage::{Engine, Storage};
 use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
 use fail;
@@ -15,10 +19,6 @@ use kvproto::raft_cmdpb::{
     StatusCmdType, StatusRequest,
 };
 use protobuf::text_format::print_to_string;
-
-use crate::raftstore::store::msg::Callback;
-use crate::server::debug::{Debugger, Error};
-use crate::server::transport::RaftStoreRouter;
 use tikv_util::metrics;
 
 use tikv_alloc;
@@ -45,15 +45,16 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter> {
+pub struct Service<T: RaftStoreRouter, E: Engine> {
     pool: CpuPool,
     debugger: Debugger,
     raft_router: T,
+    storage: Storage<E>,
 }
 
-impl<T: RaftStoreRouter> Service<T> {
+impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
     /// Constructs a new `Service` with `Engines` and a `RaftStoreRouter`.
-    pub fn new(engines: Engines, raft_router: T) -> Service<T> {
+    pub fn new(engines: Engines, raft_router: T, storage: Storage<E>) -> Service<T, E> {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
@@ -63,6 +64,7 @@ impl<T: RaftStoreRouter> Service<T> {
             pool,
             debugger,
             raft_router,
+            storage,
         }
     }
 
@@ -84,7 +86,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
+impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb_grpc::Debug for Service<T, E> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -408,6 +410,27 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
                 }
                 resp
             });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn dump_memory_info(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _req: DumpMemoryInfoRequest,
+        sink: UnarySink<DumpMemoryInfoResponse>,
+    ) {
+        const TAG: &str = "dump_memory_info";
+
+        let f = self
+            .pool
+            .spawn(
+                future::ok(self.storage.dump_memory_info()).and_then(move |mem_info| {
+                    let mut resp = DumpMemoryInfoResponse::new();
+                    resp.set_infos(format!("{:?}", mem_info));
+                    Ok(resp)
+                }),
+            );
 
         self.handle_response(ctx, sink, f, TAG);
     }
