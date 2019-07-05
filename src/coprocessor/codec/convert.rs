@@ -240,7 +240,7 @@ pub fn convert_json_to_int(ctx: &mut EvalContext, json: &Json, tp: FieldTypeTp) 
     convert_int_to_int(ctx, val, tp)
 }
 
-/// `convert_int_to_uint` converts an i64 to an u64 value
+/// Converts an i64 to an u64 value
 #[inline]
 pub fn convert_int_to_uint(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> Result<u64> {
     if val < 0 {
@@ -256,7 +256,7 @@ pub fn convert_int_to_uint(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> 
     Ok(val as u64)
 }
 
-/// `convert_uint_to_uint` converts an u64 to a different u64 value
+/// Converts an u64 to a different u64 value
 #[inline]
 pub fn convert_uint_to_uint(ctx: &mut EvalContext, val: u64, tp: FieldTypeTp) -> Result<u64> {
     let upper_bound = integer_unsigned_upper_bound(tp);
@@ -289,7 +289,7 @@ pub fn convert_float_to_uint(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) 
     Ok(val as u64)
 }
 
-/// `convert_bytes_to_uint` converts a byte arrays to an u64 in best effort.
+/// Converts a byte arrays to an u64 in best effort.
 #[inline]
 pub fn convert_bytes_to_uint(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp) -> Result<u64> {
     let s = str::from_utf8(bytes)?.trim();
@@ -322,7 +322,7 @@ macro_rules! decimal_as_u64 {
     }};
 }
 
-/// `convert_datetime_to_uint` converts a `DateTime` to an u64 value
+/// Converts a `DateTime` to an u64 value
 #[inline]
 pub fn convert_datetime_to_uint(
     ctx: &mut EvalContext,
@@ -335,7 +335,7 @@ pub fn convert_datetime_to_uint(
     decimal_as_u64!(t.to_decimal()?, ctx, tp)
 }
 
-/// `convert_duration_to_uint` converts a `Duration` to an u64 value
+/// Converts a `Duration` to an u64 value
 #[inline]
 pub fn convert_duration_to_uint(
     ctx: &mut EvalContext,
@@ -346,7 +346,7 @@ pub fn convert_duration_to_uint(
     decimal_as_u64!(Decimal::try_from(dur)?, ctx, tp)
 }
 
-/// `convert_decimal_to_uint` converts a `Decimal` to an u64 value
+/// Converts a `Decimal` to an u64 value
 #[inline]
 pub fn convert_decimal_to_uint(
     ctx: &mut EvalContext,
@@ -368,7 +368,7 @@ pub fn convert_decimal_to_uint(
     decimal_as_u64!(dec, ctx, tp)
 }
 
-/// `convert_json_to_uint` converts a `Json` to an u64 value
+/// Converts a `Json` to an u64 value
 #[inline]
 pub fn convert_json_to_uint(ctx: &mut EvalContext, json: &Json, tp: FieldTypeTp) -> Result<u64> {
     let val = json.cast_to_uint(ctx)?;
