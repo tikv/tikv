@@ -230,7 +230,7 @@ pub enum Command {
     /// **This is an unsafe action.**
     ///
     /// All keys in the range will be deleted permanently regardless of their timestamps.
-    /// This means, you are even unable to get deleted keys by specifying an older timestamp.
+    /// This means that deleted keys will not be retrievable by specifying an older timestamp.
     DeleteRange {
         ctx: Context,
         /// The inclusive start key.
