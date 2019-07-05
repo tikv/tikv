@@ -14,24 +14,35 @@ fn if_null<T: Evaluable>(lhs: &Option<T>, rhs: &Option<T>) -> Result<Option<T>> 
     Ok(rhs.clone())
 }
 
-#[rpn_fn(raw_varg)]
+#[rpn_fn(raw_varg, validator = case_when_validator::<T>)]
 #[inline]
 pub fn case_when<T: Evaluable>(args: &[ScalarValueRef<'_>]) -> Result<Option<T>> {
     for chunk in args.chunks(2) {
         if chunk.len() == 1 {
-            // else statement
-            // TODO: Must verify type
+            // Else statement
             let ret: &Option<T> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
             return Ok(ret.clone());
         }
         let cond: &Option<Int> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
         if cond == &Some(1) {
-            // TODO: Must verify type
             let ret: &Option<T> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
             return Ok(ret.clone());
         }
     }
     Ok(None)
+}
+
+fn case_when_validator<T: Evaluable>(expr: &tipb::expression::Expr) -> Result<()> {
+    super::function::validate_expr_return_type(expr, T::EVAL_TYPE)?;
+    for chunk in expr.get_children().chunks(2) {
+        if chunk.len() == 1 {
+            super::function::validate_expr_return_type(&chunk[0], T::EVAL_TYPE)?;
+        } else {
+            super::function::validate_expr_return_type(&chunk[0], Int::EVAL_TYPE)?;
+            super::function::validate_expr_return_type(&chunk[1], T::EVAL_TYPE)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
