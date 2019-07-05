@@ -465,7 +465,7 @@ impl<E: Engine> Scheduler<E> {
             start_ts,
             tctx.cb,
             pr,
-            lock.clone(),
+            lock,
             is_first_lock,
         );
         // Set `WAIT_TABLE_IS_EMPTY` here to prevent there is an on-the-fly WaitFor msg
