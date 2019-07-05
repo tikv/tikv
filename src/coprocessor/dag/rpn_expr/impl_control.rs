@@ -24,7 +24,7 @@ pub fn case_when<T: Evaluable>(args: &[ScalarValueRef<'_>]) -> Result<Option<T>>
             return Ok(ret.clone());
         }
         let cond: &Option<Int> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
-        if cond == &Some(1) {
+        if cond.unwrap_or(0) != 0 {
             let ret: &Option<T> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
             return Ok(ret.clone());
         }
@@ -90,6 +90,7 @@ mod tests {
             (vec![0.into(), ScalarValue::Real(None)], None),
             (vec![1.into(), ScalarValue::Real(None)], None),
             (vec![1.into(), (3.5).into()], Real::new(3.5).ok()),
+            (vec![2.into(), (3.5).into()], Real::new(3.5).ok()),
             (
                 vec![
                     0.into(),
