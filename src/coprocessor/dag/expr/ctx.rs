@@ -47,6 +47,8 @@ bitflags! {
 
         /// DIVIDED_BY_ZERO_AS_WARNING indicates if DividedByZero should be returned as warning.
         const DIVIDED_BY_ZERO_AS_WARNING = 1 << 8;
+        /// `IN_LOAD_DATA_STMT` indicates if this is a LOAD DATA statement.
+        const IN_LOAD_DATA_STMT = 1 << 10;
     }
 }
 
@@ -289,6 +291,15 @@ impl EvalContext {
             &mut self.warnings,
             EvalWarnings::new(self.cfg.max_warning_cnt),
         )
+    }
+
+    /// Indicates whether values less than 0 should be clipped to 0 for unsigned
+    /// integer types. This is the case for `insert`, `update`, `alter table` and
+    /// `load data infile` statements, when not in strict SQL mode.
+    /// see https://dev.mysql.com/doc/refman/5.7/en/out-of-range-and-overflow.html
+    pub fn should_clip_to_zero(&self) -> bool {
+        self.cfg.flag.contains(Flag::IN_INSERT_STMT)
+            || self.cfg.flag.contains(Flag::IN_LOAD_DATA_STMT)
     }
 }
 
