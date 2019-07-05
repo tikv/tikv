@@ -7,6 +7,7 @@ pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_control;
 pub mod impl_like;
+pub mod impl_math;
 pub mod impl_op;
 
 pub use self::types::*;
@@ -21,6 +22,7 @@ use self::impl_arithmetic::*;
 use self::impl_compare::*;
 use self::impl_control::*;
 use self::impl_like::*;
+use self::impl_math::*;
 use self::impl_op::*;
 
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
@@ -168,6 +170,10 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfNullTime => if_null_fn_meta::<DateTime>(),
         ScalarFuncSig::IfNullDuration => if_null_fn_meta::<Duration>(),
         ScalarFuncSig::IfNullJson => if_null_fn_meta::<Json>(),
+        ScalarFuncSig::AbsInt => abs_int_fn_meta(),
+        ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
+        ScalarFuncSig::AbsReal => abs_real_fn_meta(),
+        ScalarFuncSig::AbsDecimal => abs_decimal_fn_meta(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),
@@ -175,6 +181,13 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::CoalesceTime => coalesce_fn_meta::<DateTime>(),
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
         ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
+        ScalarFuncSig::InInt => compare_in_fn_meta::<Int>(),
+        ScalarFuncSig::InReal => compare_in_fn_meta::<Real>(),
+        ScalarFuncSig::InString => compare_in_fn_meta::<Bytes>(),
+        ScalarFuncSig::InDecimal => compare_in_fn_meta::<Decimal>(),
+        ScalarFuncSig::InTime => compare_in_fn_meta::<DateTime>(),
+        ScalarFuncSig::InDuration => compare_in_fn_meta::<Duration>(),
+        ScalarFuncSig::InJson => compare_in_fn_meta::<Json>(),
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
