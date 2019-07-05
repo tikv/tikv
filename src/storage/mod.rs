@@ -1116,7 +1116,7 @@ impl<E: Engine> Storage<E> {
     /// Delete all keys in the range [`start_key`, `end_key`).
     ///
     /// All keys in the range will be deleted permanently regardless of their timestamps.
-    /// That means, you are even unable to get deleted keys by specifying an older timestamp.
+    /// This means that deleted keys will not be retrievable by specifying an older timestamp.
     /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
     /// still be replicated via Raft. This is used to notify that the data will be deleted by
     /// `unsafe_destroy_range` soon.
