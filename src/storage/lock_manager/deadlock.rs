@@ -396,7 +396,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             if role == StateRole::Leader {
                 info!("became the leader of deadlock detector!"; "self_id" => self.store_id);
             } else {
-                info!("changed from leader to follower"; "self_id" => self.store_id);
+                info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id);
             }
             self.reset(role);
         }
