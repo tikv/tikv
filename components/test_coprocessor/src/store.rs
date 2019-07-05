@@ -159,11 +159,13 @@ impl<E: Engine> Store<E> {
 
     pub fn commit_with_ctx(&mut self, ctx: Context) {
         let commit_ts = next_id() as u64;
-        let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
-        self.store
-            .commit(ctx, handles, self.current_ts, commit_ts)
-            .unwrap();
-        self.last_committed_ts = commit_ts;
+        let handles: Vec<_> = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
+        if !handles.is_empty() {
+            self.store
+                .commit(ctx, handles, self.current_ts, commit_ts)
+                .unwrap();
+            self.last_committed_ts = commit_ts;
+        }
     }
 
     pub fn commit(&mut self) {

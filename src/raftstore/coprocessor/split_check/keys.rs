@@ -230,7 +230,7 @@ mod tests {
     use std::cmp;
     use std::sync::{mpsc, Arc};
     use std::u64;
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::worker::Runnable;
 
     use super::*;
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -351,7 +351,10 @@ mod tests {
 
     #[test]
     fn test_region_approximate_keys() {
-        let path = TempDir::new("_test_region_approximate_keys").expect("");
+        let path = Builder::new()
+            .prefix("_test_region_approximate_keys")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();

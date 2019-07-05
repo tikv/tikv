@@ -41,11 +41,6 @@ impl ScalarValue {
     }
 
     #[inline]
-    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
-        VectorLikeValueRef::Scalar(self)
-    }
-
-    #[inline]
     pub fn as_scalar_value_ref(&self) -> ScalarValueRef<'_> {
         match_template_evaluable! {
             TT, match self {
@@ -65,41 +60,6 @@ impl AsMySQLBool for ScalarValue {
         }
     }
 }
-
-macro_rules! impl_as_ref {
-    ($ty:tt, $name:ident) => {
-        impl ScalarValue {
-            #[inline]
-            pub fn $name(&self) -> &Option<$ty> {
-                match self {
-                    ScalarValue::$ty(ref v) => v,
-                    other => panic!(
-                        "Cannot cast {} scalar value into {}",
-                        other.eval_type(),
-                        stringify!($ty),
-                    ),
-                }
-            }
-        }
-
-        impl AsRef<Option<$ty>> for ScalarValue {
-            #[inline]
-            fn as_ref(&self) -> &Option<$ty> {
-                self.$name()
-            }
-        }
-
-        // `AsMut` is not implemented intentionally.
-    };
-}
-
-impl_as_ref! { Int, as_int }
-impl_as_ref! { Real, as_real }
-impl_as_ref! { Decimal, as_decimal }
-impl_as_ref! { Bytes, as_bytes }
-impl_as_ref! { DateTime, as_date_time }
-impl_as_ref! { Duration, as_duration }
-impl_as_ref! { Json, as_json }
 
 macro_rules! impl_from {
     ($ty:tt) => {
@@ -173,6 +133,62 @@ impl<'a> ScalarValueRef<'a> {
         }
     }
 }
+
+macro_rules! impl_as_ref {
+    ($ty:tt, $name:ident) => {
+        impl ScalarValue {
+            #[inline]
+            pub fn $name(&self) -> &Option<$ty> {
+                match self {
+                    ScalarValue::$ty(v) => v,
+                    other => panic!(
+                        "Cannot cast {} scalar value into {}",
+                        other.eval_type(),
+                        stringify!($ty),
+                    ),
+                }
+            }
+        }
+
+        impl AsRef<Option<$ty>> for ScalarValue {
+            #[inline]
+            fn as_ref(&self) -> &Option<$ty> {
+                self.$name()
+            }
+        }
+
+        impl<'a> ScalarValueRef<'a> {
+            #[inline]
+            pub fn $name(&'a self) -> &'a Option<$ty> {
+                match self {
+                    ScalarValueRef::$ty(v) => v,
+                    other => panic!(
+                        "Cannot cast {} scalar value into {}",
+                        other.eval_type(),
+                        stringify!($ty),
+                    ),
+                }
+            }
+        }
+
+        impl AsRef<Option<$ty>> for ScalarValueRef<'_> {
+            #[inline]
+            fn as_ref(&self) -> &Option<$ty> {
+                self.$name()
+            }
+        }
+
+        // `AsMut` is not implemented intentionally.
+    };
+}
+
+impl_as_ref! { Int, as_int }
+impl_as_ref! { Real, as_real }
+impl_as_ref! { Decimal, as_decimal }
+impl_as_ref! { Bytes, as_bytes }
+impl_as_ref! { DateTime, as_date_time }
+impl_as_ref! { Duration, as_duration }
+impl_as_ref! { Json, as_json }
 
 impl<'a> Ord for ScalarValueRef<'a> {
     fn cmp(&self, other: &Self) -> Ordering {

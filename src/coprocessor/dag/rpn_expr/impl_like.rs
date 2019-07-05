@@ -1,35 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cop_codegen::RpnFunction;
+use cop_codegen::rpn_fn;
 
-use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::expr_util;
 use crate::coprocessor::Result;
 
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 3)]
-pub struct RpnFnLike;
-
-impl RpnFnLike {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        target: &Option<Bytes>,
-        pattern: &Option<Bytes>,
-        escape: &Option<i64>,
-    ) -> Result<Option<i64>> {
-        match (target, pattern, escape) {
-            (Some(target), Some(pattern), Some(escape)) => Ok(Some(expr_util::like::like(
-                target.as_slice(),
-                pattern.as_slice(),
-                *escape as u32,
-                0,
-            )? as i64)),
-            _ => Ok(None),
+#[rpn_fn]
+#[inline]
+pub fn like(
+    target: &Option<Bytes>,
+    pattern: &Option<Bytes>,
+    escape: &Option<i64>,
+) -> Result<Option<i64>> {
+    match (target, pattern, escape) {
+        (Some(target), Some(pattern), Some(escape)) => {
+            Ok(Some(
+                expr_util::like::like(target.as_slice(), pattern.as_slice(), *escape as u32, 0)?
+                    as i64,
+            ))
         }
+        _ => Ok(None),
     }
 }
 
@@ -37,7 +28,7 @@ impl RpnFnLike {
 mod tests {
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use crate::coprocessor::dag::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_like() {

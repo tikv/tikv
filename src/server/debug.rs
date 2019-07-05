@@ -427,10 +427,10 @@ impl Debugger {
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
                     v1!(
-                        "thread {}: started on range [\"{}\", \"{}\")",
+                        "thread {}: started on range [{}, {})",
                         thread_index,
-                        escape(&start_key),
-                        escape(&end_key)
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key)
                     );
 
                     recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
@@ -1020,7 +1020,7 @@ impl MvccChecker {
                         v1!(
                             "thread {}: LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
                             self.thread_index,
-                            escape(key),
+                            hex::encode_upper(key),
                             l.ts,
                             commit_ts
                         );
@@ -1042,7 +1042,7 @@ impl MvccChecker {
                             v1!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
-                                escape(key),
+                                hex::encode_upper(key),
                                 l.ts
                             );
                             self.delete(wb, CF_LOCK, key, None)?;
@@ -1082,7 +1082,7 @@ impl MvccChecker {
                 v1!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
-                    escape(key),
+                    hex::encode_upper(key),
                     default.unwrap()
                 );
                 self.delete(wb, CF_DEFAULT, key, default)?;
@@ -1094,7 +1094,7 @@ impl MvccChecker {
                     v1!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
-                        escape(key),
+                        hex::encode_upper(key),
                         w.start_ts,
                         commit_ts
                     );
@@ -1315,8 +1315,8 @@ impl MvccInfoIterator {
                 _ => {
                     let err_msg = format!(
                         "scan_mvcc CF_DEFAULT corrupt: want {}, got {}",
-                        escape(&min_prefix),
-                        escape(box_try!(Key::truncate_ts_for(self.default_iter.key())))
+                        hex::encode_upper(&min_prefix),
+                        hex::encode_upper(box_try!(Key::truncate_ts_for(self.default_iter.key())))
                     );
                     return Err(box_err!(err_msg));
                 }
@@ -1481,7 +1481,7 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use super::*;
     use crate::storage::mvcc::{Lock, LockType};
@@ -1584,7 +1584,7 @@ mod tests {
     }
 
     fn new_debugger() -> Debugger {
-        let tmp = TempDir::new("test_debug").unwrap();
+        let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
             rocks::util::new_engine_opt(
@@ -2166,7 +2166,10 @@ mod tests {
             ));
         }
 
-        let path = TempDir::new("test_mvcc_checker").expect("");
+        let path = Builder::new()
+            .prefix("test_mvcc_checker")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let cfs_opts = ALL_CFS
             .iter()

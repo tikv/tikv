@@ -80,7 +80,7 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
         let timer = self.summary_collector.on_start_iterate();
         let result = self.inner.next_batch(scan_rows);
         self.summary_collector
-            .on_finish_iterate(timer, result.data.rows_len());
+            .on_finish_iterate(timer, result.logical_rows.len());
         result
     }
 
@@ -103,9 +103,18 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
 /// It is designed to be used in new generation executors, i.e. executors support batch execution.
 /// The old executors will not be refined to return this kind of result.
 pub struct BatchExecuteResult {
-    /// The columns data generated during this invocation. Note that empty column data doesn't mean
-    /// that there is no more data. See `is_drained`.
-    pub data: LazyBatchColumnVec,
+    /// The *physical* columns data generated during this invocation.
+    ///
+    /// Note 1: Empty column data doesn't mean that there is no more data. See `is_drained`.
+    ///
+    /// Note 2: This is only a *physical* store of data. The data may not be in desired order and
+    ///         there could be filtered out data stored inside. You should access the *logical*
+    ///         data via the `logical_rows` field. For the same reason, `rows_len() > 0` doesn't
+    ///         mean that there is logical data inside.
+    pub physical_columns: LazyBatchColumnVec,
+
+    /// Valid row offsets in `physical_columns`, placed in the logical order.
+    pub logical_rows: Vec<usize>,
 
     /// The warnings generated during this invocation.
     // TODO: It can be more general, e.g. `ExecuteWarnings` instead of `EvalWarnings`.

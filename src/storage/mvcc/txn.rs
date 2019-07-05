@@ -189,13 +189,13 @@ impl<S: Snapshot> MvccTxn<S> {
         for_update_ts: u64,
         lock: Lock,
     ) -> Result<()> {
-        // Optimistic lock's for_update_ts is its start_ts.
-        let lock_for_update_ts = if lock.for_update_ts > 0 {
-            lock.for_update_ts
-        } else {
-            lock.ts
-        };
-        if for_update_ts > lock_for_update_ts {
+        // The previous pessimistic transaction has been committed or aborted.
+        // Resolve it immediately.
+        //
+        // Because the row key is locked, the optimistic transaction will
+        // abort. Resolve it immediately.
+        // Optimistic lock's for_update_ts is zero.
+        if for_update_ts > lock.for_update_ts {
             Err(Error::KeyIsLocked {
                 key: key.into_raw()?,
                 primary: lock.primary,

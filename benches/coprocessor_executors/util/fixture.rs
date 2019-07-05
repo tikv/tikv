@@ -339,8 +339,11 @@ impl BatchExecutor for BatchFixtureExecutor {
             columns.push(column);
         }
 
+        let physical_columns = LazyBatchColumnVec::from(columns);
+        let logical_rows = (0..physical_columns.rows_len()).collect();
         BatchExecuteResult {
-            data: LazyBatchColumnVec::from(columns),
+            physical_columns,
+            logical_rows,
             warnings: EvalWarnings::default(),
             is_drained: Ok(self.columns[0].is_empty()),
         }

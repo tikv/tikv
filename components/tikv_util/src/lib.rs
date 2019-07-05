@@ -29,6 +29,8 @@ extern crate slog;
 extern crate slog_global;
 #[cfg(test)]
 extern crate test;
+#[macro_use]
+extern crate fail;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
@@ -453,7 +455,7 @@ impl<T> DerefMut for MustConsumeVec<T> {
 impl<T> Drop for MustConsumeVec<T> {
     fn drop(&mut self) {
         if !self.is_empty() {
-            panic!("resource leak detected: {}.", self.tag);
+            safe_panic!("resource leak detected: {}.", self.tag);
         }
     }
 }
@@ -531,16 +533,6 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     }))
 }
 
-#[inline]
-pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
-    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
-    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
-    // here.
-    let mut new_vec = Vec::with_capacity(vec.capacity());
-    new_vec.extend_from_slice(vec);
-    new_vec
-}
-
 /// Checks environment variables that affect TiKV.
 pub fn check_environment_variables() {
     if cfg!(unix) && env::var("TZ").is_err() {
@@ -586,18 +578,24 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_panic_mark_file_path() {
-        let dir = TempDir::new("test_panic_mark_file_path").unwrap();
+        let dir = Builder::new()
+            .prefix("test_panic_mark_file_path")
+            .tempdir()
+            .unwrap();
         let panic_mark_file = panic_mark_file_path(dir.path());
         assert_eq!(panic_mark_file, dir.path().join(PANIC_MARK_FILE))
     }
 
     #[test]
     fn test_panic_mark_file_exists() {
-        let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
+        let dir = Builder::new()
+            .prefix("test_panic_mark_file_exists")
+            .tempdir()
+            .unwrap();
         create_panic_mark_file(dir.path());
         assert!(panic_mark_file_exists(dir.path()));
     }
@@ -757,5 +755,17 @@ mod tests {
         assert!(is_zero_duration(&Duration::new(0, 0)));
         assert!(!is_zero_duration(&Duration::new(1, 0)));
         assert!(!is_zero_duration(&Duration::new(0, 1)));
+    }
+
+    #[test]
+    fn test_must_consume_vec_dtor_not_abort() {
+        let res = panic_hook::recover_safe(|| {
+            let mut v = MustConsumeVec::new("test");
+            v.push(2);
+            panic!("Panic with MustConsumeVec non-empty");
+            // It would abort if there was a double-panic in dtor, thus
+            // the test would fail.
+        });
+        res.unwrap_err();
     }
 }

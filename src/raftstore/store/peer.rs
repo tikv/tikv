@@ -40,7 +40,7 @@ use crate::raftstore::{Error, Result};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
-use tikv_util::{escape, MustConsumeVec};
+use tikv_util::MustConsumeVec;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -67,6 +67,37 @@ impl ReadIndexRequest {
             slice::from_raw_parts(id, 8)
         }
     }
+
+    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        self.cmds.push((req, cb));
+    }
+
+    fn with_command(
+        id: u64,
+        req: RaftCmdRequest,
+        cb: Callback,
+        renew_lease_time: Timespec,
+    ) -> Self {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
+        cmds.push((req, cb));
+        ReadIndexRequest {
+            id,
+            cmds,
+            renew_lease_time,
+            read_index: None,
+        }
+    }
+}
+
+impl Drop for ReadIndexRequest {
+    fn drop(&mut self) {
+        let dur = (monotonic_raw_now() - self.renew_lease_time)
+            .to_std()
+            .unwrap();
+        RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
+    }
 }
 
 #[derive(Default)]
@@ -84,6 +115,7 @@ impl ReadIndexQueue {
 
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
@@ -300,6 +332,8 @@ pub struct Peer {
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
+    /// The index of the latest proposed prepare merge command.
+    last_proposed_prepare_merge_idx: u64,
     /// The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
@@ -369,6 +403,7 @@ impl Peer {
             pending_remove: false,
             pending_merge_state: None,
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
+            last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag,
@@ -495,6 +530,7 @@ impl Peer {
         }
 
         for mut read in self.pending_reads.reads.drain(..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_req_region_removed(region.get_id(), cb);
             }
@@ -676,10 +712,14 @@ impl Peer {
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            self.send_raft_message(msg, trans);
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
-                MessageType::MsgAppendResponse => metrics.append_resp += 1,
+                MessageType::MsgAppendResponse => {
+                    if msg.get_request_snapshot() != raft::INVALID_INDEX {
+                        metrics.request_snapshot += 1;
+                    }
+                    metrics.append_resp += 1;
+                }
                 MessageType::MsgRequestPreVote => metrics.prevote += 1,
                 MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
@@ -711,6 +751,7 @@ impl Peer {
                 | MessageType::MsgReadIndex
                 | MessageType::MsgReadIndexResp => {}
             }
+            self.send_raft_message(msg, trans);
         }
     }
 
@@ -979,6 +1020,45 @@ impl Peer {
             || self.pending_merge_state.is_some()
     }
 
+    // Checks merge strictly, it checks whether there is any onging merge by
+    // tracking last proposed prepare merge.
+    // TODO: There is a false positives, proposed prepare merge may never be
+    //       committed.
+    fn is_merging_strict(&self) -> bool {
+        self.last_proposed_prepare_merge_idx > self.get_store().applied_index() || self.is_merging()
+    }
+
+    // Check if this peer can handle request_snapshot.
+    pub fn ready_to_handle_request_snapshot(&mut self, request_index: u64) -> bool {
+        let reject_reason = if !self.is_leader() {
+            // Only leader can handle request snapshot.
+            "not_leader"
+        } else if self.get_store().applied_index_term() != self.term()
+            || self.get_store().applied_index() < request_index
+        {
+            // Reject if there are any unapplied raft log.
+            // We don't want to handle request snapshot if there is any ongoing
+            // merge, because it is going to be destroyed. This check prevents
+            // handling request snapshot after leadership being transferred.
+            "stale_apply"
+        } else if self.is_merging_strict() || self.is_splitting() {
+            // Reject if it is merging or splitting.
+            // `is_merging_strict` also checks last proposed prepare merge, it
+            // prevents handling request snapshot while a prepare merge going
+            // to be committed.
+            "split_merge"
+        } else {
+            return true;
+        };
+
+        info!("can not handle request snapshot";
+            "reason" => reject_reason,
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.peer_id(),
+            "request_index" => request_index);
+        false
+    }
+
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
         if self.apply_proposals.is_empty() {
             return None;
@@ -1071,15 +1151,6 @@ impl Peer {
                     return None;
                 }
             }
-        }
-
-        // Check whether there is a pending generate snapshot task, the task
-        // needs to be sent the apply system.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
         }
 
         if !self
@@ -1249,6 +1320,16 @@ impl Peer {
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
+            // Check whether there is a pending generate snapshot task, the task
+            // needs to be sent to the apply system.
+            // Always sending snapshot task behind apply task, so it gets latest
+            // snapshot.
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
         }
 
         self.apply_reads(ctx, &ready);
@@ -1267,6 +1348,8 @@ impl Peer {
         if self.pending_reads.ready_cnt > 0 {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
+                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+
                 let is_read_index_request = read.cmds.len() == 1
                     && read.cmds[0].0.get_requests().len() == 1
                     && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
@@ -1305,6 +1388,7 @@ impl Peer {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                 for (req, cb) in read.cmds.drain(..) {
                     cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
                 }
@@ -1376,6 +1460,7 @@ impl Peer {
             if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
                 for _ in 0..self.pending_reads.ready_cnt {
                     let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                     }
@@ -1803,7 +1888,7 @@ impl Peer {
                     if let Some(read) = self.pending_reads.reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
-                            read.cmds.push((req, cb));
+                            read.push_command(req, cb);
                             return false;
                         }
                     }
@@ -1835,14 +1920,9 @@ impl Peer {
             return false;
         }
 
-        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
-        cmds.push((req, cb));
-        self.pending_reads.reads.push_back(ReadIndexRequest {
-            id,
-            cmds,
-            renew_lease_time,
-            read_index: None,
-        });
+        let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        self.pending_reads.reads.push_back(read_proposal);
+
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
@@ -1860,10 +1940,32 @@ impl Peer {
         true
     }
 
-    pub fn get_min_progress(&self) -> u64 {
-        self.raft_group.status_ref().progress.map_or(0, |p| {
-            p.iter().map(|(_, pr)| pr.matched).min().unwrap_or_default()
-        })
+    // For now, it is only used in merge.
+    pub fn get_min_progress(&self) -> Result<u64> {
+        let mut min = None;
+        if let Some(progress) = self.raft_group.status_ref().progress {
+            for (id, pr) in progress.iter() {
+                // Reject merge if there is any pending request snapshot,
+                // because a target region may merge a source region which is in
+                // an invalid state.
+                if pr.state == ProgressState::Snapshot
+                    || pr.pending_request_snapshot != INVALID_INDEX
+                {
+                    return Err(box_err!(
+                        "there is a pending snapshot peer {} [{:?}], skip merge",
+                        id,
+                        pr
+                    ));
+                }
+                if min.is_none() {
+                    min = Some(pr.matched);
+                }
+                if min.unwrap() > pr.matched {
+                    min = Some(pr.matched);
+                }
+            }
+        }
+        Ok(min.unwrap_or(0))
     }
 
     fn pre_propose_prepare_merge<T, C>(
@@ -1872,7 +1974,7 @@ impl Peer {
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
-        let min_progress = self.get_min_progress();
+        let min_progress = self.get_min_progress()?;
         let min_index = min_progress + 1;
         if min_progress == 0 || last_index - min_progress > ctx.cfg.merge_max_log_gap {
             return Err(box_err!(
@@ -1998,6 +2100,10 @@ impl Peer {
             return Err(Error::NotLeader(self.region_id, None));
         }
 
+        if ctx.contains(ProposalContext::PREPARE_MERGE) {
+            self.last_proposed_prepare_merge_idx = propose_index;
+        }
+
         Ok(propose_index)
     }
 
@@ -2118,6 +2224,7 @@ impl Peer {
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
         for mut read in self.pending_reads.reads.drain(..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             read.cmds.clear();
         }
     }
@@ -2408,7 +2515,7 @@ impl ReadExecutor {
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
                         region.get_id(),
-                        escape(key),
+                        hex::encode_upper(key),
                         cf,
                         e
                     )
@@ -2420,7 +2527,7 @@ impl ReadExecutor {
                     panic!(
                         "[region {}] failed to get {}: {:?}",
                         region.get_id(),
-                        escape(key),
+                        hex::encode_upper(key),
                         e
                     )
                 })

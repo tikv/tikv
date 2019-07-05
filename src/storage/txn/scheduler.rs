@@ -112,6 +112,10 @@ impl TaskContext {
     fn new(task: Task, latches: &Latches, cb: StorageCb) -> TaskContext {
         let tag = task.cmd().tag();
         let lock = gen_command_lock(latches, task.cmd());
+        // Write command should acquire write lock.
+        if !task.cmd().readonly() && !lock.is_write_lock() {
+            panic!("write lock is expected for command {:?}", task.cmd());
+        }
         let write_bytes = if lock.is_write_lock() {
             task.cmd().write_bytes()
         } else {
@@ -330,7 +334,7 @@ impl<E: Engine> Scheduler<E> {
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
-    /// the method initiates a get snapshot operation for furthur processing.
+    /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
         if self.inner.acquire_lock(cid) {
             self.get_snapshot(cid);

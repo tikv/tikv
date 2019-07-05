@@ -206,7 +206,7 @@ mod tests {
         // update vector
         state.update(&mut ctx, &Some(7i64)).unwrap();
         state
-            .update_vector(&mut ctx, &[Some(21i64), None, Some(22i64)])
+            .update_vector(&mut ctx, &[Some(21i64), None, Some(22i64)], &[0, 1, 2])
             .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -256,7 +256,7 @@ mod tests {
         // update vector
         state.update(&mut ctx, &Some(70i64)).unwrap();
         state
-            .update_vector(&mut ctx, &[Some(69i64), None, Some(68i64)])
+            .update_vector(&mut ctx, &[Some(69i64), None, Some(68i64)], &[0, 1, 2])
             .unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
@@ -291,14 +291,17 @@ mod tests {
         let src_schema = [FieldTypeTp::LongLong.into()];
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
+            col.mut_decoded().push_int(Some(10000));
             col.mut_decoded().push_int(Some(1));
             col.mut_decoded().push_int(Some(23));
             col.mut_decoded().push_int(Some(42));
+            col.mut_decoded().push_int(Some(-10000));
             col.mut_decoded().push_int(None);
             col.mut_decoded().push_int(Some(99));
             col.mut_decoded().push_int(Some(-1));
             col
         }]);
+        let logical_rows = vec![3, 2, 6, 5, 1, 7];
 
         let mut schema = vec![];
         let mut exp = vec![];
@@ -325,19 +328,27 @@ mod tests {
 
         // max
         {
-            let max_result = exp[0].eval(&mut ctx, 6, &src_schema, &mut columns).unwrap();
-            assert!(max_result.is_vector());
-            let max_slice: &[Option<Int>] = max_result.vector_value().unwrap().as_ref();
-            max_state.update_vector(&mut ctx, max_slice).unwrap();
+            let max_result = exp[0]
+                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+                .unwrap();
+            let max_result = max_result.vector_value().unwrap();
+            let max_slice: &[Option<Int>] = max_result.as_ref().as_ref();
+            max_state
+                .update_vector(&mut ctx, max_slice, max_result.logical_rows())
+                .unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
         // min
         {
-            let min_result = exp[1].eval(&mut ctx, 6, &src_schema, &mut columns).unwrap();
-            assert!(min_result.is_vector());
-            let min_slice: &[Option<Int>] = min_result.vector_value().unwrap().as_ref();
-            min_state.update_vector(&mut ctx, min_slice).unwrap();
+            let min_result = exp[0]
+                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+                .unwrap();
+            let min_result = min_result.vector_value().unwrap();
+            let min_slice: &[Option<Int>] = min_result.as_ref().as_ref();
+            min_state
+                .update_vector(&mut ctx, min_slice, min_result.logical_rows())
+                .unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
