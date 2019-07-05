@@ -416,7 +416,7 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
         return Cow::Borrowed(s);
     }
 
-    let mut int_str = String::with_capacity(s.len());
+    let mut int_str = String::with_capacity(s.len() + 1);
     match s.rfind(|c| c != '9' && c != '+' && c != '-') {
         Some(idx) => {
             int_str.push_str(&s[..idx]);
