@@ -126,7 +126,7 @@ impl VectorValue {
     /// The caller must provide an output buffer which is large enough for holding values.
     pub fn eval_as_mysql_bools(
         &self,
-        context: &mut EvalContext,
+        ctx: &mut EvalContext,
         outputs: &mut [bool],
     ) -> crate::coprocessor::Result<()> {
         assert!(outputs.len() >= self.len());
@@ -135,7 +135,7 @@ impl VectorValue {
                 VectorValue::TT(v) => {
                     let l = self.len();
                     for i in 0..l {
-                        outputs[i] = v[i].as_mysql_bool(context)?;
+                        outputs[i] = v[i].as_mysql_bool(ctx)?;
                     }
                 },
             }

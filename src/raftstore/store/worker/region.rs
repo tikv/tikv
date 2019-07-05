@@ -25,7 +25,6 @@ use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, SnapEntry, SnapKey, SnapManager,
 };
-use tikv_util::escape;
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time;
 use tikv_util::timer::Timer;
@@ -89,8 +88,8 @@ impl Display for Task {
                 f,
                 "Destroy {} [{}, {})",
                 region_id,
-                escape(start_key),
-                escape(end_key)
+                hex::encode_upper(start_key),
+                hex::encode_upper(end_key)
             ),
         }
     }
@@ -175,8 +174,8 @@ impl PendingDeleteRanges {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
                 region_id,
-                escape(&start_key),
-                escape(&end_key),
+                hex::encode_upper(&start_key),
+                hex::encode_upper(&end_key),
             );
         }
         let info = StalePeerInfo {
@@ -279,7 +278,7 @@ impl SnapContext {
                 None => {
                     return Err(box_err!(
                         "failed to get region_state from {}",
-                        escape(&region_key)
+                        hex::encode_upper(&region_key)
                     ));
                 }
             };
@@ -305,7 +304,7 @@ impl SnapContext {
                 None => {
                     return Err(box_err!(
                         "failed to get raftstate from {}",
-                        escape(&state_key)
+                        hex::encode_upper(&state_key)
                     ));
                 }
             };
@@ -490,7 +489,7 @@ impl SnapContext {
             assert!(
                 self.pending_delete_ranges.remove(&key).is_some(),
                 "cleanup pending_delete_ranges {} should exist",
-                escape(&key)
+                hex::encode_upper(&key)
             );
         }
     }
@@ -677,7 +676,7 @@ mod tests {
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::time;
     use tikv_util::timer::Timer;
     use tikv_util::worker::Worker;
@@ -762,7 +761,10 @@ mod tests {
 
     #[test]
     fn test_pending_applies() {
-        let temp_dir = TempDir::new("test_pending_applies").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("test_pending_applies")
+            .tempdir()
+            .unwrap();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
@@ -803,7 +805,7 @@ mod tests {
             Arc::clone(&engine.kv),
             shared_block_cache,
         );
-        let snap_dir = TempDir::new("snap_dir").unwrap();
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();

@@ -250,19 +250,17 @@ impl EvalContext {
     }
 
     pub fn handle_invalid_time_error(&mut self, err: Error) -> Result<()> {
-        if err.code() != super::codec::error::ERR_TRUNCATE_WRONG_VALUE {
+        // FIXME: Only some of the errors can be converted to warning.
+        // See `handleInvalidTimeError` in TiDB.
+
+        if self.cfg.sql_mode.is_strict()
+            && (self.cfg.flag.contains(Flag::IN_INSERT_STMT)
+                || self.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT))
+        {
             return Err(err);
         }
-        let cfg = &self.cfg;
-        if cfg.sql_mode.is_strict()
-            && (cfg.flag.contains(Flag::IN_INSERT_STMT)
-                || cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT))
-        {
-            Err(err)
-        } else {
-            self.warnings.append_warning(err);
-            Ok(())
-        }
+        self.warnings.append_warning(err);
+        Ok(())
     }
 
     pub fn overflow_from_cast_str_as_int(

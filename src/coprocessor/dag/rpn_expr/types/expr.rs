@@ -10,8 +10,10 @@ use crate::coprocessor::codec::data_type::ScalarValue;
 pub enum RpnExpressionNode {
     /// Represents a function call.
     FnCall {
-        func: RpnFnMeta,
+        func_meta: RpnFnMeta,
+        args_len: usize,
         field_type: FieldType,
+        implicit_args: Vec<ScalarValue>,
     },
 
     /// Represents a scalar constant value.
@@ -39,7 +41,7 @@ impl RpnExpressionNode {
     #[inline]
     pub fn fn_call_func(&self) -> Option<RpnFnMeta> {
         match self {
-            RpnExpressionNode::FnCall { func, .. } => Some(*func),
+            RpnExpressionNode::FnCall { func_meta, .. } => Some(*func_meta),
             _ => None,
         }
     }

@@ -11,7 +11,7 @@ The design of TiKV is inspired by some great distributed systems from Google, su
 
 ![cncf_logo](images/cncf.png)
 
-TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
+TiKV is an incubating project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2019/05/21/toc-votes-to-move-tikv-into-cncf-incubator/).
 
 ---
 
@@ -71,22 +71,29 @@ We provide multiple deployment methods, but it is recommended to use our Ansible
     You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://github.com/pingcap/docs).
 
 - Try TiKV separately
-    - [Deploy TiKV Using Docker Compose](docs/op-guide/deploy-tikv-using-docker-compose.md): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
-    - [Deploy TiKV Using Docker](docs/op-guide/deploy-tikv-using-docker.md): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](docs/op-guide/deploy-tikv-using-binary.md): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+    - [Deploy TiKV Using Docker Compose](docs/how-to/deploy/using-docker-compose.md): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
+    - [Deploy TiKV Using Docker](docs/how-to/deploy/using-docker.md): To deploy a multi-node TiKV testing cluster using Docker
+    - [Deploy TiKV Using Binary Files](docs/how-to/deploy/using-binary.md): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
 
 ### Production deployment
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/op-guide/ansible-deployment.md)
-- [Deploy TiKV separately Using Ansible](docs/op-guide/deploy-tikv-using-ansible.md)
+- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md)
+- [Deploy TiKV separately Using Ansible](docs/how-to/deploy/using-ansible.md)
 
 ## Client drivers
 
-Currently, the only interface to TiKV is the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
+Currently, the interfaces to TiKV are the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
 
-If you want to try the Go client, see [Try Two Types of APIs](docs/clients/go-client-api.md).
+These are the clients for TiKV:
+
+- [Go](https://github.com/tikv/client-go) (The most stable and widely used)
+- [Java](https://github.com/tikv/client-java)
+- [Rust](https://github.com/tikv/client-rust)
+- [C](https://github.com/tikv/client-rust)
+
+If you want to try the Go client, see [Try Two Types of APIs](docs/reference/clients/go-client-api.md).
 
 ## Setting up a development workspace
 

@@ -11,6 +11,7 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::mysql::MAX_FSP;
+use crate::coprocessor::codec::{datum, Datum};
 use crate::coprocessor::{Error, Result};
 
 /// Helper to build an `RpnExpression`.
@@ -43,7 +44,7 @@ impl RpnExpressionBuilder {
             ExprType::MysqlDecimal => {}
             ExprType::MysqlJson => {}
             ExprType::ColumnRef => {}
-            _ => return Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+            _ => return Err(box_err!("Blacklist expression type {:?}", c.get_tp())),
         }
 
         Ok(())
@@ -120,12 +121,33 @@ impl RpnExpressionBuilder {
     #[cfg(test)]
     pub fn push_fn_call(
         mut self,
-        func: RpnFnMeta,
+        func_meta: RpnFnMeta,
+        args_len: usize,
         return_field_type: impl Into<FieldType>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
-            func,
+            func_meta,
+            args_len,
             field_type: return_field_type.into(),
+            implicit_args: vec![],
+        };
+        self.0.push(node);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn push_fn_call_with_implicit_args(
+        mut self,
+        func_meta: RpnFnMeta,
+        args_len: usize,
+        return_field_type: impl Into<FieldType>,
+        implicit_args: Vec<ScalarValue>,
+    ) -> Self {
+        let node = RpnExpressionNode::FnCall {
+            func_meta,
+            args_len,
+            field_type: return_field_type.into(),
+            implicit_args,
         };
         self.0.push(node);
         self
@@ -276,22 +298,41 @@ where
     F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
     // Map pb func to `RpnFnMeta`.
-    let func = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
+    let func_meta = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
+
+    // Validate the input expression.
+    // (func_meta.validator_ptr)(&tree_node)
+    //     .map_err(|e| Error::Other(box_err!("Invalid function signature: {}", e)))?;
+
     let args = tree_node.take_children().into_vec();
-    if func.args_len != args.len() {
-        return Err(box_err!(
-            "Unexpected arguments, expect {}, received {}",
-            func.args_len,
-            args.len()
-        ));
+    let args_len = args.len();
+
+    // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
+    let datums = datum::decode(&mut tree_node.get_val())?;
+    let mut implicit_args = Vec::with_capacity(datums.len());
+    for d in datums {
+        let arg = match d {
+            Datum::I64(n) => ScalarValue::Int(Some(n)),
+            Datum::U64(n) => ScalarValue::Int(Some(n as i64)),
+            Datum::F64(n) => ScalarValue::Real(Real::new(n).ok()),
+            Datum::Dur(dur) => ScalarValue::Duration(Some(dur)),
+            Datum::Bytes(bytes) => ScalarValue::Bytes(Some(bytes)),
+            Datum::Dec(dec) => ScalarValue::Decimal(Some(dec)),
+            Datum::Json(json) => ScalarValue::Json(Some(json)),
+            _ => return Err(box_err!("Unsupported push down datum {}", d)),
+        };
+        implicit_args.push(arg);
     }
+
     // Visit children first, then push current node, so that it is a post-order traversal.
     for arg in args {
         append_rpn_nodes_recursively(arg, rpn_nodes, time_zone, fn_mapper, max_columns)?;
     }
     rpn_nodes.push(RpnExpressionNode::FnCall {
-        func,
+        func_meta,
+        args_len,
         field_type: tree_node.take_field_type(),
+        implicit_args,
     });
     Ok(())
 }
@@ -426,7 +467,9 @@ mod tests {
     use cop_codegen::rpn_fn;
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
+    use tipb_helper::ExprDefBuilder;
 
+    use crate::coprocessor::codec::datum::{self, Datum};
     use crate::coprocessor::Result;
     use tikv_util::codec::number::NumberEncoder;
 
@@ -764,6 +807,128 @@ mod tests {
                 append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
                     .is_ok()
             );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::iter_skip_next)]
+    fn test_expr_with_val() {
+        fn build_expr() -> Expr {
+            let mut expr =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsReal, FieldTypeTp::LongLong)
+                    .build();
+            expr.mut_children()
+                .push(ExprDefBuilder::constant_int(7).build());
+            expr.mut_children()
+                .push(ExprDefBuilder::constant_int(3).build());
+            expr
+        }
+
+        // Simple cases
+        // bytes generated from TiDB
+        // datum(0)
+        let mut expr = build_expr();
+        expr.mut_val().extend(&vec![8, 0]);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(0))]);
+            }
+            _ => unreachable!(),
+        }
+
+        // datum(1)
+        let mut expr = build_expr();
+        expr.mut_val().extend(&vec![8, 2]);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(1))]);
+            }
+            _ => unreachable!(),
+        }
+
+        // bytes generated from TiKV
+        // datum(0)
+        let bytes = datum::encode_value(&[Datum::I64(0)]).unwrap();
+        let mut expr = build_expr();
+        expr.set_val(bytes);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(0))]);
+            }
+            _ => unreachable!(),
+        }
+
+        // datum(1)
+        let bytes = datum::encode_value(&[Datum::I64(1)]).unwrap();
+        let mut expr = build_expr();
+        expr.set_val(bytes);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(1))]);
+            }
+            _ => unreachable!(),
+        }
+
+        // Combine various datums
+        // bytes generated from TiDB
+        // Int/Real/Duration/Decimal/Bytes/Json
+        let mut expr = build_expr();
+        expr.mut_val().extend(&vec![
+            8, 0, 5, 191, 241, 153, 153, 153, 153, 153, 154, 2, 18, 102, 114, 111, 109, 32, 84,
+            105, 68, 66, 6, 2, 1, 129, 5, 10, 4, 2, 7, 128, 0, 0, 0, 0, 0, 39, 16,
+        ]);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        let args = vec![
+            ScalarValue::Int(Some(0)),
+            ScalarValue::Real(Some(Real::new(1.1).unwrap())),
+            ScalarValue::Bytes(Some(b"from TiDB".to_vec())),
+            ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
+            ScalarValue::Json(Some(Json::Boolean(false))),
+            ScalarValue::Duration(Some(Duration::from_micros(10, 6).unwrap())),
+        ];
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, args);
+            }
+            _ => unreachable!(),
+        }
+
+        // bytes generated from TiKV
+        let datums = vec![
+            Datum::I64(0),
+            Datum::F64(1.1),
+            Datum::Bytes(b"from TiKV".to_vec()),
+            Datum::Dec(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
+            Datum::Json(Json::Boolean(false)),
+            Datum::Dur(Duration::from_nanos(10000, 3).unwrap()),
+        ];
+        let bytes = datum::encode_value(&datums).unwrap();
+        let mut expr = build_expr();
+        expr.set_val(bytes);
+        let mut vec = vec![];
+        append_rpn_nodes_recursively(expr, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
+        let args = vec![
+            ScalarValue::Int(Some(0)),
+            ScalarValue::Real(Some(Real::new(1.1).unwrap())),
+            ScalarValue::Bytes(Some(b"from TiKV".to_vec())),
+            ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
+            ScalarValue::Json(Some(Json::Boolean(false))),
+            ScalarValue::Duration(Some(Duration::from_nanos(10000, 3).unwrap())),
+        ];
+        match vec.into_iter().skip(2).next().unwrap() {
+            RpnExpressionNode::FnCall { implicit_args, .. } => {
+                assert_eq!(implicit_args, args);
+            }
+            _ => unreachable!(),
         }
     }
 }

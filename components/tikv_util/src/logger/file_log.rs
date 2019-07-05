@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 /// Adds `Duration` to the initial date and time.
@@ -61,13 +61,39 @@ impl RotatingFileLogger {
         Utc::now() > self.next_rotation_time
     }
 
+    fn rename(&self) -> io::Result<()> {
+        fail_point!("file_log_rename", |t| {
+            if let Some(t) = t {
+                Err(match t.as_ref() {
+                    "NotFound" => ErrorKind::NotFound,
+                    "PermissionDenied" => ErrorKind::PermissionDenied,
+                    "AlreadyExists" => ErrorKind::AlreadyExists,
+                    "InvalidInput" => ErrorKind::InvalidInput,
+                    "InvalidData" => ErrorKind::InvalidData,
+                    "WriteZero" => ErrorKind::WriteZero,
+                    "UnexpectedEof" => ErrorKind::UnexpectedEof,
+                    _ => ErrorKind::Other,
+                }
+                .into())
+            } else {
+                Ok(())
+            }
+        });
+        // Note: renaming files while they're open only works on Linux and macOS.
+        let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
+        fs::rename(&self.file_path, new_path)
+    }
+
     /// Rotates the current file and updates the next rotation time.
     fn rotate(&mut self) -> io::Result<()> {
         self.flush()?;
 
-        // Note: renaming files while they're open only works on Linux and macOS.
-        let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
-        fs::rename(&self.file_path, new_path)?;
+        match self.rename() {
+            Ok(_) => Ok(()),
+            Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }?;
+
         let new_file = open_log_file(&self.file_path)?;
         self.update_rotation_time();
         self.file = new_file;
@@ -112,7 +138,7 @@ mod tests {
     use std::path::Path;
 
     use chrono::{Duration, Utc};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use utime;
 
     use super::{rotation_file_path_with_timestamp, RotatingFileLogger};
@@ -124,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_rotating_file_logger() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let log_file = tmp_dir
             .path()
             .join("test_rotating_file_logger.log")
@@ -157,12 +183,13 @@ mod tests {
 
     #[test]
     fn test_failing_to_rotate_file_will_not_cause_panic() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let log_file = tmp_dir.path().join("test_rotating_file_logger.log");
         let mut logger = RotatingFileLogger::new(&log_file, Duration::days(1)).unwrap();
-        // delete the log_file so rotation fails.
-        std::fs::remove_file(&log_file).unwrap();
-        logger.rotate().unwrap_err();
+        // trigger fail point
+        fail::cfg("file_log_rename", "return(NotFound)").unwrap();
+        logger.rotate().unwrap();
+        fail::remove("file_log_rename");
         // dropping the logger still should not panic.
         drop(logger);
     }
