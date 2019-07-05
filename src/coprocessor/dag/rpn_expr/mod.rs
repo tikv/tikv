@@ -181,6 +181,13 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::CoalesceTime => coalesce_fn_meta::<DateTime>(),
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
         ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
+        ScalarFuncSig::InInt => compare_in_fn_meta::<Int>(),
+        ScalarFuncSig::InReal => compare_in_fn_meta::<Real>(),
+        ScalarFuncSig::InString => compare_in_fn_meta::<Bytes>(),
+        ScalarFuncSig::InDecimal => compare_in_fn_meta::<Decimal>(),
+        ScalarFuncSig::InTime => compare_in_fn_meta::<DateTime>(),
+        ScalarFuncSig::InDuration => compare_in_fn_meta::<Duration>(),
+        ScalarFuncSig::InJson => compare_in_fn_meta::<Json>(),
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
