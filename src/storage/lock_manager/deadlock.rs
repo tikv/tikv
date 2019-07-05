@@ -137,8 +137,7 @@ pub enum Task {
     /// If the node has the leader region, and the role of the node changes,
     /// a `ChangeRole` task will be scheduled.
     ///
-    /// It's the only way to change the node from leader to follower and it
-    /// can speed up changing the node from follower to leader.
+    /// It's the only way to change the node from leader to follower, and vice versa.
     ChangeRole(StateRole),
 }
 
@@ -229,7 +228,9 @@ pub fn register_role_change_observer(host: &mut CoprocessorHost, worker: &Future
 struct Inner {
     /// The role of the deadlock detector. Default is `StateRole::Follower`.
     role: StateRole,
+
     detect_table: DetectTable,
+
     /// Max transaction's timestamp the deadlock detector received.
     /// Used to remove out of date entries in detect table.
     max_ts: u64,
@@ -254,6 +255,7 @@ pub struct Detector<S: StoreAddrResolver + 'static> {
     waiter_mgr_scheduler: WaiterMgrScheduler,
 
     inner: Rc<RefCell<Inner>>,
+
     is_initialized: bool,
 }
 
@@ -322,21 +324,24 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         self.leader_info.take();
     }
 
-    /// Refreshes the leader info and changes role if needed.
-    fn refresh_leader_info(&mut self) {
+    /// Refreshes the leader info.
+    /// Returns true if the leader exists.
+    fn refresh_leader_info(&mut self) -> bool {
+        assert!(!self.is_leader());
         match self.get_leader_info() {
             Ok(Some((leader_id, leader_addr))) => {
                 self.update_leader_info(leader_id, leader_addr);
             }
             Ok(None) => {
-                // The leader is gone, change to follower and reset state.
+                // The leader is gone, reset state.
                 info!("no leader");
                 self.reset(StateRole::Follower);
             }
             Err(e) => {
                 error!("get leader info failed"; "err" => ?e);
             }
-        }
+        };
+        self.leader_info.is_some()
     }
 
     /// Gets leader info from PD.
@@ -368,21 +373,19 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         }
     }
 
-    /// Updates leader info and changes role if needed.
+    /// Updates the leader info.
     fn update_leader_info(&mut self, leader_id: u64, leader_addr: String) {
         match self.leader_info {
             Some((id, ref addr)) if id == leader_id && *addr == leader_addr => {
                 debug!("leader not change"; "leader_id" => leader_id, "leader_addr" => %leader_addr);
             }
             _ => {
-                info!("leader changed"; "leader_id" => leader_id, "leader_addr" => %leader_addr);
-                let role = if leader_id == self.store_id {
-                    StateRole::Leader
-                } else {
-                    StateRole::Follower
-                };
-                self.change_role(role);
-                self.leader_info.replace((leader_id, leader_addr));
+                // The leader info is stale if the leader is itself.
+                if leader_id != self.store_id {
+                    info!("leader changed"; "leader_id" => leader_id, "leader_addr" => %leader_addr);
+                    self.leader_client.take();
+                    self.leader_info.replace((leader_id, leader_addr));
+                }
             }
         }
     }
@@ -391,9 +394,9 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     fn change_role(&mut self, role: StateRole) {
         if self.inner.borrow().role != role {
             if role == StateRole::Leader {
-                info!("became the leader of deadlock detector!");
+                info!("became the leader of deadlock detector!"; "self_id" => self.store_id);
             } else {
-                info!("changed from leader to follower");
+                info!("changed from leader to follower"; "self_id" => self.store_id);
             }
             self.reset(role);
         }
@@ -433,6 +436,8 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         info!("reconnect leader succeeded"; "leader_id" => leader_id);
     }
 
+    /// Returns true if sends successfully.
+    ///
     /// If the client is None, reconnects the leader first. Then sends the request to the leader.
     /// If send failed, sets the client to None for retry.
     fn send_request_to_leader(
@@ -441,10 +446,10 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         tp: DetectType,
         txn_ts: u64,
         lock: Lock,
-    ) -> Result<()> {
-        assert!(!self.is_leader());
+    ) -> bool {
+        assert!(!self.is_leader() && self.leader_info.is_some());
 
-        if self.leader_client.is_none() && self.leader_info.is_some() {
+        if self.leader_client.is_none() {
             self.reconnect_leader(handle);
         }
         if let Some(leader_client) = &self.leader_client {
@@ -461,15 +466,12 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             req.set_tp(tp);
             req.set_entry(entry);
             if leader_client.detect(req).is_ok() {
-                Ok(())
-            } else {
-                // The client is disconnected. Take it for retry.
-                self.leader_client.take();
-                Err(box_err!("leader client failed"))
+                return true;
             }
-        } else {
-            Err(Error::NoLeader)
+            // The client is disconnected. Take it for retry.
+            self.leader_client.take();
         }
+        false
     }
 
     fn handle_detect_locally(&self, tp: DetectType, txn_ts: u64, lock: Lock) {
@@ -495,31 +497,26 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
     /// Handles detect requests of itself.
     fn handle_detect(&mut self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
-        // Send a request first to check client validation due to asynchronous mode.
-        if !self.is_leader()
-            && self
-                .send_request_to_leader(handle, tp, txn_ts, lock)
-                .is_ok()
-        {
-            return;
-        }
-
-        // Refresh leader info when the connection to the leader is disconnected.
-        // It's possible changes to leader here.
-        if !self.is_leader() && self.leader_client.is_none() {
-            // TODO: If the leader hasn't been elected, it requests Pd for
-            // each detect request. Maybe need flow control here.
-            self.refresh_leader_info();
-        }
-
         if self.is_leader() {
             self.handle_detect_locally(tp, txn_ts, lock);
         } else {
-            if let Err(e) = self.send_request_to_leader(handle, tp, txn_ts, lock) {
-                error!("send detect request failed"; "err" => ?e);
-                warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
-                ERROR_COUNTER_VEC.dropped.inc();
+            for _ in 0..2 {
+                // TODO: If the leader hasn't been elected, it requests Pd for
+                // each detect request. Maybe need flow control here.
+                //
+                // Refresh leader info when the connection to the leader is disconnected.
+                if self.leader_client.is_none() && !self.refresh_leader_info() {
+                    // Return if the leader doesn't exist.
+                    return;
+                }
+                // Because the client is asynchronous, it won't be closed until failing to send a
+                // request. So retry to refresh the leader info and send it again.
+                if self.send_request_to_leader(handle, tp, txn_ts, lock) {
+                    return;
+                }
             }
+            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
+            ERROR_COUNTER_VEC.dropped.inc();
         }
     }
 
@@ -531,17 +528,13 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         sink: DuplexSink<DeadlockResponse>,
     ) {
         if !self.is_leader() {
-            // Somebody thought I am the leader. Check it.
-            self.refresh_leader_info();
-            if !self.is_leader() {
-                let status = RpcStatus::new(
-                    RpcStatusCode::FailedPrecondition,
-                    Some("I'm not the leader of deadlock detector".to_string()),
-                );
-                handle.spawn(sink.fail(status).map_err(|_| ()));
-                ERROR_COUNTER_VEC.not_leader.inc();
-                return;
-            }
+            let status = RpcStatus::new(
+                RpcStatusCode::FailedPrecondition,
+                Some("I'm not the leader of deadlock detector".to_string()),
+            );
+            handle.spawn(sink.fail(status).map_err(|_| ()));
+            ERROR_COUNTER_VEC.not_leader.inc();
+            return;
         }
 
         let inner = Rc::clone(&self.inner);
