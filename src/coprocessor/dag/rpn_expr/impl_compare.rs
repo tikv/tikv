@@ -207,6 +207,35 @@ pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
     Ok(None)
 }
 
+#[rpn_fn(varg)]
+#[inline]
+pub fn compare_in<T: Evaluable + Eq>(args: &[&Option<T>]) -> Result<Option<Int>> {
+    if args.is_empty() {
+        // TODO: Change to assert after validator function is implemented.
+        return Err(box_err!("Invalid IN() arguments"));
+    }
+    let base_val = args[0];
+    match base_val {
+        None => Ok(None),
+        Some(base_val) => {
+            let mut default_ret = Some(0);
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        default_ret = None;
+                    }
+                    Some(v) => {
+                        if v == base_val {
+                            return Ok(Some(1));
+                        }
+                    }
+                }
+            }
+            Ok(default_ret)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,11 +655,29 @@ mod tests {
             (vec![None, Some(0), None], Some(0)),
         ];
         for (args, expected) in cases {
-            let mut evaluator = RpnFnScalarEvaluator::new();
-            for arg in args {
-                evaluator = evaluator.push_param(arg);
-            }
-            let output = evaluator.evaluate(ScalarFuncSig::CoalesceInt).unwrap();
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::CoalesceInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_in() {
+        let cases = vec![
+            (vec![Some(1)], Some(0)),
+            (vec![Some(1), Some(2)], Some(0)),
+            (vec![Some(1), Some(2), Some(1)], Some(1)),
+            (vec![Some(1), Some(2), None], None),
+            (vec![Some(1), Some(2), None, Some(1)], Some(1)),
+            (vec![None, Some(2), Some(1)], None),
+        ];
+        for (args, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::InInt)
+                .unwrap();
             assert_eq!(output, expected);
         }
     }
