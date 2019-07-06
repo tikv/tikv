@@ -336,7 +336,7 @@ mod metronome {
             .unwrap();
         });
 
-        panic::take_hook();
+        let _ = panic::take_hook();
 
         assert!(res.is_err());
     }
