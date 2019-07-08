@@ -469,8 +469,8 @@ impl Storage for PeerStorage {
         Ok(self.last_index())
     }
 
-    fn snapshot(&self) -> raft::Result<Snapshot> {
-        self.snapshot()
+    fn snapshot(&self, request_index: u64) -> raft::Result<Snapshot> {
+        self.snapshot(request_index)
     }
 }
 
@@ -683,9 +683,9 @@ impl PeerStorage {
         DbSnapshot::new(Arc::clone(&self.engines.kv))
     }
 
-    fn validate_snap(&self, snap: &Snapshot) -> bool {
+    fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
         let idx = snap.get_metadata().get_index();
-        if idx < self.truncated_index() {
+        if idx < self.truncated_index() || idx < request_index {
             // stale snapshot, should generate again.
             info!(
                 "snapshot is stale, generate again";
@@ -693,6 +693,7 @@ impl PeerStorage {
                 "peer_id" => self.peer_id,
                 "snap_index" => idx,
                 "truncated_index" => self.truncated_index(),
+                "request_index" => request_index,
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["stale"])
@@ -734,7 +735,7 @@ impl PeerStorage {
 
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
     /// snapshot.
-    pub fn snapshot(&self) -> raft::Result<Snapshot> {
+    pub fn snapshot(&self, request_index: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
@@ -757,7 +758,7 @@ impl PeerStorage {
             match snap {
                 Some(s) => {
                     *tried_cnt = 0;
-                    if self.validate_snap(&s) {
+                    if self.validate_snap(&s, request_index) {
                         return Ok(s);
                     }
                 }
@@ -789,12 +790,13 @@ impl PeerStorage {
             "requesting snapshot";
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
+            "request_index" => request_index,
         );
         *tried_cnt += 1;
         let (tx, rx) = mpsc::sync_channel(1);
         *snap_state = SnapState::Generating(rx);
 
-        let task = GenSnapTask::new(self.region.get_id(), tx);
+        let task = GenSnapTask::new(self.region.get_id(), self.committed_index(), tx);
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);
@@ -1147,7 +1149,8 @@ impl PeerStorage {
             }
         }
 
-        if ctx.raft_state != self.raft_state {
+        // Save raft state if it has changed or peer has applied a snapshot.
+        if ctx.raft_state != self.raft_state || snapshot_index != 0 {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
             if snapshot_index > 0 {
                 // in case of restart happen when we just write region state to Applying,
@@ -1163,7 +1166,7 @@ impl PeerStorage {
         }
 
         // only when apply snapshot
-        if ctx.apply_state != self.apply_state {
+        if snapshot_index != 0 {
             ctx.save_apply_state_to(&self.engines.kv, &mut ready_ctx.kv_wb_mut())?;
         }
 
@@ -1401,7 +1404,7 @@ pub fn do_snapshot(
     let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = mgr.get_snapshot_for_building(&key, &kv_snap)?;
+    let mut s = mgr.get_snapshot_for_building(&key)?;
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
@@ -1646,7 +1649,7 @@ mod tests {
     use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
-    use tempdir::*;
+    use tempfile::{Builder, TempDir};
     use tikv_util::worker::{Scheduler, Worker};
 
     use super::*;
@@ -1763,7 +1766,7 @@ mod tests {
             (5, Ok(5)),
         ];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
-            let td = TempDir::new("tikv-store-test").unwrap();
+            let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
@@ -1817,7 +1820,7 @@ mod tests {
 
     #[test]
     fn test_storage_clear_meta() {
-        let td = TempDir::new("tikv-store").unwrap();
+        let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
@@ -1895,7 +1898,7 @@ mod tests {
         ];
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
-            let td = TempDir::new("tikv-store-test").unwrap();
+            let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
@@ -1919,7 +1922,7 @@ mod tests {
             (5, Ok(())),
         ];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
-            let td = TempDir::new("tikv-store-test").unwrap();
+            let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
@@ -1947,15 +1950,15 @@ mod tests {
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
-        let td = TempDir::new("tikv-store-test").unwrap();
-        let snap_dir = TempDir::new("snap_dir").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
         let runner = RegionRunner::new(s.engines.clone(), mgr, 0, true, Duration::from_secs(0));
         worker.start(runner).unwrap();
-        let snap = s.snapshot();
+        let snap = s.snapshot(0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -1980,12 +1983,24 @@ mod tests {
         let (tx, rx) = channel();
         s.set_snap_state(SnapState::Generating(rx));
         // Empty channel should cause snapshot call to wait.
-        assert_eq!(s.snapshot().unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         tx.send(snap.clone()).unwrap();
-        assert_eq!(s.snapshot(), Ok(snap.clone()));
+        assert_eq!(s.snapshot(0), Ok(snap.clone()));
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
+
+        let (tx, rx) = channel();
+        tx.send(snap.clone()).unwrap();
+        s.set_snap_state(SnapState::Generating(rx));
+        // stale snapshot should be abandoned, snapshot index < request index.
+        assert_eq!(
+            s.snapshot(snap.get_metadata().get_index() + 1).unwrap_err(),
+            unavailable
+        );
+        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+        // Drop the task.
+        let _ = s.gen_snap_task.borrow_mut().take().unwrap();
 
         let mut ctx = InvokeContext::new(&s);
         let mut kv_wb = WriteBatch::new();
@@ -2020,8 +2035,8 @@ mod tests {
         tx.send(snap.clone()).unwrap();
         s.set_snap_state(SnapState::Generating(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
-        // stale snapshot should be abandoned.
-        assert_eq!(s.snapshot().unwrap_err(), unavailable);
+        // stale snapshot should be abandoned, snapshot index < truncated index.
+        assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
@@ -2040,7 +2055,7 @@ mod tests {
             ref s => panic!("unexpected state {:?}", s),
         }
         // Disconnected channel should trigger another try.
-        assert_eq!(s.snapshot().unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         gen_task
             .generate_and_schedule_snapshot(&s.engines, &sched)
@@ -2049,7 +2064,7 @@ mod tests {
 
         for cnt in 2..super::MAX_SNAP_TRY_CNT {
             // Scheduled job failed should trigger .
-            assert_eq!(s.snapshot().unwrap_err(), unavailable);
+            assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             gen_task
                 .generate_and_schedule_snapshot(&s.engines, &sched)
@@ -2058,7 +2073,7 @@ mod tests {
         }
 
         // When retry too many times, it should report a different error.
-        match s.snapshot() {
+        match s.snapshot(0) {
             Err(RaftError::Store(StorageError::Other(_))) => {}
             res => panic!("unexpected res: {:?}", res),
         }
@@ -2099,7 +2114,7 @@ mod tests {
             ),
         ];
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
-            let td = TempDir::new("tikv-store-test").unwrap();
+            let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager");
             let sched = worker.scheduler();
             let mut store = new_storage_from_ents(sched, &td, &ents);
@@ -2115,7 +2130,7 @@ mod tests {
     #[test]
     fn test_storage_cache_fetch() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let td = TempDir::new("tikv-store-test").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
@@ -2158,7 +2173,7 @@ mod tests {
     #[test]
     fn test_storage_cache_update() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let td = TempDir::new("tikv-store-test").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
@@ -2252,8 +2267,8 @@ mod tests {
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
-        let td1 = TempDir::new("tikv-store-test").unwrap();
-        let snap_dir = TempDir::new("snap").unwrap();
+        let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
@@ -2266,7 +2281,7 @@ mod tests {
             Duration::from_secs(0),
         );
         worker.start(runner).unwrap();
-        assert!(s1.snapshot().is_err());
+        assert!(s1.snapshot(0).is_err());
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         gen_task
             .generate_and_schedule_snapshot(&s1.engines, &sched)
@@ -2279,7 +2294,7 @@ mod tests {
         assert_eq!(s1.truncated_term(), 3);
         worker.stop().unwrap().join().unwrap();
 
-        let td2 = TempDir::new("tikv-store-test").unwrap();
+        let td2 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let mut s2 = new_storage(sched.clone(), &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
@@ -2296,7 +2311,7 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         validate_cache(&s2, &[]);
 
-        let td3 = TempDir::new("tikv-store-test").unwrap();
+        let td3 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let ents = &[new_entry(3, 3), new_entry(4, 3)];
         let mut s3 = new_storage_from_ents(sched, &td3, ents);
         validate_cache(&s3, &ents[1..]);
@@ -2316,7 +2331,7 @@ mod tests {
 
     #[test]
     fn test_canceling_snapshot() {
-        let td = TempDir::new("tikv-store-test").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage(sched, &td);
@@ -2362,7 +2377,7 @@ mod tests {
 
     #[test]
     fn test_try_finish_snapshot() {
-        let td = TempDir::new("tikv-store-test").unwrap();
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage(sched, &td);

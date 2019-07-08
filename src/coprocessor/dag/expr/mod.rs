@@ -11,7 +11,7 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::coprocessor::codec::mysql::charset;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use crate::coprocessor::codec::{self, Datum};
+use crate::coprocessor::codec::{self, datum, Datum};
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
 use tikv_util::codec::number;
@@ -62,6 +62,7 @@ pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     field_type: FieldType,
+    implicit_args: Vec<Datum>,
     cus_rng: CusRng,
 }
 
@@ -179,7 +180,7 @@ impl Expression {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
@@ -269,6 +270,7 @@ impl Expression {
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
                 ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
+                let implicit_args = datum::decode(&mut expr.get_val())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
@@ -278,6 +280,7 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             field_type,
+                            implicit_args,
                             cus_rng: CusRng {
                                 rng: RefCell::new(None),
                             },

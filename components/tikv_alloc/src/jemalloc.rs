@@ -1,5 +1,6 @@
 // The implementation of this crate when jemalloc is turned on
 
+use super::error::{ProfError, ProfResult};
 use crate::AllocStats;
 use jemalloc_ctl::{stats, Epoch as JeEpoch};
 use jemallocator::ffi::malloc_stats_print;
@@ -11,7 +12,7 @@ pub const fn allocator() -> Allocator {
     jemallocator::Jemalloc
 }
 
-pub use self::profiling::dump_prof;
+pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
@@ -63,10 +64,12 @@ mod tests {
 #[cfg(feature = "mem-profiling")]
 mod profiling {
     use std::ffi::CString;
-    use std::{env, ptr};
+    use std::ptr;
 
     use jemallocator;
     use libc::c_char;
+
+    use super::{ProfError, ProfResult};
 
     // C string should end with a '\0'.
     const PROF_ACTIVE: &'static [u8] = b"prof.active\0";
@@ -89,40 +92,52 @@ mod profiling {
         }
     }
 
+    pub fn activate_prof() -> ProfResult<()> {
+        info!("start profiler");
+        unsafe {
+            if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, true) {
+                error!("failed to activate profiling: {}", e);
+                return Err(ProfError::JemallocError(e));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn deactivate_prof() -> ProfResult<()> {
+        info!("stop profiler");
+        unsafe {
+            if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, false) {
+                error!("failed to deactivate profiling: {}", e);
+                return Err(ProfError::JemallocError(e));
+            }
+        }
+        Ok(())
+    }
+
     /// Dump the profile to the `path`.
     ///
     /// If `path` is `None`, will dump it in the working directory with an auto-generated name.
-    pub fn dump_prof(path: Option<&str>) {
-        unsafe {
-            // First set the `prof.active` value in case profiling is deactivated
-            // as with MALLOC_CONF="opt.prof:true,opt.prof_active:false"
-            if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, true) {
-                error!("failed to activate profiling: {}", e);
-                return;
-            }
-        }
-        let mut c_path = DumpPathGuard::from_cstring(path.map(|p| CString::new(p).unwrap()));
+    pub fn dump_prof(path: &str) -> ProfResult<()> {
+        // TODO: return errors in this function
+        let mut c_path = DumpPathGuard::from_cstring(Some(CString::new(path).unwrap()));
         let res = unsafe { jemallocator::mallctl_set(PROF_DUMP, c_path.get_mut_ptr()) };
         match res {
-            Err(e) => error!("failed to dump the profile to {:?}: {}", path, e),
+            Err(e) => {
+                error!("failed to dump the profile to {:?}: {}", path, e);
+                Err(ProfError::JemallocError(e))
+            }
             Ok(_) => {
-                if let Some(p) = path {
-                    info!("dump profile to {}", p);
-                    return;
-                }
-
-                info!("dump profile to {}", env::current_dir().unwrap().display());
+                info!("dump profile to {}", path);
+                Ok(())
             }
         }
     }
 
     #[cfg(test)]
     mod tests {
-        extern crate tempdir;
-
-        use self::tempdir::TempDir;
         use jemallocator;
         use std::fs;
+        use tempfile::Builder;
 
         const OPT_PROF: &'static [u8] = b"opt.prof\0";
 
@@ -153,15 +168,18 @@ mod profiling {
             // Make sure somebody has turned on profiling
             assert!(is_profiling_on(), r#"Set MALLOC_CONF="prof:true""#);
 
-            let dir = TempDir::new("test_profiling_memory").unwrap();
+            let dir = Builder::new()
+                .prefix("test_profiling_memory")
+                .tempdir()
+                .unwrap();
 
             let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(Some(&path));
+            super::dump_prof(&path);
 
             let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(Some(&path));
+            super::dump_prof(&path);
 
             let files = fs::read_dir(dir.path()).unwrap().count();
             assert_eq!(files, 2);
@@ -186,5 +204,15 @@ mod profiling {
 
 #[cfg(not(feature = "mem-profiling"))]
 mod profiling {
-    pub fn dump_prof(_path: Option<&str>) {}
+    use super::{ProfError, ProfResult};
+
+    pub fn dump_prof(_path: &str) -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn activate_prof() -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn deactivate_prof() -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
 }

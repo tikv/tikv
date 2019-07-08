@@ -527,6 +527,26 @@ impl Filter for DropSnapshotFilter {
     }
 }
 
+/// Capture the first snapshot message.
+pub struct RecvSnapshotFilter {
+    pub notifier: Mutex<Option<Sender<RaftMessage>>>,
+    pub region_id: u64,
+}
+
+impl Filter for RecvSnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot
+                && msg.get_region_id() == self.region_id
+            {
+                let tx = self.notifier.lock().unwrap().take().unwrap();
+                tx.send(msg.clone()).unwrap();
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Filters all `filter_type` packets until seeing the `flush_type`.
 ///
 /// The first filtered message will be flushed too.
@@ -712,6 +732,24 @@ impl Filter for LeaseReadFilter {
                 msg.take_context();
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct DropMessageFilter {
+    ty: MessageType,
+}
+
+impl DropMessageFilter {
+    pub fn new(ty: MessageType) -> DropMessageFilter {
+        DropMessageFilter { ty }
+    }
+}
+
+impl Filter for DropMessageFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        msgs.retain(|m| m.get_message().get_msg_type() != self.ty);
         Ok(())
     }
 }

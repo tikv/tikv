@@ -14,7 +14,7 @@ fn bench_simple_aggr_count_1(b: &mut criterion::Bencher, input: &Input) {
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::constant_int(1))
         .build();
-    input.bencher.bench(b, &fb, &expr);
+    input.bencher.bench(b, &fb, &[expr]);
 }
 
 /// COUNT(COL) where COL is a int column
@@ -23,7 +23,7 @@ fn bench_simple_aggr_count_int_col(b: &mut criterion::Bencher, input: &Input) {
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
         .build();
-    input.bencher.bench(b, &fb, &expr);
+    input.bencher.bench(b, &fb, &[expr]);
 }
 
 /// COUNT(COL) where COL is a real column
@@ -32,7 +32,7 @@ fn bench_simple_aggr_count_real_col(b: &mut criterion::Bencher, input: &Input) {
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
         .build();
-    input.bencher.bench(b, &fb, &expr);
+    input.bencher.bench(b, &fb, &[expr]);
 }
 
 /// COUNT(COL) where COL is a bytes column (note: the column is very short)
@@ -41,7 +41,7 @@ fn bench_simple_aggr_count_bytes_col(b: &mut criterion::Bencher, input: &Input) 
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::VarChar))
         .build();
-    input.bencher.bench(b, &fb, &expr);
+    input.bencher.bench(b, &fb, &[expr]);
 }
 
 #[derive(Clone)]

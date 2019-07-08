@@ -57,6 +57,7 @@ fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
 fn new_debug_executor(
     db: Option<&str>,
     raft_db: Option<&str>,
+    skip_paranoid_checks: bool,
     host: Option<&str>,
     cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
@@ -65,6 +66,7 @@ fn new_debug_executor(
         (None, Some(kv_path)) => {
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
+            kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
@@ -227,6 +229,7 @@ trait DebugExecutor {
                 .for_each(move |(key, mvcc)| {
                     if point_query && key != from {
                         v1!("no mvcc infos for {}", escape(&from));
+                        return future::err::<(), String>("no mvcc infos".to_owned());
                     }
 
                     v1!("key: {}", escape(&key));
@@ -291,7 +294,7 @@ trait DebugExecutor {
         cfg: &TiKvConfig,
         mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, host, cfg, mgr);
+        let rhs_debug_executor = new_debug_executor(db, raft_db, false, host, cfg, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
@@ -468,6 +471,11 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
+    fn set_region_tombstone_force(&self, region_ids: Vec<u64>) {
+        self.check_local_mode();
+        self.set_region_tombstone_by_id(region_ids);
+    }
+
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
@@ -541,6 +549,8 @@ trait DebugExecutor {
     );
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
+
+    fn set_region_tombstone_by_id(&self, regions: Vec<u64>);
 
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool);
 
@@ -685,6 +695,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
+    fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
+        unimplemented!("only avaliable for local mode");
+    }
+
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
         unimplemented!("only available for local mode");
     }
@@ -808,6 +822,19 @@ impl DebugExecutor for Debugger {
         let ret = self
             .set_region_tombstone(regions)
             .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone", e));
+        if ret.is_empty() {
+            v1!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            ve1!("region: {}, error: {}", region_id, error);
+        }
+    }
+
+    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
+        let ret = self
+            .set_region_tombstone_by_id(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
         if ret.is_empty() {
             v1!("success!");
             return;
@@ -945,6 +972,13 @@ fn main() {
                 .long("raftdb")
                 .takes_value(true)
                 .help("Set the raft rocksdb path"),
+        )
+        .arg(
+            Arg::with_name("skip-paranoid-checks")
+                .required(false)
+                .long("skip-paranoid-checks")
+                .takes_value(false)
+                .help("skip paranoid checks when open rocksdb"),
         )
         .arg(
             Arg::with_name("config")
@@ -1332,7 +1366,6 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("pd")
-                        .required(true)
                         .short("p")
                         .takes_value(true)
                         .multiple(true)
@@ -1340,6 +1373,12 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("force")
+                        .long("force")
+                        .takes_value(false)
+                        .help("force execute without pd"),
                 ),
         )
         .subcommand(
@@ -1740,10 +1779,18 @@ fn main() {
 
     // Deal with all subcommands about db or host.
     let db = matches.value_of("db");
+    let skip_paranoid_checks = matches.is_present("skip-paranoid-checks");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
 
-    let debug_executor = new_debug_executor(db, raft_db, host, &cfg, Arc::clone(&mgr));
+    let debug_executor = new_debug_executor(
+        db,
+        raft_db,
+        skip_paranoid_checks,
+        host,
+        &cfg,
+        Arc::clone(&mgr),
+    );
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -1836,13 +1883,18 @@ fn main() {
             .map(str::parse)
             .collect::<Result<Vec<_>, _>>()
             .expect("parse regions fail");
-        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
-        let mut cfg = PdConfig::default();
-        cfg.endpoints = pd_urls;
-        if let Err(e) = cfg.validate() {
-            panic!("invalid pd configuration: {:?}", e);
+        if let Some(pd_urls) = matches.values_of("pd") {
+            let pd_urls = Vec::from_iter(pd_urls.map(ToOwned::to_owned));
+            let mut cfg = PdConfig::default();
+            cfg.endpoints = pd_urls;
+            if let Err(e) = cfg.validate() {
+                panic!("invalid pd configuration: {:?}", e);
+            }
+            debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+        } else {
+            assert!(matches.is_present("force"));
+            debug_executor.set_region_tombstone_force(regions);
         }
-        debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("recover-mvcc") {
         let read_only = matches.is_present("read-only");
         if matches.is_present("all") {
@@ -2137,7 +2189,7 @@ fn compact_whole_cluster(
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string().clone()).collect();
         let h = thread::spawn(move || {
-            let debug_executor = new_debug_executor(None, None, Some(&addr), &cfg, mgr);
+            let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {
                 debug_executor.compact(
                     Some(&addr),

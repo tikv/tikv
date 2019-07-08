@@ -14,6 +14,7 @@ use tikv::coprocessor::dag::executor::{Executor, HashAggExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
+use crate::util::executor_descriptor::hash_aggregate;
 use crate::util::FixtureBuilder;
 
 pub trait HashAggrBencher {
@@ -54,9 +55,7 @@ impl HashAggrBencher for NormalBencher {
         aggr_expr: &[Expr],
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
-            let mut meta = Aggregation::new();
-            meta.set_agg_func(aggr_expr.to_vec().into());
-            meta.set_group_by(group_by_expr.to_vec().into());
+            let meta = hash_aggregate(aggr_expr, group_by_expr).take_aggregation();
             let src = fb.clone().build_normal_fixture_executor();
             let ex = HashAggExecutor::new(
                 black_box(meta),

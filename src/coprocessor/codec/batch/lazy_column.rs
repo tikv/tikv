@@ -8,6 +8,7 @@ use tipb::expression::FieldType;
 use super::BufferVec;
 use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::raw_datum::RawDatumDecoder;
 use crate::coprocessor::codec::Result;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
@@ -47,6 +48,15 @@ impl LazyBatchColumn {
     #[inline]
     pub fn decoded_with_capacity_and_tp(capacity: usize, eval_tp: EvalType) -> Self {
         LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
+    }
+
+    /// Creates a new empty `LazyBatchColumn` with the same schema.
+    #[inline]
+    pub fn clone_empty(&self, capacity: usize) -> Self {
+        match self {
+            LazyBatchColumn::Raw(_) => Self::raw_with_capacity(capacity),
+            LazyBatchColumn::Decoded(v) => LazyBatchColumn::Decoded(v.clone_empty(capacity)),
+        }
     }
 
     #[inline]
@@ -134,47 +144,59 @@ impl LazyBatchColumn {
         }
     }
 
-    /// Retains the elements according to a boolean array.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `retain_arr` is not long enough.
-    #[inline]
-    pub fn retain_by_array(&mut self, retain_arr: &[bool]) {
-        match self {
-            LazyBatchColumn::Raw(v) => v.retain_by_array(retain_arr),
-            LazyBatchColumn::Decoded(v) => v.retain_by_array(retain_arr),
-        }
-    }
-
-    /// Decodes this column in place if the column is not decoded.
+    /// Decodes this column if the column is not decoded, according to the given logical rows map.
+    /// After decoding, the decoded column will have the same physical layout as the encoded one
+    /// (i.e. the same logical rows), but elements in unnecessary positions will not be decoded
+    /// and will be `None`.
     ///
     /// The field type is needed because we use the same `DateTime` structure when handling
     /// Date, Time or Timestamp.
     // TODO: Maybe it's a better idea to assign different eval types for different date types.
-    pub fn ensure_decoded(&mut self, time_zone: &Tz, field_type: &FieldType) -> Result<()> {
+    pub fn ensure_decoded(
+        &mut self,
+        time_zone: &Tz,
+        field_type: &FieldType,
+        logical_rows: &[usize],
+    ) -> Result<()> {
         if self.is_decoded() {
             return Ok(());
         }
 
         let eval_type = box_try!(EvalType::try_from(field_type.tp()));
+        let raw_vec = self.raw();
+        let raw_vec_len = raw_vec.len();
 
-        let mut decoded_column = VectorValue::with_capacity(self.capacity(), eval_type);
-        {
-            for value in self.raw().iter() {
-                decoded_column.push_datum(value, time_zone, field_type)?;
+        let mut decoded_column = VectorValue::with_capacity(raw_vec_len, eval_type);
+
+        match_template_evaluable! {
+            TT, match &mut decoded_column {
+                VectorValue::TT(vec) => {
+                    for _ in 0..raw_vec_len {
+                        vec.push(None);
+                    }
+                    for row_index in logical_rows {
+                        vec[*row_index] = raw_vec[*row_index].decode(field_type, time_zone)?;
+                    }
+                }
             }
         }
+
         *self = LazyBatchColumn::Decoded(decoded_column);
 
         Ok(())
     }
 
+    #[cfg(test)]
+    pub fn ensure_all_decoded(&mut self, time_zone: &Tz, field_type: &FieldType) -> Result<()> {
+        let logical_rows: Vec<_> = (0..self.len()).collect();
+        self.ensure_decoded(time_zone, field_type, &logical_rows)
+    }
+
     /// Returns maximum encoded size.
-    pub fn maximum_encoded_size(&self) -> Result<usize> {
+    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> Result<usize> {
         match self {
             LazyBatchColumn::Raw(v) => Ok(v.total_len()),
-            LazyBatchColumn::Decoded(v) => v.maximum_encoded_size(),
+            LazyBatchColumn::Decoded(v) => v.maximum_encoded_size(logical_rows),
         }
     }
 
@@ -203,7 +225,7 @@ mod tests {
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
     #[test]
-    fn test_lazy_batch_column_clone() {
+    fn test_basic() {
         use cop_datatype::FieldTypeTp;
 
         let mut col = LazyBatchColumn::raw_with_capacity(5);
@@ -216,24 +238,24 @@ mod tests {
             let col = col.clone();
             assert!(col.is_raw());
             assert_eq!(col.len(), 0);
-            assert_eq!(col.capacity(), 5);
+            assert_eq!(col.capacity(), 0);
             assert_eq!(col.raw().len(), 0);
         }
         {
             // Empty raw to empty decoded.
             let mut col = col.clone();
-            col.ensure_decoded(&Tz::utc(), &FieldTypeTp::Long.into())
+            col.ensure_all_decoded(&Tz::utc(), &FieldTypeTp::Long.into())
                 .unwrap();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
-            assert_eq!(col.capacity(), 5);
+            assert_eq!(col.capacity(), 0);
             assert_eq!(col.decoded().as_int_slice(), &[]);
             {
                 // Clone empty decoded LazyBatchColumn.
                 let col = col.clone();
                 assert!(col.is_decoded());
                 assert_eq!(col.len(), 0);
-                assert_eq!(col.capacity(), 5);
+                assert_eq!(col.capacity(), 0);
                 assert_eq!(col.decoded().as_int_slice(), &[]);
             }
         }
@@ -246,37 +268,54 @@ mod tests {
         DatumEncoder::encode(&mut datum_raw_2, &[Datum::U64(7)], true).unwrap();
         col.mut_raw().push(&datum_raw_2);
 
+        let mut datum_raw_3 = Vec::new();
+        DatumEncoder::encode(&mut datum_raw_3, &[Datum::U64(10)], true).unwrap();
+        col.mut_raw().push(&datum_raw_3);
+
         assert!(col.is_raw());
-        assert_eq!(col.len(), 2);
+        assert_eq!(col.len(), 3);
         assert_eq!(col.capacity(), 5);
-        assert_eq!(col.raw().len(), 2);
+        assert_eq!(col.raw().len(), 3);
         assert_eq!(&col.raw()[0], datum_raw_1.as_slice());
         assert_eq!(&col.raw()[1], datum_raw_2.as_slice());
+        assert_eq!(&col.raw()[2], datum_raw_3.as_slice());
         {
             // Clone non-empty raw LazyBatchColumn.
             let col = col.clone();
             assert!(col.is_raw());
-            assert_eq!(col.len(), 2);
-            assert_eq!(col.capacity(), 5);
-            assert_eq!(col.raw().len(), 2);
+            assert_eq!(col.len(), 3);
+            assert_eq!(col.capacity(), 3);
+            assert_eq!(col.raw().len(), 3);
             assert_eq!(&col.raw()[0], datum_raw_1.as_slice());
             assert_eq!(&col.raw()[1], datum_raw_2.as_slice());
+            assert_eq!(&col.raw()[2], datum_raw_3.as_slice());
         }
+
         // Non-empty raw to non-empty decoded.
-        col.ensure_decoded(&Tz::utc(), &FieldTypeTp::Long.into())
+        col.ensure_decoded(&Tz::utc(), &FieldTypeTp::Long.into(), &[2, 0])
             .unwrap();
         assert!(col.is_decoded());
-        assert_eq!(col.len(), 2);
-        assert_eq!(col.capacity(), 5);
-        assert_eq!(col.decoded().as_int_slice(), &[Some(32), Some(7)]);
+        assert_eq!(col.len(), 3);
+        assert_eq!(col.capacity(), 3);
+        // Element 1 is None because it is not referred in `logical_rows` and we don't decode it.
+        assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
+
         {
             // Clone non-empty decoded LazyBatchColumn.
             let col = col.clone();
             assert!(col.is_decoded());
-            assert_eq!(col.len(), 2);
-            assert_eq!(col.capacity(), 5);
-            assert_eq!(col.decoded().as_int_slice(), &[Some(32), Some(7)]);
+            assert_eq!(col.len(), 3);
+            assert_eq!(col.capacity(), 3);
+            assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
         }
+
+        // Decode a decoded column, even using a different logical rows, does not have effect.
+        col.ensure_decoded(&Tz::utc(), &FieldTypeTp::Long.into(), &[0, 1])
+            .unwrap();
+        assert!(col.is_decoded());
+        assert_eq!(col.len(), 3);
+        assert_eq!(col.capacity(), 3);
+        assert_eq!(col.decoded().as_int_slice(), &[Some(32), None, Some(10)]);
     }
 }
 
@@ -313,9 +352,10 @@ mod benches {
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
         }
+        let logical_rows: Vec<_> = (0..1000).collect();
 
         column
-            .ensure_decoded(&Tz::utc(), &FieldTypeTp::LongLong.into())
+            .ensure_decoded(&Tz::utc(), &FieldTypeTp::LongLong.into(), &logical_rows)
             .unwrap();
 
         b.iter(|| {
@@ -339,13 +379,14 @@ mod benches {
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
         }
+        let logical_rows: Vec<_> = (0..1000).collect();
 
         let ft = FieldTypeTp::LongLong.into();
         let tz = Tz::utc();
 
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
-            col.ensure_decoded(test::black_box(&tz), test::black_box(&ft))
+            col.ensure_decoded(test::black_box(&tz), test::black_box(&ft), &logical_rows)
                 .unwrap();
             test::black_box(&col);
         });
@@ -367,15 +408,16 @@ mod benches {
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
         }
+        let logical_rows: Vec<_> = (0..1000).collect();
 
         let ft = FieldTypeTp::LongLong.into();
         let tz = Tz::utc();
 
-        column.ensure_decoded(&tz, &ft).unwrap();
+        column.ensure_decoded(&tz, &ft, &logical_rows).unwrap();
 
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
-            col.ensure_decoded(test::black_box(&tz), test::black_box(&ft))
+            col.ensure_decoded(test::black_box(&tz), test::black_box(&ft), &logical_rows)
                 .unwrap();
             test::black_box(&col);
         });

@@ -2,27 +2,26 @@
 
 use std::convert::TryFrom;
 
-use cop_codegen::RpnFunction;
+use cop_codegen::rpn_fn;
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::function::RpnFunction;
-use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
+use crate::coprocessor::dag::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
 use crate::coprocessor::Result;
 
 /// Gets the cast function between specified data types.
 ///
 /// TODO: This function supports some internal casts performed by TiKV. However it would be better
 /// to be done in TiDB.
-pub fn get_cast_fn(
+pub fn get_cast_fn_rpn_node(
     from_field_type: &FieldType,
-    to_field_type: &FieldType,
-) -> Result<Box<dyn RpnFunction>> {
+    to_field_type: FieldType,
+) -> Result<RpnExpressionNode> {
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
-    Ok(match (from, to) {
+    let func_meta = match (from, to) {
         (EvalType::Int, EvalType::Decimal) => {
             if !from_field_type
                 .as_accessor()
@@ -33,16 +32,26 @@ pub fn get_cast_fn(
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
             {
-                Box::new(RpnFnCastIntAsDecimal)
+                cast_int_as_decimal_fn_meta()
             } else {
-                Box::new(RpnFnCastUintAsDecimal)
+                cast_uint_as_decimal_fn_meta()
             }
         }
-        (EvalType::Bytes, EvalType::Real) => Box::new(RpnFnCastStringAsReal),
-        (EvalType::DateTime, EvalType::Real) => Box::new(RpnFnCastTimeAsReal),
-        (EvalType::Duration, EvalType::Real) => Box::new(RpnFnCastDurationAsReal),
-        (EvalType::Json, EvalType::Real) => Box::new(RpnFnCastJsonAsReal),
+        (EvalType::Bytes, EvalType::Real) => cast_string_as_real_fn_meta(),
+        (EvalType::DateTime, EvalType::Real) => cast_time_as_real_fn_meta(),
+        (EvalType::Duration, EvalType::Real) => cast_duration_as_real_fn_meta(),
+        (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
+    };
+    // This cast function is inserted by `Coprocessor` automatically,
+    // the `inUnion` flag always false in this situation. Ideally,
+    // the cast function should be inserted by TiDB and pushed down
+    // with all implicit arguments.
+    Ok(RpnExpressionNode::FnCall {
+        func_meta,
+        args_len: 1,
+        field_type: to_field_type,
+        implicit_args: Vec::new(),
     })
 }
 
@@ -60,144 +69,98 @@ fn produce_dec_with_specified_tp(
 }
 
 /// The unsigned int implementation for push down signature `CastIntAsDecimal`.
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnCastUintAsDecimal;
-
-impl RpnFnCastUintAsDecimal {
-    #[inline]
-    fn call(
-        ctx: &mut EvalContext,
-        payload: RpnFnCallPayload<'_>,
-        val: &Option<i64>,
-    ) -> Result<Option<Decimal>> {
-        match val {
-            None => Ok(None),
-            Some(val) => {
-                let dec = Decimal::from(*val as u64);
-                Ok(Some(produce_dec_with_specified_tp(
-                    ctx,
-                    dec,
-                    payload.return_field_type(),
-                )?))
-            }
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn cast_uint_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<i64>,
+) -> Result<Option<Decimal>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dec = Decimal::from(*val as u64);
+            Ok(Some(produce_dec_with_specified_tp(
+                ctx,
+                dec,
+                extra.ret_field_type,
+            )?))
         }
     }
 }
 
 /// The signed int implementation for push down signature `CastIntAsDecimal`.
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnCastIntAsDecimal;
-
-impl RpnFnCastIntAsDecimal {
-    #[inline]
-    fn call(
-        ctx: &mut EvalContext,
-        payload: RpnFnCallPayload<'_>,
-        val: &Option<i64>,
-    ) -> Result<Option<Decimal>> {
-        match val {
-            None => Ok(None),
-            Some(val) => {
-                let dec = Decimal::from(*val);
-                Ok(Some(produce_dec_with_specified_tp(
-                    ctx,
-                    dec,
-                    payload.return_field_type(),
-                )?))
-            }
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn cast_int_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<i64>,
+) -> Result<Option<Decimal>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dec = Decimal::from(*val);
+            Ok(Some(produce_dec_with_specified_tp(
+                ctx,
+                dec,
+                extra.ret_field_type,
+            )?))
         }
     }
 }
 
 /// The implementation for push down signature `CastStringAsReal`.
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnCastStringAsReal;
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn cast_string_as_real(ctx: &mut EvalContext, val: &Option<Bytes>) -> Result<Option<Real>> {
+    use crate::coprocessor::codec::convert::bytes_to_f64;
 
-impl RpnFnCastStringAsReal {
-    #[inline]
-    fn call(
-        ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        val: &Option<Bytes>,
-    ) -> Result<Option<Real>> {
-        use crate::coprocessor::codec::convert::bytes_to_f64;
-
-        match val {
-            None => Ok(None),
-            Some(val) => {
-                let val = bytes_to_f64(ctx, val.as_slice())?;
-                // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
-                Ok(Real::new(val).ok())
-            }
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = bytes_to_f64(ctx, val.as_slice())?;
+            // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
+            Ok(Real::new(val).ok())
         }
     }
 }
 
 /// The implementation for push down signature `CastTimeAsReal`.
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnCastTimeAsReal;
-
-impl RpnFnCastTimeAsReal {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        val: &Option<DateTime>,
-    ) -> Result<Option<Real>> {
-        match val {
-            None => Ok(None),
-            Some(val) => {
-                let val = val.to_decimal()?.as_f64()?;
-                Ok(Real::new(val).ok())
-            }
+#[rpn_fn]
+#[inline]
+pub fn cast_time_as_real(val: &Option<DateTime>) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.to_decimal()?.as_f64()?;
+            Ok(Real::new(val).ok())
         }
     }
 }
 
 /// The implementation for push down signature `CastDurationAsReal`.
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnCastDurationAsReal;
-
-impl RpnFnCastDurationAsReal {
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        val: &Option<Duration>,
-    ) -> Result<Option<Real>> {
-        match val {
-            None => Ok(None),
-            Some(val) => {
-                let val = val.to_decimal()?.as_f64()?;
-                Ok(Real::new(val).ok())
-            }
+#[rpn_fn]
+#[inline]
+fn cast_duration_as_real(val: &Option<Duration>) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = Decimal::try_from(*val)?.as_f64()?;
+            Ok(Real::new(val).ok())
         }
     }
 }
 
 /// The implementation for push down signature `CastJsonAsReal`.
-#[derive(Debug, Clone, Copy, RpnFunction)]
-#[rpn_function(args = 1)]
-pub struct RpnFnCastJsonAsReal;
-
-impl RpnFnCastJsonAsReal {
-    #[inline]
-    fn call(
-        ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        val: &Option<Json>,
-    ) -> Result<Option<Real>> {
-        match val {
-            None => Ok(None),
-            Some(val) => {
-                let val = val.cast_to_real(ctx)?;
-                Ok(Real::new(val).ok())
-            }
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_json_as_real(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.cast_to_real(ctx)?;
+            Ok(Real::new(val).ok())
         }
     }
 }

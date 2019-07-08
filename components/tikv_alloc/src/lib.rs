@@ -82,6 +82,8 @@
 #[macro_use]
 extern crate log;
 
+pub mod error;
+
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
 mod default;
 

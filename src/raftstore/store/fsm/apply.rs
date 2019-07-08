@@ -39,13 +39,15 @@ use crate::raftstore::store::msg::{Callback, PeerMsg};
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
+use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
+use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
-use tikv_util::{escape, MustConsumeVec};
+use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
 use super::{
@@ -79,9 +81,10 @@ impl PendingCmd {
 impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
-            panic!(
+            safe_panic!(
                 "callback of pending command at [index: {}, term: {}] is leak",
-                self.index, self.term
+                self.index,
+                self.term
             );
         }
     }
@@ -691,7 +694,6 @@ impl ApplyDelegate {
             return;
         }
         apply_ctx.prepare_for(self);
-        apply_ctx.committed_count += committed_entries.len();
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -1179,7 +1181,7 @@ impl ApplyDelegate {
                     panic!(
                         "{} failed to write ({}, {}) to cf {}: {:?}",
                         self.tag,
-                        escape(&key),
+                        hex::encode_upper(&key),
                         escape(value),
                         cf,
                         e
@@ -1190,7 +1192,7 @@ impl ApplyDelegate {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,
-                    escape(&key),
+                    hex::encode_upper(&key),
                     escape(value),
                     e
                 );
@@ -1214,7 +1216,12 @@ impl ApplyDelegate {
             rocks::util::get_cf_handle(&ctx.engines.kv, cf)
                 .and_then(|handle| ctx.kv_wb().delete_cf(handle, &key).map_err(Into::into))
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                    panic!(
+                        "{} failed to delete {}: {}",
+                        self.tag,
+                        hex::encode_upper(&key),
+                        e
+                    )
                 });
 
             if cf == CF_LOCK {
@@ -1225,7 +1232,12 @@ impl ApplyDelegate {
             }
         } else {
             ctx.kv_wb().delete(&key).unwrap_or_else(|e| {
-                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                panic!(
+                    "{} failed to delete {}: {}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    e
+                )
             });
             self.metrics.delete_keys_hint += 1;
         }
@@ -1242,6 +1254,7 @@ impl ApplyDelegate {
     ) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
+        let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
                 "invalid delete range command, start_key: {:?}, end_key: {:?}",
@@ -1270,38 +1283,43 @@ impl ApplyDelegate {
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        ctx.engines
-            .kv
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
+        if !notify_only {
+            ctx.engines
+                .kv
+                .delete_files_in_range_cf(
+                    handle, &start_key, &end_key, /* include_end */ false,
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete files in range [{}, {}): {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        e
+                    )
+                });
+
+            // Delete all remaining keys.
+            engine_util::delete_all_in_range_cf(
+                &ctx.engines.kv,
+                cf,
+                &start_key,
+                &end_key,
+                use_delete_range,
+            )
             .unwrap_or_else(|e| {
                 panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
                     self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
+                    cf,
                     e
-                )
+                );
             });
+        }
 
-        // Delete all remaining keys.
-        engine_util::delete_all_in_range_cf(
-            &ctx.engines.kv,
-            cf,
-            &start_key,
-            &end_key,
-            use_delete_range,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                self.tag,
-                escape(&start_key),
-                escape(&end_key),
-                cf,
-                e
-            );
-        });
-
+        // TODO: Should this be executed when `notify_only` is set?
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
@@ -1565,14 +1583,13 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        let apply_before_split = || {
+        (|| {
             fail_point!(
                 "apply_before_split_1_3",
                 { self.id == 3 && self.region_id() == 1 },
                 |_| {}
             );
-        };
-        apply_before_split();
+        })();
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["batch-split", "all"])
@@ -1616,7 +1633,7 @@ impl ApplyDelegate {
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "region" => ?derived,
-            "keys" => ?keys
+            "keys" => %KeysInfoFormatter(keys.iter()),
         );
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
@@ -1683,6 +1700,8 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
+        fail_point!("apply_before_prepare_merge");
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "all"])
             .inc();
@@ -2238,15 +2257,25 @@ type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
 
 pub struct GenSnapTask {
     region_id: u64,
+    commit_index: u64,
     snap_notifier: SyncSender<RaftSnapshot>,
 }
 
 impl GenSnapTask {
-    pub fn new(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
+    pub fn new(
+        region_id: u64,
+        commit_index: u64,
+        snap_notifier: SyncSender<RaftSnapshot>,
+    ) -> GenSnapTask {
         GenSnapTask {
             region_id,
+            commit_index,
             snap_notifier,
         }
+    }
+
+    pub fn commit_index(&self) -> u64 {
+        self.commit_index
     }
 
     pub fn generate_and_schedule_snapshot(
@@ -2265,6 +2294,15 @@ impl GenSnapTask {
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
+    }
+}
+
+impl Debug for GenSnapTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GenSnapTask")
+            .field("region_id", &self.region_id)
+            .field("commit_index", &self.commit_index)
+            .finish()
     }
 }
 
@@ -2594,11 +2632,13 @@ impl ApplyFsm {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
+        let applied_index = self.delegate.apply_state.get_applied_index();
+        assert!(snap_task.commit_index() <= applied_index);
         let mut need_sync = apply_ctx
             .apply_res
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
-            && self.delegate.last_sync_apply_index != self.delegate.apply_state.get_applied_index();
+            && self.delegate.last_sync_apply_index != applied_index;
         (|| {
             fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
         })();
@@ -2620,7 +2660,7 @@ impl ApplyFsm {
             apply_ctx.flush();
             // For now, it's more like last_flush_apply_index.
             // TODO: Update it only when `flush()` returns true.
-            self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
+            self.delegate.last_sync_apply_index = applied_index;
         }
 
         if let Err(e) = snap_task
@@ -2926,7 +2966,7 @@ mod tests {
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
 
     use crate::import::test_helpers::*;
     use crate::raftstore::store::{Config, RegionTask};
@@ -2935,7 +2975,7 @@ mod tests {
     use super::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
-        let path = TempDir::new(path).unwrap();
+        let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = Arc::new(
             rocks::util::new_engine(
                 path.path().join("db").to_str().unwrap(),
@@ -2954,7 +2994,7 @@ mod tests {
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
-        let dir = TempDir::new(path).unwrap();
+        let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(SSTImporter::new(dir.path()).unwrap());
         (dir, importer)
     }
@@ -3178,7 +3218,7 @@ mod tests {
             2,
             vec![
                 Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
-                Msg::Snapshot(GenSnapTask::new(2, tx)),
+                Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
@@ -3898,5 +3938,23 @@ mod tests {
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
+    }
+
+    #[test]
+    fn pending_cmd_leak() {
+        let res = panic_hook::recover_safe(|| {
+            let _cmd = PendingCmd::new(1, 1, Callback::None);
+        });
+        res.unwrap_err();
+    }
+
+    #[test]
+    fn pending_cmd_leak_dtor_not_abort() {
+        let res = panic_hook::recover_safe(|| {
+            let _cmd = PendingCmd::new(1, 1, Callback::None);
+            panic!("Don't abort");
+            // It would abort and fail if there was a double-panic in PendingCmd dtor.
+        });
+        res.unwrap_err();
     }
 }

@@ -10,6 +10,7 @@ make_static_metric! {
         kv_scan,
         kv_prewrite,
         kv_pessimistic_lock,
+        kv_pessimistic_rollback,
         kv_commit,
         kv_cleanup,
         kv_batch_get,

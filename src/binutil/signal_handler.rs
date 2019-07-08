@@ -4,8 +4,6 @@
 mod imp {
     use libc::c_int;
 
-    use tikv_alloc;
-
     use engine::rocks::util::stats as rocksdb_stats;
     use engine::Engines;
     use tikv_util::metrics;
@@ -29,7 +27,6 @@ mod imp {
                         info!("{:?}", rocksdb_stats::dump(&engines.raft));
                     }
                 }
-                SIGUSR2 => tikv_alloc::dump_prof(None),
                 // TODO: handle more signal
                 _ => unreachable!(),
             }

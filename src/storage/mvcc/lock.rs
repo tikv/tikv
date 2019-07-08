@@ -3,7 +3,7 @@
 use super::super::types::Value;
 use super::{Error, Result};
 use crate::storage::{
-    Mutation, PESSIMISTIC_TXN, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
+    Mutation, FOR_UPDATE_TS_PREFIX, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
 };
 use byteorder::ReadBytesExt;
 use tikv_util::codec::bytes::{self, BytesEncoder};
@@ -58,7 +58,8 @@ pub struct Lock {
     pub ts: u64,
     pub ttl: u64,
     pub short_value: Option<Value>,
-    pub is_pessimistic_txn: bool,
+    // If for_update_ts != 0, this lock belongs to a pessimistic transaction
+    pub for_update_ts: u64,
     pub txn_size: u64,
 }
 
@@ -69,7 +70,7 @@ impl Lock {
         ts: u64,
         ttl: u64,
         short_value: Option<Value>,
-        is_pessimistic_txn: bool,
+        for_update_ts: u64,
         txn_size: u64,
     ) -> Lock {
         Lock {
@@ -78,7 +79,7 @@ impl Lock {
             ts,
             ttl,
             short_value,
-            is_pessimistic_txn,
+            for_update_ts,
             txn_size,
         }
     }
@@ -96,8 +97,9 @@ impl Lock {
             b.push(v.len() as u8);
             b.extend_from_slice(v);
         }
-        if self.is_pessimistic_txn {
-            b.push(PESSIMISTIC_TXN);
+        if self.for_update_ts > 0 {
+            b.push(FOR_UPDATE_TS_PREFIX);
+            b.encode_u64(self.for_update_ts).unwrap();
         }
         if self.txn_size > 0 {
             b.push(TXN_SIZE_PREFIX);
@@ -120,11 +122,11 @@ impl Lock {
         };
 
         if b.is_empty() {
-            return Ok(Lock::new(lock_type, primary, ts, ttl, None, false, 0));
+            return Ok(Lock::new(lock_type, primary, ts, ttl, None, 0, 0));
         }
 
         let mut short_value = None;
-        let mut is_pessimistic_txn: bool = false;
+        let mut for_update_ts = 0;
         let mut txn_size: u64 = 0;
         while !b.is_empty() {
             match b.read_u8()? {
@@ -140,7 +142,7 @@ impl Lock {
                     short_value = Some(b[..len as usize].to_vec());
                     b = &b[len as usize..];
                 }
-                PESSIMISTIC_TXN => is_pessimistic_txn = true,
+                FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?,
                 TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
                 flag => panic!("invalid flag [{:?}] in lock", flag),
             }
@@ -151,7 +153,7 @@ impl Lock {
             ts,
             ttl,
             short_value,
-            is_pessimistic_txn,
+            for_update_ts,
             txn_size,
         ))
     }
@@ -208,25 +210,45 @@ mod tests {
     fn test_lock() {
         // Test `Lock::to_bytes()` and `Lock::parse()` works as a pair.
         let mut locks = vec![
-            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, false, 0),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0, 0),
             Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1,
                 10,
                 Some(b"short_value".to_vec()),
-                false,
+                0,
                 0,
             ),
-            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, true, 0),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 10, 0),
             Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1,
                 10,
                 Some(b"short_value".to_vec()),
-                true,
+                10,
+                0,
+            ),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0, 16),
+            Lock::new(
+                LockType::Delete,
+                b"pk".to_vec(),
+                1,
+                10,
+                Some(b"short_value".to_vec()),
+                0,
                 16,
+            ),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 10, 16),
+            Lock::new(
+                LockType::Delete,
+                b"pk".to_vec(),
+                1,
+                10,
+                Some(b"short_value".to_vec()),
+                10,
+                0,
             ),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
@@ -244,7 +266,7 @@ mod tests {
             1,
             10,
             Some(b"short_value".to_vec()),
-            false,
+            0,
             0,
         );
         let v = lock.to_bytes();

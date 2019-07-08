@@ -108,19 +108,24 @@ impl RequestHandler for BatchDAGHandler {
             // field.
             warnings.merge(&mut result.warnings);
 
-            // Notice that rows_len == 0 doesn't mean that it is drained.
-            if result.data.rows_len() > 0 {
+            // Notice that logical rows len == 0 doesn't mean that it is drained.
+            if !result.logical_rows.is_empty() {
                 assert_eq!(
-                    result.data.columns_len(),
+                    result.physical_columns.columns_len(),
                     self.out_most_executor.schema().len()
                 );
                 let mut chunk = Chunk::new();
                 {
                     let data = chunk.mut_rows_data();
-                    data.reserve(result.data.maximum_encoded_size(&self.output_offsets)?);
+                    data.reserve(
+                        result
+                            .physical_columns
+                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
+                    );
                     // Although `schema()` can be deeply nested, it is ok since we process data in
                     // batch.
-                    result.data.encode(
+                    result.physical_columns.encode(
+                        &result.logical_rows,
                         &self.output_offsets,
                         self.out_most_executor.schema(),
                         data,

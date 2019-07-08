@@ -8,7 +8,7 @@ use criterion::black_box;
 use protobuf::RepeatedField;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::{ExecType, Executor as PbExecutor, TableScan};
+use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
 
 use test_coprocessor::*;
@@ -20,6 +20,7 @@ use tikv::coprocessor::dag::expr::EvalConfig;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 
+use crate::util::executor_descriptor::table_scan;
 use crate::util::scan_bencher;
 
 pub type TableScanParam = ();
@@ -32,7 +33,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
     for NormalTableScanExecutorBuilder<T>
 {
     type T = T;
-    type E = TableScanExecutor<T>;
+    type E = Box<dyn Executor>;
     type P = TableScanParam;
 
     fn build(
@@ -54,7 +55,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
         executor.next().unwrap().unwrap();
-        executor
+        Box::new(executor) as Box<dyn Executor>
     }
 }
 
@@ -64,7 +65,7 @@ pub struct BatchTableScanExecutorBuilder<T: TxnStore + 'static> {
 
 impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScanExecutorBuilder<T> {
     type T = T;
-    type E = BatchTableScanExecutor<T>;
+    type E = Box<dyn BatchExecutor>;
     type P = TableScanParam;
 
     fn build(
@@ -84,7 +85,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
         executor.next_batch(1);
-        executor
+        Box::new(executor) as Box<dyn BatchExecutor>
     }
 }
 
@@ -105,10 +106,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
         store: &Store<RocksEngine>,
         _: (),
     ) -> Box<dyn RequestHandler> {
-        let mut exec = PbExecutor::new();
-        exec.set_tp(ExecType::TypeTableScan);
-        exec.mut_tbl_scan()
-            .set_columns(RepeatedField::from_slice(columns));
+        let exec = table_scan(columns);
         crate::util::build_dag_handler::<T>(&[exec], ranges, store, batch)
     }
 }

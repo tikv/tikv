@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::{Writable, WriteBatch, DB};
-use tempdir::TempDir;
+use tempfile::Builder;
 use test::Bencher;
 
 fn writebatch(db: &DB, round: usize, batch_keys: usize) {
@@ -17,7 +17,10 @@ fn writebatch(db: &DB, round: usize, batch_keys: usize) {
 }
 
 fn bench_writebatch_impl(b: &mut Bencher, batch_keys: usize) {
-    let path = TempDir::new("/tmp/rocksdb_write_batch_bench").unwrap();
+    let path = Builder::new()
+        .prefix("/tmp/rocksdb_write_batch_bench")
+        .tempdir()
+        .unwrap();
     let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
     let key_count = 1 << 13;
     let round = key_count / batch_keys;
