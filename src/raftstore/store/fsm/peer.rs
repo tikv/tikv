@@ -1976,16 +1976,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
-        self.ctx
-            .router
-            .send(
-                source.get_id(),
-                PeerMsg::CasualMessage(CasualMessage::MergeResult {
-                    target: self.fsm.peer.peer.clone(),
-                    stale: false,
-                }),
-            )
-            .unwrap();
+        if let Err(e) = self.ctx.router.send(
+            source.get_id(),
+            PeerMsg::CasualMessage(CasualMessage::MergeResult {
+                target: self.fsm.peer.peer.clone(),
+                stale: false,
+            }),
+        ) {
+            info!(
+                "failed to send merge result, are we shutting down?";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
+        }
         None
     }
 
