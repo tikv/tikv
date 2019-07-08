@@ -764,28 +764,59 @@ mod tests {
     #[test]
     fn test_int_divide_int() {
         let test_cases = vec![
-            (13, 11, Some(1), false),
-            (13, -11, Some(-1), false),
-            (-13, 11, Some(-1), false),
-            (-13, -11, Some(1), false),
-            (33, 11, Some(3), false),
-            (33, -11, Some(-3), false),
-            (-33, 11, Some(-3), false),
-            (-33, -11, Some(3), false),
-            (11, 0, None, false),
-            (-11, 0, None, false),
-            (-3, 5, Some(0), false),
-            (3, -5, Some(0), false),
-            (std::i64::MIN + 1, -1, Some(std::i64::MAX), false),
-            (std::i64::MIN, 1, Some(std::i64::MIN), false),
-            (std::i64::MAX, 1, Some(std::i64::MAX), false),
-            (std::u64::MAX as i64, 1, Some(std::u64::MAX as i64), false),
+            (13, false, 11, false, Some(1), false),
+            (13, false, -11, false, Some(-1), false),
+            (-13, false, 11, false, Some(-1), false),
+            (-13, false, -11, false, Some(1), false),
+            (33, false, 11, false, Some(3), false),
+            (33, false, -11, false, Some(-3), false),
+            (-33, false, 11, false, Some(-3), false),
+            (-33, false, -11, false, Some(3), false),
+            (11, false, 0, false, None, false),
+            (-11, false, 0, false, None, false),
+            (-3, false, 5, true, Some(0), false),
+            (3, false, -5, false, Some(0), false),
+            (
+                std::i64::MIN + 1,
+                false,
+                -1,
+                false,
+                Some(std::i64::MAX),
+                false,
+            ),
+            (std::i64::MIN, false, 1, false, Some(std::i64::MIN), false),
+            (std::i64::MAX, false, 1, false, Some(std::i64::MAX), false),
+            (
+                std::u64::MAX as i64,
+                true,
+                1,
+                false,
+                Some(std::u64::MAX as i64),
+                false,
+            ),
         ];
 
-        for (lhs, rhs, expected, is_err) in test_cases {
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, expected, is_err) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
             let output = RpnFnScalarEvaluator::new()
-                .push_param(lhs)
-                .push_param(rhs)
+                .push_param_with_field_type(lhs, lhs_field_type)
+                .push_param_with_field_type(rhs, rhs_field_type)
                 .evaluate(ScalarFuncSig::IntDivideInt);
 
             if is_err {
@@ -798,21 +829,55 @@ mod tests {
     }
 
     #[test]
+    fn test_int_divide_int_overflow() {
+        let test_cases = vec![
+            (std::i64::MIN, false, -1, false),
+            (-1, false, 1, true),
+            (-2, false, 1, true),
+            (1, true, -1, false),
+            (2, true, -1, false),
+        ];
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(lhs, lhs_field_type)
+                .push_param_with_field_type(rhs, rhs_field_type)
+                .evaluate(ScalarFuncSig::IntDivideInt);
+            assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
     fn test_int_divide_decimal() {
         let test_cases = vec![
-            ("11.01", "1.1", "10", false),
-            ("-11.01", "1.1", "-10", false),
-            ("11.01", "-1.1", "-10", false),
-            ("-11.01", "-1.1", "10", false),
-            ("123", "", "", false),
-            ("", "123", "", false),
+            ("11.01", "1.1", Some(10), false),
+            ("-11.01", "1.1", Some(-10), false),
+            ("11.01", "-1.1", Some(-10), false),
+            ("-11.01", "-1.1", Some(10), false),
+            ("123", "", None, false),
+            ("", "123", None, false),
             // divide by zero
-            ("0.0", "0", "", false),
-            ("", "", "", false),
+            ("0.0", "0", None, false),
+            ("", "", None, false),
         ];
 
         for (lhs, rhs, expected, is_err) in test_cases {
-            let expected = expected.parse::<Int>().ok();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs.parse::<Decimal>().ok())
                 .push_param(rhs.parse::<Decimal>().ok())
@@ -824,6 +889,26 @@ mod tests {
                 let output = output.unwrap();
                 assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
             }
+        }
+    }
+
+    #[test]
+    fn test_int_divide_decimal_overflow() {
+        let test_cases = vec![
+            (Decimal::from(std::i64::MIN), Decimal::from(-1)),
+            (
+                Decimal::from(std::i64::MAX),
+                Decimal::from_f64(0.1).unwrap(),
+            ),
+        ];
+
+        for (lhs, rhs) in test_cases {
+            let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+                .push_param(lhs.clone())
+                .push_param(rhs.clone())
+                .evaluate(ScalarFuncSig::IntDivideDecimal);
+
+            assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
 }
