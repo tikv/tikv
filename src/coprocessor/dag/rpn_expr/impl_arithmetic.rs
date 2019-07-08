@@ -376,7 +376,7 @@ fn int_divide_decimal(
     ctx: &mut EvalContext,
     lhs: &Option<Decimal>,
     rhs: &Option<Decimal>,
-) -> Result<Option<Decimal>> {
+) -> Result<Option<Int>> {
     use crate::coprocessor::codec::mysql::Res;
 
     if lhs.is_none() || rhs.is_none() {
@@ -385,19 +385,17 @@ fn int_divide_decimal(
     let lhs = lhs.as_ref().unwrap();
     let rhs = rhs.as_ref().unwrap();
 
-    let overflow = Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs));
-
     match lhs / rhs {
         Some(v) => match v {
             Res::Ok(v) => match v.as_i64() {
-                Res::Ok(v_i64) => Ok(Some(Decimal::from(v_i64))),
-                Res::Truncated(v_i64) => Ok(Some(Decimal::from(v_i64))),
+                Res::Ok(v_i64) => Ok(Some(v_i64)),
+                Res::Truncated(v_i64) => Ok(Some(v_i64)),
                 Res::Overflow(_) => {
                     Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
                 }
             },
             Res::Truncated(_) => Err(Error::truncated())?,
-            Res::Overflow(_) => Err(overflow)?,
+            Res::Overflow(_) => Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))?,
         },
         None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
     }
@@ -814,7 +812,7 @@ mod tests {
         ];
 
         for (lhs, rhs, expected, is_err) in test_cases {
-            let expected = expected.parse::<Decimal>().ok();
+            let expected = expected.parse::<Int>().ok();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs.parse::<Decimal>().ok())
                 .push_param(rhs.parse::<Decimal>().ok())
