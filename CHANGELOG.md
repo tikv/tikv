@@ -4,6 +4,9 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [Unreleased]
 
++ Engine
+  - Fix Titan portable build
+
 ## [3.0.0]
 
 + Engine
