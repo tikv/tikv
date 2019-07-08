@@ -302,7 +302,7 @@ where
         Error::Other(box_err!(
             "Invalid {} (sig = {:?}) signature: {}",
             func_meta.name,
-            tree_node.get_tp(),
+            tree_node.get_sig(),
             e
         ))
     })?;

@@ -21,10 +21,10 @@ struct RpnFnAttr {
     ///
     /// Only varg or raw varg function accepts a range of number of arguments. Other kind of
     /// function strictly stipulates number of arguments according to the function definition.
-    min_args: Option<usize>, // Only for varg
+    min_args: Option<usize>,
 
     /// A custom validator.
-    validator: Option<Expr>,
+    validator: Option<TokenStream>,
 
     /// Special variables captured when calling the function.
     captures: Vec<Expr>,
@@ -61,7 +61,7 @@ impl parse::Parse for RpnFnAttr {
                             min_args = Some(lit.value() as usize);
                         }
                         "validator" => {
-                            validator = Some((**right).clone());
+                            validator = Some((&**right).into_token_stream());
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -314,7 +314,7 @@ pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream>
 struct VargsRpnFn {
     captures: Vec<Expr>,
     min_args: Option<usize>,
-    validator: Option<Expr>,
+    validator: Option<TokenStream>,
     item_fn: ItemFn,
     arg_type: TypePath,
     ret_type: TypePath,
@@ -387,11 +387,7 @@ impl VargsRpnFn {
             validator_fn_ptr = quote! { validate #ty_generics_turbofish };
         } else {
             validator_fn = None;
-            validator_fn_ptr = self
-                .validator
-                .as_ref()
-                .map(|f| f.into_token_stream())
-                .unwrap();
+            validator_fn_ptr = self.validator.clone().unwrap();
         }
 
         quote! {
@@ -441,7 +437,7 @@ impl VargsRpnFn {
 struct RawVargsRpnFn {
     captures: Vec<Expr>,
     min_args: Option<usize>,
-    validator: Option<Expr>,
+    validator: Option<TokenStream>,
     item_fn: ItemFn,
     ret_type: TypePath,
 }
@@ -504,11 +500,7 @@ impl RawVargsRpnFn {
             validator_fn_ptr = quote! { validate #ty_generics_turbofish };
         } else {
             validator_fn = None;
-            validator_fn_ptr = self
-                .validator
-                .as_ref()
-                .map(|f| f.into_token_stream())
-                .unwrap();
+            validator_fn_ptr = self.validator.clone().unwrap();
         }
 
         quote! {
@@ -559,7 +551,7 @@ impl RawVargsRpnFn {
 #[derive(Debug)]
 struct NormalRpnFn {
     captures: Vec<Expr>,
-    validator: Option<Expr>,
+    validator: Option<TokenStream>,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -758,11 +750,7 @@ impl NormalRpnFn {
             validator_fn_ptr = quote! { validate #ty_generics_turbofish };
         } else {
             validator_fn = None;
-            validator_fn_ptr = self
-                .validator
-                .as_ref()
-                .map(|f| f.into_token_stream())
-                .unwrap();
+            validator_fn_ptr = self.validator.clone().unwrap();
         }
 
         quote! {
