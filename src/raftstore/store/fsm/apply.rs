@@ -755,12 +755,6 @@ impl ApplyDelegate {
     }
 
     fn write_apply_state(&self, engines: &Engines, wb: &WriteBatch) {
-        if self.region.get_id() == 1000 && self.id() == 1003 {
-            println!(
-                "write apply state: {}",
-                self.apply_state.get_truncated_state().get_index()
-            );
-        }
         rocks::util::get_cf_handle(&engines.kv, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
