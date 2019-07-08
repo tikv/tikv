@@ -16,8 +16,9 @@ pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as Date
 pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
 
-use cop_datatype::EvalType;
+use cop_datatype::{EvalType, FieldTypeTp};
 
+use crate::coprocessor::codec::convert::convert_bytes_to_int;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
@@ -45,8 +46,7 @@ impl AsMySQLBool for Real {
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        Ok(!self.is_empty()
-            && crate::coprocessor::codec::convert::bytes_to_int(context, self)? != 0)
+        Ok(!self.is_empty() && convert_bytes_to_int(context, self, FieldTypeTp::LongLong)? != 0)
     }
 }
 

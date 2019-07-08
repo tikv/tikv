@@ -8,7 +8,9 @@ use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use crate::coprocessor::codec::convert::{
+    self, convert_bytes_to_int, convert_float_to_int, convert_float_to_uint,
+};
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
@@ -22,10 +24,10 @@ impl ScalarFunc {
     pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
-            let uval = convert_float_to_uint(val, u64::MAX, FieldTypeTp::Double)?;
+            let uval = convert_float_to_uint(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(uval as i64))
         } else {
-            let res = convert_float_to_int(val, i64::MIN, i64::MAX, FieldTypeTp::Double)?;
+            let res = convert_float_to_int(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(res))
         }
     }
@@ -61,9 +63,12 @@ impl ScalarFunc {
             _ => false,
         };
         let res = if is_negative {
-            convert::bytes_to_int(ctx, &val).map(|v| {
-                ctx.warnings
-                    .append_warning(Error::cast_neg_int_as_unsigned());
+            convert_bytes_to_int(ctx, &val, FieldTypeTp::LongLong).map(|v| {
+                // TODO: handle inUion flag
+                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                    ctx.warnings
+                        .append_warning(Error::cast_neg_int_as_unsigned());
+                }
                 v
             })
         } else {
@@ -1931,7 +1936,7 @@ mod tests {
                 0,
             ),
             (
-                FieldTypeFlag::empty(),
+                FieldTypeFlag::UNSIGNED,
                 vec![Datum::Bytes(b"-1".to_vec())],
                 -1,
                 1,
@@ -1947,9 +1952,18 @@ mod tests {
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
+            assert_eq!(
+                ctx.warnings.warning_cnt, warnings_cnt,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
+            );
             if warnings_cnt > 0 {
-                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code(),
+                    ERR_UNKNOWN,
+                    "unexpected warning: {:?}",
+                    ctx.warnings.warnings
+                );
             }
         }
 
@@ -1957,14 +1971,16 @@ mod tests {
             (
                 vec![Datum::Bytes(b"-9223372036854775810".to_vec())],
                 i64::MIN,
+                ERR_DATA_OUT_OF_RANGE,
             ),
             (
                 vec![Datum::Bytes(b"18446744073709551616".to_vec())],
                 u64::MAX as i64,
+                ERR_TRUNCATE_WRONG_VALUE,
             ),
         ];
 
-        for (cols, exp) in cases {
+        for (cols, exp, err_code) in cases {
             let col_expr = col_expr(0, FieldTypeTp::String);
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
@@ -1974,10 +1990,16 @@ mod tests {
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(
+                ctx.warnings.warning_cnt, 1,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
+            );
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                ERR_TRUNCATE_WRONG_VALUE
+                err_code,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
             );
 
             // test overflow as error
