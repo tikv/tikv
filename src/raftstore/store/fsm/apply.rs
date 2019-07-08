@@ -755,6 +755,12 @@ impl ApplyDelegate {
     }
 
     fn write_apply_state(&self, engines: &Engines, wb: &WriteBatch) {
+        if self.region.get_id() == 1000 && self.id() == 1003 {
+            println!(
+                "write apply state: {}",
+                self.apply_state.get_truncated_state().get_index()
+            );
+        }
         rocks::util::get_cf_handle(&engines.kv, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
@@ -2385,6 +2391,11 @@ impl ApplyFsm {
             apply_ctx.timer = Some(SlowTimer::new());
         }
 
+        fail_point!(
+            "on_handle_apply_1000_1003",
+            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
+            |_| {}
+        );
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -2440,6 +2451,11 @@ impl ApplyFsm {
             // Flush before destroying to avoid reordering messages.
             ctx.flush();
         }
+        fail_point!(
+            "before_peer_destroy_1000_1003",
+            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
+            |_| {}
+        );
         info!(
             "remove delegate from apply delegates";
             "region_id" => self.delegate.region_id(),
@@ -2538,11 +2554,10 @@ impl ApplyFsm {
                 return;
             }
         }
-
         fail_point!(
-            "after_handle_catch_up_logs_for_merge",
-            { self.delegate.id == 1003 && self.delegate.region_id() == 1000 },
-            |_| ()
+            "after_handle_catch_up_logs_for_merge_1000_1003",
+            self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
+            |_| {}
         );
 
         let region_id = self.delegate.region_id();

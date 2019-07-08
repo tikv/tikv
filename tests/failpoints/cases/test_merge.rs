@@ -205,6 +205,7 @@ fn test_node_merge_restart() {
     must_get_none(&cluster.get_engine(3), b"k3");
 }
 
+/// Test if merge is still working when restart a cluster during catching up logs for merge.
 #[test]
 fn test_node_merge_catch_up_logs_restart() {
     let _guard = crate::setup();
@@ -223,6 +224,57 @@ fn test_node_merge_catch_up_logs_restart() {
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
 
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.must_put(b"k11", b"v11");
+    must_get_none(&cluster.get_engine(3), b"k11");
+
+    // after source peer is applied but before set it to tombstone
+    fail::cfg("after_handle_catch_up_logs_for_merge_1000_1003", "return()").unwrap();
+    pd_client.must_merge(left.get_id(), right.get_id());
+    thread::sleep(Duration::from_millis(100));
+    cluster.shutdown();
+
+    fail::remove("after_handle_catch_up_logs_for_merge_1000_1003");
+    cluster.start().unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+}
+
+/// Test if leader election is working properly when catching up logs for merge.
+#[test]
+fn test_node_merge_catch_up_logs_leader_election() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 25;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(1000);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // let the entries committed but not applied
+    fail::cfg("on_handle_apply_1000_1003", "pause").unwrap();
+    for i in 2..20 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v");
+    }
+    // wait a while to trigger compact raft log
+    thread::sleep(Duration::from_millis(1000));
+
     // after source peer is applied but before set it to tombstone
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
@@ -231,12 +283,16 @@ fn test_node_merge_catch_up_logs_restart() {
     ));
     cluster.must_put(b"k11", b"v11");
     must_get_none(&cluster.get_engine(3), b"k11");
-    fail::cfg("after_handle_catch_up_logs_for_merge", "return()").unwrap();
+
+    // let peer not destroyed before election timeout
+    fail::cfg("before_peer_destroy_1000_1003", "pause").unwrap();
+    fail::remove("on_handle_apply_1000_1003");
     pd_client.must_merge(left.get_id(), right.get_id());
-    thread::sleep(Duration::from_millis(100));
-    cluster.shutdown();
-    fail::remove("after_handle_catch_up_logs_for_merge");
-    cluster.start().unwrap();
+
+    // wait election timeout
+    thread::sleep(Duration::from_millis(500));
+    fail::remove("before_peer_destroy_1000_1003");
+
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
 
