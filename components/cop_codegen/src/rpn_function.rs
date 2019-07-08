@@ -157,8 +157,8 @@ impl ValidatorFnGenerator {
 
     pub fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
         self.tokens.push(quote! {
-            for children in expr.get_children() {
-                function::validate_expr_return_type(children, #args_evaluable::EVAL_TYPE)?;
+            for child in expr.get_children() {
+                function::validate_expr_return_type(child, #args_evaluable::EVAL_TYPE)?;
             }
         });
         self
