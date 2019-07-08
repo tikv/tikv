@@ -1,14 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::{i64, str, u64};
 
 use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use crate::coprocessor::codec::convert::{
+    self, convert_bytes_to_int, convert_float_to_int, convert_float_to_uint,
+};
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
@@ -22,10 +24,10 @@ impl ScalarFunc {
     pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
-            let uval = convert_float_to_uint(val, u64::MAX, FieldTypeTp::Double)?;
+            let uval = convert_float_to_uint(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(uval as i64))
         } else {
-            let res = convert_float_to_int(val, i64::MIN, i64::MAX, FieldTypeTp::Double)?;
+            let res = convert_float_to_int(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(res))
         }
     }
@@ -61,9 +63,12 @@ impl ScalarFunc {
             _ => false,
         };
         let res = if is_negative {
-            convert::bytes_to_int(ctx, &val).map(|v| {
-                ctx.warnings
-                    .append_warning(Error::cast_neg_int_as_unsigned());
+            convert_bytes_to_int(ctx, &val, FieldTypeTp::LongLong).map(|v| {
+                // TODO: handle inUion flag
+                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                    ctx.warnings
+                        .append_warning(Error::cast_neg_int_as_unsigned());
+                }
                 v
             })
         } else {
@@ -107,7 +112,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec = Decimal::try_from(val)?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
@@ -170,7 +175,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let val = val.to_decimal()?;
+        let val = Decimal::try_from(val)?;
         let res = val.as_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
@@ -254,7 +259,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec = Decimal::try_from(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -409,8 +414,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val =
-            Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
+        let mut val = Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val)?;
         val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
@@ -429,12 +433,12 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
-            Ok(dur) => Ok(Some(Cow::Owned(dur))),
+            Ok(dur) => Ok(Some(dur)),
             Err(e) => {
                 if e.is_overflow() {
                     ctx.handle_overflow(e)?;
@@ -450,68 +454,66 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
         let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        Ok(Some(dur))
     }
 
     pub fn cast_decimal_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
         let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        Ok(Some(dur))
     }
 
     pub fn cast_str_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let dur = Duration::parse(val.as_ref(), self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        Ok(Some(dur))
     }
 
     pub fn cast_time_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let res = val
             .to_duration()?
             .round_frac(self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(res)))
+        Ok(Some(res))
     }
 
     pub fn cast_duration_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let res = val
-            .into_owned()
-            .round_frac(self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(res)))
+        let res = val.round_frac(self.field_type.decimal() as i8)?;
+        Ok(Some(res))
     }
 
     pub fn cast_json_as_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
         // TODO: tidb would handle truncate here
         let d = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
-        Ok(Some(Cow::Owned(d)))
+        Ok(Some(d))
     }
 
     pub fn cast_int_as_json<'a, 'b: 'a>(
@@ -589,9 +591,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = val.into_owned();
-        val.set_fsp(mysql::MAX_FSP as u8);
+        let mut val = try_opt!(self.children[0].eval_duration(ctx, row));
+        val = val.maximize_fsp();
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))
     }
@@ -1640,10 +1641,10 @@ mod tests {
                 .set_decimal(isize::from(to_fsp));
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_duration(&mut ctx, col).unwrap();
-            let data = res.unwrap().into_owned();
+            let data = res.unwrap();
             let mut expt = *exp;
             if to_fsp != mysql::UNSPECIFIED_FSP {
-                expt.set_fsp(to_fsp as u8);
+                expt = expt.round_frac(to_fsp).expect("fail to round");
             }
             assert_eq!(
                 data.to_string(),
@@ -1935,7 +1936,7 @@ mod tests {
                 0,
             ),
             (
-                FieldTypeFlag::empty(),
+                FieldTypeFlag::UNSIGNED,
                 vec![Datum::Bytes(b"-1".to_vec())],
                 -1,
                 1,
@@ -1951,9 +1952,18 @@ mod tests {
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
+            assert_eq!(
+                ctx.warnings.warning_cnt, warnings_cnt,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
+            );
             if warnings_cnt > 0 {
-                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code(),
+                    ERR_UNKNOWN,
+                    "unexpected warning: {:?}",
+                    ctx.warnings.warnings
+                );
             }
         }
 
@@ -1961,14 +1971,16 @@ mod tests {
             (
                 vec![Datum::Bytes(b"-9223372036854775810".to_vec())],
                 i64::MIN,
+                ERR_DATA_OUT_OF_RANGE,
             ),
             (
                 vec![Datum::Bytes(b"18446744073709551616".to_vec())],
                 u64::MAX as i64,
+                ERR_TRUNCATE_WRONG_VALUE,
             ),
         ];
 
-        for (cols, exp) in cases {
+        for (cols, exp, err_code) in cases {
             let col_expr = col_expr(0, FieldTypeTp::String);
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
@@ -1978,10 +1990,16 @@ mod tests {
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(
+                ctx.warnings.warning_cnt, 1,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
+            );
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                ERR_TRUNCATE_WRONG_VALUE
+                err_code,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
             );
 
             // test overflow as error

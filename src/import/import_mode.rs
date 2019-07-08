@@ -162,7 +162,7 @@ mod tests {
     use super::*;
 
     use engine::rocks::util::new_engine;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     fn check_import_options(
         db: &DB,
@@ -203,7 +203,10 @@ mod tests {
 
     #[test]
     fn test_import_mode_switcher() {
-        let temp_dir = TempDir::new("test_import_mode_switcher").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("test_import_mode_switcher")
+            .tempdir()
+            .unwrap();
         let db = new_engine(temp_dir.path().to_str().unwrap(), None, &["a", "b"], None).unwrap();
 
         let import_db_options = ImportModeDBOptions::new();

@@ -79,7 +79,7 @@ pub enum GroupState {
 }
 
 pub struct PeerFsm {
-    peer: Peer,
+    pub peer: Peer,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     /// Ticks for speed up campaign in chaos state.
@@ -358,6 +358,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
             }
+            CasualMessage::Test(cb) => cb(self.fsm),
         }
     }
 
@@ -890,6 +891,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(());
         }
 
+        if !self.check_request_snapshot(&msg) {
+            return Ok(());
+        }
+
         if util::is_vote_msg(&msg.get_message())
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
@@ -1311,6 +1316,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         Ok(None)
+    }
+
+    // Check if this peer can handle request_snapshot.
+    fn check_request_snapshot(&mut self, msg: &RaftMessage) -> bool {
+        let m = msg.get_message();
+        let request_index = m.get_request_snapshot();
+        if request_index == raft::INVALID_INDEX {
+            // If it's not a request snapshot, then go on.
+            return true;
+        }
+        self.fsm
+            .peer
+            .ready_to_handle_request_snapshot(request_index)
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
@@ -1748,7 +1766,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let target_id = expect_region.get_id();
             let sibling_region = expect_region;
 
-            let min_index = self.fsm.peer.get_min_progress() + 1;
+            let min_index = self.fsm.peer.get_min_progress()? + 1;
             let low = cmp::max(min_index, state.get_min_index());
             // TODO: move this into raft module.
             // > over >= to include the PrepareMerge proposal.

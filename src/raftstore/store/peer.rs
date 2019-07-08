@@ -333,6 +333,8 @@ pub struct Peer {
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
+    /// The index of the latest proposed prepare merge command.
+    last_proposed_prepare_merge_idx: u64,
     /// The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
     /// The merge related state. It indicates this Peer is in merging.
@@ -404,6 +406,7 @@ impl Peer {
             pending_remove: false,
             pending_merge_state: None,
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
+            last_proposed_prepare_merge_idx: 0,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag,
@@ -743,10 +746,14 @@ impl Peer {
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            self.send_raft_message(msg, trans);
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
-                MessageType::MsgAppendResponse => metrics.append_resp += 1,
+                MessageType::MsgAppendResponse => {
+                    if msg.get_request_snapshot() != raft::INVALID_INDEX {
+                        metrics.request_snapshot += 1;
+                    }
+                    metrics.append_resp += 1;
+                }
                 MessageType::MsgRequestPreVote => metrics.prevote += 1,
                 MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
@@ -778,6 +785,7 @@ impl Peer {
                 | MessageType::MsgReadIndex
                 | MessageType::MsgReadIndexResp => {}
             }
+            self.send_raft_message(msg, trans);
         }
     }
 
@@ -1044,6 +1052,45 @@ impl Peer {
     fn is_merging(&self) -> bool {
         self.last_committed_prepare_merge_idx > self.get_store().applied_index()
             || self.pending_merge_state.is_some()
+    }
+
+    // Checks merge strictly, it checks whether there is any onging merge by
+    // tracking last proposed prepare merge.
+    // TODO: There is a false positives, proposed prepare merge may never be
+    //       committed.
+    fn is_merging_strict(&self) -> bool {
+        self.last_proposed_prepare_merge_idx > self.get_store().applied_index() || self.is_merging()
+    }
+
+    // Check if this peer can handle request_snapshot.
+    pub fn ready_to_handle_request_snapshot(&mut self, request_index: u64) -> bool {
+        let reject_reason = if !self.is_leader() {
+            // Only leader can handle request snapshot.
+            "not_leader"
+        } else if self.get_store().applied_index_term() != self.term()
+            || self.get_store().applied_index() < request_index
+        {
+            // Reject if there are any unapplied raft log.
+            // We don't want to handle request snapshot if there is any ongoing
+            // merge, because it is going to be destroyed. This check prevents
+            // handling request snapshot after leadership being transferred.
+            "stale_apply"
+        } else if self.is_merging_strict() || self.is_splitting() {
+            // Reject if it is merging or splitting.
+            // `is_merging_strict` also checks last proposed prepare merge, it
+            // prevents handling request snapshot while a prepare merge going
+            // to be committed.
+            "split_merge"
+        } else {
+            return true;
+        };
+
+        info!("can not handle request snapshot";
+            "reason" => reject_reason,
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.peer_id(),
+            "request_index" => request_index);
+        false
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -1924,10 +1971,32 @@ impl Peer {
         true
     }
 
-    pub fn get_min_progress(&self) -> u64 {
-        self.raft_group.status_ref().progress.map_or(0, |p| {
-            p.iter().map(|(_, pr)| pr.matched).min().unwrap_or_default()
-        })
+    // For now, it is only used in merge.
+    pub fn get_min_progress(&self) -> Result<u64> {
+        let mut min = None;
+        if let Some(progress) = self.raft_group.status_ref().progress {
+            for (id, pr) in progress.iter() {
+                // Reject merge if there is any pending request snapshot,
+                // because a target region may merge a source region which is in
+                // an invalid state.
+                if pr.state == ProgressState::Snapshot
+                    || pr.pending_request_snapshot != INVALID_INDEX
+                {
+                    return Err(box_err!(
+                        "there is a pending snapshot peer {} [{:?}], skip merge",
+                        id,
+                        pr
+                    ));
+                }
+                if min.is_none() {
+                    min = Some(pr.matched);
+                }
+                if min.unwrap() > pr.matched {
+                    min = Some(pr.matched);
+                }
+            }
+        }
+        Ok(min.unwrap_or(0))
     }
 
     fn pre_propose_prepare_merge<T, C>(
@@ -1936,7 +2005,7 @@ impl Peer {
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
-        let min_progress = self.get_min_progress();
+        let min_progress = self.get_min_progress()?;
         let min_index = min_progress + 1;
         if min_progress == 0 || last_index - min_progress > ctx.cfg.merge_max_log_gap {
             return Err(box_err!(
@@ -2060,6 +2129,10 @@ impl Peer {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
+        }
+
+        if ctx.contains(ProposalContext::PREPARE_MERGE) {
+            self.last_proposed_prepare_merge_idx = propose_index;
         }
 
         Ok(propose_index)

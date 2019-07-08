@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use tempdir::TempDir;
+use tempfile::Builder;
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
@@ -41,7 +41,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
-    let tmp_path = TempDir::new("test_cluster").unwrap();
+    let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let engine = Arc::new(
         rocks::util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
     );
@@ -55,7 +55,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::clone(&raft_engine),
         shared_block_cache,
     );
-    let tmp_mgr = TempDir::new("test_cluster").unwrap();
+    let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
 
     let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
