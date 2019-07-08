@@ -32,8 +32,8 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/zhangjinpeng1987/rust-rocksdb.git"
-branch = "tikv-3.0-guards"
+git = "https://github.com/yiwu-arbug/rust-rocksdb.git"
+branch = "guard_noflush"
 package = "rocksdb"
 
 [dev-dependencies]
