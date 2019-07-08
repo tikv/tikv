@@ -2,6 +2,7 @@
 
 use cop_codegen::rpn_fn;
 
+use super::super::expr::EvalContext;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
 use crate::coprocessor::Result;
@@ -369,32 +370,36 @@ impl ArithmeticOp for UintDivideInt {
     }
 }
 
-#[derive(Debug)]
-pub struct IntDivideDecimal;
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn int_divide_decimal(
+    ctx: &mut EvalContext,
+    lhs: &Option<Decimal>,
+    rhs: &Option<Decimal>,
+) -> Result<Option<Decimal>> {
+    use crate::coprocessor::codec::mysql::Res;
 
-impl ArithmeticOp for IntDivideDecimal {
-    type T = Decimal;
+    if lhs.is_none() || rhs.is_none() {
+        return Ok(None);
+    }
+    let lhs = lhs.as_ref().unwrap();
+    let rhs = rhs.as_ref().unwrap();
 
-    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        use crate::coprocessor::codec::mysql::Res;
+    let overflow = Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs));
 
-        let overflow = Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs));
-
-        match lhs / rhs {
-            Some(v) => match v {
-                Res::Ok(v) => match v.as_i64() {
-                    Res::Ok(v_i64) => Ok(Some(Decimal::from(v_i64))),
-                    Res::Truncated(v_i64) => Ok(Some(Decimal::from(v_i64))),
-                    Res::Overflow(_) => {
-                        Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
-                    }
-                },
-                Res::Truncated(_) => Err(Error::truncated())?,
-                Res::Overflow(_) => Err(overflow)?,
+    match lhs / rhs {
+        Some(v) => match v {
+            Res::Ok(v) => match v.as_i64() {
+                Res::Ok(v_i64) => Ok(Some(Decimal::from(v_i64))),
+                Res::Truncated(v_i64) => Ok(Some(Decimal::from(v_i64))),
+                Res::Overflow(_) => {
+                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
+                }
             },
-            // TODO: fix this with ctx.division_by_zero
-            None => Ok(None),
-        }
+            Res::Truncated(_) => Err(Error::truncated())?,
+            Res::Overflow(_) => Err(overflow)?,
+        },
+        None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
     }
 }
 

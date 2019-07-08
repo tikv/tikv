@@ -180,7 +180,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfNullDuration => if_null_fn_meta::<Duration>(),
         ScalarFuncSig::IfNullJson => if_null_fn_meta::<Json>(),
         ScalarFuncSig::IntDivideInt => map_int_sig(value, children, divide_mapper)?,
-        ScalarFuncSig::IntDivideDecimal => arithmetic_fn_meta::<IntDivideDecimal>(),
+        ScalarFuncSig::IntDivideDecimal => int_divide_decimal_fn_meta(),
         ScalarFuncSig::CaseWhenInt => case_when_fn_meta::<Int>(),
         ScalarFuncSig::CaseWhenReal => case_when_fn_meta::<Real>(),
         ScalarFuncSig::CaseWhenString => case_when_fn_meta::<Bytes>(),
