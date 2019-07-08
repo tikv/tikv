@@ -1918,6 +1918,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "peer_id" => self.fsm.peer.peer_id(),
                     "last_index" => last_index,
                 );
+                self.fsm.has_ready = true;
             }
             None => {
                 info!(
