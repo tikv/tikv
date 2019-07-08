@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(clippy::useless_let_if_seq)]
-
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
