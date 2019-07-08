@@ -380,11 +380,11 @@ impl ArithmeticOp for IntDivideDecimal {
 
         let overflow = Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs));
 
-        let s: Result<Option<Decimal>> = match lhs / rhs {
+        match lhs / rhs {
             Some(v) => match v {
                 Res::Ok(v) => match v.as_i64() {
-                    Res::Ok(v_i64) => Ok(Some(Decimal::from_f64(v_i64 as f64).unwrap())),
-                    Res::Truncated(v_i64) => Ok(Some(Decimal::from_f64(v_i64 as f64).unwrap())),
+                    Res::Ok(v_i64) => Ok(Some(Decimal::from(v_i64))),
+                    Res::Truncated(v_i64) => Ok(Some(Decimal::from(v_i64))),
                     Res::Overflow(_) => {
                         Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
                     }
@@ -392,10 +392,9 @@ impl ArithmeticOp for IntDivideDecimal {
                 Res::Truncated(_) => Err(Error::truncated())?,
                 Res::Overflow(_) => Err(overflow)?,
             },
+            // TODO: fix this with ctx.division_by_zero
             None => Err(Error::division_by_zero())?,
-        };
-
-        s
+        }
     }
 }
 
