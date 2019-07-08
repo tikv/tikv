@@ -1792,18 +1792,26 @@ impl ApplyDelegate {
                 "source_region_id" => source_region_id
             );
 
-            let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
-            let logs_up_to_date = Arc::new(AtomicU64::new(0));
-            let msg = Msg::CatchUpLogs(CatchUpLogs {
-                target_mailbox: mailbox,
-                merge: merge.to_owned(),
-                logs_up_to_date: logs_up_to_date.clone(),
-            });
-            ctx.router.schedule_task(source_region_id, msg);
-            return Ok((
-                AdminResponse::default(),
-                ApplyResult::WaitMergeSource(logs_up_to_date),
-            ));
+            if let Some(mailbox) = ctx.router.mailbox(self.region_id()) {
+                let logs_up_to_date = Arc::new(AtomicU64::new(0));
+                let msg = Msg::CatchUpLogs(CatchUpLogs {
+                    target_mailbox: mailbox,
+                    merge: merge.to_owned(),
+                    logs_up_to_date: logs_up_to_date.clone(),
+                });
+                ctx.router.schedule_task(source_region_id, msg);
+                return Ok((
+                    AdminResponse::default(),
+                    ApplyResult::WaitMergeSource(logs_up_to_date),
+                ));
+            } else {
+                info!(
+                    "failed to get mailbox, are we shutting down?";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                );
+                return Err(box_err!("failed to get mailbox"));
+            }
         }
 
         info!(
