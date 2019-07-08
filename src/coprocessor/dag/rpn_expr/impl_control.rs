@@ -14,7 +14,7 @@ fn if_null<T: Evaluable>(lhs: &Option<T>, rhs: &Option<T>) -> Result<Option<T>> 
     Ok(rhs.clone())
 }
 
-#[rpn_fn(raw_varg, validator = case_when_validator::<T>)]
+#[rpn_fn(raw_varg, extra_validator = case_when_validator::<T>)]
 #[inline]
 pub fn case_when<T: Evaluable>(args: &[ScalarValueRef<'_>]) -> Result<Option<T>> {
     for chunk in args.chunks(2) {
@@ -33,7 +33,6 @@ pub fn case_when<T: Evaluable>(args: &[ScalarValueRef<'_>]) -> Result<Option<T>>
 }
 
 fn case_when_validator<T: Evaluable>(expr: &tipb::expression::Expr) -> Result<()> {
-    super::function::validate_expr_return_type(expr, T::EVAL_TYPE)?;
     for chunk in expr.get_children().chunks(2) {
         if chunk.len() == 1 {
             super::function::validate_expr_return_type(&chunk[0], T::EVAL_TYPE)?;

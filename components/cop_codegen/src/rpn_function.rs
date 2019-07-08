@@ -23,8 +23,8 @@ struct RpnFnAttr {
     /// function strictly stipulates number of arguments according to the function definition.
     min_args: Option<usize>,
 
-    /// A custom validator.
-    validator: Option<TokenStream>,
+    /// Extra validator.
+    extra_validator: Option<TokenStream>,
 
     /// Special variables captured when calling the function.
     captures: Vec<Expr>,
@@ -35,7 +35,7 @@ impl parse::Parse for RpnFnAttr {
         let mut is_varg = false;
         let mut is_raw_varg = false;
         let mut min_args = None;
-        let mut validator = None;
+        let mut extra_validator = None;
         let mut captures = Vec::new();
 
         let config_items = Punctuated::<Expr, Token![,]>::parse_terminated(input).unwrap();
@@ -60,8 +60,8 @@ impl parse::Parse for RpnFnAttr {
                             })?;
                             min_args = Some(lit.value() as usize);
                         }
-                        "validator" => {
-                            validator = Some((&**right).into_token_stream());
+                        "extra_validator" => {
+                            extra_validator = Some((&**right).into_token_stream());
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -108,18 +108,12 @@ impl parse::Parse for RpnFnAttr {
                 "`min_args` is only available when `varg` or `raw_varg` presents",
             ));
         }
-        if validator.is_some() && min_args != None {
-            return Err(Error::new_spanned(
-                config_items,
-                "`min_args` is only available when `validator` is not customized",
-            ));
-        }
 
         Ok(Self {
             is_varg,
             is_raw_varg,
             min_args,
-            validator,
+            extra_validator,
             captures,
         })
     }
@@ -177,6 +171,15 @@ impl ValidatorFnGenerator {
                 )?;
             )*
         });
+        self
+    }
+
+    pub fn validate_by_fn(mut self, extra_validator: &Option<TokenStream>) -> Self {
+        if let Some(ts) = extra_validator {
+            self.tokens.push(quote! {
+                #ts(expr)?;
+            });
+        }
         self
     }
 
@@ -314,7 +317,7 @@ pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream>
 struct VargsRpnFn {
     captures: Vec<Expr>,
     min_args: Option<usize>,
-    validator: Option<TokenStream>,
+    extra_validator: Option<TokenStream>,
     item_fn: ItemFn,
     arg_type: TypePath,
     ret_type: TypePath,
@@ -346,7 +349,7 @@ impl VargsRpnFn {
         Ok(Self {
             captures: attr.captures,
             min_args: attr.min_args,
-            validator: attr.validator,
+            extra_validator: attr.extra_validator,
             item_fn,
             arg_type: arg_type.eval_type,
             ret_type: ret_type.eval_type,
@@ -374,21 +377,12 @@ impl VargsRpnFn {
         let fn_name = self.item_fn.ident.to_string();
         let arg_type = &self.arg_type;
 
-        let validator_fn;
-        let validator_fn_ptr;
-        if self.validator.is_none() {
-            validator_fn = Some(
-                ValidatorFnGenerator::new()
-                    .validate_return_type(&self.ret_type)
-                    .validate_min_args(self.min_args)
-                    .validate_args_identical_type(&self.arg_type)
-                    .generate(&impl_generics, where_clause),
-            );
-            validator_fn_ptr = quote! { validate #ty_generics_turbofish };
-        } else {
-            validator_fn = None;
-            validator_fn_ptr = self.validator.clone().unwrap();
-        }
+        let validator_fn = ValidatorFnGenerator::new()
+            .validate_return_type(&self.ret_type)
+            .validate_min_args(self.min_args)
+            .validate_args_identical_type(&self.arg_type)
+            .validate_by_fn(&self.extra_validator)
+            .generate(&impl_generics, where_clause);
 
         quote! {
             pub const fn #constructor_ident #impl_generics ()
@@ -425,7 +419,7 @@ impl VargsRpnFn {
 
                 crate::coprocessor::dag::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    validator_ptr: #validator_fn_ptr,
+                    validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
             }
@@ -437,7 +431,7 @@ impl VargsRpnFn {
 struct RawVargsRpnFn {
     captures: Vec<Expr>,
     min_args: Option<usize>,
-    validator: Option<TokenStream>,
+    extra_validator: Option<TokenStream>,
     item_fn: ItemFn,
     ret_type: TypePath,
 }
@@ -462,7 +456,7 @@ impl RawVargsRpnFn {
         Ok(Self {
             captures: attr.captures,
             min_args: attr.min_args,
-            validator: attr.validator,
+            extra_validator: attr.extra_validator,
             item_fn,
             ret_type: ret_type.eval_type,
         })
@@ -488,20 +482,11 @@ impl RawVargsRpnFn {
         let fn_ident = &self.item_fn.ident;
         let fn_name = self.item_fn.ident.to_string();
 
-        let validator_fn;
-        let validator_fn_ptr;
-        if self.validator.is_none() {
-            validator_fn = Some(
-                ValidatorFnGenerator::new()
-                    .validate_return_type(&self.ret_type)
-                    .validate_min_args(self.min_args)
-                    .generate(&impl_generics, where_clause),
-            );
-            validator_fn_ptr = quote! { validate #ty_generics_turbofish };
-        } else {
-            validator_fn = None;
-            validator_fn_ptr = self.validator.clone().unwrap();
-        }
+        let validator_fn = ValidatorFnGenerator::new()
+            .validate_return_type(&self.ret_type)
+            .validate_min_args(self.min_args)
+            .validate_by_fn(&self.extra_validator)
+            .generate(&impl_generics, where_clause);
 
         quote! {
             pub const fn #constructor_ident #impl_generics ()
@@ -540,7 +525,7 @@ impl RawVargsRpnFn {
 
                 crate::coprocessor::dag::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    validator_ptr: #validator_fn_ptr,
+                    validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
             }
@@ -551,7 +536,7 @@ impl RawVargsRpnFn {
 #[derive(Debug)]
 struct NormalRpnFn {
     captures: Vec<Expr>,
-    validator: Option<TokenStream>,
+    extra_validator: Option<TokenStream>,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -582,7 +567,7 @@ impl NormalRpnFn {
         let evaluator_ident = Ident::new(&format!("{}_Evaluator", camel_name), Span::call_site());
         Ok(Self {
             captures: attr.captures,
-            validator: attr.validator,
+            extra_validator: attr.extra_validator,
             item_fn,
             fn_trait_ident,
             evaluator_ident,
@@ -738,20 +723,11 @@ impl NormalRpnFn {
         }
         let fn_name = self.item_fn.ident.to_string();
 
-        let validator_fn;
-        let validator_fn_ptr;
-        if self.validator.is_none() {
-            validator_fn = Some(
-                ValidatorFnGenerator::new()
-                    .validate_return_type(&self.ret_type)
-                    .validate_args_type(&self.arg_types)
-                    .generate(&impl_generics, where_clause),
-            );
-            validator_fn_ptr = quote! { validate #ty_generics_turbofish };
-        } else {
-            validator_fn = None;
-            validator_fn_ptr = self.validator.clone().unwrap();
-        }
+        let validator_fn = ValidatorFnGenerator::new()
+            .validate_return_type(&self.ret_type)
+            .validate_args_type(&self.arg_types)
+            .validate_by_fn(&self.extra_validator)
+            .generate(&impl_generics, where_clause);
 
         quote! {
             pub const fn #constructor_ident #impl_generics ()
@@ -773,7 +749,7 @@ impl NormalRpnFn {
 
                 crate::coprocessor::dag::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    validator_ptr: #validator_fn_ptr,
+                    validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
             }
@@ -1124,7 +1100,7 @@ mod tests_normal {
                 is_varg: false,
                 is_raw_varg: false,
                 min_args: None,
-                validator: None,
+                extra_validator: None,
                 captures: vec![parse_str("ctx").unwrap()],
             },
             item_fn,
