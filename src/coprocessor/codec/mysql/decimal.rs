@@ -2176,15 +2176,7 @@ impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn div(self, rhs: &'a Decimal) -> Self::Output {
-        <Decimal>::div(self, rhs, DEFAULT_DIV_FRAC_INCR)
-    }
-}
-
-impl Div for Decimal {
-    type Output = Option<Res<Decimal>>;
-
-    fn div(self, rhs: Decimal) -> Option<Res<Decimal>> {
-        <Decimal>::div(&self, &rhs, DEFAULT_DIV_FRAC_INCR)
+        self.div(rhs, DEFAULT_DIV_FRAC_INCR)
     }
 }
 
@@ -3267,7 +3259,7 @@ mod tests {
         for (lhs_str, rhs_str, rem_exp) in div_cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res = (lhs / rhs).unwrap().map(|d| d.to_string());
+            let res = (&lhs / &rhs).unwrap().map(|d| d.to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()))
         }
     }

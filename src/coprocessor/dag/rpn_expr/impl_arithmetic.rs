@@ -393,7 +393,7 @@ impl ArithmeticOp for IntDivideDecimal {
                 Res::Overflow(_) => Err(overflow)?,
             },
             // TODO: fix this with ctx.division_by_zero
-            None => Err(Error::division_by_zero())?,
+            None => Ok(None),
         }
     }
 }
@@ -804,7 +804,7 @@ mod tests {
             ("123", "", "", false),
             ("", "123", "", false),
             // divide by zero
-            ("0.0", "0", "", true),
+            ("0.0", "0", "", false),
             ("", "", "", false),
         ];
 
