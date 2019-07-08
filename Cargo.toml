@@ -30,9 +30,6 @@ name = "tikv-server"
 [[bin]]
 name = "tikv-ctl"
 
-[[bin]]
-name = "tikv-importer"
-
 [[test]]
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
