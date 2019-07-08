@@ -207,13 +207,10 @@ pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
     Ok(None)
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(varg, min_args = 1)]
 #[inline]
 pub fn compare_in<T: Evaluable + Eq>(args: &[&Option<T>]) -> Result<Option<Int>> {
-    if args.is_empty() {
-        // TODO: Change to assert after validator function is implemented.
-        return Err(box_err!("Invalid IN() arguments"));
-    }
+    assert!(!args.is_empty());
     let base_val = args[0];
     match base_val {
         None => Ok(None),

@@ -280,6 +280,7 @@ mod tests {
     use cop_codegen::rpn_fn;
     use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
+    use tipb_helper::ExprDefBuilder;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
     use crate::coprocessor::codec::data_type::{Int, Real};
@@ -937,10 +938,7 @@ mod tests {
     /// Parse from an expression tree then evaluate.
     #[test]
     fn test_parse_and_eval() {
-        use tipb::expression::ScalarFuncSig;
-        use tipb::expression::{Expr, ExprType};
-
-        use tikv_util::codec::number::NumberEncoder;
+        use tipb::expression::{Expr, ScalarFuncSig};
 
         // We will build an expression tree from:
         //      fn_d(
@@ -989,85 +987,29 @@ mod tests {
             })
         }
 
-        let node_fn_b = {
-            // Col1
-            let mut node_col_1 = Expr::new();
-            node_col_1.set_tp(ExprType::ColumnRef);
-            node_col_1
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_col_1.mut_val().encode_i64(1).unwrap();
-
-            // fn_c
-            let mut node_fn_c = Expr::new();
-            node_fn_c.set_tp(ExprType::ScalarFunc);
-            node_fn_c.set_sig(ScalarFuncSig::CastIntAsString);
-            node_fn_c
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-
-            // fn_b
-            let mut node_fn_b = Expr::new();
-            node_fn_b.set_tp(ExprType::ScalarFunc);
-            node_fn_b.set_sig(ScalarFuncSig::CastIntAsReal);
-            node_fn_b
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_fn_b.mut_children().push(node_col_1);
-            node_fn_b.mut_children().push(node_fn_c);
-            node_fn_b
-        };
-
-        let node_fn_a = {
-            // Const1
-            let mut node_const_1 = Expr::new();
-            node_const_1.set_tp(ExprType::Int64);
-            node_const_1
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_const_1.mut_val().encode_i64(7).unwrap();
-
-            // Col0
-            let mut node_col_0 = Expr::new();
-            node_col_0.set_tp(ExprType::ColumnRef);
-            node_col_0
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_col_0.mut_val().encode_i64(0).unwrap();
-
-            // fn_a
-            let mut node_fn_a = Expr::new();
-            node_fn_a.set_tp(ExprType::ScalarFunc);
-            node_fn_a.set_sig(ScalarFuncSig::CastIntAsInt);
-            node_fn_a
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_fn_a.mut_children().push(node_const_1);
-            node_fn_a.mut_children().push(node_fn_b);
-            node_fn_a.mut_children().push(node_col_0);
-            node_fn_a
-        };
-
-        // fn_d
-        let mut node_fn_d = Expr::new();
-        node_fn_d.set_tp(ExprType::ScalarFunc);
-        node_fn_d.set_sig(ScalarFuncSig::CastIntAsDecimal);
-        node_fn_d
-            .mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
-        node_fn_d.mut_children().push(node_fn_a);
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDecimal, FieldTypeTp::LongLong)
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::Double)
+                        .push_child(ExprDefBuilder::constant_int(7))
+                        .push_child(
+                            ExprDefBuilder::scalar_func(
+                                ScalarFuncSig::CastIntAsReal,
+                                FieldTypeTp::Double,
+                            )
+                            .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+                            .push_child(ExprDefBuilder::scalar_func(
+                                ScalarFuncSig::CastIntAsString,
+                                FieldTypeTp::LongLong,
+                            )),
+                        )
+                        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong)),
+                )
+                .build();
 
         // Build RPN expression from this expression tree.
         let exp =
-            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node_fn_d, fn_mapper, 2)
-                .unwrap();
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 2).unwrap();
 
         let mut columns = LazyBatchColumnVec::from(vec![
             {
