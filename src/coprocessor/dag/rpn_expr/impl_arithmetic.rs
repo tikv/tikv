@@ -866,21 +866,21 @@ mod tests {
     #[test]
     fn test_int_divide_decimal() {
         let test_cases = vec![
-            ("11.01", "1.1", Some(10), false),
-            ("-11.01", "1.1", Some(-10), false),
-            ("11.01", "-1.1", Some(-10), false),
-            ("-11.01", "-1.1", Some(10), false),
-            ("123", "", None, false),
-            ("", "123", None, false),
+            (Some(11.01), Some(1.1), Some(10), false),
+            (Some(-11.01), Some(1.1), Some(-10), false),
+            (Some(11.01), Some(-1.1), Some(-10), false),
+            (Some(-11.01), Some(-1.1), Some(10), false),
+            (Some(123.0), None, None, false),
+            (None, Some(123.0), None, false),
             // divide by zero
-            ("0.0", "0", None, false),
-            ("", "", None, false),
+            (Some(0.0), Some(0.0), None, false),
+            (None, None, None, false),
         ];
 
         for (lhs, rhs, expected, is_err) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(lhs.parse::<Decimal>().ok())
-                .push_param(rhs.parse::<Decimal>().ok())
+                .push_param(lhs.map(|f| Decimal::from_f64(f).unwrap()))
+                .push_param(rhs.map(|f| Decimal::from_f64(f).unwrap()))
                 .evaluate(ScalarFuncSig::IntDivideDecimal);
 
             if is_err {
