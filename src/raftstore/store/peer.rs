@@ -57,6 +57,7 @@ struct ReadIndexRequest {
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
+    //    follower_read: bool,
 }
 
 impl ReadIndexRequest {
@@ -1350,21 +1351,21 @@ impl Peer {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
 
-                let is_read_index_request = read.cmds.len() == 1
-                    && read.cmds[0].0.get_requests().len() == 1
-                    && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+                //                let is_read_index_request = read.cmds.len() == 1
+                //                    && read.cmds[0].0.get_requests().len() == 1
+                //                    && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
-                if !is_read_index_request {
-                    let term = self.term();
-                    // Only read index request is valid.
-                    for (_, cb) in read.cmds.drain(..) {
-                        apply::notify_stale_req(term, cb);
-                    }
-                } else {
-                    for (req, cb) in read.cmds.drain(..) {
-                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                    }
+                //                if !is_read_index_request {
+                //                    let term = self.term();
+                //                    // Only read index request is valid.
+                //                    for (_, cb) in read.cmds.drain(..) {
+                //                        apply::notify_stale_req(term, cb);
+                //                    }
+                //                } else {
+                for (req, cb) in read.cmds.drain(..) {
+                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                 }
+                //                }
                 self.pending_reads.ready_cnt -= 1;
             }
         }
