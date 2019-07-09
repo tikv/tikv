@@ -196,6 +196,17 @@ impl CmpOp for CmpOpNullEQ {
     }
 }
 
+#[rpn_fn(varg)]
+#[inline]
+pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
+    for arg in args {
+        if arg.is_some() {
+            return Ok((*arg).clone());
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,7 +215,7 @@ mod tests {
     use cop_datatype::{FieldTypeFlag, FieldTypeTp};
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use crate::coprocessor::dag::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum TestCaseCmpOp {
@@ -604,6 +615,25 @@ mod tests {
                     assert_eq!(output, Some(0));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_coalesce() {
+        let cases = vec![
+            (vec![], None),
+            (vec![None], None),
+            (vec![None, None], None),
+            (vec![None, None, None], None),
+            (vec![None, Some(0), None], Some(0)),
+        ];
+        for (args, expected) in cases {
+            let mut evaluator = RpnFnScalarEvaluator::new();
+            for arg in args {
+                evaluator = evaluator.push_param(arg);
+            }
+            let output = evaluator.evaluate(ScalarFuncSig::CoalesceInt).unwrap();
+            assert_eq!(output, expected);
         }
     }
 }

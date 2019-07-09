@@ -8,18 +8,20 @@ use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::function::RpnFnMeta;
-use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
+use crate::coprocessor::dag::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
 use crate::coprocessor::Result;
 
 /// Gets the cast function between specified data types.
 ///
 /// TODO: This function supports some internal casts performed by TiKV. However it would be better
 /// to be done in TiDB.
-pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Result<RpnFnMeta> {
+pub fn get_cast_fn_rpn_node(
+    from_field_type: &FieldType,
+    to_field_type: FieldType,
+) -> Result<RpnExpressionNode> {
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
-    Ok(match (from, to) {
+    let func_meta = match (from, to) {
         (EvalType::Int, EvalType::Decimal) => {
             if !from_field_type
                 .as_accessor()
@@ -40,6 +42,15 @@ pub fn get_cast_fn(from_field_type: &FieldType, to_field_type: &FieldType) -> Re
         (EvalType::Duration, EvalType::Real) => cast_duration_as_real_fn_meta(),
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
+    };
+    // This cast function is inserted by `Coprocessor` automatically,
+    // the `inUnion` flag always false in this situation. Ideally,
+    // the cast function should be inserted by TiDB and pushed down
+    // with all implicit arguments.
+    Ok(RpnExpressionNode::FnCall {
+        func_meta,
+        args_len: 1,
+        field_type: to_field_type,
     })
 }
 
@@ -57,11 +68,11 @@ fn produce_dec_with_specified_tp(
 }
 
 /// The unsigned int implementation for push down signature `CastIntAsDecimal`.
-#[rpn_fn(ctx, payload)]
+#[rpn_fn(capture = [ctx, extra])]
 #[inline]
 pub fn cast_uint_as_decimal(
     ctx: &mut EvalContext,
-    payload: &RpnFnCallPayload<'_>,
+    extra: &RpnFnCallExtra<'_>,
     val: &Option<i64>,
 ) -> Result<Option<Decimal>> {
     match val {
@@ -71,18 +82,18 @@ pub fn cast_uint_as_decimal(
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 dec,
-                payload.return_field_type(),
+                extra.ret_field_type,
             )?))
         }
     }
 }
 
 /// The signed int implementation for push down signature `CastIntAsDecimal`.
-#[rpn_fn(ctx, payload)]
+#[rpn_fn(capture = [ctx, extra])]
 #[inline]
 pub fn cast_int_as_decimal(
     ctx: &mut EvalContext,
-    payload: &RpnFnCallPayload<'_>,
+    extra: &RpnFnCallExtra<'_>,
     val: &Option<i64>,
 ) -> Result<Option<Decimal>> {
     match val {
@@ -92,14 +103,14 @@ pub fn cast_int_as_decimal(
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 dec,
-                payload.return_field_type(),
+                extra.ret_field_type,
             )?))
         }
     }
 }
 
 /// The implementation for push down signature `CastStringAsReal`.
-#[rpn_fn(ctx)]
+#[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn cast_string_as_real(ctx: &mut EvalContext, val: &Option<Bytes>) -> Result<Option<Real>> {
     use crate::coprocessor::codec::convert::bytes_to_f64;
@@ -141,7 +152,7 @@ fn cast_duration_as_real(val: &Option<Duration>) -> Result<Option<Real>> {
 }
 
 /// The implementation for push down signature `CastJsonAsReal`.
-#[rpn_fn(ctx)]
+#[rpn_fn(capture = [ctx])]
 #[inline]
 fn cast_json_as_real(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option<Real>> {
     match val {
