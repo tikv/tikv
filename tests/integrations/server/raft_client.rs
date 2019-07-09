@@ -116,65 +116,55 @@ fn test_raft_client_reconnect() {
         }
     }
 
+    // Try to bind the mock server on a Tcp port and return the mock server and addr,
+    // try up to 300 connections, otherwise cause panic.
+    fn create_server_and_build(counter: Arc<AtomicUsize>) -> (Server, String) {
+        for i in 0..300 {
+            let kv_service = MockKv(MockKvForRaft(Arc::clone(&counter)));
+            let port = 50000 + i;
+            let mock_server = match mock_kv_service(kv_service, "localhost", port) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            return (mock_server, format!("localhost:{}", port));
+        }
+        panic!("server connect failed");
+    }
+
     let pool = tokio_threadpool::Builder::new().pool_size(1).build();
     let mut raft_client = get_raft_client(&pool);
     let counter = Arc::new(AtomicUsize::new(0));
 
-    // Try to bind the mock server on a TCP port, and then do test.
-    let mut i = 0;
-    loop {
-        let kv_service = MockKv(MockKvForRaft(Arc::clone(&counter)));
-        let port = 50000 + i;
-        let mut mock_server = match mock_kv_service(kv_service, "localhost", port) {
-            Ok(s) => s,
-            Err(_) => {
-                i += 1;
-                continue;
-            }
-        };
-        mock_server.start();
+    // Try to get mock server and Tcp port, and then do test.
+    let (mut mock_server, addr) = create_server_and_build(Arc::clone(&counter));
+    mock_server.start();
 
-        let addr = format!("localhost:{}", port);
-        (0..50).for_each(|_| {
-            raft_client.send(1, &addr, RaftMessage::new()).unwrap();
-            raft_client.flush();
-        });
-        thread::sleep(time::Duration::from_millis(100));
-        drop(mock_server);
+    (0..50).for_each(|_| {
+        raft_client.send(1, &addr, RaftMessage::new()).unwrap();
+        raft_client.flush();
+    });
 
-        (50..100).for_each(|_| {
-            raft_client.send(1, &addr, RaftMessage::new()).unwrap();
-            raft_client.flush();
-        });
+    thread::sleep(time::Duration::from_millis(100));
+    assert_eq!(counter.load(Ordering::SeqCst), 50);
+    drop(mock_server);
 
-        // Try to rebuild mock server and bind the new mock server on a TCP port,
-        // and then do test.
-        i = 0;
-        loop {
-            let kv_service = MockKv(MockKvForRaft(Arc::clone(&counter)));
-            let port = 50000 + i;
-            let mut mock_server = match mock_kv_service(kv_service, "localhost", port) {
-                Ok(s) => s,
-                Err(_) => {
-                    i += 1;
-                    continue;
-                }
-            };
-            mock_server.start();
+    (50..100).for_each(|_| {
+        raft_client.send(1, &addr, RaftMessage::new()).unwrap();
+        raft_client.flush();
+    });
 
-            let addr = format!("localhost:{}", port);
-            (100..150).for_each(|_| {
-                raft_client.send(1, &addr, RaftMessage::new()).unwrap();
-                raft_client.flush();
-            });
+    // Try to rebuild mock server and bind the new mock server on a TCP port,
+    // and then do test.
+    let (mut mock_server, addr) = create_server_and_build(Arc::clone(&counter));
+    mock_server.start();
 
-            thread::sleep(time::Duration::from_millis(100));
-            assert_eq!(counter.load(Ordering::SeqCst), 99);
-            break;
-        }
+    (100..150).for_each(|_| {
+        raft_client.send(1, &addr, RaftMessage::new()).unwrap();
+        raft_client.flush();
+    });
 
-        assert!(counter.load(Ordering::SeqCst) > 50);
-        break;
-    }
+    thread::sleep(time::Duration::from_millis(100));
+    assert_eq!(counter.load(Ordering::SeqCst), 99);
+
     pool.shutdown().wait().unwrap();
 }
