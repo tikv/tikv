@@ -14,7 +14,8 @@
 # The `test` rule runs tests in configurations that are not covered by `cargo
 # test` by default.
 #
-# Important make rules:
+# Important make rules
+# --------------------
 #
 # - `build` - create a development profile, unoptimized build
 #
@@ -30,6 +31,15 @@
 #   tests and static analysis including clippy and rustfmt
 #
 # - `release` - create a release profile, optimized build
+#
+#
+# Environment variables
+# ---------------------
+#
+# By default, this makefile sets the `RUSTFLAGS, `CXXFLAGS`, and `CFLAGS`
+# environment variables in order to optimize for a specific baseline CPU. This
+# collective optimization behavior can be overridden with the `OPTIMIZE`
+# environment variable. See the comments on opts.mk for details.
 
 SHELL := /bin/bash
 ENABLE_FEATURES ?=
@@ -44,6 +54,12 @@ else ifeq ($(SYSTEM_ALLOC),1)
 else
 ENABLE_FEATURES += jemalloc
 endif
+
+# Figure out the correct set of rustc/gcc/msvc compiler flags for the desired
+# platform. This mostly sets and exports RUSTFLAGS, CXXFLAGS, and CFLAGS, but
+# also sometimes touches the ROCKSDB_* variables that are interpreted below to
+# influence the rocksdb crate.
+include opts.mk
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
