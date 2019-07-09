@@ -198,7 +198,7 @@ members = [
 
 [profile.dev]
 opt-level = 0
-debug = false
+debug = 1
 codegen-units = 4
 lto = false
 incremental = true
