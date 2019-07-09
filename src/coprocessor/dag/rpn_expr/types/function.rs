@@ -66,13 +66,37 @@
 //! }
 //! ```
 //!
+//! If the RPN function accepts variable number of arguments and all arguments have the same eval
+//! type, like RPN function `coalesce`, you can use `#[rpn_fn(varg)]` like:
+//!
+//! ```ignore
+//! #[rpn_fn(varg)]
+//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
+//! In case of variable number of arguments and eval types are not the same, like RPN function
+//! `case_when`, you can use `#[rpn_fn(raw_varg)]` instead, receiving `ScalarValueRef` as
+//! the argument:
+//!
+//! ```ignore
+//! #[rpn_fn(raw_varg)]
+//! pub fn foo(args: &[ScalarValueRef<'_>]) -> Result<Option<Real>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
 //! If you are curious about what code the macro will generate, check the test code
 //! in `components/cop_codegen/src/rpn_function.rs`.
 
-use tipb::expression::FieldType;
+use std::convert::TryFrom;
+
+use cop_datatype::{EvalType, FieldTypeAccessor};
+use tipb::expression::{Expr, FieldType};
 
 use super::RpnStackNode;
-use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
+use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
@@ -82,9 +106,9 @@ pub struct RpnFnMeta {
     /// The display name of the RPN function. Mainly used in tests.
     pub name: &'static str,
 
-    // TODO: Use validator ptr to verify input expression.
-    // /// Validator against input expression tree.
-    // pub validator_ptr: fn(expr: &Expr) -> Result<()>,
+    /// Validator against input expression tree.
+    pub validator_ptr: fn(expr: &Expr) -> Result<()>,
+
     #[allow(clippy::type_complexity)]
     /// The RPN function.
     pub fn_ptr: fn(
@@ -265,7 +289,48 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
     }
 }
 
+/// Validates whether the return type of an expression node meets expectation.
+pub fn validate_expr_return_type(expr: &Expr, et: EvalType) -> Result<()> {
+    let received_et = box_try!(EvalType::try_from(expr.get_field_type().tp()));
+    if et == received_et {
+        Ok(())
+    } else {
+        Err(box_err!("Expect `{}`, received `{}`", et, received_et))
+    }
+}
+
+/// Validates whether the number of arguments of an expression node meets expectation.
+pub fn validate_expr_arguments_eq(expr: &Expr, args: usize) -> Result<()> {
+    let received_args = expr.get_children().len();
+    if received_args == args {
+        Ok(())
+    } else {
+        Err(box_err!(
+            "Expect {} arguments, received {}",
+            args,
+            received_args
+        ))
+    }
+}
+
+/// Validates whether the number of arguments of an expression node >= expectation.
+pub fn validate_expr_arguments_gte(expr: &Expr, args: usize) -> Result<()> {
+    let received_args = expr.get_children().len();
+    if received_args >= args {
+        Ok(())
+    } else {
+        Err(box_err!(
+            "Expect at least {} arguments, received {}",
+            args,
+            received_args
+        ))
+    }
+}
+
 thread_local! {
     pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<usize>> =
+        std::cell::RefCell::new(Vec::with_capacity(20));
+
+    pub static RAW_VARG_PARAM_BUF: std::cell::RefCell<Vec<ScalarValueRef<'static>>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 }
