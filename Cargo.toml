@@ -30,9 +30,6 @@ name = "tikv-server"
 [[bin]]
 name = "tikv-ctl"
 
-[[bin]]
-name = "tikv-importer"
-
 [[test]]
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
@@ -78,7 +75,7 @@ libc = "0.2"
 crc = "1.8"
 fs2 = "0.4"
 spin = "0.5"
-protobuf = "~2.0"
+protobuf = "2"
 nix = "0.11"
 utime = "0.2"
 chrono = "0.4"

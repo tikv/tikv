@@ -798,9 +798,7 @@ impl ApplyDelegate {
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
 
-        let mut state = self.apply_state.clone();
-        state.set_applied_index(index);
-        self.apply_state = state;
+        self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
         assert!(term > 0);
 
