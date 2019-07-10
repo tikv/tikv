@@ -467,4 +467,5 @@ fn test_node_request_snapshot_reject_merge() {
     let target = cluster.get_region(target_region.get_start_key());
     assert_eq!(target, target_region);
     fail::remove(region_gen_snap_fp);
+    drop(cluster);
 }
