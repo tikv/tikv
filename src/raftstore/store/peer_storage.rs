@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
-use std::{cmp, error, u64};
+use std::{cmp, error, mem, u64};
 
 use engine::rocks;
 use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
@@ -203,6 +203,10 @@ impl EntryCache {
     #[inline]
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+
+    pub fn memory_usage(&self) -> usize {
+        self.cache.capacity() * mem::size_of::<Entry>()
     }
 }
 
@@ -669,6 +673,10 @@ impl PeerStorage {
     #[inline]
     pub fn truncated_term(&self) -> u64 {
         self.apply_state.get_truncated_state().get_term()
+    }
+
+    pub fn memory_usage(&self) -> usize {
+        self.cache.memory_usage()
     }
 
     pub fn region(&self) -> &metapb::Region {

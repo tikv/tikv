@@ -180,7 +180,7 @@ impl RaftRouter {
     }
 
     fn report_unreachable(&self, store_id: u64) {
-        self.broadcast_normal(|| {
+        let _ = self.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
         });
     }
@@ -1044,7 +1044,7 @@ impl RaftBatchSystem {
 
         let router = Mutex::new(self.router.clone());
         pd_client.handle_reconnect(move || {
-            router
+            let _ = router
                 .lock()
                 .unwrap()
                 .broadcast_normal(|| PeerMsg::HeartbeatPd);

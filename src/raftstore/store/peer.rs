@@ -444,6 +444,10 @@ impl Peer {
         );
     }
 
+    pub fn memory_usage(&self) -> usize {
+        self.get_store().memory_usage()
+    }
+
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1

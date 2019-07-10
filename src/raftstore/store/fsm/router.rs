@@ -420,11 +420,15 @@ where
     }
 
     /// Try to notify all normal fsm a message.
-    pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
+    pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) -> usize {
         let mailboxes = self.normals.lock().unwrap();
+        let mut success_count: usize = 0;
         for mailbox in mailboxes.values() {
-            let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
+            if let Ok(()) = mailbox.force_send(msg_gen(), &self.normal_scheduler) {
+                success_count += 1;
+            }
         }
+        success_count
     }
 
     /// Try to notify all fsm that the cluster is being shutdown.

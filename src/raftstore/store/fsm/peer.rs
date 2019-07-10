@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{cmp, u64};
+use std::{cmp, mem, u64};
 
 use crate::pd::{PdClient, PdTask};
 use crate::raftstore::{Error, Result};
@@ -304,6 +304,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     if self.fsm.peer.is_leader() {
                         self.register_pd_heartbeat_tick()
                     }
+                }
+                PeerMsg::MemoryUsage { sender } => {
+                    let peer_mem = self.fsm.peer.memory_usage();
+                    let channel_mem = self.fsm.receiver.len() * mem::size_of::<PeerMsg>();
+                    let _ = sender.send(peer_mem + channel_mem);
                 }
                 PeerMsg::Noop => {}
             }

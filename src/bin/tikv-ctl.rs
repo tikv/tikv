@@ -753,7 +753,9 @@ impl DebugExecutor for DebugClient {
         let resp = self
             .dump_memory_info(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::dump_memory_info", e));
-        v1!("{}", resp.get_infos());
+        for info in resp.get_infos() {
+            v1!("{}", info);
+        }
     }
 }
 

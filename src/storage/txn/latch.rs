@@ -135,11 +135,11 @@ impl Latches {
             }
             // For some hot keys, the waiting list maybe very long, so we should shrink the waiting
             // VecDeque after pop.
-//            if latch.waiting.capacity() > WAITING_LIST_SHRINK_SIZE
-//                && latch.waiting.len() < WAITING_LIST_SHRINK_SIZE
-//            {
-//                latch.waiting.shrink_to_fit();
-//            }
+            //            if latch.waiting.capacity() > WAITING_LIST_SHRINK_SIZE
+            //                && latch.waiting.len() < WAITING_LIST_SHRINK_SIZE
+            //            {
+            //                latch.waiting.shrink_to_fit();
+            //            }
         }
         wakeup_list
     }

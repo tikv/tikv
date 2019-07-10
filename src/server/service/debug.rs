@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::raftstore::store::msg::Callback;
+use crate::raftstore::store::PeerMsg;
 use crate::server::debug::{Debugger, Error};
 use crate::server::transport::RaftStoreRouter;
 use crate::storage::{Engine, Storage};
@@ -19,7 +20,9 @@ use kvproto::raft_cmdpb::{
     StatusCmdType, StatusRequest,
 };
 use protobuf::text_format::print_to_string;
+use protobuf::RepeatedField;
 use tikv_util::metrics;
+use tikv_util::mpsc;
 
 use tikv_alloc;
 
@@ -422,12 +425,33 @@ impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb_grpc::Debug for 
     ) {
         const TAG: &str = "dump_memory_info";
 
+        let (tx, rx) = mpsc::unbounded();
+        let count = self
+            .raft_router
+            .broadcast_msg(|| PeerMsg::MemoryUsage { sender: tx.clone() });
+        let mut total_peers_mem_usage: usize = 0;
+        let mut max_peer_mem_usage: usize = 0;
+        for _ in 0..count {
+            if let Ok(peer_usage) = rx.recv() {
+                total_peers_mem_usage += peer_usage;
+                if peer_usage > max_peer_mem_usage {
+                    max_peer_mem_usage = peer_usage
+                }
+            }
+        }
+        let peers_memory_info = format!(
+            "raftstore peers total memory usage {}, raftstore max peer memory usage {}",
+            total_peers_mem_usage, max_peer_mem_usage
+        );
+
         let f = self
             .pool
             .spawn(
                 future::ok(self.storage.dump_memory_info()).and_then(move |mem_info| {
+                    let storage_memory_info = format!("storage {:?}", mem_info);
+                    let infos = vec![peers_memory_info, storage_memory_info];
                     let mut resp = DumpMemoryInfoResponse::new();
-                    resp.set_infos(format!("{:?}", mem_info));
+                    resp.set_infos(RepeatedField::from_vec(infos));
                     Ok(resp)
                 }),
             );

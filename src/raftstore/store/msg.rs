@@ -17,6 +17,7 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
 use crate::storage::kv::CompactedEvent;
 use tikv_util::escape;
+use tikv_util::mpsc::Sender;
 
 use super::RegionSnapshot;
 
@@ -306,6 +307,8 @@ pub enum PeerMsg {
     CasualMessage(CasualMessage),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
+    /// Get region memory usage
+    MemoryUsage { sender: Sender<usize> },
 }
 
 impl fmt::Debug for PeerMsg {
@@ -324,6 +327,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
+            PeerMsg::MemoryUsage { .. } => write!(fmt, "MemoryUsage"),
         }
     }
 }
