@@ -177,8 +177,8 @@ where
     Some(mock_server)
 }
 
-fn check_f<F: Fn() -> bool>(max_delay_ms: u64,f: F) {
-    for _delay_ms in 0..max_delay_ms/10 {
+fn check_f<F: Fn() -> bool>(max_delay_ms: u64, f: F) {
+    for _delay_ms in 0..max_delay_ms / 10 {
         if f() {
             return;
         }
