@@ -36,7 +36,7 @@ pub struct MvccInfo {
 
 /// `LatchInfo` stores scheduler latches memory usage and other information.
 #[derive(Debug, Default)]
-pub struct MemoryInfo {
+pub struct StorageMemoryInfo {
     pub latch_mem_info: LatchMemoryInfo,
 }
 

@@ -44,7 +44,7 @@ pub trait RaftStoreRouter: Send + Clone {
     }
 
     /// Broadcast message to all peers, return the count of peer
-    fn broadcast_msg(&self, mut _msg_gen: impl FnMut() -> PeerMsg) -> usize {
+    fn broadcast_msg(&self, _msg_gen: impl FnMut() -> PeerMsg) -> usize {
         0
     }
 
@@ -176,7 +176,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
             .send_control(StoreMsg::StoreUnreachable { store_id });
     }
 
-    fn broadcast_msg(&self, mut msg_gen: impl FnMut() -> PeerMsg) -> usize {
+    fn broadcast_msg(&self, msg_gen: impl FnMut() -> PeerMsg) -> usize {
         self.router.broadcast_normal(msg_gen)
     }
 }

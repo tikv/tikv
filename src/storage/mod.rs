@@ -43,7 +43,7 @@ pub use self::readpool_impl::*;
 use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
-pub use self::types::{Key, KvPair, MemoryInfo, MvccInfo, Value};
+pub use self::types::{Key, KvPair, MvccInfo, StorageMemoryInfo, Value};
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
@@ -1763,9 +1763,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    pub fn dump_memory_info(&self) -> MemoryInfo {
+    pub fn dump_memory_info(&self) -> StorageMemoryInfo {
         let latch_mem_info = self.sched.dump_latch_memory_info();
-        let mut mem_info = MemoryInfo::default();
+        let mut mem_info = StorageMemoryInfo::default();
         mem_info.latch_mem_info = latch_mem_info;
         mem_info
     }
