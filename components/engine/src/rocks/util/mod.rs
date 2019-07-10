@@ -375,6 +375,22 @@ impl SliceTransform for FixedPrefixSliceTransform {
     }
 }
 
+pub struct SequentialRowInsertTransform;
+
+impl SliceTransform for SequentialRowInsertTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        &key[..13]
+    }
+
+    fn in_domain(&mut self, key: &[u8]) -> bool {
+        key.len() > 13 && &key[0..2] == b"zt" && &key[11..2] == b"_r"
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        false
+    }
+}
+
 pub struct NoopSliceTransform;
 
 impl SliceTransform for NoopSliceTransform {

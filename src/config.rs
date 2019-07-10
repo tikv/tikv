@@ -41,7 +41,7 @@ use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-    NoopSliceTransform,
+    NoopSliceTransform, SequentialRowInsertTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
@@ -397,6 +397,10 @@ impl DefaultCfConfig {
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
+        let f = Box::new(SequentialRowInsertTransform);
+        cf_opts
+            .set_memtable_insert_hint_prefix_extractor("table-sequential-insert", f)
+            .unwrap();
         cf_opts
     }
 }

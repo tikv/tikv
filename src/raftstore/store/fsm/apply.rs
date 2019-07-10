@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -8,7 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::{cmp, usize};
+use std::{cmp, mem, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
@@ -302,7 +303,37 @@ struct ApplyContext {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+
+    // Default cf write buffer.
+    // For key/value pairs write to default cf, we first place them in this write buffer,
+    // and then append to WriteBatch after sorted.
+    rows_buffer: Vec<KeyValue>,
 }
+
+struct KeyValue {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+impl Ord for KeyValue {
+    fn cmp(&self, right: &KeyValue) -> CmpOrdering {
+        self.key.cmp(&right.key)
+    }
+}
+
+impl PartialOrd for KeyValue {
+    fn partial_cmp(&self, right: &KeyValue) -> Option<CmpOrdering> {
+        Some(self.cmp(right))
+    }
+}
+
+impl PartialEq for KeyValue {
+    fn eq(&self, right: &KeyValue) -> bool {
+        self.key == right.key
+    }
+}
+
+impl Eq for KeyValue {}
 
 impl ApplyContext {
     pub fn new(
@@ -335,6 +366,7 @@ impl ApplyContext {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
+            rows_buffer: vec![],
         }
     }
 
@@ -380,6 +412,21 @@ impl ApplyContext {
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.enable_sync_log && self.sync_log_hint;
+
+        if !self.rows_buffer.is_empty() {
+            self.rows_buffer.sort();
+            let rows_buffer = mem::replace(&mut self.rows_buffer, vec![]);
+            for row in rows_buffer {
+                if !row.value.is_empty() {
+                    // put key/value
+                    self.kv_wb().put(&row.key, &row.value).unwrap();
+                } else {
+                    // delete key
+                    self.kv_wb().delete(&row.key).unwrap();
+                }
+            }
+        }
+
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -439,6 +486,18 @@ impl ApplyContext {
     #[inline]
     pub fn kv_kv_wb_mut(&mut self) -> &mut WriteBatch {
         self.kv_wb.as_mut().unwrap()
+    }
+
+    pub fn delete_row(&mut self, key: Vec<u8>) {
+        self.rows_buffer.push(KeyValue { key, value: vec![] });
+    }
+
+    pub fn put_row(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        self.rows_buffer.push(KeyValue { key, value });
+    }
+
+    pub fn row_buffer_count(&self) -> usize {
+        self.rows_buffer.len()
     }
 
     /// Flush all pending writes to engines.
@@ -791,7 +850,10 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
+            if should_write_to_engine(
+                &cmd,
+                apply_ctx.kv_wb().count() + apply_ctx.row_buffer_count(),
+            ) {
                 apply_ctx.commit(self);
             }
 
@@ -1094,7 +1156,7 @@ impl ApplyDelegate {
 
     fn exec_write_cmd(
         &mut self,
-        ctx: &ApplyContext,
+        ctx: &mut ApplyContext,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         let requests = req.get_requests();
@@ -1156,7 +1218,7 @@ impl ApplyDelegate {
 
 // Write commands related.
 impl ApplyDelegate {
-    fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+    fn handle_put(&mut self, ctx: &mut ApplyContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1186,20 +1248,21 @@ impl ApplyDelegate {
                     )
                 });
         } else {
-            ctx.kv_wb().put(&key, value).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to write ({}, {}): {:?}",
-                    self.tag,
-                    hex::encode_upper(&key),
-                    escape(value),
-                    e
-                );
-            });
+            ctx.put_row(key, value.to_vec());
+            //            ctx.kv_wb().put(&key, value).unwrap_or_else(|e| {
+            //                panic!(
+            //                    "{} failed to write ({}, {}): {:?}",
+            //                    self.tag,
+            //                    hex::encode_upper(&key),
+            //                    escape(value),
+            //                    e
+            //                );
+            //            });
         }
         Ok(resp)
     }
 
-    fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+    fn handle_delete(&mut self, ctx: &mut ApplyContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1229,14 +1292,15 @@ impl ApplyDelegate {
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            ctx.kv_wb().delete(&key).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete {}: {}",
-                    self.tag,
-                    hex::encode_upper(&key),
-                    e
-                )
-            });
+            ctx.delete_row(key);
+            //            ctx.kv_wb().delete(&key).unwrap_or_else(|e| {
+            //                panic!(
+            //                    "{} failed to delete {}: {}",
+            //                    self.tag,
+            //                    hex::encode_upper(&key),
+            //                    e
+            //                )
+            //            });
             self.metrics.delete_keys_hint += 1;
         }
 
