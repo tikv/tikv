@@ -281,7 +281,10 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => Some(!bs.is_empty() && convert::bytes_to_int(ctx, bs)? != 0),
+            Datum::Bytes(ref bs) => Some(
+                !bs.is_empty()
+                    && convert::convert_bytes_to_int(ctx, bs, FieldTypeTp::LongLong)? != 0,
+            ),
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
@@ -343,14 +346,12 @@ impl Datum {
     /// `into_i64` converts self into i64.
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
-        let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
         let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => convert::convert_uint_to_int(u, upper_bound, tp),
-
-            Datum::F64(f) => convert::convert_float_to_int(f, lower_bound, upper_bound, tp),
-            Datum::Bytes(bs) => convert::bytes_to_int(ctx, &bs),
+            Datum::U64(u) => convert::convert_uint_to_int(ctx, u, tp),
+            Datum::F64(f) => convert::convert_float_to_int(ctx, f, tp),
+            Datum::Bytes(bs) => convert::convert_bytes_to_int(ctx, &bs, FieldTypeTp::LongLong),
             Datum::Time(mut t) => {
                 t.round_frac(mysql::DEFAULT_FSP)?;
                 let d = t.to_decimal()?;
@@ -554,7 +555,7 @@ impl Datum {
             (a, b) => {
                 let a = a.into_dec()?;
                 let b = b.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let d: Result<Decimal> = res.into();
@@ -714,7 +715,7 @@ impl Datum {
             (left, right) => {
                 let a = left.into_dec()?;
                 let b = right.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let i = res.unwrap().as_i64().unwrap();
@@ -1668,7 +1669,7 @@ mod tests {
             (Datum::F64(-0.4), Some(false)),
             (Datum::Null, None),
             (b"".as_ref().into(), Some(false)),
-            (b"0.5".as_ref().into(), Some(false)),
+            (b"0.5".as_ref().into(), Some(true)),
             (b"0".as_ref().into(), Some(false)),
             (b"2".as_ref().into(), Some(true)),
             (b"abc".as_ref().into(), Some(false)),
