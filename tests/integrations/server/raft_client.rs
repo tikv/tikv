@@ -121,12 +121,12 @@ fn test_raft_client_reconnect() {
     // `send` should success.
     (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::new()).unwrap());
     raft_client.flush();
-    thread::sleep(time::Duration::from_millis(100));
-    assert_eq!(counter.load(Ordering::SeqCst), 50);
+
+    check_f(300, || counter.load(Ordering::SeqCst) == 50);
 
     // `send` should fail after the mock server stopped.
     drop(mock_server);
-    thread::sleep(time::Duration::from_millis(100));
+
     assert!((0..100)
         .map(|_| raft_client.send(1, &addr, RaftMessage::new()))
         .collect::<Result<(), _>>()
@@ -137,7 +137,8 @@ fn test_raft_client_reconnect() {
     let mock_server = create_mock_server_on(service, port);
     (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::new()).unwrap());
     raft_client.flush();
-    thread::sleep(time::Duration::from_millis(100));
+
+    check_f(300, || counter.load(Ordering::SeqCst) == 100);
     assert_eq!(counter.load(Ordering::SeqCst), 100);
 
     drop(mock_server);
@@ -174,4 +175,14 @@ where
     };
     mock_server.start();
     Some(mock_server)
+}
+
+fn check_f<F: Fn() -> bool>(max_delay_ms: u64,f: F) {
+    for _delay_ms in 0..max_delay_ms/10 {
+        if f() {
+            return;
+        }
+        thread::sleep(time::Duration::from_millis(10));
+    }
+    panic!("raftclient flush time out");
 }
