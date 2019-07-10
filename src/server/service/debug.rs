@@ -46,6 +46,21 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
     e
 }
 
+#[derive(Default)]
+struct RaftstoreMemoryInfo {
+    total_mem_usage: usize,
+    max_peer_mem_usage: usize,
+}
+
+impl fmt::Debug for RaftstoreMemoryInfo {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("RaftstoreMemoryInfo")
+            .field("total-memory-usage", self.total_mem_usage)
+            .field("max-peer-memory-usage", self.max_peer_mem_usage)
+            .finish()
+    }
+}
+
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter, E: Engine> {
@@ -429,13 +444,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb_grpc::Debug for 
         let count = self
             .raft_router
             .broadcast_msg(|| PeerMsg::MemoryUsage { sender: tx.clone() });
-        let mut total_peers_mem_usage: usize = 0;
-        let mut max_peer_mem_usage: usize = 0;
+        let mut raftstore_mem = RaftstoreMemoryInfo::default();
         for _ in 0..count {
             if let Ok(peer_usage) = rx.recv() {
-                total_peers_mem_usage += peer_usage;
-                if peer_usage > max_peer_mem_usage {
-                    max_peer_mem_usage = peer_usage
+                raftstore_mem.total_mem_usage += peer_usage;
+                if peer_usage > raftstore_mem.max_peer_mem_usage {
+                    raftstore_mem.max_peer_mem_usage = peer_usage;
                 }
             }
         }
@@ -447,9 +461,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb_grpc::Debug for 
         let f = self
             .pool
             .spawn(
-                future::ok(self.storage.dump_memory_info()).and_then(move |mem_info| {
-                    let storage_memory_info = format!("storage {:?}", mem_info);
-                    let infos = vec![peers_memory_info, storage_memory_info];
+                future::ok(self.storage.dump_memory_info()).and_then(move |storage_mem| {
+                    let storage_memory_info = format!("{:?}", storage_mem);
+                    let raftstore_memory_info = format!("{:?}", raftstore_mem);
+                    let infos = vec![raftstore_memory_info, storage_memory_info];
                     let mut resp = DumpMemoryInfoResponse::new();
                     resp.set_infos(RepeatedField::from_vec(infos));
                     Ok(resp)
