@@ -266,10 +266,10 @@ impl<S: Snapshot> MvccReader<S> {
             if write.start_ts == start_ts {
                 return Ok(Some((commit_ts, write.write_type)));
             }
-            seek_ts = commit_ts - 1;
-            if seek_ts < start_ts {
+            if commit_ts <= start_ts {
                 break;
             }
+            seek_ts = commit_ts - 1;
         }
         Ok(None)
     }
