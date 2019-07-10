@@ -5,7 +5,6 @@ edition = "2018"
 publish = false
 
 [dependencies]
-hashbrown = { version = "0.5", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"
@@ -40,6 +39,7 @@ serde_derive = "1.0"
 grpcio = { version = "0.4", features = [ "secure" ] }
 crossbeam = "0.5"
 fail = "0.2"
+fxhash = "0.2.1"
 
 [dependencies.prometheus]
 version = "0.4.2"

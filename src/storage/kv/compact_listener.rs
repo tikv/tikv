@@ -4,7 +4,7 @@ use std::cmp;
 
 use crate::raftstore::coprocessor::properties::RangeProperties;
 use engine::rocks::{CompactionJobInfo, EventListener};
-use tikv_util::collections::HashSet;
+use tikv_util::collections::hash_set_with_capacity;
 
 pub struct CompactedEvent {
     pub cf: String,
@@ -66,8 +66,8 @@ impl EventListener for CompactionListener {
             }
         }
 
-        let mut input_files = HashSet::with_capacity(info.input_file_count());
-        let mut output_files = HashSet::with_capacity(info.output_file_count());
+        let mut input_files = hash_set_with_capacity(info.input_file_count());
+        let mut output_files = hash_set_with_capacity(info.output_file_count());
         for i in 0..info.input_file_count() {
             info.input_file_at(i)
                 .to_str()
