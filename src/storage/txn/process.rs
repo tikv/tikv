@@ -712,7 +712,7 @@ fn process_write_impl<S: Snapshot>(
             let wait_table_is_empty = wait_table_is_empty();
             // Map (txn's start_ts, is_pessimistic_txn) => Option<key_hashes>
             let mut txn_to_keys = if waiter_mgr_scheduler.is_some() {
-                Some(HashMap::new())
+                Some(HashMap::default())
             } else {
                 None
             };
