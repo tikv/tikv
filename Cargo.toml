@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "3.0.0-beta.1"
+version = "4.0.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -15,6 +15,7 @@ publish = false
 default = ["tikv_alloc/default"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc"]
+mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
@@ -58,7 +59,6 @@ name = "misc"
 path = "benches/misc/mod.rs"
 
 [dependencies]
-hashbrown = { version = "0.5", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = { version = "2.3", default-features = false }
@@ -76,7 +76,7 @@ libc = "0.2"
 crc = "1.8"
 fs2 = "0.4"
 spin = "0.5"
-protobuf = "~2.0"
+protobuf = "2"
 nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
@@ -139,6 +139,7 @@ log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
 farmhash = "1.1.5"
+fxhash = "0.2.1"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
