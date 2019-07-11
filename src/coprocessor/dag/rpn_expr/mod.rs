@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[macro_use]
-pub mod function;
 pub mod types;
 
 pub mod impl_arithmetic;
@@ -9,21 +7,23 @@ pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_control;
 pub mod impl_like;
+pub mod impl_math;
 pub mod impl_op;
 
-pub use self::function::RpnFnMeta;
-pub use self::types::{RpnExpression, RpnExpressionBuilder};
+pub use self::types::*;
 
 use cop_datatype::{FieldTypeAccessor, FieldTypeFlag};
 use tipb::expression::{Expr, ScalarFuncSig};
+
+use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::Result;
 
 use self::impl_arithmetic::*;
 use self::impl_compare::*;
 use self::impl_control::*;
 use self::impl_like::*;
+use self::impl_math::*;
 use self::impl_op::*;
-use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::Result;
 
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
@@ -81,6 +81,15 @@ fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
         (false, true) => arithmetic_fn_meta::<IntUintMod>(),
         (true, false) => arithmetic_fn_meta::<UintIntMod>(),
         (true, true) => arithmetic_fn_meta::<UintUintMod>(),
+    }
+}
+
+fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
+    match (lhs_is_unsigned, rhs_is_unsigned) {
+        (false, false) => arithmetic_fn_meta::<IntDivideInt>(),
+        (false, true) => arithmetic_fn_meta::<IntDivideUint>(),
+        (true, false) => arithmetic_fn_meta::<UintDivideInt>(),
+        (true, true) => arithmetic_fn_meta::<UintDivideUint>(),
     }
 }
 
@@ -170,6 +179,33 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfNullTime => if_null_fn_meta::<DateTime>(),
         ScalarFuncSig::IfNullDuration => if_null_fn_meta::<Duration>(),
         ScalarFuncSig::IfNullJson => if_null_fn_meta::<Json>(),
+        ScalarFuncSig::IntDivideInt => map_int_sig(value, children, divide_mapper)?,
+        ScalarFuncSig::IntDivideDecimal => int_divide_decimal_fn_meta(),
+        ScalarFuncSig::CaseWhenInt => case_when_fn_meta::<Int>(),
+        ScalarFuncSig::CaseWhenReal => case_when_fn_meta::<Real>(),
+        ScalarFuncSig::CaseWhenString => case_when_fn_meta::<Bytes>(),
+        ScalarFuncSig::CaseWhenDecimal => case_when_fn_meta::<Decimal>(),
+        ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
+        ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
+        ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::AbsInt => abs_int_fn_meta(),
+        ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
+        ScalarFuncSig::AbsReal => abs_real_fn_meta(),
+        ScalarFuncSig::AbsDecimal => abs_decimal_fn_meta(),
+        ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
+        ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
+        ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),
+        ScalarFuncSig::CoalesceDecimal => coalesce_fn_meta::<Decimal>(),
+        ScalarFuncSig::CoalesceTime => coalesce_fn_meta::<DateTime>(),
+        ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
+        ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
+        ScalarFuncSig::InInt => compare_in_fn_meta::<Int>(),
+        ScalarFuncSig::InReal => compare_in_fn_meta::<Real>(),
+        ScalarFuncSig::InString => compare_in_fn_meta::<Bytes>(),
+        ScalarFuncSig::InDecimal => compare_in_fn_meta::<Decimal>(),
+        ScalarFuncSig::InTime => compare_in_fn_meta::<DateTime>(),
+        ScalarFuncSig::InDuration => compare_in_fn_meta::<Duration>(),
+        ScalarFuncSig::InJson => compare_in_fn_meta::<Json>(),
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

@@ -320,11 +320,11 @@ mod tests {
     use crate::import::test_helpers::*;
 
     use engine::rocks::util::new_engine;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_import_dir() {
-        let temp_dir = TempDir::new("test_import_dir").unwrap();
+        let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
         let mut meta = SSTMeta::new();
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_import_file() {
-        let temp_dir = TempDir::new("test_import_file").unwrap();
+        let temp_dir = Builder::new().prefix("test_import_file").tempdir().unwrap();
 
         let path = ImportPath {
             save: temp_dir.path().join("save"),

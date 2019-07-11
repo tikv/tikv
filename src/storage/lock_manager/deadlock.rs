@@ -5,8 +5,9 @@ use super::metrics::*;
 use super::util::extract_physical_timestamp;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
-use crate::pd::{PdClient, RpcClient, INVALID_ID};
-use crate::tikv_util::collections::{HashMap, HashSet};
+use crate::pd::{RpcClient, INVALID_ID};
+use crate::server::resolve::StoreAddrResolver;
+use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::future::paired_future_callback;
 use crate::tikv_util::security::SecurityManager;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
@@ -16,7 +17,6 @@ use grpcio::{
 };
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
-use kvproto::metapb;
 use protobuf::RepeatedField;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
@@ -37,7 +37,7 @@ struct DetectTable {
 impl DetectTable {
     /// Return deadlock key hash if deadlocked
     pub fn detect(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> Option<u64> {
-        let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
+        let _timer = DETECTOR_HISTOGRAM_VEC.detect.start_coarse_timer();
         TASK_COUNTER_VEC.detect.inc();
 
         if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
@@ -62,7 +62,7 @@ impl DetectTable {
     }
 
     pub fn register(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
-        let locks = self.wait_for_map.entry(txn_ts).or_insert(vec![]);
+        let locks = self.wait_for_map.entry(txn_ts).or_default();
         let lock = Lock {
             ts: lock_ts,
             hash: lock_hash,
@@ -178,15 +178,12 @@ impl Scheduler {
 #[derive(Clone)]
 struct Inner {
     store_id: u64,
-    leader_id: u64,
+    // (leader_id, leader_addr)
+    leader_info: Option<(u64, String)>,
+    leader_client: Option<Client>,
     detect_table: Rc<RefCell<DetectTable>>,
     waiter_mgr_scheduler: WaiterMgrScheduler,
     security_mgr: Arc<SecurityManager>,
-    // all stores in cluster excpet itself
-    addrs: Rc<RefCell<HashMap<u64, String>>>,
-    leader_client: Option<Client>,
-    recving: Rc<RefCell<HashMap<u64, Client>>>,
-    failed: Rc<RefCell<HashSet<u64>>>,
     max_ts: u64,
 }
 
@@ -198,20 +195,25 @@ impl Inner {
     ) -> Self {
         Self {
             store_id,
-            leader_id: 0,
+            leader_info: None,
+            leader_client: None,
             detect_table: Rc::new(RefCell::new(DetectTable::default())),
             waiter_mgr_scheduler,
             security_mgr,
-            addrs: Rc::new(RefCell::new(HashMap::new())),
-            leader_client: None,
-            recving: Rc::new(RefCell::new(HashMap::new())),
-            failed: Rc::new(RefCell::new(HashSet::new())),
             max_ts: 0,
         }
     }
 
+    fn leader_id(&self) -> u64 {
+        self.leader_info.as_ref().unwrap().0
+    }
+
+    fn leader_addr(&self) -> &str {
+        &self.leader_info.as_ref().unwrap().1
+    }
+
     fn is_leader(&self) -> bool {
-        self.store_id == self.leader_id
+        self.leader_info.is_some() && self.leader_id() == self.store_id
     }
 
     fn update_max_ts_if_needed(&mut self, ts: u64) {
@@ -222,126 +224,33 @@ impl Inner {
 
     fn reset(&mut self) {
         self.leader_client.take();
-        self.recving.borrow_mut().clear();
-        self.failed.borrow_mut().clear();
         self.detect_table.borrow_mut().clear();
     }
 
-    fn watch_member_change(&mut self, handle: &Handle, pd_client: &Arc<RpcClient>) -> Result<()> {
-        let stores = pd_client.get_all_stores(true)?;
-        // The leader of region 1 is leader of deadlock detector.
-        let (_, leader) = pd_client.get_region_and_leader(&[0])?;
-        self.update_addrs_if_needed(stores);
-        self.update_leader_if_needed(&handle, leader);
-        self.handle_failed_requests_if_needed(&handle);
-        Ok(())
-    }
-
-    fn update_addrs_if_needed(&self, stores: Vec<metapb::Store>) {
-        self.addrs.replace(
-            stores
-                .into_iter()
-                .filter(|store| store.get_id() != self.store_id)
-                .map(|mut store| (store.get_id(), store.take_address()))
-                .collect(),
-        );
-    }
-
-    fn update_leader_if_needed(&mut self, handle: &Handle, leader: Option<metapb::Peer>) {
-        if let Some(leader) = leader {
-            let leader_id = leader.get_store_id();
-            if leader_id != self.leader_id {
-                if leader_id != self.store_id {
-                    self.become_follower(handle, leader_id);
+    fn change_role_if_needed(&mut self, leader_id: u64, leader_addr: String) {
+        match self.leader_info {
+            Some((id, ref addr)) if id == leader_id && *addr == leader_addr => {
+                debug!("leader not change"; "leader_id" => leader_id, "leader_addr" => leader_addr);
+            }
+            _ => {
+                if self.store_id == leader_id {
+                    info!("become the leader of deadlock detector!"; "self_id" => self.store_id);
                 } else {
-                    self.become_leader(handle);
+                    if self.is_leader() {
+                        info!("changed from leader to follower"; "self_id" => self.store_id);
+                    }
+                    info!("leader changed"; "leader_id" => leader_id);
                 }
+                self.reset();
+                self.leader_info.replace((leader_id, leader_addr));
             }
         }
-    }
-
-    fn handle_failed_requests_if_needed(&self, handle: &Handle) {
-        if self.is_leader() {
-            self.failed.borrow().iter().for_each(|id| {
-                let mut recving = self.recving.borrow_mut();
-                let new_client = self.reconnect_follower(*id);
-                if new_client.is_some() {
-                    let new_client = new_client.unwrap();
-                    self.get_wait_for_entries(handle, *id, &new_client);
-                    recving.insert(*id, new_client);
-                } else {
-                    info!("retry to get_wait_for_entries failed(address not found)"; "store_id" => *id);
-                    recving.remove(id);
-                }
-            });
-            self.failed.borrow_mut().clear();
-        }
-    }
-
-    fn become_leader(&mut self, handle: &Handle) {
-        info!("become the leader of deadlock detector!"; "self_id" => self.store_id);
-        self.reset();
-        self.leader_id = self.store_id;
-
-        for (&id, addr) in self.addrs.borrow().iter() {
-            let client = Client::new(Arc::clone(&self.security_mgr), addr);
-            self.get_wait_for_entries(handle, id, &client);
-            self.recving.borrow_mut().insert(id, client);
-        }
-    }
-
-    fn become_follower(&mut self, handle: &Handle, leader_id: u64) {
-        info!("leader changed"; "leader_id" => leader_id);
-        if self.is_leader() {
-            info!("change from leader to follower!"; "self_id" => self.store_id);
-            self.reset();
-        }
-        self.leader_id = leader_id;
-        self.reconnect_leader(handle);
-    }
-
-    fn get_wait_for_entries(&self, handle: &Handle, store_id: u64, client: &Client) {
-        let inner = self.clone();
-        let f = client.get_wait_for_entries().then(move |res| {
-            match res {
-                Ok(res) => {
-                    if inner.is_leader() {
-                        if inner.recving.borrow_mut().remove(&store_id).is_some() {
-                            info!("received wait_for_entries"; "store_id" => store_id);
-                            res.get_entries().iter().for_each(|e| {
-                                inner.detect_table.borrow_mut().register(
-                                    e.get_txn(),
-                                    e.get_wait_for_txn(),
-                                    e.get_key_hash(),
-                                )
-                            });
-                        }
-                    }
-                }
-                Err(e) => {
-                    if inner.is_leader() && inner.recving.borrow().contains_key(&store_id) {
-                        error!("get wait_for_entries failed"; "store_id" => store_id, "err" => ?e);
-                        inner.failed.borrow_mut().insert(store_id);
-                    }
-                }
-            }
-            Ok(())
-        });
-        handle.spawn(f);
     }
 
     fn reconnect_leader(&mut self, handle: &Handle) {
+        assert!(self.leader_client.is_none());
         ERROR_COUNTER_VEC.reconnect_leader.inc();
-        self.leader_client.take();
-
-        // Make compiler happy.
-        let addrs = self.addrs.borrow();
-        let addr = addrs.get(&self.leader_id);
-        if addr.is_none() {
-            warn!("leader address not found"; "leader_id" => self.leader_id);
-            return;
-        }
-        let mut leader_client = Client::new(Arc::clone(&self.security_mgr), addr.unwrap().as_str());
+        let mut leader_client = Client::new(Arc::clone(&self.security_mgr), self.leader_addr());
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
             let WaitForEntry {
@@ -359,39 +268,37 @@ impl Inner {
                 resp.get_deadlock_key_hash(),
             )
         }));
-        handle.spawn(send.map_err(|e| error!("detect request sender failed"; "err" => ?e)));
-        handle.spawn(recv.map_err(|e| error!("detect response receiver failed"; "err" => ?e)));
+        handle.spawn(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
+        // No need to log it again.
+        handle.spawn(recv.map_err(|_| ()));
         self.leader_client = Some(leader_client);
-        info!("reconnect leader succeeded"; "leader_id" => self.leader_id);
-    }
-
-    fn reconnect_follower(&self, store_id: u64) -> Option<Client> {
-        let addrs = self.addrs.borrow();
-        let addr = addrs.get(&store_id)?;
-        Some(Client::new(Arc::clone(&self.security_mgr), addr.as_str()))
+        info!("reconnect leader succeeded"; "leader_id" => self.leader_id());
     }
 }
 
-pub struct Detector {
+pub struct Detector<S: StoreAddrResolver + 'static> {
     pd_client: Arc<RpcClient>,
+    resolver: S,
     inner: Rc<RefCell<Inner>>,
     monitor_membership_interval: u64,
     is_initialized: bool,
 }
 
-unsafe impl Send for Detector {}
+unsafe impl<S: StoreAddrResolver + 'static> Send for Detector<S> {}
 
-impl Detector {
+impl<S: StoreAddrResolver + 'static> Detector<S> {
     pub fn new(
         store_id: u64,
         waiter_mgr_scheduler: WaiterMgrScheduler,
         security_mgr: Arc<SecurityManager>,
         pd_client: Arc<RpcClient>,
+        resolver: S,
         monitor_membership_interval: u64,
     ) -> Self {
         assert!(store_id != INVALID_ID);
         Self {
             pd_client,
+            resolver,
             inner: Rc::new(RefCell::new(Inner::new(
                 store_id,
                 waiter_mgr_scheduler,
@@ -402,21 +309,48 @@ impl Detector {
         }
     }
 
+    fn monitor_membership_change(
+        pd_client: &Arc<RpcClient>,
+        resolver: &S,
+        inner: &Rc<RefCell<Inner>>,
+    ) -> Result<()> {
+        let _timer = DETECTOR_HISTOGRAM_VEC
+            .monitor_membership_change
+            .start_coarse_timer();
+        let (_, leader) = pd_client.get_region_and_leader(b"")?;
+        if let Some(leader) = leader {
+            let leader_id = leader.get_store_id();
+            return match wait_op!(|cb| resolver
+                .resolve(leader_id, cb)
+                .map_err(|e| Error::Other(box_err!(e))))
+            {
+                Some(ref addr) if addr.is_ok() => {
+                    inner
+                        .borrow_mut()
+                        .change_role_if_needed(leader_id, addr.as_ref().unwrap().to_owned());
+                    Ok(())
+                }
+                _ => Err(box_err!("failed to resolve leader address")),
+            };
+        }
+        warn!("leader not found");
+        ERROR_COUNTER_VEC.leader_not_found.inc();
+        Ok(())
+    }
+
     fn schedule_membership_change_monitor(&self, handle: &Handle) {
         info!("schedule membership change monitor");
         let pd_client = Arc::clone(&self.pd_client);
+        let resolver = self.resolver.clone();
         let inner = Rc::clone(&self.inner);
-        let handle_copy = handle.clone();
         let timer = Interval::new(
             Instant::now(),
             Duration::from_millis(self.monitor_membership_interval),
         )
         .for_each(move |_| {
-            if let Err(e) = inner
-                .borrow_mut()
-                .watch_member_change(&handle_copy, &pd_client)
-            {
-                warn!("watch member change failed"; "err" => ?e);
+            if let Err(e) = Self::monitor_membership_change(&pd_client, &resolver, &inner) {
+                error!("monitor membership change failed"; "err" => ?e);
+                ERROR_COUNTER_VEC.monitor_membership_change.inc();
             }
             Ok(())
         })
@@ -440,7 +374,10 @@ impl Detector {
         handle.spawn(timer);
     }
 
-    fn init(&mut self, handle: &Handle) {
+    fn initialize(&mut self, handle: &Handle) {
+        assert!(!self.is_initialized);
+        // Get leader info now because tokio_timer::Interval can't execute immediately.
+        let _ = Self::monitor_membership_change(&self.pd_client, &self.resolver, &self.inner);
         self.schedule_membership_change_monitor(handle);
         self.schedule_detect_table_expiration(handle);
         self.is_initialized = true;
@@ -470,7 +407,7 @@ impl Detector {
             }
         } else {
             for _ in 0..2 {
-                if inner.leader_client.is_none() && inner.leader_id != INVALID_ID {
+                if inner.leader_client.is_none() && inner.leader_info.is_some() {
                     inner.reconnect_leader(handle);
                 }
                 if let Some(leader_client) = &inner.leader_client {
@@ -517,6 +454,13 @@ impl Detector {
         let s = stream
             .map_err(Error::Grpc)
             .and_then(move |mut req| {
+                // It's possible the leader changes after registering this handler.
+                let mut inner = inner.borrow_mut();
+                if !inner.is_leader() {
+                    ERROR_COUNTER_VEC.not_leader.inc();
+                    return Err(Error::Other(box_err!("leader changed")));
+                }
+
                 let WaitForEntry {
                     txn,
                     wait_for_txn,
@@ -524,10 +468,8 @@ impl Detector {
                     ..
                 } = req.get_entry();
 
-                let mut inner = inner.borrow_mut();
                 inner.update_max_ts_if_needed(*txn);
                 let mut detect_table = inner.detect_table.borrow_mut();
-
                 let res = match req.get_tp() {
                     DeadlockRequestType::Detect => {
                         if let Some(deadlock_key_hash) =
@@ -564,19 +506,18 @@ impl Detector {
     }
 }
 
-impl FutureRunnable<Task> for Detector {
+impl<S: StoreAddrResolver + 'static> FutureRunnable<Task> for Detector<S> {
     fn run(&mut self, task: Task, handle: &Handle) {
         if !self.is_initialized {
-            self.init(handle);
+            self.initialize(handle);
         }
 
         match task {
-            Task::DetectRpc { stream, sink } => {
-                self.handle_detect_rpc(handle, stream, sink);
-            }
-
             Task::Detect { tp, txn_ts, lock } => {
                 self.handle_detect(handle, tp, txn_ts, lock);
+            }
+            Task::DetectRpc { stream, sink } => {
+                self.handle_detect_rpc(handle, stream, sink);
             }
         }
     }
@@ -598,6 +539,7 @@ impl Service {
 }
 
 impl deadlock_grpc::Deadlock for Service {
+    // TODO: remove it
     fn get_wait_for_entries(
         &mut self,
         ctx: RpcContext<'_>,

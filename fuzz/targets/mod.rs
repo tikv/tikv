@@ -128,7 +128,7 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
         let _ = lhs + rhs;
         let _ = lhs - rhs;
         let _ = lhs * rhs;
-        let _ = lhs.clone() / rhs.clone();
+        let _ = lhs / rhs;
         let _ = lhs.clone() % rhs.clone();
         let _ = -lhs.clone();
         Ok(())
@@ -285,22 +285,25 @@ fn fuzz_duration(
     t: tikv::coprocessor::codec::mysql::Duration,
     mut cursor: Cursor<&[u8]>,
 ) -> Result<(), Error> {
+    use std::convert::TryFrom;
+    use tikv::coprocessor::codec::mysql::decimal::Decimal;
     use tikv::coprocessor::codec::mysql::DurationEncoder;
+
     let _ = t.fsp();
-    let mut u = t;
-    u.set_fsp(cursor.read_as_u8()?);
+    let u = t;
+    u.round_frac(cursor.read_as_i8()?)?;
     let _ = t.hours();
     let _ = t.minutes();
     let _ = t.secs();
-    let _ = t.micro_secs();
-    let _ = t.nano_secs();
-    let _ = t.to_secs();
+    let _ = t.subsec_micros();
+    let _ = t.to_secs_f64();
     let _ = t.is_zero();
-    let _ = t.to_decimal();
+    let _ = Decimal::try_from(t)?;
+
     let u = t;
     u.round_frac(cursor.read_as_i8()?)?;
     let mut v = Vec::new();
-    let _ = v.encode_duration(&t);
+    let _ = v.encode_duration(t);
     Ok(())
 }
 

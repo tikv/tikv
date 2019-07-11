@@ -15,7 +15,7 @@ use crate::coprocessor::dag::batch::executors::util::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
+use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
@@ -717,13 +717,13 @@ mod tests {
             vec![
                 RpnExpressionBuilder::new()
                     .push_column_ref(0)
-                    .push_fn_call(is_null_fn_meta::<Int>(), FieldTypeTp::LongLong)
+                    .push_fn_call(is_null_fn_meta::<Int>(), 1, FieldTypeTp::LongLong)
                     .build(),
                 RpnExpressionBuilder::new().push_column_ref(0).build(),
                 RpnExpressionBuilder::new()
                     .push_column_ref(1)
                     .push_constant(1)
-                    .push_fn_call(arithmetic_fn_meta::<IntIntPlus>(), FieldTypeTp::LongLong)
+                    .push_fn_call(arithmetic_fn_meta::<IntIntPlus>(), 2, FieldTypeTp::LongLong)
                     .build(),
             ],
             vec![false, false, true],
