@@ -28,11 +28,13 @@ fn test_wait_for_apply_index() {
     let region = cluster.get_region(b"k0");
     cluster.must_transfer_leader(region.get_id(), p2.clone());
 
+    // Block all write cmd applying of Peer 3.
     fail::cfg("on_apply_write_cmd", "sleep(5000)").unwrap();
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
-    // Peer 3 does not apply the value of 'k1' right now, then the follower read must be blocked
+    // Peer 3 does not apply the cmd of putting 'k1' right now, then the follower read must
+    // be blocked.
     must_get_none(&cluster.get_engine(3), b"k1");
     let mut request = new_request(
         region.get_id(),
@@ -52,7 +54,7 @@ fn test_wait_for_apply_index() {
     assert!(rx.recv_timeout(Duration::from_secs(3)).is_err());
     fail::cfg("on_apply_write_cmd", "off").unwrap();
 
-    // After write cmd applied, the follower read will be executed
+    // After write cmd applied, the follower read will be executed.
     match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(resp) => {
             assert_eq!(resp.get_responses().len(), 1);
