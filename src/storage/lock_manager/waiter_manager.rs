@@ -97,7 +97,7 @@ struct WaitTable {
 impl WaitTable {
     fn new() -> Self {
         Self {
-            wait_table: HashMap::new(),
+            wait_table: HashMap::default(),
         }
     }
 
@@ -113,7 +113,7 @@ impl WaitTable {
     }
 
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
-        self.wait_table.entry(ts).or_insert(vec![]).push(waiter);
+        self.wait_table.entry(ts).or_default().push(waiter);
         true
     }
 
