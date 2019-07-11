@@ -16,7 +16,10 @@ RUN sed -i '/fuzz/d' Cargo.toml && \
 
 # Use Makefile to build
 COPY Makefile ./
-COPY scripts ./
+
+# For build_dist_release
+COPY ./scripts/run-cargo.sh ./scripts/run-cargo.sh
+COPY ./etc/cargo.config.dist ./etc/cargo.config.dist
 
 # Add components Cargo files
 # Notice: every time we add a new component, we must regenerate the dockerfile
