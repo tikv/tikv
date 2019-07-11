@@ -2538,13 +2538,13 @@ impl ApplyFsm {
             let apply_index = self.delegate.apply_state.get_applied_index();
             if apply_index < catch_up_logs.merge.get_commit() {
                 let mut res = VecDeque::new();
+                // send logs to raftstore to append
                 res.push_back(ExecResult::CatchUpLogs {
                     merge: catch_up_logs.merge,
                     logs_up_to_date: catch_up_logs.logs_up_to_date,
                 });
 
                 // TODO: can we use `ctx.finish_for()` directly? is it safe here?
-                // send logs to raftstore to append
                 ctx.apply_res.push(ApplyRes {
                     region_id: self.delegate.region_id(),
                     apply_state: self.delegate.apply_state.clone(),

@@ -1927,7 +1927,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         assert_eq!(region_id, merge.get_source().get_id());
         self.fsm.peer.catch_up_logs = Some(logs_up_to_date);
 
-        // directly append these logs to raft log
+        // directly append these logs to raft log and then commit
         match self.fsm.peer.maybe_append_merge_entries(merge) {
             Some(last_index) => {
                 info!(
