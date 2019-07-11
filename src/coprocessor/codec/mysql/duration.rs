@@ -465,11 +465,11 @@ impl Duration {
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
-        if input.is_empty() {
-            return Err(invalid_type!("invalid time format"));
-        }
-
         let fsp = check_fsp(fsp)?;
+
+        if input.is_empty() {
+            return Ok(Duration::zero());
+        }
 
         let (mut neg, [mut day, mut hour, mut minute, mut second, micros]) =
             self::parser::parse(input, fsp)
@@ -857,7 +857,8 @@ mod tests {
             (b" - 1 : 2 :  3 .123 ", 3, Some("-01:02:03.123")),
             (b" - 1 .123 ", 3, Some("-00:00:01.123")),
             (b"-", 0, None),
-            (b"", 0, None),
+            (b"", 0, Some("00:00:00")),
+            (b"", 7, None),
             (b"18446744073709551615:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
