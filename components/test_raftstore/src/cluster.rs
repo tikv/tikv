@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::sync::{self, Arc, RwLock};
+use std::sync::{self, mpsc, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -20,7 +20,7 @@ use engine::Peekable;
 use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
+use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
@@ -351,7 +351,7 @@ impl<T: Simulator> Cluster<T> {
         }
         self.reset_leader_of_region(region_id);
         let mut leader = None;
-        let mut leaders = HashMap::new();
+        let mut leaders = HashMap::default();
 
         let node_ids = self.sim.rl().get_node_ids();
         // For some tests, we stop the node but pd still has this information,
@@ -992,6 +992,25 @@ impl<T: Simulator> Cluster<T> {
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
+    }
+
+    // Request a snapshot on the given region.
+    pub fn must_request_snapshot(&self, store_id: u64, region_id: u64) -> u64 {
+        // Request snapshot.
+        let (request_tx, request_rx) = mpsc::channel();
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        router
+            .send(
+                region_id,
+                PeerMsg::CasualMessage(CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
+                    let idx = peer.peer.raft_group.get_store().committed_index();
+                    peer.peer.raft_group.request_snapshot(idx).unwrap();
+                    debug!("{} request snapshot at {}", idx, peer.peer.tag);
+                    request_tx.send(idx).unwrap();
+                }))),
+            )
+            .unwrap();
+        request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
     }
 }
 
