@@ -3,10 +3,8 @@
 use std::sync::Arc;
 
 use fail;
-use kvproto::kvrpcpb::Context;
+use std::time::Duration;
 use test_raftstore::*;
-use tikv::storage::kv::*;
-use tikv::storage::Key;
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -27,35 +25,39 @@ fn test_wait_for_apply_index() {
     cluster.pd_client.must_add_peer(r1, p3.clone());
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
-    let r1 = cluster.get_region(b"k0");
-    cluster.must_transfer_leader(r1.get_id(), p2.clone());
+    let region = cluster.get_region(b"k0");
+    cluster.must_transfer_leader(region.get_id(), p2.clone());
 
-    let mut ctx = Context::new();
-    ctx.set_region_id(r1.get_id());
-    ctx.set_region_epoch(r1.get_region_epoch().clone());
-    ctx.set_follower_read(true);
-
-    fail::cfg("on_raft_ready", "pause").unwrap();
+    fail::cfg("on_apply_write_cmd", "sleep(5000)").unwrap();
     cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k2", b"v2");
-    cluster.must_put(b"k3", b"v3");
-    cluster.must_put(b"k4", b"v4");
-    must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
-    fail::cfg("on_raft_ready", "off").unwrap();
-    // Peer 3 does not apply the value of 'k4' right now
-    let p3_storage = cluster.sim.rl().storages[&p3.get_id()].clone();
-    ctx.set_peer(p3.clone());
-    must_get_none(&cluster.get_engine(3), b"k4");
-    assert_has(&ctx, &p3_storage, b"k4", b"v4");
-}
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
-fn assert_has<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
-    let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(
-        snapshot
-            .get(&Key::from_encoded_slice(key))
-            .unwrap()
-            .unwrap(),
-        value
+    // Peer 3 does not apply the value of 'k1' right now, then the follower read must be blocked
+    must_get_none(&cluster.get_engine(3), b"k1");
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cf_cmd("default", b"k1")],
+        false,
     );
+    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_follower_read(true);
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(3, request, cb)
+        .unwrap();
+    // Must timeout here
+    assert!(rx.recv_timeout(Duration::from_secs(3)).is_err());
+    fail::cfg("on_apply_write_cmd", "off").unwrap();
+
+    // After write cmd applied, the follower read will be executed
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(resp) => {
+            assert_eq!(resp.get_responses().len(), 1);
+            assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+        }
+        Err(_) => panic!("follower read failed"),
+    }
 }
