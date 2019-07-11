@@ -47,7 +47,7 @@ RUN mkdir -p ./src/bin && \
     mkdir ./components/tikv_alloc/src && echo '' > ./components/tikv_alloc/src/lib.rs && \
     mkdir ./components/tikv_util/src && echo '' > ./components/tikv_util/src/lib.rs && \
     mkdir ./components/tipb_helper/src && echo '' > ./components/tipb_helper/src/lib.rs && \
-    make dist_release && \
+    make build_dist_release && \
     rm -rf ./target/release/.fingerprint/codec-* && \
     rm -rf ./target/release/.fingerprint/cop_codegen-* && \
     rm -rf ./target/release/.fingerprint/cop_datatype-* && \
@@ -64,7 +64,7 @@ RUN mkdir -p ./src/bin && \
 COPY ./src ./src
 COPY ./components ./components
 
-RUN make dist_release
+RUN make build_dist_release
 
 # Strip debug info to reduce the docker size, may strip later?
 # RUN strip --strip-debug /tikv/target/release/tikv-server && \
