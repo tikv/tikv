@@ -1,3 +1,5 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::Arc;
 
 use fail;
@@ -9,6 +11,7 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_wait_for_apply_index() {
+    let _guard = crate::setup();
     let mut cluster = new_server_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.

@@ -1009,7 +1009,7 @@ impl Peer {
             && !self.is_merging()
     }
 
-    fn ready_to_handle_follower_read(&self, read_index: u64) -> bool {
+    fn ready_to_handle_unsafe_follower_read(&self, read_index: u64) -> bool {
         // Wait until the follower applies all values before the read. There is still a
         // problem if the leader applies fewer values than the follower, the follower read
         // could get a newer value.
@@ -1366,7 +1366,8 @@ impl Peer {
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                     }
-                } else if self.ready_to_handle_follower_read(read.read_index.unwrap()) {
+                    self.pending_reads.ready_cnt -= 1;
+                } else if self.ready_to_handle_unsafe_follower_read(read.read_index.unwrap()) {
                     for (req, cb) in read.cmds.drain(..) {
                         if req.get_header().get_follower_read() {
                             cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
