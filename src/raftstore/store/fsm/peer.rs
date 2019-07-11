@@ -1931,11 +1931,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         match self.fsm.peer.maybe_append_merge_entries(merge) {
             Some(last_index) => {
                 info!(
-                    "append entries to source region";
+                    "append and commit entries to source region";
                     "region_id" => region_id,
                     "peer_id" => self.fsm.peer.peer_id(),
                     "last_index" => last_index,
                 );
+                // Now it has some committed entries, so mark it to take `Ready` in next round.
                 self.fsm.has_ready = true;
             }
             None => {
