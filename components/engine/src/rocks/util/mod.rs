@@ -375,7 +375,9 @@ impl SliceTransform for FixedPrefixSliceTransform {
     }
 }
 
-pub struct SequentialRowInsertTransform;
+pub struct SequentialRowInsertTransform {
+    pub id: usize,
+}
 
 impl SliceTransform for SequentialRowInsertTransform {
     fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {

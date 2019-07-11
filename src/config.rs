@@ -397,7 +397,7 @@ impl DefaultCfConfig {
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
-        let f = Box::new(SequentialRowInsertTransform);
+        let f = Box::new(SequentialRowInsertTransform { id: 1 });
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("table-sequential-insert-default", f)
             .unwrap();
@@ -476,7 +476,7 @@ impl WriteCfConfig {
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
-        let f = Box::new(SequentialRowInsertTransform);
+        let f = Box::new(SequentialRowInsertTransform { id: 2 });
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("table-sequential-insert-write", f)
             .unwrap();
