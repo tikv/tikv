@@ -308,6 +308,7 @@ struct ApplyContext {
     // For key/value pairs write to default cf, we first place them in this write buffer,
     // and then append to WriteBatch after sorted.
     rows_buffer: Vec<KeyValue>,
+    rows_buffer_write: Vec<KeyValue>,
 }
 
 struct KeyValue {
@@ -367,6 +368,7 @@ impl ApplyContext {
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             rows_buffer: vec![],
+            rows_buffer_write: vec![],
         }
     }
 
@@ -423,6 +425,23 @@ impl ApplyContext {
                 } else {
                     // delete key
                     self.kv_wb().delete(&row.key).unwrap();
+                }
+            }
+        }
+
+        if !self.rows_buffer_write.is_empty() {
+            self.rows_buffer_write.sort();
+            let rows_buffer_write = mem::replace(&mut self.rows_buffer_write, vec![]);
+            let handle = rocks::util::get_cf_handle(&self.engines.kv, CF_WRITE).unwrap();
+            for row_write in rows_buffer_write {
+                if !row_write.value.is_empty() {
+                    // put key/value
+                    self.kv_wb()
+                        .put_cf(handle, &row_write.key, &row_write.value)
+                        .unwrap();
+                } else {
+                    // delete key
+                    self.kv_wb().delete_cf(handle, &row_write.key).unwrap();
                 }
             }
         }
@@ -497,7 +516,15 @@ impl ApplyContext {
     }
 
     pub fn row_buffer_count(&self) -> usize {
-        self.rows_buffer.len()
+        self.rows_buffer.len() + self.rows_buffer_write.len()
+    }
+
+    pub fn put_row_write(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        self.rows_buffer_write.push(KeyValue { key, value });
+    }
+
+    pub fn delete_row_write(&mut self, key: Vec<u8>) {
+        self.rows_buffer_write.push(KeyValue { key, value: vec![] });
     }
 
     /// Flush all pending writes to engines.
@@ -1229,6 +1256,11 @@ impl ApplyDelegate {
         self.metrics.size_diff_hint += value.len() as i64;
         if !req.get_put().get_cf().is_empty() {
             let cf = req.get_put().get_cf();
+            // Place into write buffer
+            if cf == CF_WRITE {
+                ctx.put_row_write(key, value.to_vec());
+                return Ok(resp);
+            }
             // TODO: don't allow write preseved cfs.
             if cf == CF_LOCK {
                 self.metrics.lock_cf_written_bytes += key.len() as u64;
@@ -1273,6 +1305,11 @@ impl ApplyDelegate {
         let resp = Response::new();
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
+            // Place into write buffer
+            if cf == CF_WRITE {
+                ctx.delete_row_write(key);
+                return Ok(resp);
+            }
             // TODO: check whether cf exists or not.
             rocks::util::get_cf_handle(&ctx.engines.kv, cf)
                 .and_then(|handle| ctx.kv_wb().delete_cf(handle, &key).map_err(Into::into))
