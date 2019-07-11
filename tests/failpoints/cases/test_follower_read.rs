@@ -29,7 +29,7 @@ fn test_wait_for_apply_index() {
     cluster.must_transfer_leader(region.get_id(), p2.clone());
 
     // Block all write cmd applying of Peer 3.
-    fail::cfg("on_apply_write_cmd", "sleep(5000)").unwrap();
+    fail::cfg("on_apply_write_cmd", "sleep(2000)").unwrap();
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
@@ -51,11 +51,11 @@ fn test_wait_for_apply_index() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     // Must timeout here
-    assert!(rx.recv_timeout(Duration::from_secs(3)).is_err());
+    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
     fail::cfg("on_apply_write_cmd", "off").unwrap();
 
     // After write cmd applied, the follower read will be executed.
-    match rx.recv_timeout(Duration::from_secs(5)) {
+    match rx.recv_timeout(Duration::from_secs(3)) {
         Ok(resp) => {
             assert_eq!(resp.get_responses().len(), 1);
             assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
