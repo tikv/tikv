@@ -351,7 +351,7 @@ impl<T: Simulator> Cluster<T> {
         }
         self.reset_leader_of_region(region_id);
         let mut leader = None;
-        let mut leaders = HashMap::new();
+        let mut leaders = HashMap::default();
 
         let node_ids = self.sim.rl().get_node_ids();
         // For some tests, we stop the node but pd still has this information,

@@ -200,7 +200,7 @@ impl ScalarFunc {
         let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
         let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
         let overflow = Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs));
-        match lhs.into_owned() / rhs.into_owned() {
+        match lhs.as_ref() / rhs.as_ref() {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(Cow::Owned(v))),
                 Res::Truncated(_) => Err(Error::truncated()),

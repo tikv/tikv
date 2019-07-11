@@ -204,7 +204,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
             .stream
             .send(msg)
         {
-            error!("RaftClient fails to send");
+            error!("send to {} fail, the gRPC connection could be broken", addr);
             let index = msg.region_id as usize % self.cfg.grpc_raft_conn_num;
             self.conns.remove(&(addr.to_owned(), index));
 
@@ -213,6 +213,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
                     self.addrs.insert(store_id, current_addr);
                 }
             }
+            return Err(box_err!("RaftClient send fail"));
         }
         Ok(())
     }
