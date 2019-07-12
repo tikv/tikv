@@ -62,8 +62,8 @@ pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
-    store_handle: Option<thread::JoinHandle<()>>,
     system: RaftBatchSystem,
+    has_started: bool,
 
     pd_client: Arc<C>,
 }
@@ -101,9 +101,9 @@ where
             cluster_id: cfg.cluster_id,
             store,
             store_cfg: store_cfg.clone(),
-            store_handle: None,
             pd_client,
             system,
+            has_started: false,
         }
     }
 
@@ -329,10 +329,10 @@ where
     {
         info!("start raft store thread"; "store_id" => store_id);
 
-        if self.store_handle.is_some() {
+        if self.has_started {
             return Err(box_err!("{} is already started", store_id));
         }
-
+        self.has_started = true;
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
