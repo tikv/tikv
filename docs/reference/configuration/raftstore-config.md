@@ -13,8 +13,8 @@ Raftstore is TiKV's implementation of [Multi-raft](https://tikv.org/deep-dive/sc
 
 This document introduces the following features of Raftstore and their configurations:
 
-- [Multi-thread Raftstore](#Multi-thread-Raftstore)
-- [Hibernate Region](#Hibernate-Region)
+- [Multi-thread Raftstore](#multi-thread-raftstore)
+- [Hibernate Region](#hibernate-region)
 
 ## Multi-thread Raftstore
 
@@ -24,7 +24,7 @@ This document introduces the following features of Raftstore and their configura
 
 > **Note:**
 >
-> In the multi-thread mode, peers are obtained in batch, so pressure from hot write regions cannot be scattered evenly to each CPU. For better load balancing, it is recommended you use smaller batch sizes.
+> In the multi-thread mode, peers are obtained in batch, so pressure from hot write Regions cannot be scattered evenly to each CPU. For better load balancing, it is recommended you use smaller batch sizes.
 
 ### Configuration items
 
@@ -48,12 +48,12 @@ Determines the number of threads. The value must be a positive integer. For bett
 
 ## Hibernate Region
 
-Hibernate Region is a Raftstore feature to reduce the extra overhead caused by heartbeat messages between the Raft leader and the followers for idle regions. With this feature enabled, a region idle for a long time is automatically set as hibernated. The heartbeat interval for the leader to maintain its lease becomes much longer, and the followers do not initiate elections simply because they cannot receive heartbeats from the leader.
+Hibernate Region is a Raftstore feature to reduce the extra overhead caused by heartbeat messages between the Raft leader and the followers for idle Regions. With this feature enabled, a Region idle for a long time is automatically set as hibernated. The heartbeat interval for the leader to maintain its lease becomes much longer, and the followers do not initiate elections simply because they cannot receive heartbeats from the leader.
 
 > **Note:**
 >
 > - Hibernate Region is still an Experimental feature and is disabled by default.
-> - Any requests from the client or disconnections will activate the region from the hibernated state.
+> - Any requests from the client or disconnections will activate the Region from the hibernated state.
 
 ### Configuration items
 
@@ -65,4 +65,4 @@ Enables or disables Hibernate Region. Possible values are true and false. The de
 
 **`raftstore.peer_stale_state_check_interval`**
 
-Modifies the state check interval for hibernated Regions. The default value is 5 minutes. This value also determines the heartbeat interval between the leader and followers of the hibernated regions.
+Modifies the state check interval for hibernated Regions. The default value is 5 minutes. This value also determines the heartbeat interval between the leader and followers of the hibernated Regions.
