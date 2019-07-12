@@ -157,9 +157,9 @@ pub fn convert_float_to_int(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -
     Ok(val as i64)
 }
 
-/// Converts a byte arrays to an i64 in best effort.
-pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp) -> Result<i64> {
-    let s = match str::from_utf8(bytes) {
+#[inline(always)]
+fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&'a str> {
+    let valid = match str::from_utf8(bytes) {
         Ok(s) => s,
         Err(err) => {
             ctx.handle_truncate(true)?;
@@ -167,6 +167,12 @@ pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp
             unsafe { str::from_utf8_unchecked(valid) }
         }
     };
+    Ok(valid)
+}
+
+/// Converts a byte arrays to an i64 in best effort.
+pub fn convert_bytes_to_int(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp) -> Result<i64> {
+    let s = get_valid_utf8_prefix(ctx, bytes)?;
     let s = s.trim();
     let vs = get_valid_int_prefix(ctx, s)?;
     let val = vs.parse::<i64>();
@@ -210,15 +216,8 @@ pub fn convert_duration_to_int(
     convert_int_to_int(ctx, val, tp)
 }
 
-/// Converts a `Decimal` to an i64 value
-#[inline]
-pub fn convert_decimal_to_int(
-    ctx: &mut EvalContext,
-    dec: &Decimal,
-    tp: FieldTypeTp,
-) -> Result<i64> {
-    // TODO: avoid this clone
-    let dec = match dec.clone().round(0, RoundMode::HalfEven) {
+fn round_decimal_with_ctx(ctx: &mut EvalContext, dec: Decimal) -> Result<Decimal> {
+    let dec = match dec.round(0, RoundMode::HalfEven) {
         Res::Ok(d) => d,
         Res::Overflow(d) => {
             ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
@@ -229,6 +228,18 @@ pub fn convert_decimal_to_int(
             d
         }
     };
+    Ok(dec)
+}
+
+/// Converts a `Decimal` to an i64 value
+#[inline]
+pub fn convert_decimal_to_int(
+    ctx: &mut EvalContext,
+    dec: &Decimal,
+    tp: FieldTypeTp,
+) -> Result<i64> {
+    // TODO: avoid this clone
+    let dec = round_decimal_with_ctx(ctx, dec.clone())?;
     let val = dec.as_i64_with_ctx(ctx)?;
     convert_int_to_int(ctx, val, tp)
 }
@@ -243,7 +254,7 @@ pub fn convert_json_to_int(ctx: &mut EvalContext, json: &Json, tp: FieldTypeTp) 
 /// Converts an i64 to an u64 value
 #[inline]
 pub fn convert_int_to_uint(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> Result<u64> {
-    if val < 0 {
+    if val < 0 && ctx.should_clip_to_zero() {
         ctx.handle_overflow(overflow!(val, 0))?;
         return Ok(0);
     }
@@ -292,7 +303,7 @@ pub fn convert_float_to_uint(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) 
 /// Converts a byte arrays to an u64 in best effort.
 #[inline]
 pub fn convert_bytes_to_uint(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeTp) -> Result<u64> {
-    let s = str::from_utf8(bytes)?.trim();
+    let s = get_valid_utf8_prefix(ctx, bytes)?;
     let vs = get_valid_int_prefix(ctx, s)?;
     let val = vs.parse::<u64>();
     match val {
@@ -310,7 +321,7 @@ macro_rules! decimal_as_u64 {
         let val = match $expr.as_u64() {
             Res::Ok(val) => val,
             Res::Overflow(val) => {
-                $ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
+                $ctx.handle_overflow(Error::overflow("DECIMAL", &$expr.to_string()))?;
                 val
             }
             Res::Truncated(val) => {
@@ -354,17 +365,7 @@ pub fn convert_decimal_to_uint(
     tp: FieldTypeTp,
 ) -> Result<u64> {
     // TODO: avoid this clone
-    let dec = match dec.clone().round(0, RoundMode::HalfEven) {
-        Res::Ok(d) => d,
-        Res::Overflow(d) => {
-            ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
-            d
-        }
-        Res::Truncated(d) => {
-            ctx.handle_truncate(true)?;
-            d
-        }
-    };
+    let dec = round_decimal_with_ctx(ctx, dec.clone())?;
     decimal_as_u64!(dec, ctx, tp)
 }
 
@@ -1032,7 +1033,7 @@ mod tests {
             (16777216, FieldTypeTp::Long, Some(16777216)),
             (4294967297, FieldTypeTp::Long, None),
             (8388610, FieldTypeTp::LongLong, Some(8388610)),
-            (-8388610, FieldTypeTp::LongLong, None),
+            (-1, FieldTypeTp::LongLong, Some(u64::MAX)),
         ];
 
         let mut ctx = EvalContext::default();
@@ -1048,6 +1049,18 @@ mod tests {
                 ),
             }
         }
+
+        // SHOULD_CLIP_TO_ZERO
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IN_INSERT_STMT)));
+        let r = convert_int_to_uint(&mut ctx, -12345, FieldTypeTp::LongLong);
+        assert!(r.is_err());
+
+        // SHOULD_CLIP_TO_ZERO | OVERFLOW_AS_WARNING
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
+            Flag::IN_INSERT_STMT | Flag::OVERFLOW_AS_WARNING,
+        )));
+        let r = convert_int_to_uint(&mut ctx, -12345, FieldTypeTp::LongLong).unwrap();
+        assert_eq!(r, 0);
     }
 
     #[test]
@@ -1219,11 +1232,12 @@ mod tests {
         // convert_int_to_uint
         let cases: Vec<(i64, u64, FieldTypeTp)> = vec![
             (12345, 255, FieldTypeTp::Tiny),
-            (-12345, 0, FieldTypeTp::Tiny),
+            (-1, 255, FieldTypeTp::Tiny),
             (123456, 65535, FieldTypeTp::Short),
+            (-1, 65535, FieldTypeTp::Short),
             (16777216, 16777215, FieldTypeTp::Int24),
             (i64::MAX, 4294967295, FieldTypeTp::Long),
-            (i64::MIN, 0, FieldTypeTp::Long),
+            (i64::MIN, u32::MAX as u64, FieldTypeTp::Long),
         ];
         for (raw, dst, tp) in cases {
             test_overflow(raw, dst, convert_int_to_uint, tp);
@@ -1260,7 +1274,6 @@ mod tests {
         let cases: Vec<(&[u8], u64, FieldTypeTp)> = vec![
             (b"255.5", 255, FieldTypeTp::Tiny),
             (b"12345", 255, FieldTypeTp::Tiny),
-            (b"-12345", 255, FieldTypeTp::Tiny),
             (b"65535.6", 65535, FieldTypeTp::Short),
             (b"123456", 65535, FieldTypeTp::Short),
             (b"16777215.7", 16777215, FieldTypeTp::Int24),
