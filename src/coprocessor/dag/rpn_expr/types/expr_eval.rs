@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tipb::expression::FieldType;
 
 use super::expr::{RpnExpression, RpnExpressionNode};
-use super::RpnFnCallPayload;
+use super::RpnFnCallExtra;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 use crate::coprocessor::codec::mysql::time::Tz;
@@ -146,7 +146,7 @@ impl RpnExpression {
     /// Panics when referenced column does not have equal length as specified in `rows`.
     pub fn eval<'a>(
         &'a self,
-        context: &mut EvalContext,
+        ctx: &mut EvalContext,
         schema: &'a [FieldType],
         input_physical_columns: &'a mut LazyBatchColumnVec,
         input_logical_rows: &'a [usize],
@@ -156,13 +156,13 @@ impl RpnExpression {
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
         self.ensure_columns_decoded(
-            &context.cfg.tz,
+            &ctx.cfg.tz,
             schema,
             input_physical_columns,
             input_logical_rows,
         )?;
         self.eval_decoded(
-            context,
+            ctx,
             schema,
             input_physical_columns,
             input_logical_rows,
@@ -206,7 +206,7 @@ impl RpnExpression {
     /// Panics when referenced column does not have equal length as specified in `rows`.
     pub fn eval_decoded<'a>(
         &'a self,
-        context: &mut EvalContext,
+        ctx: &mut EvalContext,
         schema: &'a [FieldType],
         input_physical_columns: &'a LazyBatchColumnVec,
         input_logical_rows: &'a [usize],
@@ -221,10 +221,7 @@ impl RpnExpression {
 
         for node in self.as_ref() {
             match node {
-                RpnExpressionNode::Constant {
-                    ref value,
-                    ref field_type,
-                } => {
+                RpnExpressionNode::Constant { value, field_type } => {
                     stack.push(RpnStackNode::Scalar {
                         value: &value,
                         field_type,
@@ -243,30 +240,27 @@ impl RpnExpression {
                     });
                 }
                 RpnExpressionNode::FnCall {
-                    ref func,
-                    ref field_type,
+                    func_meta,
+                    args_len,
+                    field_type: ret_field_type,
                 } => {
                     // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
                     // `[A, B, C, Foo]`.
                     // Now we receives a function call `Foo`, so there are `[A, B, C]` in the stack
                     // as the last several elements. We will directly use the last N (N = number of
                     // arguments) elements in the stack as function arguments.
-                    assert!(stack.len() >= func.args_len);
-                    let stack_slice_begin = stack.len() - func.args_len;
+                    assert!(stack.len() >= *args_len);
+                    let stack_slice_begin = stack.len() - *args_len;
                     let stack_slice = &stack[stack_slice_begin..];
-                    let call_info = RpnFnCallPayload {
-                        output_rows,
-                        raw_args: stack_slice,
-                        ret_field_type: field_type,
-                    };
-                    let ret = (func.fn_ptr)(context, &call_info)?;
+                    let mut call_extra = RpnFnCallExtra { ret_field_type };
+                    let ret = (func_meta.fn_ptr)(ctx, output_rows, stack_slice, &mut call_extra)?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {
                             physical_value: ret,
                             logical_rows: Arc::clone(&identity_logical_rows),
                         },
-                        field_type,
+                        field_type: ret_field_type,
                     });
                 }
             }
@@ -286,6 +280,7 @@ mod tests {
     use cop_codegen::rpn_fn;
     use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
+    use tipb_helper::ExprDefBuilder;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
     use crate::coprocessor::codec::data_type::{Int, Real};
@@ -423,7 +418,7 @@ mod tests {
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn_meta(), 0, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -449,7 +444,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::Double)
+            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -488,7 +483,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
@@ -532,7 +527,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0, 1], 3);
@@ -558,7 +553,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
             .push_constant(3i64)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::Double)
+            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -598,7 +593,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
             .push_constant(1.5f64)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::Double)
+            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
@@ -636,7 +631,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
             .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::Double)
+            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 2], 2);
@@ -686,7 +681,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(1)
             .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[0, 2, 1], 3);
@@ -736,7 +731,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
             .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[1], 1);
@@ -772,7 +767,7 @@ mod tests {
             .push_column_ref(0)
             .push_constant(3i64)
             .push_column_ref(0)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn_meta(), 3, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 0, 2], 3);
@@ -844,13 +839,13 @@ mod tests {
         // Col0, fn_b, Col1, Const0, fn_d, Const1, fn_c, fn_a
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_fn_call(fn_b_fn_meta(), FieldTypeTp::Double)
+            .push_fn_call(fn_b_fn_meta(), 0, FieldTypeTp::Double)
             .push_column_ref(1)
             .push_constant(7i64)
-            .push_fn_call(fn_d_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(fn_d_fn_meta(), 2, FieldTypeTp::LongLong)
             .push_constant(11i64)
-            .push_fn_call(fn_c_fn_meta(), FieldTypeTp::Double)
-            .push_fn_call(fn_a_fn_meta(), FieldTypeTp::Double)
+            .push_fn_call(fn_c_fn_meta(), 2, FieldTypeTp::Double)
+            .push_fn_call(fn_a_fn_meta(), 3, FieldTypeTp::Double)
             .build();
 
         //      fn_a(
@@ -884,7 +879,7 @@ mod tests {
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::LongLong)
+            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -908,7 +903,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_constant(3.0f64)
             .push_constant(1.5f64)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::Double)
+            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -930,7 +925,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(7i64)
-            .push_fn_call(foo_fn_meta(), FieldTypeTp::Double)
+            .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
@@ -943,10 +938,7 @@ mod tests {
     /// Parse from an expression tree then evaluate.
     #[test]
     fn test_parse_and_eval() {
-        use tipb::expression::ScalarFuncSig;
-        use tipb::expression::{Expr, ExprType};
-
-        use tikv_util::codec::number::NumberEncoder;
+        use tipb::expression::{Expr, ScalarFuncSig};
 
         // We will build an expression tree from:
         //      fn_d(
@@ -995,85 +987,29 @@ mod tests {
             })
         }
 
-        let node_fn_b = {
-            // Col1
-            let mut node_col_1 = Expr::new();
-            node_col_1.set_tp(ExprType::ColumnRef);
-            node_col_1
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_col_1.mut_val().encode_i64(1).unwrap();
-
-            // fn_c
-            let mut node_fn_c = Expr::new();
-            node_fn_c.set_tp(ExprType::ScalarFunc);
-            node_fn_c.set_sig(ScalarFuncSig::CastIntAsString);
-            node_fn_c
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-
-            // fn_b
-            let mut node_fn_b = Expr::new();
-            node_fn_b.set_tp(ExprType::ScalarFunc);
-            node_fn_b.set_sig(ScalarFuncSig::CastIntAsReal);
-            node_fn_b
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_fn_b.mut_children().push(node_col_1);
-            node_fn_b.mut_children().push(node_fn_c);
-            node_fn_b
-        };
-
-        let node_fn_a = {
-            // Const1
-            let mut node_const_1 = Expr::new();
-            node_const_1.set_tp(ExprType::Int64);
-            node_const_1
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_const_1.mut_val().encode_i64(7).unwrap();
-
-            // Col0
-            let mut node_col_0 = Expr::new();
-            node_col_0.set_tp(ExprType::ColumnRef);
-            node_col_0
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_col_0.mut_val().encode_i64(0).unwrap();
-
-            // fn_a
-            let mut node_fn_a = Expr::new();
-            node_fn_a.set_tp(ExprType::ScalarFunc);
-            node_fn_a.set_sig(ScalarFuncSig::CastIntAsInt);
-            node_fn_a
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_fn_a.mut_children().push(node_const_1);
-            node_fn_a.mut_children().push(node_fn_b);
-            node_fn_a.mut_children().push(node_col_0);
-            node_fn_a
-        };
-
-        // fn_d
-        let mut node_fn_d = Expr::new();
-        node_fn_d.set_tp(ExprType::ScalarFunc);
-        node_fn_d.set_sig(ScalarFuncSig::CastIntAsDecimal);
-        node_fn_d
-            .mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
-        node_fn_d.mut_children().push(node_fn_a);
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDecimal, FieldTypeTp::LongLong)
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::Double)
+                        .push_child(ExprDefBuilder::constant_int(7))
+                        .push_child(
+                            ExprDefBuilder::scalar_func(
+                                ScalarFuncSig::CastIntAsReal,
+                                FieldTypeTp::Double,
+                            )
+                            .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+                            .push_child(ExprDefBuilder::scalar_func(
+                                ScalarFuncSig::CastIntAsString,
+                                FieldTypeTp::LongLong,
+                            )),
+                        )
+                        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong)),
+                )
+                .build();
 
         // Build RPN expression from this expression tree.
         let exp =
-            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node_fn_d, fn_mapper, 2)
-                .unwrap();
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 2).unwrap();
 
         let mut columns = LazyBatchColumnVec::from(vec![
             {
@@ -1119,7 +1055,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
             .push_column_ref(0)
-            .push_fn_call(arithmetic_fn_meta::<IntIntPlus>(), FieldTypeTp::LongLong)
+            .push_fn_call(arithmetic_fn_meta::<IntIntPlus>(), 2, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..1024).collect();
@@ -1154,6 +1090,7 @@ mod tests {
             .push_column_ref(0)
             .push_fn_call(
                 compare_fn_meta::<BasicComparer<Int, CmpOpLE>>(),
+                2,
                 FieldTypeTp::LongLong,
             )
             .build();
@@ -1190,6 +1127,7 @@ mod tests {
             .push_column_ref(0)
             .push_fn_call(
                 compare_fn_meta::<BasicComparer<Int, CmpOpLE>>(),
+                2,
                 FieldTypeTp::LongLong,
             )
             .build();
