@@ -127,10 +127,11 @@ fn test_raft_client_reconnect() {
     // `send` should fail after the mock server stopped.
     drop(mock_server);
 
-    assert!((0..100)
-        .map(|_| raft_client.send(1, &addr, RaftMessage::new()))
-        .collect::<Result<(), _>>()
-        .is_err());
+    let send = |_| {
+        thread::sleep(time::Duration::from_millis(10));
+        raft_client.send(1, &addr, RaftMessage::new())
+    };
+    assert!((0..100).map(send).collect::<Result<(), _>>().is_err());
 
     // `send` should success after the mock server restarted.
     let service = MockKvForRaft(Arc::clone(&counter));
