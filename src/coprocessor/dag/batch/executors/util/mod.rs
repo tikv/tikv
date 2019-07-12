@@ -13,8 +13,8 @@ use tipb::expression::FieldType;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
+use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::Result;
 
 /// Decodes all columns that are not decoded.
@@ -34,7 +34,7 @@ pub fn ensure_columns_decoded(
 /// Evaluates expressions and outputs the result into the given Vec. Lifetime of the expressions
 /// are erased.
 pub unsafe fn eval_exprs_decoded_no_lifetime<'a>(
-    context: &mut EvalContext,
+    ctx: &mut EvalContext,
     exprs: &[RpnExpression],
     schema: &[FieldType],
     input_physical_columns: &LazyBatchColumnVec,
@@ -43,7 +43,7 @@ pub unsafe fn eval_exprs_decoded_no_lifetime<'a>(
 ) -> Result<()> {
     for expr in exprs {
         output.push(erase_lifetime(expr).eval_decoded(
-            erase_lifetime_mut(context),
+            erase_lifetime_mut(ctx),
             erase_lifetime(schema),
             erase_lifetime(input_physical_columns),
             erase_lifetime(input_logical_rows),

@@ -10,7 +10,8 @@ use crate::coprocessor::codec::data_type::ScalarValue;
 pub enum RpnExpressionNode {
     /// Represents a function call.
     FnCall {
-        func: RpnFnMeta,
+        func_meta: RpnFnMeta,
+        args_len: usize,
         field_type: FieldType,
     },
 
@@ -26,39 +27,30 @@ pub enum RpnExpressionNode {
 
 impl RpnExpressionNode {
     /// Gets the field type.
-    #[inline]
-    pub fn field_type(&self) -> Option<&FieldType> {
+    #[cfg(test)]
+    pub fn field_type(&self) -> &FieldType {
         match self {
-            RpnExpressionNode::FnCall { ref field_type, .. } => Some(field_type),
-            RpnExpressionNode::Constant { ref field_type, .. } => Some(field_type),
-            RpnExpressionNode::ColumnRef { .. } => None,
+            RpnExpressionNode::FnCall { field_type, .. } => field_type,
+            RpnExpressionNode::Constant { field_type, .. } => field_type,
+            RpnExpressionNode::ColumnRef { .. } => panic!(),
         }
     }
 
     /// Borrows the function instance for `FnCall` variant.
-    #[inline]
-    pub fn fn_call_func(&self) -> Option<RpnFnMeta> {
+    #[cfg(test)]
+    pub fn fn_call_func(&self) -> RpnFnMeta {
         match self {
-            RpnExpressionNode::FnCall { func, .. } => Some(*func),
-            _ => None,
+            RpnExpressionNode::FnCall { func_meta, .. } => *func_meta,
+            _ => panic!(),
         }
     }
 
     /// Borrows the constant value for `Constant` variant.
-    #[inline]
-    pub fn constant_value(&self) -> Option<&ScalarValue> {
+    #[cfg(test)]
+    pub fn constant_value(&self) -> &ScalarValue {
         match self {
-            RpnExpressionNode::Constant { ref value, .. } => Some(value),
-            _ => None,
-        }
-    }
-
-    /// Gets the column offset for `ColumnRef` variant.
-    #[inline]
-    pub fn column_ref_offset(&self) -> Option<usize> {
-        match self {
-            RpnExpressionNode::ColumnRef { ref offset, .. } => Some(*offset),
-            _ => None,
+            RpnExpressionNode::Constant { value, .. } => value,
+            _ => panic!(),
         }
     }
 }
@@ -111,6 +103,11 @@ impl RpnExpression {
             RpnExpressionNode::Constant { field_type, .. } => field_type,
             RpnExpressionNode::ColumnRef { offset } => &schema[*offset],
         }
+    }
+
+    /// Unwraps into the underlying expression node vector.
+    pub fn into_inner(self) -> Vec<RpnExpressionNode> {
+        self.0
     }
 }
 
