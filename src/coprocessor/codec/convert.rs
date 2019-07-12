@@ -157,7 +157,7 @@ pub fn convert_float_to_int(ctx: &mut EvalContext, fval: f64, tp: FieldTypeTp) -
     Ok(val as i64)
 }
 
-#[inline(always)]
+#[inline]
 fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&'a str> {
     let valid = match str::from_utf8(bytes) {
         Ok(s) => s,
@@ -316,21 +316,20 @@ pub fn convert_bytes_to_uint(ctx: &mut EvalContext, bytes: &[u8], tp: FieldTypeT
     }
 }
 
-macro_rules! decimal_as_u64 {
-    ($expr:expr, $ctx:ident, $tp:ident) => {{
-        let val = match $expr.as_u64() {
-            Res::Ok(val) => val,
-            Res::Overflow(val) => {
-                $ctx.handle_overflow(Error::overflow("DECIMAL", &$expr.to_string()))?;
-                val
-            }
-            Res::Truncated(val) => {
-                $ctx.handle_truncate(true)?;
-                val
-            }
-        };
-        convert_uint_to_uint($ctx, val, $tp)
-    }};
+#[inline]
+fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Result<u64> {
+    let val = match dec.as_u64() {
+        Res::Ok(val) => val,
+        Res::Overflow(val) => {
+            ctx.handle_overflow(Error::overflow("DECIMAL", &dec.to_string()))?;
+            val
+        }
+        Res::Truncated(val) => {
+            ctx.handle_truncate(true)?;
+            val
+        }
+    };
+    convert_uint_to_uint(ctx, val, tp)
 }
 
 /// Converts a `DateTime` to an u64 value
@@ -343,7 +342,7 @@ pub fn convert_datetime_to_uint(
     // TODO: avoid this clone after refactor the `Time`
     let mut t = dt.clone();
     t.round_frac(DEFAULT_FSP)?;
-    decimal_as_u64!(t.to_decimal()?, ctx, tp)
+    decimal_as_u64(ctx, t.to_decimal()?, tp)
 }
 
 /// Converts a `Duration` to an u64 value
@@ -354,7 +353,7 @@ pub fn convert_duration_to_uint(
     tp: FieldTypeTp,
 ) -> Result<u64> {
     let dur = dur.round_frac(DEFAULT_FSP)?;
-    decimal_as_u64!(Decimal::try_from(dur)?, ctx, tp)
+    decimal_as_u64(ctx, Decimal::try_from(dur)?, tp)
 }
 
 /// Converts a `Decimal` to an u64 value
@@ -366,7 +365,7 @@ pub fn convert_decimal_to_uint(
 ) -> Result<u64> {
     // TODO: avoid this clone
     let dec = round_decimal_with_ctx(ctx, dec.clone())?;
-    decimal_as_u64!(dec, ctx, tp)
+    decimal_as_u64(ctx, dec, tp)
 }
 
 /// Converts a `Json` to an u64 value
