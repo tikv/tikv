@@ -769,3 +769,13 @@ fn test_debug_scan_mvcc() {
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
 }
+
+#[test]
+fn test_double_run_node() {
+    let count = 1;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+    let e = cluster.run_node(1).unwrap_err();
+    assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
+    cluster.shutdown();
+}
