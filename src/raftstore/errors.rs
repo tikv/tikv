@@ -144,7 +144,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl From<Error> for errorpb::Error {
     fn from(err: Error) -> errorpb::Error {
         let mut errorpb = errorpb::Error::new();
-        errorpb.set_message(error::Error::description(&err).to_owned());
+        errorpb.set_message(format!("{}", err));
 
         match err {
             Error::RegionNotFound(region_id) => {
