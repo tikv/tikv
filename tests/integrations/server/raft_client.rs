@@ -128,7 +128,10 @@ fn test_raft_client_reconnect() {
     drop(mock_server);
 
     assert!((0..100)
-        .map(|_| raft_client.send(1, &addr, RaftMessage::new()))
+        .map(|_| {
+            thread::sleep(time::Duration::from_millis(10));
+            raft_client.send(1, &addr, RaftMessage::new())
+        })
         .collect::<Result<(), _>>()
         .is_err());
 
