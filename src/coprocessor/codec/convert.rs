@@ -1237,7 +1237,7 @@ mod tests {
             (-1, 65535, FieldTypeTp::Short),
             (16777216, 16777215, FieldTypeTp::Int24),
             (i64::MAX, 4294967295, FieldTypeTp::Long),
-            (i64::MIN, u32::MAX as u64, FieldTypeTp::Long),
+            (i64::MIN, u64::from(u32::MAX), FieldTypeTp::Long),
         ];
         for (raw, dst, tp) in cases {
             test_overflow(raw, dst, convert_int_to_uint, tp);
