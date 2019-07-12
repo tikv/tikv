@@ -1,0 +1,8 @@
+[package]
+name = "fuzzer-afl"
+version = "0.0.1"
+publish = false
+
+[dependencies]
+fuzz-targets = {path = "../targets"}
+afl = "0.4"
