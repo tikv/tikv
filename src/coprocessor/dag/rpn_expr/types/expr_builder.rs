@@ -120,11 +120,13 @@ impl RpnExpressionBuilder {
     #[cfg(test)]
     pub fn push_fn_call(
         mut self,
-        func: RpnFnMeta,
+        func_meta: RpnFnMeta,
+        args_len: usize,
         return_field_type: impl Into<FieldType>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
-            func,
+            func_meta,
+            args_len,
             field_type: return_field_type.into(),
         };
         self.0.push(node);
@@ -230,9 +232,6 @@ fn append_rpn_nodes_recursively<F>(
 where
     F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
-    // TODO: We should check whether node types match the function signature. Otherwise there
-    // will be panics when the expression is evaluated.
-
     match tree_node.get_tp() {
         ExprType::ScalarFunc => {
             handle_node_fn_call(tree_node, rpn_nodes, time_zone, fn_mapper, max_columns)
@@ -276,21 +275,29 @@ where
     F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
     // Map pb func to `RpnFnMeta`.
-    let func = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
+    let func_meta = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
+
+    // Validate the input expression.
+    (func_meta.validator_ptr)(&tree_node).map_err(|e| {
+        Error::Other(box_err!(
+            "Invalid {} (sig = {:?}) signature: {}",
+            func_meta.name,
+            tree_node.get_sig(),
+            e
+        ))
+    })?;
+
     let args = tree_node.take_children().into_vec();
-    if func.args_len != args.len() {
-        return Err(box_err!(
-            "Unexpected arguments, expect {}, received {}",
-            func.args_len,
-            args.len()
-        ));
-    }
+    let args_len = args.len();
+
     // Visit children first, then push current node, so that it is a post-order traversal.
     for arg in args {
         append_rpn_nodes_recursively(arg, rpn_nodes, time_zone, fn_mapper, max_columns)?;
     }
+
     rpn_nodes.push(RpnExpressionNode::FnCall {
-        func,
+        func_meta,
+        args_len,
         field_type: tree_node.take_field_type(),
     });
     Ok(())
@@ -426,9 +433,9 @@ mod tests {
     use cop_codegen::rpn_fn;
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
+    use tipb_helper::ExprDefBuilder;
 
     use crate::coprocessor::Result;
-    use tikv_util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
     #[rpn_fn]
@@ -454,6 +461,30 @@ mod tests {
         unreachable!()
     }
 
+    /// This function is only used when testing with the validator.
+    #[rpn_fn]
+    fn fn_e(_v1: &Option<Int>, _v2: &Option<Real>) -> Result<Option<Bytes>> {
+        unreachable!()
+    }
+
+    /// This function is only used when testing with the validator.
+    #[rpn_fn(varg)]
+    fn fn_f(_v: &[&Option<Int>]) -> Result<Option<Real>> {
+        unreachable!()
+    }
+
+    /// This function is only used when testing with the validator.
+    #[rpn_fn(varg, min_args = 2)]
+    fn fn_g(_v: &[&Option<Real>]) -> Result<Option<Int>> {
+        unreachable!()
+    }
+
+    /// This function is only used when testing with the validator.
+    #[rpn_fn(raw_varg, min_args = 1)]
+    fn fn_h(_v: &[ScalarValueRef<'_>]) -> Result<Option<Real>> {
+        unreachable!()
+    }
+
     /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
     /// cannot be modified by us in tests to support fn_a ~ fn_d. So let's just hard code some
     /// substitute.
@@ -462,13 +493,192 @@ mod tests {
         // fn_b: CastIntAsReal
         // fn_c: CastIntAsString
         // fn_d: CastIntAsDecimal
+        // fn_e: CastIntAsTime
+        // fn_f: CastIntAsDuration
+        // fn_g: CastIntAsJson
+        // fn_h: CastRealAsInt
         Ok(match value {
             ScalarFuncSig::CastIntAsInt => fn_a_fn_meta(),
             ScalarFuncSig::CastIntAsReal => fn_b_fn_meta(),
             ScalarFuncSig::CastIntAsString => fn_c_fn_meta(),
             ScalarFuncSig::CastIntAsDecimal => fn_d_fn_meta(),
+            ScalarFuncSig::CastIntAsTime => fn_e_fn_meta(),
+            ScalarFuncSig::CastIntAsDuration => fn_f_fn_meta(),
+            ScalarFuncSig::CastIntAsJson => fn_g_fn_meta(),
+            ScalarFuncSig::CastRealAsInt => fn_h_fn_meta(),
             _ => unreachable!(),
         })
+    }
+
+    #[test]
+    fn test_validator_fixed_args_fn() {
+        // Correct signature
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::VarChar)
+            .push_child(ExprDefBuilder::constant_int(1))
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_ok());
+
+        // Incorrect return type
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_int(1))
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        // Incorrect number of arguments
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::VarChar)
+            .push_child(ExprDefBuilder::constant_int(1))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::VarChar)
+            .push_child(ExprDefBuilder::constant_int(1))
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .push_child(ExprDefBuilder::constant_real(1.0))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        // Incorrect argument type
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsTime, FieldTypeTp::VarChar)
+            .push_child(ExprDefBuilder::constant_int(1))
+            .push_child(ExprDefBuilder::constant_int(5))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+    }
+
+    #[test]
+    fn test_validator_vargs_fn() {
+        // Correct signature
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_ok());
+
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .push_child(ExprDefBuilder::constant_int(5))
+                .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_ok());
+
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .push_child(ExprDefBuilder::constant_int(5))
+                .push_child(ExprDefBuilder::constant_int(4))
+                .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_ok());
+
+        // Incorrect return type
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        // Incorrect argument type
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::constant_real(1.0))
+                .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .push_child(ExprDefBuilder::constant_real(1.0))
+                .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::constant_real(3.0))
+                .push_child(ExprDefBuilder::constant_real(1.0))
+                .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDuration, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::constant_real(3.0))
+                .push_child(ExprDefBuilder::constant_real(1.0))
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+    }
+
+    #[test]
+    fn test_validator_vargs_fn_with_min_args() {
+        // Correct signature
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsJson, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .push_child(ExprDefBuilder::constant_real(5.0))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_ok());
+
+        // Insufficient arguments
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsJson, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        // Incorrect return type
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsJson, FieldTypeTp::Double)
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .push_child(ExprDefBuilder::constant_real(5.0))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        // Incorrect types
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsJson, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .push_child(ExprDefBuilder::constant_real(5.0))
+            .push_child(ExprDefBuilder::constant_int(42))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+    }
+
+    #[test]
+    fn test_validator_raw_vargs_fn_with_min_args() {
+        // Correct signature
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastRealAsInt, FieldTypeTp::Double)
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .push_child(ExprDefBuilder::constant_int(5))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_ok());
+
+        // Insufficient arguments
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastRealAsInt, FieldTypeTp::Double).build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
+
+        // Incorrect return type
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastRealAsInt, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_real(3.0))
+            .push_child(ExprDefBuilder::constant_int(5))
+            .build();
+        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0);
+        assert!(exp.is_err());
     }
 
     #[test]
@@ -489,205 +699,77 @@ mod tests {
         // RPN:
         // a b c d fn_c fn_a e f fn_b fn_a fn_d
 
-        let node_fn_a_1 = {
-            // node b
-            let mut node_b = Expr::new();
-            node_b.set_tp(ExprType::Int64);
-            node_b
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_b.mut_val().encode_i64(7).unwrap();
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsDecimal, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::constant_null(FieldTypeTp::Double))
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::Double)
+                        .push_child(
+                            ExprDefBuilder::scalar_func(
+                                ScalarFuncSig::CastIntAsString,
+                                FieldTypeTp::LongLong,
+                            )
+                            .push_child(ExprDefBuilder::constant_int(7))
+                            .push_child(ExprDefBuilder::constant_int(3))
+                            .push_child(ExprDefBuilder::constant_int(11)),
+                        ),
+                )
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::Double)
+                        .push_child(
+                            ExprDefBuilder::scalar_func(
+                                ScalarFuncSig::CastIntAsReal,
+                                FieldTypeTp::LongLong,
+                            )
+                            .push_child(ExprDefBuilder::constant_real(-1.5))
+                            .push_child(ExprDefBuilder::constant_real(100.12)),
+                        ),
+                )
+                .build();
 
-            // node c
-            let mut node_c = Expr::new();
-            node_c.set_tp(ExprType::Int64);
-            node_c
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_c.mut_val().encode_i64(3).unwrap();
-
-            // node d
-            let mut node_d = Expr::new();
-            node_d.set_tp(ExprType::Int64);
-            node_d
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_d.mut_val().encode_i64(11).unwrap();
-
-            // fn_c
-            let mut node_fn_c = Expr::new();
-            node_fn_c.set_tp(ExprType::ScalarFunc);
-            node_fn_c.set_sig(ScalarFuncSig::CastIntAsString);
-            node_fn_c
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_fn_c.mut_children().push(node_b);
-            node_fn_c.mut_children().push(node_c);
-            node_fn_c.mut_children().push(node_d);
-
-            // fn_a
-            let mut node_fn_a = Expr::new();
-            node_fn_a.set_tp(ExprType::ScalarFunc);
-            node_fn_a.set_sig(ScalarFuncSig::CastIntAsInt);
-            node_fn_a
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_fn_a.mut_children().push(node_fn_c);
-            node_fn_a
-        };
-
-        let node_fn_a_2 = {
-            // node e
-            let mut node_e = Expr::new();
-            node_e.set_tp(ExprType::Float64);
-            node_e
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_e.mut_val().encode_f64(-1.5).unwrap();
-
-            // node f
-            let mut node_f = Expr::new();
-            node_f.set_tp(ExprType::Float64);
-            node_f
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_f.mut_val().encode_f64(100.12).unwrap();
-
-            // fn_b
-            let mut node_fn_b = Expr::new();
-            node_fn_b.set_tp(ExprType::ScalarFunc);
-            node_fn_b.set_sig(ScalarFuncSig::CastIntAsReal);
-            node_fn_b
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong);
-            node_fn_b.mut_children().push(node_e);
-            node_fn_b.mut_children().push(node_f);
-
-            // fn_a
-            let mut node_fn_a = Expr::new();
-            node_fn_a.set_tp(ExprType::ScalarFunc);
-            node_fn_a.set_sig(ScalarFuncSig::CastIntAsInt);
-            node_fn_a
-                .mut_field_type()
-                .as_mut_accessor()
-                .set_tp(FieldTypeTp::Double);
-            node_fn_a.mut_children().push(node_fn_b);
-            node_fn_a
-        };
-
-        // node a (NULL)
-        let mut node_a = Expr::new();
-        node_a.set_tp(ExprType::Null);
-        node_a
-            .mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::Double);
-
-        // fn_d
-        let mut node_fn_d = Expr::new();
-        node_fn_d.set_tp(ExprType::ScalarFunc);
-        node_fn_d.set_sig(ScalarFuncSig::CastIntAsDecimal);
-        node_fn_d
-            .mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::Double);
-        node_fn_d.mut_children().push(node_a);
-        node_fn_d.mut_children().push(node_fn_a_1);
-        node_fn_d.mut_children().push(node_fn_a_2);
-
-        let mut vec = vec![];
-        append_rpn_nodes_recursively(node_fn_d, &mut vec, &Tz::utc(), fn_mapper, 0).unwrap();
-
-        let mut it = vec.into_iter();
+        let mut it = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 0)
+            .unwrap()
+            .into_inner()
+            .into_iter();
 
         // node a
-        assert!(it
-            .next()
-            .unwrap()
-            .constant_value()
-            .unwrap()
-            .as_real()
-            .is_none());
+        assert!(it.next().unwrap().constant_value().as_real().is_none());
 
         // node b
-        assert_eq!(
-            it.next()
-                .unwrap()
-                .constant_value()
-                .unwrap()
-                .as_int()
-                .unwrap(),
-            7
-        );
+        assert_eq!(7, it.next().unwrap().constant_value().as_int().unwrap());
 
         // node c
-        assert_eq!(
-            it.next()
-                .unwrap()
-                .constant_value()
-                .unwrap()
-                .as_int()
-                .unwrap(),
-            3
-        );
+        assert_eq!(3, it.next().unwrap().constant_value().as_int().unwrap());
 
         // node d
-        assert_eq!(
-            it.next()
-                .unwrap()
-                .constant_value()
-                .unwrap()
-                .as_int()
-                .unwrap(),
-            11
-        );
+        assert_eq!(11, it.next().unwrap().constant_value().as_int().unwrap());
 
         // fn_c
-        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name, "fn_c");
+        assert_eq!(it.next().unwrap().fn_call_func().name, "fn_c");
 
         // fn_a
-        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name, "fn_a");
+        assert_eq!(it.next().unwrap().fn_call_func().name, "fn_a");
 
         // node e
         assert_eq!(
-            it.next()
-                .unwrap()
-                .constant_value()
-                .unwrap()
-                .as_real()
-                .unwrap()
-                .into_inner(),
-            -1.5
+            &Real::new(-1.5).ok(),
+            it.next().unwrap().constant_value().as_real()
         );
 
         // node f
         assert_eq!(
-            it.next()
-                .unwrap()
-                .constant_value()
-                .unwrap()
-                .as_real()
-                .unwrap()
-                .into_inner(),
-            100.12
+            &Real::new(100.12).ok(),
+            it.next().unwrap().constant_value().as_real()
         );
 
         // fn_b
-        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name, "fn_b");
+        assert_eq!(it.next().unwrap().fn_call_func().name, "fn_b");
 
         // fn_a
-        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name, "fn_a");
+        assert_eq!(it.next().unwrap().fn_call_func().name, "fn_a");
 
         // fn_d
-        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name, "fn_d");
+        assert_eq!(it.next().unwrap().fn_call_func().name, "fn_d");
 
         // Finish
         assert!(it.next().is_none())
@@ -695,75 +777,64 @@ mod tests {
 
     #[test]
     fn test_max_columns_check() {
-        let mut vec = vec![];
-
         // Col offset = 0. The minimum success max_columns is 1.
-        let mut node = Expr::new();
-        node.set_tp(ExprType::ColumnRef);
-        node.mut_val().encode_i64(0).unwrap();
-        assert!(
-            append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, 0).is_err()
-        );
+        let node = ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build();
+        assert!(RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node.clone(),
+            fn_mapper,
+            0
+        )
+        .is_err());
         for i in 1..10 {
-            assert!(
-                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
-                    .is_ok()
-            );
+            assert!(RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+                node.clone(),
+                fn_mapper,
+                i
+            )
+            .is_ok());
         }
 
         // Col offset = 3. The minimum success max_columns is 4.
-        let mut node = Expr::new();
-        node.set_tp(ExprType::ColumnRef);
-        node.mut_val().encode_i64(3).unwrap();
+        let node = ExprDefBuilder::column_ref(3, FieldTypeTp::LongLong).build();
         for i in 0..=3 {
-            assert!(
-                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
-                    .is_err()
-            );
+            assert!(RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+                node.clone(),
+                fn_mapper,
+                i
+            )
+            .is_err());
         }
         for i in 4..10 {
-            assert!(
-                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
-                    .is_ok()
-            );
+            assert!(RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+                node.clone(),
+                fn_mapper,
+                i
+            )
+            .is_ok());
         }
 
         // Col offset = 1, 2, 5. The minimum success max_columns is 6.
-        let mut node = Expr::new();
-        node.set_tp(ExprType::ScalarFunc);
-        node.set_sig(ScalarFuncSig::CastIntAsString); // fn_c
-        node.mut_field_type()
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::LongLong);
-        node.mut_children().push({
-            let mut n = Expr::new();
-            n.set_tp(ExprType::ColumnRef);
-            n.mut_val().encode_i64(1).unwrap();
-            n
-        });
-        node.mut_children().push({
-            let mut n = Expr::new();
-            n.set_tp(ExprType::ColumnRef);
-            n.mut_val().encode_i64(2).unwrap();
-            n
-        });
-        node.mut_children().push({
-            let mut n = Expr::new();
-            n.set_tp(ExprType::ColumnRef);
-            n.mut_val().encode_i64(5).unwrap();
-            n
-        });
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsString, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong))
+                .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong))
+                .push_child(ExprDefBuilder::column_ref(5, FieldTypeTp::LongLong))
+                .build();
         for i in 0..=5 {
-            assert!(
-                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
-                    .is_err()
-            );
+            assert!(RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+                node.clone(),
+                fn_mapper,
+                i
+            )
+            .is_err());
         }
         for i in 6..10 {
-            assert!(
-                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
-                    .is_ok()
-            );
+            assert!(RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+                node.clone(),
+                fn_mapper,
+                i
+            )
+            .is_ok());
         }
     }
 }
