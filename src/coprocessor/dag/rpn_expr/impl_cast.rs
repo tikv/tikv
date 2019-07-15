@@ -181,7 +181,6 @@ fn cast_json_as_real(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option
 #[cfg(test)]
 mod tests {
     #[test]
-    #[allow(clippy::iter_skip_next)]
     fn test_in_union() {
         use super::*;
 
