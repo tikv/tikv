@@ -37,4 +37,4 @@ mod scanner;
 pub use self::batch_handler::BatchDAGHandler;
 pub use self::builder::DAGBuilder;
 pub use self::handler::DAGRequestHandler;
-pub use self::scanner::{ScanOn, Scanner};
+pub use self::scanner::Scanner;

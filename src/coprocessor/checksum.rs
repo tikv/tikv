@@ -5,12 +5,12 @@ use std::vec::IntoIter;
 use crc::crc64::{self, Digest, Hasher64};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
+use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
 use crate::storage::{Snapshot, SnapshotStore};
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
-use crate::coprocessor::dag::{ScanOn, Scanner};
+use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
@@ -70,11 +70,7 @@ impl<S: Snapshot> ChecksumContext<S> {
     }
 
     fn new_scanner(&self, range: KeyRange) -> Result<Scanner<SnapshotStore<S>>> {
-        let scan_on = match self.req.get_scan_on() {
-            ChecksumScanOn::Table => ScanOn::Table,
-            ChecksumScanOn::Index => ScanOn::Index,
-        };
-        Scanner::new(&self.store, scan_on, false, false, range).map_err(Error::from)
+        Scanner::new(&self.store, false, false, range).map_err(Error::from)
     }
 }
 
