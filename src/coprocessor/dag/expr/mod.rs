@@ -66,6 +66,19 @@ pub struct ScalarFunc {
     cus_rng: CusRng,
 }
 
+impl ScalarFunc {
+    /// Indicates whether the current expression is evaluated in union statement
+    pub fn in_union(&self) -> bool {
+        if self.implicit_args.is_empty() {
+            return false;
+        }
+        match self.implicit_args[0] {
+            Datum::I64(1) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CusRng {
     rng: RefCell<Option<XorShiftRng>>,
@@ -588,5 +601,35 @@ mod tests {
             let res = e.eval(&mut ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }
+    }
+
+    #[test]
+    fn test_in_union() {
+        use super::*;
+
+        let mut scalar_func = ScalarFunc {
+            sig: ScalarFuncSig::CastIntAsInt,
+            children: vec![],
+            implicit_args: vec![],
+            field_type: FieldType::new(),
+            cus_rng: CusRng {
+                rng: RefCell::new(None),
+            },
+        };
+
+        // empty implicit arguments
+        assert!(!scalar_func.in_union());
+
+        // single implicit arguments
+        scalar_func.implicit_args = vec![Datum::I64(0)];
+        assert!(!scalar_func.in_union());
+        scalar_func.implicit_args = vec![Datum::I64(1)];
+        assert!(scalar_func.in_union());
+
+        // multiple implicit arguments
+        scalar_func.implicit_args = vec![Datum::I64(0), Datum::I64(1)];
+        assert!(!scalar_func.in_union());
+        scalar_func.implicit_args = vec![Datum::I64(1), Datum::I64(0)];
+        assert!(scalar_func.in_union());
     }
 }
