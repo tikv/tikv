@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
-use tikv::coprocessor::dag::{ScanOn, Scanner};
+use tikv::coprocessor::dag::Scanner;
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
 
@@ -54,7 +54,7 @@ fn test_checksum() {
             (range, ChecksumScanOn::Index)
         };
         let request = new_checksum_request(range.clone(), scan_on);
-        let expected = reversed_checksum_crc64_xor(&store, range, scan_on);
+        let expected = reversed_checksum_crc64_xor(&store, range);
 
         let response = handle_request(&endpoint, request);
         let mut resp = ChecksumResponse::new();
@@ -64,11 +64,7 @@ fn test_checksum() {
     }
 }
 
-fn reversed_checksum_crc64_xor<E: Engine>(
-    store: &Store<E>,
-    range: KeyRange,
-    scan_on: ChecksumScanOn,
-) -> u64 {
+fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> u64 {
     let ctx = Context::new();
     let snap = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),
@@ -76,12 +72,8 @@ fn reversed_checksum_crc64_xor<E: Engine>(
         IsolationLevel::SI,
         true,
     );
-    let scan_on = match scan_on {
-        ChecksumScanOn::Table => ScanOn::Table,
-        ChecksumScanOn::Index => ScanOn::Index,
-    };
     let mut scanner = Scanner::new(
-        &snap, scan_on, true, // Scan in reversed order.
+        &snap, true, // Scan in reversed order.
         false, range,
     )
     .unwrap();
