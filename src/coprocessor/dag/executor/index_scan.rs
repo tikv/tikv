@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
@@ -69,8 +70,8 @@ impl InnerExecutor for IndexInnerExecutor {
     }
 
     #[inline]
-    fn scan_on(&self) -> super::super::scanner::ScanOn {
-        super::super::scanner::ScanOn::Index
+    fn collect_executor_metrics(&self, m: &mut ExecutorMetrics) {
+        m.executor_count.index_scan += 1;
     }
 
     // Since the unique index wouldn't always come with
