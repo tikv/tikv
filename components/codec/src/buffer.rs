@@ -22,10 +22,7 @@ impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
     fn bytes(&self) -> &[u8] {
         let pos = self.position() as usize;
         let slice = self.get_ref().as_ref();
-        if pos >= slice.len() {
-            return &[];
-        }
-        &slice[pos..]
+        slice.get(pos..).unwrap_or(&[])
     }
 
     fn advance(&mut self, count: usize) {
@@ -103,10 +100,7 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
         // `size` is ignored since this buffer is not capable to grow.
         let pos = self.position() as usize;
         let slice = self.get_mut().as_mut();
-        if pos >= slice.len() {
-            return &mut [];
-        }
-        &mut slice[pos..]
+        slice.get_mut(pos..).unwrap_or(&mut [])
     }
 
     unsafe fn advance_mut(&mut self, count: usize) {

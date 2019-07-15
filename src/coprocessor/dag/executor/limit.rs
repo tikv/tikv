@@ -3,20 +3,21 @@
 use tipb::executor::Limit;
 
 use super::ExecutorMetrics;
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::executor::{Executor, Row};
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::Result;
 
 /// Retrieves rows from the source executor and only produces part of the rows.
-pub struct LimitExecutor<'a> {
+pub struct LimitExecutor {
     limit: u64,
     cursor: u64,
-    src: Box<dyn Executor + Send + 'a>,
+    src: Box<dyn Executor + Send>,
     first_collect: bool,
 }
 
-impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<dyn Executor + Send + 'a>) -> LimitExecutor<'_> {
+impl LimitExecutor {
+    pub fn new(limit: Limit, src: Box<dyn Executor + Send>) -> Self {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
@@ -26,7 +27,7 @@ impl<'a> LimitExecutor<'a> {
     }
 }
 
-impl<'a> Executor for LimitExecutor<'a> {
+impl Executor for LimitExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         if self.cursor >= self.limit {
             return Ok(None);
@@ -51,12 +52,16 @@ impl<'a> Executor for LimitExecutor<'a> {
         }
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.src.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.src.take_eval_warnings()
     }
 }
 
@@ -99,7 +104,7 @@ mod tests {
         let mut limit_ect = LimitExecutor::new(limit_meta, ts_ect);
         let mut limit_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = limit_ect.next().unwrap() {
-            limit_rows.push(row.take_origin());
+            limit_rows.push(row.take_origin().unwrap());
         }
         assert_eq!(limit_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 2, 3, 5, 6];

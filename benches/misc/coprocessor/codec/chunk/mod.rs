@@ -66,7 +66,7 @@ fn bench_chunk_build_tidb(b: &mut Bencher) {
 }
 
 #[bench]
-fn bench_chunk_build_offical(b: &mut Bencher) {
+fn bench_chunk_build_official(b: &mut Bencher) {
     let rows = 1024;
     let fields = vec![
         field_type(FieldTypeTp::LongLong),
@@ -120,7 +120,7 @@ fn bench_chunk_iter_tidb(b: &mut Bencher) {
 }
 
 #[bench]
-fn bench_chunk_iter_offical(b: &mut Bencher) {
+fn bench_chunk_iter_official(b: &mut Bencher) {
     let rows = 1024;
     let fields = vec![
         field_type(FieldTypeTp::LongLong),

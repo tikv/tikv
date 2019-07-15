@@ -1,17 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::grpc::{
+use futures::{future, Async, Future, Poll, Stream};
+use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
+use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
-use futures::{future, Async, Future, Poll, Stream};
-use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
@@ -25,7 +24,7 @@ use super::metrics::*;
 use super::transport::RaftStoreRouter;
 use super::{Config, Error, Result};
 
-pub type Callback = Box<dyn FnBox(Result<()>) + Send>;
+pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
 const DEFAULT_POOL_SIZE: usize = 4;
 

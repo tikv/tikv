@@ -1,0 +1,14 @@
+# Configuration for release builds, that is bulids that are
+# _literally_ for packaging and releasing; and cases where we _must_
+# benchmark against a fully-optimized build.
+
+[profile.release]
+opt-level = 3
+debug = true
+rpath = false
+lto = true
+debug-assertions = false
+codegen-units = 1
+panic = "abort"
+incremental = false
+overflow-checks = false

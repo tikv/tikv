@@ -21,11 +21,12 @@ const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
 impl WriteType {
-    pub fn from_lock_type(tp: LockType) -> WriteType {
+    pub fn from_lock_type(tp: LockType) -> Option<WriteType> {
         match tp {
-            LockType::Put => WriteType::Put,
-            LockType::Delete => WriteType::Delete,
-            LockType::Lock => WriteType::Lock,
+            LockType::Put => Some(WriteType::Put),
+            LockType::Delete => Some(WriteType::Delete),
+            LockType::Lock => Some(WriteType::Lock),
+            LockType::Pessimistic => None,
         }
     }
 
@@ -49,11 +50,28 @@ impl WriteType {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Clone)]
 pub struct Write {
     pub write_type: WriteType,
     pub start_ts: u64,
     pub short_value: Option<Value>,
+}
+
+impl std::fmt::Debug for Write {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Write")
+            .field("write_type", &self.write_type)
+            .field("start_ts", &self.start_ts)
+            .field(
+                "short_value",
+                &self
+                    .short_value
+                    .as_ref()
+                    .map(|v| hex::encode_upper(v))
+                    .unwrap_or_else(|| "None".to_owned()),
+            )
+            .finish()
+    }
 }
 
 impl Write {
@@ -125,7 +143,7 @@ mod tests {
         ];
         for (i, (lock_type, write_type, flag)) in tests.drain(..).enumerate() {
             if lock_type.is_some() {
-                let wt = WriteType::from_lock_type(lock_type.unwrap());
+                let wt = WriteType::from_lock_type(lock_type.unwrap()).unwrap();
                 assert_eq!(
                     wt, write_type,
                     "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",

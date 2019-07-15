@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::iter::*;
-use std::sync::Arc;
+use std::sync::*;
 use std::thread;
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ use engine::Peekable;
 use engine::{CF_RAFT, CF_WRITE};
 use test_raftstore::*;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -59,11 +59,11 @@ fn test_node_base_merge() {
     assert_eq!(region.get_id(), right.get_id());
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
-    let orgin_epoch = left.get_region_epoch();
+    let origin_epoch = left.get_region_epoch();
     let new_epoch = region.get_region_epoch();
     // PrepareMerge + CommitMerge, so it should be 2.
-    assert_eq!(new_epoch.get_version(), orgin_epoch.get_version() + 2);
-    assert_eq!(new_epoch.get_conf_ver(), orgin_epoch.get_conf_ver());
+    assert_eq!(new_epoch.get_version(), origin_epoch.get_version() + 2);
+    assert_eq!(new_epoch.get_conf_ver(), origin_epoch.get_conf_ver());
     let get = new_request(
         region.get_id(),
         new_epoch.to_owned(),
@@ -100,6 +100,54 @@ fn test_node_base_merge() {
     }
 
     cluster.must_put(b"k4", b"v4");
+}
+
+#[test]
+fn test_node_merge_with_slow_learner() {
+    let mut cluster = new_node_cluster(0, 2);
+    configure_for_merge(&mut cluster);
+
+    // Create a cluster with peer 1 as leader and peer 2 as learner.
+    let r1 = cluster.run_conf_change();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // Split the region.
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    assert_eq!(region.get_id(), right.get_id());
+    assert_eq!(left.get_end_key(), right.get_start_key());
+    assert_eq!(right.get_start_key(), b"k2");
+
+    // Make sure the leader has received the learner's last index.
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    (0..100).for_each(|i| cluster.must_put(b"k1", format!("v{}", i).as_bytes()));
+
+    // Merge 2 regions under isolation should fail.
+    let merge = new_prepare_merge(right.clone());
+    let req = new_admin_request(left.get_id(), left.get_region_epoch(), merge);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("log gap"));
+
+    cluster.clear_send_filters();
+    cluster.must_put(b"k11", b"v100");
+    must_get_equal(&cluster.get_engine(1), b"k11", b"v100");
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v100");
+    pd_client.must_merge(left.get_id(), right.get_id());
 }
 
 /// Test whether merge will be aborted if prerequisites is not met.
@@ -684,4 +732,54 @@ fn test_merge_with_slow_promote() {
     pd_client.must_merge(right.get_id(), left.get_id());
     cluster.sim.wl().clear_send_filters(3);
     cluster.must_transfer_leader(left.get_id(), new_peer(3, left.get_id() + 3));
+}
+
+#[test]
+fn test_request_snapshot_after_propose_merge() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = pd_client.get_region(b"k3").unwrap();
+    let target_region = pd_client.get_region(b"k1").unwrap();
+
+    // Make sure peer 1 is the leader.
+    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+
+    // Drop append messages, so prepare merge can not be committed.
+    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(
+        MessageType::MsgAppend,
+    )));
+    let prepare_merge = new_prepare_merge(target_region);
+    let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), prepare_merge);
+    req.mut_header().set_peer(new_peer(1, 1));
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, req, Callback::None)
+        .unwrap();
+    sleep_ms(200);
+
+    // Install snapshot filter before requesting snapshot.
+    let (tx, rx) = mpsc::channel();
+    let notifier = Mutex::new(Some(tx));
+    cluster.sim.wl().add_recv_filter(
+        2,
+        Box::new(RecvSnapshotFilter {
+            notifier,
+            region_id: region.get_id(),
+        }),
+    );
+    cluster.must_request_snapshot(2, region.get_id());
+    // Leader should reject request snapshot if there is any proposed merge.
+    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
 }

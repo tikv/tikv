@@ -23,8 +23,8 @@ pub enum CheckLockResult {
 /// committed version will be returned for primary key instead of leading to lock conflicts.
 #[inline]
 pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
-    if lock.ts > ts || lock.lock_type == LockType::Lock {
-        // Ignore lock when lock.ts > ts or lock's type is Lock
+    if lock.ts > ts || lock.lock_type == LockType::Lock || lock.lock_type == LockType::Pessimistic {
+        // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
         return Ok(CheckLockResult::NotLocked);
     }
 
@@ -43,6 +43,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
         primary: lock.primary.clone(),
         ts: lock.ts,
         ttl: lock.ttl,
+        txn_size: lock.txn_size,
     }))
 }
 
@@ -71,7 +72,7 @@ where
     assert!(write.short_value.is_none());
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek(&seek_key, &mut statistics.data)?;
-    if !default_cursor.valid()
+    if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
@@ -98,7 +99,7 @@ where
     assert!(write.short_value.is_none());
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
-    if !default_cursor.valid()
+    if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(

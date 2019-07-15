@@ -1,8 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use crate::storage::mvcc::properties::get_range_entries_and_versions;
-use crate::storage::mvcc::properties::RangeProperties;
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine::util;
@@ -13,6 +11,7 @@ use std::sync::Mutex;
 
 use super::super::error::Result;
 use super::super::metrics::*;
+use super::super::properties::{get_range_entries_and_versions, RangeProperties};
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
@@ -214,11 +213,11 @@ pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) ->
 #[cfg(test)]
 mod tests {
     use super::super::size::tests::must_split_at;
-    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
-    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::mvcc::properties::{
+    use crate::raftstore::coprocessor::properties::{
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
     };
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
     use engine::rocks;
@@ -231,7 +230,7 @@ mod tests {
     use std::cmp;
     use std::sync::{mpsc, Arc};
     use std::u64;
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::worker::Runnable;
 
     use super::*;
@@ -266,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -352,7 +351,10 @@ mod tests {
 
     #[test]
     fn test_region_approximate_keys() {
-        let path = TempDir::new("_test_region_approximate_keys").expect("");
+        let path = Builder::new()
+            .prefix("_test_region_approximate_keys")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();

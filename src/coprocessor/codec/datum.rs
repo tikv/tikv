@@ -3,6 +3,7 @@
 use byteorder::WriteBytesExt;
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
 use std::str::FromStr;
@@ -122,7 +123,7 @@ impl Datum {
             Datum::U64(u) => self.cmp_u64(ctx, u),
             Datum::F64(f) => self.cmp_f64(ctx, f),
             Datum::Bytes(ref bs) => self.cmp_bytes(ctx, bs),
-            Datum::Dur(ref d) => self.cmp_dur(ctx, d),
+            Datum::Dur(d) => self.cmp_dur(ctx, d),
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(ref t) => self.cmp_time(ctx, t),
             Datum::Json(ref j) => self.cmp_json(j),
@@ -173,7 +174,7 @@ impl Datum {
                 cmp_f64(ff, f)
             }
             Datum::Dur(ref d) => {
-                let ff = d.to_secs();
+                let ff = d.to_secs_f64();
                 cmp_f64(ff, f)
             }
             Datum::Time(ref t) => {
@@ -225,14 +226,14 @@ impl Datum {
         }
     }
 
-    fn cmp_dur(&self, ctx: &mut EvalContext, d: &Duration) -> Result<Ordering> {
+    fn cmp_dur(&self, ctx: &mut EvalContext, d: Duration) -> Result<Ordering> {
         match *self {
-            Datum::Dur(ref d2) => Ok(d2.cmp(d)),
+            Datum::Dur(ref d2) => Ok(d2.cmp(&d)),
             Datum::Bytes(ref bs) => {
                 let d2 = Duration::parse(bs, MAX_FSP)?;
-                Ok(d2.cmp(d))
+                Ok(d2.cmp(&d))
             }
-            _ => self.cmp_f64(ctx, d.to_secs()),
+            _ => self.cmp_f64(ctx, d.to_secs_f64()),
         }
     }
 
@@ -280,7 +281,10 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => Some(!bs.is_empty() && convert::bytes_to_int(ctx, bs)? != 0),
+            Datum::Bytes(ref bs) => Some(
+                !bs.is_empty()
+                    && convert::convert_bytes_to_int(ctx, bs, FieldTypeTp::LongLong)? != 0,
+            ),
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
@@ -330,7 +334,7 @@ impl Datum {
                 d.as_f64()
             }
             Datum::Dur(d) => {
-                let d = d.to_decimal()?;
+                let d = Decimal::try_from(d)?;
                 d.as_f64()
             }
             Datum::Dec(d) => d.as_f64(),
@@ -342,32 +346,26 @@ impl Datum {
     /// `into_i64` converts self into i64.
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
-        let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
         let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => convert::convert_uint_to_int(u, upper_bound, tp),
-
-            Datum::F64(f) => convert::convert_float_to_int(f, lower_bound, upper_bound, tp),
-            Datum::Bytes(bs) => convert::bytes_to_int(ctx, &bs),
+            Datum::U64(u) => convert::convert_uint_to_int(ctx, u, tp),
+            Datum::F64(f) => convert::convert_float_to_int(ctx, f, tp),
+            Datum::Bytes(bs) => convert::convert_bytes_to_int(ctx, &bs, FieldTypeTp::LongLong),
             Datum::Time(mut t) => {
                 t.round_frac(mysql::DEFAULT_FSP)?;
                 let d = t.to_decimal()?;
                 d.as_i64().into()
             }
             Datum::Dur(d) => {
-                let d = d.round_frac(mysql::DEFAULT_FSP)?.to_decimal()?;
+                let d = Decimal::try_from(d.round_frac(mysql::DEFAULT_FSP)?)?;
                 d.as_i64().into()
             }
             Datum::Dec(d) => {
                 let res: Result<Decimal> = d.round(mysql::DEFAULT_FSP, RoundMode::HalfEven).into();
-                if let Err(e) = res {
-                    Err(e)
-                } else {
-                    res.unwrap().as_i64().into()
-                }
+                res?.as_i64().into()
             }
-            Datum::Json(j) => Ok(j.cast_to_int()),
+            Datum::Json(j) => j.cast_to_int(ctx),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
@@ -418,7 +416,7 @@ impl Datum {
                 Ok(Datum::Dec(dec))
             }
             Datum::Dur(d) => {
-                let dec = d.to_decimal()?;
+                let dec = Decimal::try_from(d)?;
                 if d.fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
@@ -432,7 +430,7 @@ impl Datum {
     pub fn into_dec(self) -> Result<Decimal> {
         match self {
             Datum::Time(t) => t.to_decimal().map_err(From::from),
-            Datum::Dur(d) => d.to_decimal().map_err(From::from),
+            Datum::Dur(d) => Decimal::try_from(d).map_err(From::from),
             d => match d.coerce_to_dec()? {
                 Datum::Dec(d) => Ok(d),
                 d => Err(box_err!("failed to conver {} to decimal", d)),
@@ -553,7 +551,7 @@ impl Datum {
             (a, b) => {
                 let a = a.into_dec()?;
                 let b = b.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let d: Result<Decimal> = res.into();
@@ -713,7 +711,7 @@ impl Datum {
             (left, right) => {
                 let a = left.into_dec()?;
                 let b = right.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let i = res.unwrap().as_i64().unwrap();
@@ -1040,7 +1038,6 @@ mod tests {
 
     use std::cmp::Ordering;
     use std::sync::Arc;
-    use std::time::Duration as StdDuration;
     use std::{i16, i32, i64, i8, u16, u32, u64, u8};
 
     fn same_type(l: &Datum, r: &Datum) -> bool {
@@ -1073,12 +1070,8 @@ mod tests {
             ],
             vec![Datum::Null],
             vec![
-                Duration::new(StdDuration::from_millis(23), false, MAX_FSP)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(23), true, MAX_FSP)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(23, MAX_FSP).unwrap().into(),
+                Duration::from_millis(-23, MAX_FSP).unwrap().into(),
             ],
             vec![
                 Datum::U64(1),
@@ -1209,84 +1202,52 @@ mod tests {
             ),
             (b"".as_ref().into(), b"".as_ref().into(), Ordering::Equal),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Datum::Null,
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(29034), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(29034, 2).unwrap().into(),
                 Ordering::Less,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Equal,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(-34, 2).unwrap().into(),
                 Datum::Null,
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(0), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(0, 2).unwrap().into(),
                 Datum::I64(0),
                 Ordering::Equal,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(29034), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(-29034, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), true, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(-3340, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Less,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
+                Duration::from_millis(-34, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 b"-00.34".as_ref().into(),
                 Ordering::Greater,
             ),
@@ -1704,7 +1665,7 @@ mod tests {
             (Datum::F64(-0.4), Some(false)),
             (Datum::Null, None),
             (b"".as_ref().into(), Some(false)),
-            (b"0.5".as_ref().into(), Some(false)),
+            (b"0.5".as_ref().into(), Some(true)),
             (b"0".as_ref().into(), Some(false)),
             (b"2".as_ref().into(), Some(true)),
             (b"abc".as_ref().into(), Some(false)),

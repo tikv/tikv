@@ -12,13 +12,13 @@ use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
+use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+
 use super::super::error::Result;
 use super::super::metrics::*;
+use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use crate::storage::mvcc::properties::RangeProperties;
-use tikv_util::escape;
 
 pub struct Checker {
     max_size: u64,
@@ -286,8 +286,8 @@ fn get_approximate_split_keys_cf(
             split_size,
             collection.len(),
             cfname,
-            escape(&start),
-            escape(&end)
+            hex::encode_upper(&start),
+            hex::encode_upper(&end)
         ));
     }
     keys.sort();
@@ -343,11 +343,11 @@ fn get_approximate_split_keys_cf(
 #[cfg(test)]
 pub mod tests {
     use super::Checker;
+    use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::raftstore::store::{
         keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
     };
-    use crate::storage::mvcc::properties::RangePropertiesCollectorFactory;
     use crate::storage::Key;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
@@ -358,7 +358,7 @@ pub mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::{iter, u64};
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
 
@@ -395,7 +395,7 @@ pub mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -533,7 +533,10 @@ pub mod tests {
 
     #[test]
     fn test_get_approximate_split_keys_error() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();
@@ -569,7 +572,10 @@ pub mod tests {
 
     #[test]
     fn test_get_approximate_split_keys() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();
@@ -683,7 +689,10 @@ pub mod tests {
 
     #[test]
     fn test_region_approximate_size() {
-        let path = TempDir::new("_test_raftstore_region_approximate_size").expect("");
+        let path = Builder::new()
+            .prefix("_test_raftstore_region_approximate_size")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -720,8 +729,10 @@ pub mod tests {
 
     #[test]
     fn test_region_maybe_inaccurate_approximate_size() {
-        let path =
-            TempDir::new("_test_raftstore_region_maybe_inaccurate_approximate_size").expect("");
+        let path = Builder::new()
+            .prefix("_test_raftstore_region_maybe_inaccurate_approximate_size")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();

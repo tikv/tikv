@@ -4,7 +4,8 @@
 
 //! Batch executor common structures.
 
-pub use super::statistics::{BatchExecuteStatistics, ExecSummaryCollector};
+pub use super::super::exec_summary::{ExecSummaryCollector, WithSummaryCollector};
+pub use super::statistics::BatchExecuteStatistics;
 
 use tipb::expression::FieldType;
 
@@ -27,7 +28,7 @@ pub trait BatchExecutor: Send {
     ///
     /// This function might return zero rows, which doesn't mean that there is no more result.
     /// See `is_drained` in `BatchExecuteResult`.
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult;
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult;
 
     /// Collects statistics (including but not limited to metrics and execution summaries)
     /// accumulated during execution and prepares for next collection.
@@ -39,6 +40,19 @@ pub trait BatchExecutor: Send {
     /// not contain accumulated meta data in last invocation. Normally the invocation frequency of
     /// this function is less than `next_batch()`.
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics);
+
+    fn with_summary_collector<C: ExecSummaryCollector + Send>(
+        self,
+        summary_collector: C,
+    ) -> WithSummaryCollector<C, Self>
+    where
+        Self: Sized,
+    {
+        WithSummaryCollector {
+            summary_collector,
+            inner: self,
+        }
+    }
 }
 
 impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
@@ -46,12 +60,34 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).schema()
     }
 
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        (**self).next_batch(expect_rows)
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        (**self).next_batch(scan_rows)
     }
 
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         (**self).collect_statistics(destination)
+    }
+}
+
+impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
+    for WithSummaryCollector<C, T>
+{
+    fn schema(&self) -> &[FieldType] {
+        self.inner.schema()
+    }
+
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let timer = self.summary_collector.on_start_iterate();
+        let result = self.inner.next_batch(scan_rows);
+        self.summary_collector
+            .on_finish_iterate(timer, result.logical_rows.len());
+        result
+    }
+
+    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
+        self.inner.collect_statistics(destination);
+        self.summary_collector
+            .collect_into(&mut destination.summary_per_executor);
     }
 }
 
@@ -67,9 +103,18 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
 /// It is designed to be used in new generation executors, i.e. executors support batch execution.
 /// The old executors will not be refined to return this kind of result.
 pub struct BatchExecuteResult {
-    /// The columns data generated during this invocation. Note that empty column data doesn't mean
-    /// that there is no more data. See `is_drained`.
-    pub data: LazyBatchColumnVec,
+    /// The *physical* columns data generated during this invocation.
+    ///
+    /// Note 1: Empty column data doesn't mean that there is no more data. See `is_drained`.
+    ///
+    /// Note 2: This is only a *physical* store of data. The data may not be in desired order and
+    ///         there could be filtered out data stored inside. You should access the *logical*
+    ///         data via the `logical_rows` field. For the same reason, `rows_len() > 0` doesn't
+    ///         mean that there is logical data inside.
+    pub physical_columns: LazyBatchColumnVec,
+
+    /// Valid row offsets in `physical_columns`, placed in the logical order.
+    pub logical_rows: Vec<usize>,
 
     /// The warnings generated during this invocation.
     // TODO: It can be more general, e.g. `ExecuteWarnings` instead of `EvalWarnings`.
@@ -90,7 +135,5 @@ pub struct BatchExecuteResult {
     ///                `Ok(true)`, there could be some remaining data in the `data` field which is
     ///                valid data and should be processed. The caller should NOT call `next_batch()`
     ///                any more.
-    // TODO: The name of this field is confusing and not obvious, that we need so many comments to
-    // explain what it is. We can change it to a better name or use an enum if necessary.
     pub is_drained: Result<bool, Error>,
 }

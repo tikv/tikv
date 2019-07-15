@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use rand::prelude::*;
-use rand::IsaacRng;
+use rand_isaac::isaac::IsaacRng;
 
 /// A random generator of kv.
 ///
@@ -26,7 +26,7 @@ impl KvGenerator {
         KvGenerator {
             key_len,
             value_len,
-            rng: IsaacRng::new_from_u64(seed),
+            rng: IsaacRng::seed_from_u64(seed),
         }
     }
 
@@ -55,6 +55,7 @@ impl Iterator for KvGenerator {
 mod tests {
     use super::*;
     use test::Bencher;
+
     #[bench]
     fn bench_kv_generator(b: &mut Bencher) {
         let mut g = KvGenerator::new(100, 1000);

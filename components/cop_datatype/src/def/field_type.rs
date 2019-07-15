@@ -308,3 +308,19 @@ impl FieldTypeAccessor for ColumnInfo {
         self as &mut dyn FieldTypeAccessor
     }
 }
+
+impl From<FieldTypeTp> for FieldType {
+    fn from(fp: FieldTypeTp) -> FieldType {
+        let mut ft = FieldType::new();
+        ft.as_mut_accessor().set_tp(fp);
+        ft
+    }
+}
+
+impl From<FieldTypeTp> for ColumnInfo {
+    fn from(fp: FieldTypeTp) -> ColumnInfo {
+        let mut ft = ColumnInfo::new();
+        ft.as_mut_accessor().set_tp(fp);
+        ft
+    }
+}

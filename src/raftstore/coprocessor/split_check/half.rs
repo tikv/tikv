@@ -9,10 +9,10 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
 use crate::raftstore::store::keys;
-use crate::storage::mvcc::properties::RangeProperties;
 use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
+use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::size::get_region_approximate_size_cf;
 use super::Host;
@@ -174,12 +174,12 @@ mod tests {
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
-    use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::mvcc::properties::{
+    use crate::raftstore::coprocessor::properties::{
         RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
     };
+    use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
     use crate::storage::Key;
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let cfs_opts = ALL_CFS
@@ -246,7 +246,10 @@ mod tests {
 
     #[test]
     fn test_get_region_approximate_middle_cf() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();

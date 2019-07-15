@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::test;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb::Region;
@@ -79,10 +79,12 @@ impl RaftStoreRouter for SyncBenchRouter {
     fn casual_send(&self, _: u64, _: CasualMessage) -> Result<()> {
         Ok(())
     }
+
+    fn broadcast_unreachable(&self, _: u64) {}
 }
 
 fn new_engine() -> (TempDir, Arc<DB>) {
-    let dir = TempDir::new("bench_rafkv").unwrap();
+    let dir = Builder::new().prefix("bench_rafkv").tempdir().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = rocks::util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
@@ -139,7 +141,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     ctx.set_peer(leader.clone());
     b.iter(|| {
         let on_finished: EngineCallback<RegionSnapshot> = Box::new(move |results| {
-            test::black_box(results);
+            let _ = test::black_box(results);
         });
         kv.async_snapshot(&ctx, on_finished).unwrap();
     });

@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{black_box, Bencher, Criterion};
+use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, Snapshot};
@@ -14,7 +14,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
-    bencher.iter_with_setup(
+    bencher.iter_batched(
         || {
             let test_kvs: Vec<(Key, Value)> = KvGenerator::with_seed(
                 config.key_length,
@@ -32,6 +32,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
                 black_box(engine.put(ctx, key, value)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     );
 }
 
@@ -61,7 +62,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     .map(|(key, _)| Key::from_raw(&key))
     .collect();
 
-    bencher.iter_with_setup(
+    bencher.iter_batched(
         || {
             let snap = engine.snapshot(&ctx).unwrap();
             (snap, &test_kvs)
@@ -71,6 +72,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
                 black_box(snap.get(key).unwrap());
             }
         },
+        BatchSize::SmallInput,
     );
 }
 

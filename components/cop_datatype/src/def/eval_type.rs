@@ -18,6 +18,24 @@ pub enum EvalType {
     Json,
 }
 
+impl EvalType {
+    /// Converts `EvalType` into one of the compatible `FieldTypeTp`s.
+    ///
+    /// This function should be only useful in test scenarios that only cares about `EvalType` but
+    /// accepts a `FieldTypeTp`.
+    pub fn into_certain_field_type_tp_for_test(self) -> crate::FieldTypeTp {
+        match self {
+            EvalType::Int => crate::FieldTypeTp::LongLong,
+            EvalType::Real => crate::FieldTypeTp::Double,
+            EvalType::Decimal => crate::FieldTypeTp::NewDecimal,
+            EvalType::Bytes => crate::FieldTypeTp::String,
+            EvalType::DateTime => crate::FieldTypeTp::DateTime,
+            EvalType::Duration => crate::FieldTypeTp::Duration,
+            EvalType::Json => crate::FieldTypeTp::JSON,
+        }
+    }
+}
+
 impl fmt::Display for EvalType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)

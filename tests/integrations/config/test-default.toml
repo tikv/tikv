@@ -6,6 +6,8 @@
 
 [storage]
 
+[storage.block-cache]
+
 [pd]
 
 [metric]

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
 
@@ -23,7 +24,7 @@ impl SelectionExecutor {
         mut meta: Selection,
         eval_cfg: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<SelectionExecutor> {
+    ) -> Result<Self> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
@@ -41,7 +42,7 @@ impl SelectionExecutor {
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
             for filter in &self.conditions {
                 let val = filter.eval(&mut self.ctx, &cols)?;
@@ -66,6 +67,14 @@ impl Executor for SelectionExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
+
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             warnings.merge(&mut self.ctx.take_warnings());
@@ -73,10 +82,6 @@ impl Executor for SelectionExecutor {
         } else {
             Some(self.ctx.take_warnings())
         }
-    }
-
-    fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
     }
 }
 
@@ -188,7 +193,7 @@ mod tests {
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
-            selection_rows.push(row.take_origin());
+            selection_rows.push(row.take_origin().unwrap());
         }
 
         assert_eq!(selection_rows.len(), raw_data.len());
@@ -227,7 +232,7 @@ mod tests {
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
-            selection_rows.push(row.take_origin());
+            selection_rows.push(row.take_origin().unwrap());
         }
 
         let expect_row_handles = raw_data

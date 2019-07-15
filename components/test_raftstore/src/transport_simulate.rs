@@ -5,7 +5,7 @@ use std::sync::atomic::*;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use std::{thread, time, usize};
+use std::{mem, thread, time, usize};
 
 use rand;
 
@@ -200,6 +200,10 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
         self.ch.casual_send(region_id, msg)
     }
 
+    fn broadcast_unreachable(&self, store_id: u64) {
+        self.ch.broadcast_unreachable(store_id)
+    }
+
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> Result<()> {
         self.ch.significant_send(region_id, msg)
     }
@@ -315,11 +319,12 @@ pub struct RegionPacketFilter {
     direction: Direction,
     block: Either<Arc<AtomicUsize>, Arc<AtomicBool>>,
     msg_type: Option<MessageType>,
+    dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
 }
 
 impl Filter for RegionPacketFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        msgs.retain(|m| {
+        let retain = |m: &RaftMessage| {
             let region_id = m.get_region_id();
             let from_store_id = m.get_from_peer().get_store_id();
             let to_store_id = m.get_to_peer().get_store_id();
@@ -346,7 +351,13 @@ impl Filter for RegionPacketFilter {
                 };
             }
             true
-        });
+        };
+        let origin_msgs = mem::replace(msgs, Vec::default());
+        let (retained, dropped) = origin_msgs.into_iter().partition(retain);
+        *msgs = retained;
+        if let Some(dropped_messages) = self.dropped_messages.as_ref() {
+            dropped_messages.lock().unwrap().extend_from_slice(&dropped);
+        }
         check_messages(msgs)
     }
 }
@@ -359,6 +370,7 @@ impl RegionPacketFilter {
             direction: Direction::Both,
             msg_type: None,
             block: Either::Right(Arc::new(AtomicBool::new(true))),
+            dropped_messages: None,
         }
     }
 
@@ -379,6 +391,11 @@ impl RegionPacketFilter {
 
     pub fn when(mut self, condition: Arc<AtomicBool>) -> RegionPacketFilter {
         self.block = Either::Right(condition);
+        self
+    }
+
+    pub fn reserve_dropped(mut self, dropped: Arc<Mutex<Vec<RaftMessage>>>) -> RegionPacketFilter {
+        self.dropped_messages = Some(dropped);
         self
     }
 }
@@ -506,6 +523,70 @@ impl Filter for DropSnapshotFilter {
                 false
             }
         });
+        Ok(())
+    }
+}
+
+/// Capture the first snapshot message.
+pub struct RecvSnapshotFilter {
+    pub notifier: Mutex<Option<Sender<RaftMessage>>>,
+    pub region_id: u64,
+}
+
+impl Filter for RecvSnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot
+                && msg.get_region_id() == self.region_id
+            {
+                let tx = self.notifier.lock().unwrap().take().unwrap();
+                tx.send(msg.clone()).unwrap();
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Filters all `filter_type` packets until seeing the `flush_type`.
+///
+/// The first filtered message will be flushed too.
+pub struct LeadingFilter {
+    filter_type: MessageType,
+    flush_type: MessageType,
+    first_filtered_msg: Mutex<Option<RaftMessage>>,
+}
+
+impl LeadingFilter {
+    pub fn new(filter_type: MessageType, flush_type: MessageType) -> LeadingFilter {
+        LeadingFilter {
+            filter_type,
+            flush_type,
+            first_filtered_msg: Mutex::default(),
+        }
+    }
+}
+
+impl Filter for LeadingFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        let mut filtered_msg = self.first_filtered_msg.lock().unwrap();
+        let mut to_send = vec![];
+        for msg in msgs.drain(..) {
+            if msg.get_message().get_msg_type() == self.filter_type {
+                if filtered_msg.is_none() {
+                    *filtered_msg = Some(msg);
+                }
+            } else if msg.get_message().get_msg_type() == self.flush_type {
+                to_send.push(filtered_msg.take().unwrap());
+                to_send.push(msg);
+            } else {
+                to_send.push(msg);
+            }
+        }
+        msgs.extend(to_send);
+        check_messages(msgs)
+    }
+
+    fn after(&self, _: Result<()>) -> Result<()> {
         Ok(())
     }
 }
@@ -651,6 +732,24 @@ impl Filter for LeaseReadFilter {
                 msg.take_context();
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct DropMessageFilter {
+    ty: MessageType,
+}
+
+impl DropMessageFilter {
+    pub fn new(ty: MessageType) -> DropMessageFilter {
+        DropMessageFilter { ty }
+    }
+}
+
+impl Filter for DropMessageFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        msgs.retain(|m| m.get_message().get_msg_type() != self.ty);
         Ok(())
     }
 }

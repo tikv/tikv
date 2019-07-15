@@ -3,11 +3,10 @@
 use crate::Either;
 use futures::sync::oneshot;
 use futures::{Async, Future, IntoFuture, Poll};
-use std::boxed;
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
-pub fn paired_future_callback<T>() -> (Box<dyn boxed::FnBox(T) + Send>, oneshot::Receiver<T>)
+pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, oneshot::Receiver<T>)
 where
     T: Send + 'static,
 {

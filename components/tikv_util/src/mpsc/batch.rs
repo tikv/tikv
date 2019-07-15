@@ -121,6 +121,13 @@ impl<T> Sender<T> {
     }
 
     #[inline]
+    pub fn send_and_notify(&self, t: T) -> Result<(), SendError<T>> {
+        self.sender.send(t)?;
+        self.state.notify();
+        Ok(())
+    }
+
+    #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         self.sender.try_send(t)?;
         self.state.try_notify_post_send();

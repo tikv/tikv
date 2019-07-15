@@ -23,7 +23,7 @@ quick_error! {
             description("compatible error")
             display("feature is not supported in other cluster components")
         }
-        Grpc(err: crate::grpc::Error) {
+        Grpc(err: grpcio::Error) {
             from()
             cause(err)
             description(err.description())
@@ -36,7 +36,7 @@ quick_error! {
         }
         RegionNotFound(key: Vec<u8>) {
             description("region is not found")
-            display("region is not found for key {:?}", key)
+            display("region is not found for key {}", hex::encode_upper(key))
         }
         StoreTombstone(msg: String) {
             description("store is tombstone")

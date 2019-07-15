@@ -79,7 +79,7 @@ We do releases approximately every 6 weeks. Here is how a regular release goes o
   [master](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/).**
 5. Create a [tagged release](https://github.com/tikv/tikv/releases). The release should
   start with "v" and be followed by the version number. E.g., "v1.6.0". **This must match the
-  [VERSION](VERSION).**
+  version in [Cargo.toml](Cargo.toml).**
 6. Open a PR on the [Website repo](https://github.com/tikv/website) to reflect the new release.
 7. If possible post on Twitter (or, ask @hoverbear to do it).
 8. Do a new PR to update [Cargo.toml](Cargo.toml) to the next development release. E.g., "1.7.0-dev".

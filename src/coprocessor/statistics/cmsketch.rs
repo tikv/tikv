@@ -67,7 +67,9 @@ mod tests {
     use super::*;
     use crate::coprocessor::codec::datum;
     use crate::coprocessor::codec::datum::Datum;
-    use rand::{Rng, SeedableRng, StdRng};
+    use rand::distributions::Distribution;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
     use std::cmp::min;
     use tikv_util::as_slice;
     use tikv_util::collections::HashMap;
@@ -100,11 +102,10 @@ mod tests {
     fn average_error(depth: usize, width: usize, total: u32, max_value: usize, s: f64) -> u64 {
         let mut c = CMSketch::new(depth, width).unwrap();
         let mut map: HashMap<u64, u32> = HashMap::default();
-        let seed: &[_] = &[1, 2, 3, 4];
-        let mut gen: ZipfDistribution<StdRng> =
-            ZipfDistribution::new(SeedableRng::from_seed(seed), max_value, s).unwrap();
+        let gen = ZipfDistribution::new(max_value, s).unwrap();
+        let mut rng = StdRng::seed_from_u64(0x01020304);
         for _ in 0..total {
-            let val = gen.next_u64();
+            let val = gen.sample(&mut rng) as u64;
             let bytes = datum::encode_value(as_slice(&Datum::U64(val))).unwrap();
             c.insert(&bytes);
             let counter = map.entry(val).or_insert(0);

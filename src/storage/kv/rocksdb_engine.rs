@@ -9,14 +9,15 @@ use engine::rocks;
 use engine::rocks::util::CFOptions;
 use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
 use engine::Engines;
+use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
-use crate::storage::{Key, Value};
+use crate::storage::{BlockCacheConfig, Key, Value};
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -66,7 +67,9 @@ struct RocksEngineCore {
 impl Drop for RocksEngineCore {
     fn drop(&mut self) {
         if let Some(h) = self.worker.stop() {
-            h.join().unwrap();
+            if let Err(e) = h.join() {
+                safe_panic!("RocksEngineCore engine thread panicked: {:?}", e);
+            }
         }
     }
 }
@@ -83,11 +86,12 @@ impl RocksEngine {
         path: &str,
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions<'_>>>,
+        shared_block_cache: bool,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
-                let td = TempDir::new("temp-rocksdb").unwrap();
+                let td = Builder::new().prefix("temp-rocksdb").tempdir().unwrap();
                 (td.path().to_str().unwrap().to_owned(), Some(td))
             }
             _ => (path.to_owned(), None),
@@ -96,7 +100,7 @@ impl RocksEngine {
         let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(db.clone(), db);
+        let engines = Engines::new(db.clone(), db, shared_block_cache);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -174,17 +178,18 @@ impl TestEngineBuilder {
         };
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
         let cfg_rocksdb = crate::config::DbConfig::default();
+        let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
+                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
-        RocksEngine::new(&path, &cfs, Some(cfs_opts))
+        RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
     }
 }
 
@@ -212,15 +217,20 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.put_cf(handle, k.as_encoded(), &v)
                 }
             }
-            Modify::DeleteRange(cf, start_key, end_key) => {
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
                 trace!(
                     "RocksEngine: delete_range_cf";
                     "cf" => cf,
                     "start_key" => %start_key,
-                    "end_key" => %end_key
+                    "end_key" => %end_key,
+                    "notify_only" => notify_only,
                 );
-                let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                if !notify_only {
+                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
+                    wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                } else {
+                    Ok(())
+                }
             }
         };
         // TODO: turn the error into an engine error.
@@ -322,6 +332,12 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
         DBIterator::valid(self)
     }
 
+    fn status(&self) -> Result<()> {
+        DBIterator::status(self)
+            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(From::from)
+    }
+
     fn key(&self) -> &[u8] {
         DBIterator::key(self)
     }
@@ -337,7 +353,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::CFStatistics;
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_rocksdb() {
@@ -368,7 +384,7 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = TempDir::new("rocksdb_test").unwrap();
+        let dir = Builder::new().prefix("rocksdb_test").tempdir().unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())

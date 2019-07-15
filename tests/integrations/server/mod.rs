@@ -5,8 +5,8 @@ mod raft_client;
 
 use std::sync::Arc;
 
-use crate::grpc::*;
 use futures::Future;
+use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
@@ -89,6 +89,16 @@ trait MockKvService {
     unary_call!(kv_get, GetRequest, GetResponse);
     unary_call!(kv_scan, ScanRequest, ScanResponse);
     unary_call!(kv_prewrite, PrewriteRequest, PrewriteResponse);
+    unary_call!(
+        kv_pessimistic_lock,
+        PessimisticLockRequest,
+        PessimisticLockResponse
+    );
+    unary_call!(
+        kv_pessimistic_rollback,
+        PessimisticRollbackRequest,
+        PessimisticRollbackResponse
+    );
     unary_call!(kv_commit, CommitRequest, CommitResponse);
     unary_call!(kv_import, ImportRequest, ImportResponse);
     unary_call!(kv_cleanup, CleanupRequest, CleanupResponse);
@@ -136,6 +146,7 @@ trait MockKvService {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
+    unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 
@@ -143,6 +154,16 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(kv_get, GetRequest, GetResponse);
     unary_call_dispatch!(kv_scan, ScanRequest, ScanResponse);
     unary_call_dispatch!(kv_prewrite, PrewriteRequest, PrewriteResponse);
+    unary_call_dispatch!(
+        kv_pessimistic_lock,
+        PessimisticLockRequest,
+        PessimisticLockResponse
+    );
+    unary_call_dispatch!(
+        kv_pessimistic_rollback,
+        PessimisticRollbackRequest,
+        PessimisticRollbackResponse
+    );
     unary_call_dispatch!(kv_commit, CommitRequest, CommitResponse);
     unary_call_dispatch!(kv_import, ImportRequest, ImportResponse);
     unary_call_dispatch!(kv_cleanup, CleanupRequest, CleanupResponse);
@@ -190,6 +211,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call_dispatch!(split_region, SplitRegionRequest, SplitRegionResponse);
+    unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 

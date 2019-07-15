@@ -314,6 +314,7 @@ mod tests {
                 f.sync_all().unwrap();
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
+                fs::remove_file(tmp).unwrap();
             })
             .unwrap();
         rx1.recv().unwrap();

@@ -1,8 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod config;
 pub mod engine_metrics;
 mod event_listener;
+pub mod io_limiter;
 pub mod metrics_flusher;
+pub mod security;
 pub mod stats;
 
 use std::cmp;
@@ -12,6 +15,12 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use self::engine_metrics::{
+    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE,
+    ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE,
+    ROCKSDB_TOTAL_SST_FILES_SIZE,
+};
 use crate::rocks::load_latest_options;
 use crate::rocks::set_external_sst_file_global_seq_no;
 use crate::rocks::supported_compression;
@@ -19,18 +28,12 @@ use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-
-use self::engine_metrics::{
-    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
-};
-use crate::{ALL_CFS, CF_DEFAULT};
+use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
+use tikv_util::file::calc_crc32;
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
-
-use super::{Error, Result};
 
 /// Copies the source file to a newly created file.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
@@ -47,32 +50,6 @@ pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Resu
     let res = io::copy(&mut reader, &mut writer)?;
     writer.sync_all()?;
     Ok(res)
-}
-
-/// Calculates the given file's CRC32 checksum.
-// This is a copy of `util::calc_crc32`.
-// TODO: remove it once util becomes a component.
-fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
-    use crc::crc32::{self, Digest, Hasher32};
-    use std::fs::OpenOptions;
-    use std::io::Read;
-    const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
-
-    let mut digest = Digest::new(crc32::IEEE);
-    let mut f = OpenOptions::new().read(true).open(path)?;
-    let mut buf = vec![0; DIGEST_BUFFER_SIZE];
-    loop {
-        match f.read(&mut buf[..]) {
-            Ok(0) => {
-                return Ok(digest.sum32());
-            }
-            Ok(n) => {
-                digest.write(&buf[..n]);
-            }
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(err) => return Err(err),
-        }
-    }
 }
 
 // Zlib and bzip2 are too slow.
@@ -290,6 +267,7 @@ pub fn db_exist(path: &str) -> bool {
 /// Gets total used size of rocksdb engine, including:
 /// *  total size (bytes) of all SST files.
 /// *  total size (bytes) of active and unflushed immutable memtables.
+/// *  total size (bytes) of all blob files.
 ///
 pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
@@ -305,6 +283,18 @@ pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
         if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
         {
             used_size += mem_table;
+        }
+
+        // For blob files
+        if let Some(live_blob) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE)
+        {
+            used_size += live_blob;
+        }
+        if let Some(obsolete_blob) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+        {
+            used_size += obsolete_blob;
         }
     }
     used_size
@@ -332,6 +322,11 @@ pub fn get_engine_compression_ratio_at_level(
 pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
     let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
     engine.get_property_int_cf(handle, &prop)
+}
+
+/// Gets the number of immutable mem-table of given column family.
+pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
 }
 
 /// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
@@ -625,10 +620,10 @@ mod tests {
     use super::*;
     use crate::rocks::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
-        Writable, DB,
+        TitanDBOptions, Writable, DB,
     };
     use crate::CF_DEFAULT;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_cfs_diff() {
@@ -648,7 +643,10 @@ mod tests {
 
     #[test]
     fn test_new_engine_opt() {
-        let path = TempDir::new("_util_rocksdb_test_check_column_families").expect("");
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_check_column_families")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         // create db when db not exist
@@ -713,7 +711,10 @@ mod tests {
 
     #[test]
     fn test_compression_ratio() {
-        let path = TempDir::new("_util_rocksdb_test_compression_ratio").expect("");
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_compression_ratio")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let opts = DBOptions::new();
@@ -754,19 +755,27 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_prepare_sst_for_ingestion() {
-        let path = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion").expect("");
+    fn check_prepare_sst_for_ingestion(
+        db_opts: Option<DBOptions>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
+    ) {
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_prepare_sst_for_ingestion")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let sst_dir = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion_sst").expect("");
+        let sst_dir = Builder::new()
+            .prefix("_util_rocksdb_test_prepare_sst_for_ingestion_sst")
+            .tempdir()
+            .unwrap();
         let sst_path = sst_dir.path().join("abc.sst");
         let sst_clone = sst_dir.path().join("abc.sst.clone");
 
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
         let cf_name = "default";
-        let db = new_engine(path_str, None, &[cf_name], None).unwrap();
+        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
         let cf = db.cf_handle(cf_name).unwrap();
         let mut ingest_opts = IngestExternalFileOptions::new();
         ingest_opts.move_files(true);
@@ -804,8 +813,31 @@ mod tests {
     }
 
     #[test]
+    fn test_prepare_sst_for_ingestion() {
+        check_prepare_sst_for_ingestion(None, None);
+    }
+
+    #[test]
+    fn test_prepare_sst_for_ingestion_titan() {
+        let mut db_opts = DBOptions::new();
+        let mut titan_opts = TitanDBOptions::new();
+        // Force all values write out to blob files.
+        titan_opts.set_min_blob_size(0);
+        db_opts.set_titandb_options(&titan_opts);
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_titandb_options(&titan_opts);
+        check_prepare_sst_for_ingestion(
+            Some(db_opts),
+            Some(vec![CFOptions::new("default", cf_opts)]),
+        );
+    }
+
+    #[test]
     fn test_compact_files_in_range() {
-        let temp_dir = TempDir::new("test_compact_files_in_range").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("test_compact_files_in_range")
+            .tempdir()
+            .unwrap();
 
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);

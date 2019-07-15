@@ -1,14 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(fnbox)]
 #![cfg_attr(test, feature(test))]
 
 #[macro_use]
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate prometheus;
 #[macro_use]
 extern crate quick_error;
 #[macro_use]
@@ -32,6 +29,8 @@ extern crate slog;
 extern crate slog_global;
 #[cfg(test)]
 extern crate test;
+#[macro_use]
+extern crate fail;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
@@ -44,17 +43,18 @@ use std::time::Duration;
 use std::{env, slice, thread, u64};
 
 use protobuf::Message;
-use rand::{self, ThreadRng};
+use rand;
+use rand::rngs::ThreadRng;
 
 pub mod codec;
 pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod futurepool;
-pub mod io_limiter;
+pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
@@ -102,6 +102,10 @@ pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
 }
 
 pub const NO_LIMIT: u64 = u64::MAX;
+
+pub trait AssertClone: Clone {}
+
+pub trait AssertCopy: Copy {}
 
 pub trait AssertSend: Send {}
 
@@ -451,7 +455,7 @@ impl<T> DerefMut for MustConsumeVec<T> {
 impl<T> Drop for MustConsumeVec<T> {
     fn drop(&mut self) {
         if !self.is_empty() {
-            panic!("resource leak detected: {}.", self.tag);
+            safe_panic!("resource leak detected: {}.", self.tag);
         }
     }
 }
@@ -524,19 +528,15 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         if panic_abort {
             process::abort();
         } else {
-            process::exit(1);
+            unsafe {
+                // Calling process::exit would trigger global static to destroy, like C++
+                // static variables of RocksDB, which may cause other threads encounter
+                // pure virtual method call. So calling libc::_exit() instead to skip the
+                // cleanup process.
+                libc::_exit(1);
+            }
         }
     }))
-}
-
-#[inline]
-pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
-    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
-    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
-    // here.
-    let mut new_vec = Vec::with_capacity(vec.capacity());
-    new_vec.extend_from_slice(vec);
-    new_vec
 }
 
 /// Checks environment variables that affect TiKV.
@@ -567,6 +567,14 @@ pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
 }
 
+pub unsafe fn erase_lifetime_mut<'a, T: ?Sized>(v: &mut T) -> &'a mut T {
+    &mut *(v as *mut T)
+}
+
+pub unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
+    &*(v as *const T)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,18 +584,24 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_panic_mark_file_path() {
-        let dir = TempDir::new("test_panic_mark_file_path").unwrap();
+        let dir = Builder::new()
+            .prefix("test_panic_mark_file_path")
+            .tempdir()
+            .unwrap();
         let panic_mark_file = panic_mark_file_path(dir.path());
         assert_eq!(panic_mark_file, dir.path().join(PANIC_MARK_FILE))
     }
 
     #[test]
     fn test_panic_mark_file_exists() {
-        let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
+        let dir = Builder::new()
+            .prefix("test_panic_mark_file_exists")
+            .tempdir()
+            .unwrap();
         create_panic_mark_file(dir.path());
         assert!(panic_mark_file_exists(dir.path()));
     }
@@ -747,5 +761,17 @@ mod tests {
         assert!(is_zero_duration(&Duration::new(0, 0)));
         assert!(!is_zero_duration(&Duration::new(1, 0)));
         assert!(!is_zero_duration(&Duration::new(0, 1)));
+    }
+
+    #[test]
+    fn test_must_consume_vec_dtor_not_abort() {
+        let res = panic_hook::recover_safe(|| {
+            let mut v = MustConsumeVec::new("test");
+            v.push(2);
+            panic!("Panic with MustConsumeVec non-empty");
+            // It would abort if there was a double-panic in dtor, thus
+            // the test would fail.
+        });
+        res.unwrap_err();
     }
 }

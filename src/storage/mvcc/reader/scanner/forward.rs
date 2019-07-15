@@ -88,12 +88,12 @@ impl<S: Snapshot> ForwardScanner<S> {
             // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
             // there is one, it is what current lock cursor pointing to.
             let (current_user_key, has_write, has_lock) = {
-                let w_key = if self.write_cursor.valid() {
+                let w_key = if self.write_cursor.valid()? {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
                     None
                 };
-                let l_key = if self.lock_cursor.valid() {
+                let l_key = if self.lock_cursor.valid()? {
                     Some(self.lock_cursor.key(&mut self.statistics.lock))
                 } else {
                     None
@@ -207,7 +207,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         ts: u64,
         met_next_user_key: &mut bool,
     ) -> Result<Option<Value>> {
-        assert!(self.write_cursor.valid());
+        assert!(self.write_cursor.valid()?);
 
         // The logic starting from here is similar to `PointGetter`.
 
@@ -220,7 +220,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         for i in 0..SEEK_BOUND {
             if i > 0 {
                 self.write_cursor.next(&mut self.statistics.write);
-                if !self.write_cursor.valid() {
+                if !self.write_cursor.valid()? {
                     // Key space ended.
                     return Ok(None);
                 }
@@ -245,7 +245,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             // reallocation happens in `append_ts`.
             self.write_cursor
                 .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
-            if !self.write_cursor.valid() {
+            if !self.write_cursor.valid()? {
                 // Key space ended.
                 return Ok(None);
             }
@@ -273,7 +273,7 @@ impl<S: Snapshot> ForwardScanner<S> {
 
             self.write_cursor.next(&mut self.statistics.write);
 
-            if !self.write_cursor.valid() {
+            if !self.write_cursor.valid()? {
                 // Key space ended.
                 return Ok(None);
             }
@@ -327,7 +327,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             if i > 0 {
                 self.write_cursor.next(&mut self.statistics.write);
             }
-            if !self.write_cursor.valid() {
+            if !self.write_cursor.valid()? {
                 // Key space ended. We are done here.
                 return Ok(());
             }

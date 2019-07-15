@@ -6,10 +6,12 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType};
 
+use engine::Peekable;
 use test_raftstore::*;
+use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -412,6 +414,8 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_operator();
     cluster.run();
 
+    // In case of removing leader, let's transfer leader to some node first.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     pd_client.must_remove_peer(1, new_peer(4, 4));
 
     let (tx, rx) = mpsc::channel();
@@ -438,4 +442,41 @@ fn test_node_snapshot_with_append() {
 fn test_server_snapshot_with_append() {
     let mut cluster = new_server_cluster(0, 4);
     test_snapshot_with_append(&mut cluster);
+}
+
+#[test]
+fn test_request_snapshot_apply_repeatedly() {
+    let mut cluster = new_node_cluster(0, 2);
+    configure_for_request_snapshot(&mut cluster);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    cluster.must_transfer_leader(region_id, new_peer(2, 2));
+
+    sleep_ms(200);
+    // Install snapshot filter before requesting snapshot.
+    let (tx, rx) = mpsc::channel();
+    let notifier = Mutex::new(Some(tx));
+    cluster.sim.wl().add_recv_filter(
+        1,
+        Box::new(RecvSnapshotFilter {
+            notifier,
+            region_id,
+        }),
+    );
+    cluster.must_request_snapshot(1, region_id);
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    sleep_ms(200);
+    let engine = cluster.get_raft_engine(1);
+    let raft_key = keys::raft_state_key(region_id);
+    let raft_state: RaftLocalState = engine.get_msg(&raft_key).unwrap().unwrap();
+    assert!(
+        raft_state.get_last_index() > RAFT_INIT_LOG_INDEX,
+        "{:?}",
+        raft_state
+    );
 }

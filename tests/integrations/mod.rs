@@ -2,8 +2,6 @@
 
 #![feature(test)]
 
-use grpcio as grpc;
-
 extern crate test;
 
 #[macro_use(
@@ -21,8 +19,6 @@ extern crate slog;
 extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
-#[macro_use]
-extern crate test_util;
 
 mod config;
 mod coprocessor;

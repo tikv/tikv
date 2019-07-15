@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
@@ -28,7 +29,6 @@ use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
 use tikv_util::collections::HashMap;
-use tikv_util::escape;
 use tikv_util::time::time_now_sec;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
@@ -132,7 +132,7 @@ impl Display for Task {
                 f,
                 "ask split region {} with key {}",
                 region.get_id(),
-                escape(split_key)
+                hex::encode_upper(&split_key),
             ),
             Task::AskBatchSplit {
                 ref region,
@@ -142,7 +142,7 @@ impl Display for Task {
                 f,
                 "ask split region {} with {}",
                 region.get_id(),
-                KeysInfoFormatter(&split_keys)
+                KeysInfoFormatter(split_keys.iter())
             ),
             Task::Heartbeat {
                 ref region,
@@ -185,6 +185,8 @@ pub struct Runner<T: PdClient> {
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
+    // Seconds between when a region is expected to send a heartbeat.
+    region_heartbeat_interval: u64,
 
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
@@ -199,6 +201,7 @@ impl<T: PdClient> Runner<T> {
         router: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
+        region_heartbeat_interval: u64,
     ) -> Runner<T> {
         Runner {
             store_id,
@@ -208,6 +211,7 @@ impl<T: PdClient> Runner<T> {
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
+            region_heartbeat_interval,
             scheduler,
         }
     }
@@ -390,6 +394,7 @@ impl<T: PdClient> Runner<T> {
         };
         stats.set_capacity(capacity);
 
+        // already include size of snapshot files
         let used_size =
             stats.get_used_size() + get_engine_used_size(Arc::clone(&store_info.engine));
         stats.set_used_size(used_size);
@@ -686,12 +691,16 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
                     let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
                     let written_keys_delta = written_keys - peer_stat.last_written_keys;
-                    let last_report_ts = peer_stat.last_report_ts;
+                    let mut last_report_ts = peer_stat.last_report_ts;
                     peer_stat.last_written_bytes = written_bytes;
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
                     peer_stat.last_report_ts = time_now_sec();
+                    last_report_ts = cmp::max(
+                        last_report_ts,
+                        peer_stat.last_report_ts - self.region_heartbeat_interval,
+                    );
                     (
                         read_bytes_delta,
                         read_keys_delta,

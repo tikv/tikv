@@ -46,6 +46,13 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
+/// Call fsync on directory by its path
+pub fn sync_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
+    // File::open will not error when opening a directory
+    // because it just call libc::open and do not do the file or dir check
+    fs::File::open(path)?.sync_all()
+}
+
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// Calculates the given file's CRC32 checksum.
@@ -69,16 +76,18 @@ pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
 
 #[cfg(test)]
 mod tests {
+    use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
     use std::fs::OpenOptions;
     use std::io::Write;
-    use tempdir::TempDir;
+    use std::iter;
+    use tempfile::TempDir;
 
     use super::*;
 
     #[test]
     fn test_get_file_size() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 
         // Ensure it works to get the size of an empty file.
@@ -113,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_file_exists() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 
         assert_eq!(file_exists(&dir_path), false);
@@ -134,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_delete_file_if_exist() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 
         let existent_file = dir_path.join("empty_file");
@@ -154,7 +163,11 @@ mod tests {
     }
 
     fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {
-        let s: String = thread_rng().gen_ascii_chars().take(size).collect();
+        let mut rng = thread_rng();
+        let s: String = iter::repeat(())
+            .map(|()| rng.sample(Alphanumeric))
+            .take(size)
+            .collect();
         fs::write(path, s.as_bytes()).unwrap();
         let mut digest = Digest::new(crc32::IEEE);
         digest.write(s.as_bytes());
@@ -163,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_calc_crc32() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
 
         let small_file = tmp_dir.path().join("small.txt");
         let small_checksum = gen_rand_file(&small_file, 1024);
@@ -176,12 +189,20 @@ mod tests {
 
     #[test]
     fn test_create_delete_dir() {
-        let tmp_dir = TempDir::new("").unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let subdir = tmp_dir.path().join("subdir");
 
         assert!(!delete_dir_if_exist(&subdir).unwrap());
         assert!(create_dir_if_not_exist(&subdir).unwrap());
         assert!(!create_dir_if_not_exist(&subdir).unwrap());
         assert!(delete_dir_if_exist(&subdir).unwrap());
+    }
+
+    #[test]
+    fn test_sync_dir() {
+        let tmp_dir = TempDir::new().unwrap();
+        sync_dir(tmp_dir.path()).unwrap();
+        let non_existent_file = tmp_dir.path().join("non_existent_file");
+        sync_dir(non_existent_file).unwrap_err();
     }
 }

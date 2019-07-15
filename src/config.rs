@@ -1,5 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Configuration for the entire server.
+//!
+//! TiKV is configured through the `TiKvConfig` type, which is in turn
+//! made up of many other configuration types.
+
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -9,14 +14,21 @@ use std::path::Path;
 use std::usize;
 
 use engine::rocks::{
-    BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
+    TitanDBOptions,
 };
 use slog;
 use sys_info;
 
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;
+use crate::raftstore::coprocessor::properties::{
+    MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+};
+use crate::raftstore::coprocessor::properties::{
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+};
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
@@ -24,18 +36,15 @@ use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
-use crate::storage::mvcc::properties::{
-    MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
-};
+use crate::storage::lock_manager::Config as PessimisticTxnConfig;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use tikv_util::config::{
-    self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
-};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
 
@@ -43,7 +52,8 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -67,7 +77,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
-    pub min_blob_size: u64,
+    pub min_blob_size: ReadableSize,
     pub blob_file_compression: CompressionType,
     pub blob_cache_size: ReadableSize,
     pub min_gc_batch_size: ReadableSize,
@@ -75,12 +85,13 @@ pub struct TitanCfConfig {
     pub discardable_ratio: f64,
     pub sample_ratio: f64,
     pub merge_small_file_threshold: ReadableSize,
+    pub blob_run_mode: BlobRunMode,
 }
 
 impl Default for TitanCfConfig {
     fn default() -> Self {
         Self {
-            min_blob_size: ReadableSize::kb(1).0 as u64, // disable titan default
+            min_blob_size: ReadableSize::kb(1), // disable titan default
             blob_file_compression: CompressionType::Lz4,
             blob_cache_size: ReadableSize::mb(0),
             min_gc_batch_size: ReadableSize::mb(16),
@@ -88,6 +99,7 @@ impl Default for TitanCfConfig {
             discardable_ratio: 0.5,
             sample_ratio: 0.1,
             merge_small_file_threshold: ReadableSize::mb(8),
+            blob_run_mode: BlobRunMode::Normal,
         }
     }
 }
@@ -95,14 +107,15 @@ impl Default for TitanCfConfig {
 impl TitanCfConfig {
     fn build_opts(&self) -> TitanDBOptions {
         let mut opts = TitanDBOptions::new();
-        opts.set_min_blob_size(self.min_blob_size);
+        opts.set_min_blob_size(self.min_blob_size.0 as u64);
         opts.set_blob_file_compression(self.blob_file_compression.into());
-        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, 0, 0.0);
+        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
         opts.set_discardable_ratio(self.discardable_ratio);
         opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
+        opts.set_blob_run_mode(self.blob_run_mode.into());
         opts
     }
 }
@@ -124,7 +137,7 @@ macro_rules! cf_config {
             pub bloom_filter_bits_per_key: i32,
             pub block_based_bloom_filter: bool,
             pub read_amp_bytes_per_bit: u32,
-            #[serde(with = "compression_type_level_serde")]
+            #[serde(with = "rocks_config::compression_type_level_serde")]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: ReadableSize,
             pub max_write_buffer_number: i32,
@@ -135,23 +148,40 @@ macro_rules! cf_config {
             pub level0_slowdown_writes_trigger: i32,
             pub level0_stop_writes_trigger: i32,
             pub max_compaction_bytes: ReadableSize,
-            #[serde(with = "config::compaction_pri_serde")]
+            #[serde(with = "rocks_config::compaction_pri_serde")]
             pub compaction_pri: CompactionPriority,
             pub dynamic_level_bytes: bool,
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
-            #[serde(with = "config::compaction_style_serde")]
+            #[serde(with = "rocks_config::compaction_style_serde")]
             pub compaction_style: DBCompactionStyle,
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+            pub prop_size_index_distance: u64,
+            pub prop_keys_index_distance: u64,
             pub titan: TitanCfConfig,
+        }
+
+        impl $name {
+            fn validate(&self) -> Result<(), Box<dyn Error>> {
+                if self.block_size.0 as usize > MAX_BLOCK_SIZE {
+                    return Err(format!(
+                        "invalid block-size {} for {}, exceed max size {}",
+                        self.block_size.0,
+                        stringify!($name),
+                        MAX_BLOCK_SIZE
+                    )
+                    .into());
+                }
+                Ok(())
+            }
         }
     };
 }
 
 macro_rules! write_into_metrics {
-    ($cf:expr, $tag:expr,$metrics:expr) => {{
+    ($cf:expr, $tag:expr, $metrics:expr) => {{
         $metrics
             .with_label_values(&[$tag, "block_size"])
             .set($cf.block_size.0 as f64);
@@ -236,7 +266,7 @@ macro_rules! write_into_metrics {
             .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
         $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
-            .set($cf.titan.min_blob_size as f64);
+            .set($cf.titan.min_blob_size.0 as f64);
         $metrics
             .with_label_values(&[$tag, "titan_blob_cache_size"])
             .set($cf.titan.blob_cache_size.0 as f64);
@@ -259,11 +289,17 @@ macro_rules! write_into_metrics {
 }
 
 macro_rules! build_cf_opt {
-    ($opt:ident) => {{
+    ($opt:ident, $cache:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
-        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
+        if let Some(cache) = $cache {
+            block_base_opts.set_block_cache(cache);
+        } else {
+            let mut cache_opts = LRUCacheOptions::new();
+            cache_opts.set_capacity($opt.block_cache_size.0 as usize);
+            block_base_opts.set_block_cache(&Cache::new_lru_cache(cache_opts));
+        }
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
@@ -345,15 +381,20 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan: TitanCfConfig::default(),
         }
     }
 }
 
 impl DefaultCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -364,8 +405,9 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -404,14 +446,16 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
 }
 
 impl WriteCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         // Prefix extractor(trim the timestamp at tail) for write cf.
         let e = Box::new(FixedSuffixSliceTransform::new(8));
         cf_opts
@@ -422,7 +466,10 @@ impl WriteCfConfig {
         // Collects user defined properties.
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -433,8 +480,9 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -465,14 +513,16 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
 }
 
 impl LockCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
@@ -487,8 +537,9 @@ cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -519,14 +570,16 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
 }
 
 impl RaftCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
@@ -540,11 +593,14 @@ impl RaftCfConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+// Note that Titan is still an experimental feature. Once enabled, it can't fall back.
+// Forced fallback may result in data loss.
 pub struct TitanDBConfig {
     pub enabled: bool,
     pub dirname: String,
     pub disable_gc: bool,
     pub max_background_gc: i32,
+    pub purge_obsolete_files_period: ReadableDuration,
 }
 
 impl Default for TitanDBConfig {
@@ -554,6 +610,7 @@ impl Default for TitanDBConfig {
             dirname: "".to_owned(),
             disable_gc: false,
             max_background_gc: 1,
+            purge_obsolete_files_period: ReadableDuration::secs(10),
         }
     }
 }
@@ -564,7 +621,12 @@ impl TitanDBConfig {
         opts.set_dirname(&self.dirname);
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
+        opts.set_purge_obsolete_files_period(self.purge_obsolete_files_period.as_secs() as usize);
         opts
+    }
+
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        Ok(())
     }
 }
 
@@ -572,7 +634,7 @@ impl TitanDBConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
-    #[serde(with = "config::recovery_mode_serde")]
+    #[serde(with = "rocks_config::recovery_mode_serde")]
     pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
@@ -590,7 +652,7 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
-    #[serde(with = "config::rate_limiter_mode_serde")]
+    #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     pub rate_limiter_mode: DBRateLimiterMode,
     pub auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
@@ -697,26 +759,31 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
+    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             // TODO: rmeove CF_RAFT.
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
 
-    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions<'_>> {
+    pub fn build_cf_opts_v2(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.defaultcf.validate()?;
+        self.lockcf.validate()?;
+        self.writecf.validate()?;
+        self.raftcf.validate()?;
+        self.titan.validate()?;
         Ok(())
     }
 
@@ -770,14 +837,16 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan: TitanCfConfig::default(),
         }
     }
 }
 
 impl RaftDefaultCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
@@ -794,7 +863,7 @@ impl RaftDefaultCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
-    #[serde(with = "config::recovery_mode_serde")]
+    #[serde(with = "rocks_config::recovery_mode_serde")]
     pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
@@ -829,7 +898,7 @@ impl Default for RaftDbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 2,
+            max_background_jobs: 4,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -840,7 +909,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
-            max_sub_compactions: 1,
+            max_sub_compactions: 2,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
@@ -896,8 +965,13 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
-        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
+    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
+        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
+    }
+
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.defaultcf.validate()?;
+        Ok(())
     }
 }
 
@@ -1163,6 +1237,7 @@ pub struct TiKvConfig {
     pub raftdb: RaftDbConfig,
     pub security: SecurityConfig,
     pub import: ImportConfig,
+    pub pessimistic_txn: PessimisticTxnConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1183,6 +1258,7 @@ impl Default for TiKvConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
+            pessimistic_txn: PessimisticTxnConfig::default(),
         }
     }
 }
@@ -1223,12 +1299,14 @@ impl TiKvConfig {
         }
 
         self.rocksdb.validate()?;
+        self.raftdb.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
         self.pd.validate()?;
         self.coprocessor.validate()?;
         self.security.validate()?;
         self.import.validate()?;
+        self.pessimistic_txn.validate()?;
         Ok(())
     }
 
@@ -1307,6 +1385,18 @@ impl TiKvConfig {
                 + self.server.end_point_request_max_handle_duration.as_secs();
             self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
         }
+        // When shared block cache is enabled, if its capacity is set, it overrides individual
+        // block cache sizes. Otherwise use the sum of block cache size of all column families
+        // as the shared cache size.
+        let cache_cfg = &mut self.storage.block_cache;
+        if cache_cfg.shared && cache_cfg.capacity.is_none() {
+            cache_cfg.capacity = Some(ReadableSize {
+                0: self.rocksdb.defaultcf.block_cache_size.0
+                    + self.rocksdb.writecf.block_cache_size.0
+                    + self.rocksdb.lockcf.block_cache_size.0
+                    + self.raftdb.defaultcf.block_cache_size.0,
+            });
+        }
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
@@ -1383,6 +1473,11 @@ impl TiKvConfig {
     }
 }
 
+/// Prevents launching with an incompatible configuration
+///
+/// Loads the previously-loaded configuration from `last_tikv.toml`,
+/// compares key configuration items and fails if they are not
+/// identical.
 pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
@@ -1416,7 +1511,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use super::*;
     use slog::Level;
@@ -1455,7 +1550,7 @@ mod tests {
 
     #[test]
     fn test_persist_cfg() {
-        let dir = TempDir::new("test_persist_cfg").unwrap();
+        let dir = Builder::new().prefix("test_persist_cfg").tempdir().unwrap();
         let path_buf = dir.path().join(LAST_CONFIG_FILE);
         let file = path_buf.as_path().to_str().unwrap();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
@@ -1480,7 +1575,10 @@ mod tests {
 
     #[test]
     fn test_create_parent_dir_if_missing() {
-        let root_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
+        let root_path = Builder::new()
+            .prefix("test_create_parent_dir_if_missing")
+            .tempdir()
+            .unwrap();
         let path = root_path.path().join("not_exist_dir");
 
         let mut tikv_cfg = TiKvConfig::default();
@@ -1496,6 +1594,24 @@ mod tests {
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
         assert!(tikv_cfg.validate().is_err());
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
+        tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_block_size() {
+        let mut tikv_cfg = TiKvConfig::default();
+        tikv_cfg.pd.endpoints = vec!["".to_owned()];
+        tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
+        tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::gb(10);
+        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::gb(10);
+        assert!(tikv_cfg.validate().is_err());
+        tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.writecf.block_size = ReadableSize::kb(10);
+        tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::kb(10);
+        tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.validate().unwrap();
     }
 

@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{black_box, Bencher, Criterion};
+use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
@@ -38,7 +38,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_with_setup(
+    b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> =
                 KvGenerator::new(config.key_length, config.value_length)
@@ -57,13 +57,14 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     )
 }
 
 fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
-    b.iter_with_setup(
+    b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |keys| {
             for key in keys {
@@ -74,13 +75,14 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     );
 }
 
 fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
-    b.iter_with_setup(
+    b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |keys| {
             for key in keys {
@@ -91,13 +93,14 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     )
 }
 
 fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
-    b.iter_with_setup(
+    b.iter_batched(
         || setup_prewrite(&engine, &config, 2),
         |keys| {
             for key in keys {
@@ -108,6 +111,7 @@ fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     )
 }
 
@@ -117,7 +121,7 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
-    b.iter_with_setup(
+    b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
                 .generate(DEFAULT_ITERATIONS);
@@ -133,6 +137,7 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     )
 }
 

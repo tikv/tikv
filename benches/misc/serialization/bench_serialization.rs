@@ -4,7 +4,7 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
 use raft::eraftpb::Entry;
 
 use protobuf::{self, Message};
-use rand::{thread_rng, Rng};
+use rand::{thread_rng, RngCore};
 use test::Bencher;
 
 use tikv_util::collections::HashMap;

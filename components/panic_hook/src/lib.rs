@@ -1,6 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! A simple panic hook that allows skipping printing stack trace conditionally.
+//!
+//! This crate is only for use during testing - in production, any panic in TiKV
+//! is fatal, and it is compiled with panic=abort, so use of this crate in
+//! production is an error.
 
 use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe, PanicInfo};

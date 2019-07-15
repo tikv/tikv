@@ -3,11 +3,11 @@
 use std::i32;
 
 use super::Result;
-use crate::grpc::CompressionAlgorithms;
+use grpcio::CompressionAlgorithms;
 
+use engine::rocks::util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
-use tikv_util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 
 pub use crate::raftstore::store::Config as RaftStoreConfig;
 pub use crate::storage::Config as StorageConfig;

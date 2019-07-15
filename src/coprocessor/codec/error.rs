@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::coprocessor::dag::expr::EvalContext;
 use regex::Error as RegexpError;
 use std::error::Error as StdError;
 use std::io;
@@ -55,17 +54,6 @@ quick_error! {
 }
 
 impl Error {
-    pub fn handle_invalid_time_error(ctx: &mut EvalContext, err: Error) -> Result<()> {
-        if err.code() == ERR_TRUNCATE_WRONG_VALUE {
-            return Err(err);
-        }
-        if ctx.cfg.strict_sql_mode && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt) {
-            return Err(err);
-        }
-        ctx.warnings.append_warning(err);
-        Ok(())
-    }
-
     pub fn overflow(data: &str, expr: &str) -> Error {
         let msg = format!("{} value is out of range in '{}'", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
@@ -144,11 +132,11 @@ impl Error {
     }
 }
 
-impl Into<select::Error> for Error {
-    fn into(self) -> select::Error {
+impl From<Error> for select::Error {
+    fn from(error: Error) -> select::Error {
         let mut err = select::Error::new();
-        err.set_code(self.code());
-        err.set_msg(format!("{:?}", self));
+        err.set_code(error.code());
+        err.set_msg(format!("{:?}", error));
         err
     }
 }
