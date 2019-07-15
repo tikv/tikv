@@ -131,13 +131,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Scanner::new(
-            store,
-            crate::coprocessor::dag::ScanOn::Index,
-            desc,
-            false,
-            range,
-        )
+        Scanner::new(store, desc, false, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
