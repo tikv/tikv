@@ -143,13 +143,7 @@ impl<'a> RpnFnCallExtra<'_> {
     /// but some CAST expressions inserted by TiKV coprocessor use an empty vector to represent
     /// the `inUnion` flag is false.
     pub fn in_union(&self) -> bool {
-        if self.implicit_args.is_empty() {
-            return false;
-        }
-        match self.implicit_args[0] {
-            ScalarValue::Int(Some(1)) => true,
-            _ => false,
-        }
+        self.implicit_args.get(0) == Some(&ScalarValue::Int(Some(1)))
     }
 }
 

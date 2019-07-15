@@ -69,13 +69,7 @@ pub struct ScalarFunc {
 impl ScalarFunc {
     /// Indicates whether the current expression is evaluated in union statement
     pub fn in_union(&self) -> bool {
-        if self.implicit_args.is_empty() {
-            return false;
-        }
-        match self.implicit_args[0] {
-            Datum::I64(1) => true,
-            _ => false,
-        }
+        self.implicit_args.get(0) == Some(&Datum::I64(1))
     }
 }
 
