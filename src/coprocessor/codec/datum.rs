@@ -553,7 +553,7 @@ impl Datum {
             (a, b) => {
                 let a = a.into_dec()?;
                 let b = b.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let d: Result<Decimal> = res.into();
@@ -713,7 +713,7 @@ impl Datum {
             (left, right) => {
                 let a = left.into_dec()?;
                 let b = right.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let i = res.unwrap().as_i64().unwrap();
