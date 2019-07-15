@@ -363,13 +363,9 @@ impl Datum {
             }
             Datum::Dec(d) => {
                 let res: Result<Decimal> = d.round(mysql::DEFAULT_FSP, RoundMode::HalfEven).into();
-                if let Err(e) = res {
-                    Err(e)
-                } else {
-                    res.unwrap().as_i64().into()
-                }
+                res?.as_i64().into()
             }
-            Datum::Json(j) => Ok(j.cast_to_int()),
+            Datum::Json(j) => j.cast_to_int(ctx),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
