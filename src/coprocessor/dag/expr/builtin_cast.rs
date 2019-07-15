@@ -9,7 +9,7 @@ use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::coprocessor::codec::convert::{
-    self, convert_bytes_to_int, convert_float_to_int, convert_float_to_uint,
+    self, convert_bytes_to_int, convert_bytes_to_uint, convert_float_to_int, convert_float_to_uint,
 };
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
@@ -72,7 +72,7 @@ impl ScalarFunc {
                 v
             })
         } else {
-            convert::bytes_to_uint(ctx, &val).map(|urs| {
+            convert_bytes_to_uint(ctx, &val, FieldTypeTp::LongLong).map(|urs| {
                 if !self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
                     && urs > (i64::MAX as u64)
                 {
@@ -122,7 +122,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let res = val.cast_to_int();
+        let res = val.cast_to_int(ctx)?;
         Ok(Some(res))
     }
 
@@ -1971,18 +1971,20 @@ mod tests {
             (
                 vec![Datum::Bytes(b"-9223372036854775810".to_vec())],
                 i64::MIN,
-                ERR_DATA_OUT_OF_RANGE,
+                FieldTypeFlag::empty(),
             ),
             (
                 vec![Datum::Bytes(b"18446744073709551616".to_vec())],
                 u64::MAX as i64,
-                ERR_TRUNCATE_WRONG_VALUE,
+                FieldTypeFlag::UNSIGNED,
             ),
         ];
 
-        for (cols, exp, err_code) in cases {
+        for (cols, exp, flag) in cases {
             let col_expr = col_expr(0, FieldTypeTp::String);
-            let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            ex.mut_field_type().as_mut_accessor().set_flag(flag);
+
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();
             cfg.set_flag(Flag::OVERFLOW_AS_WARNING | Flag::IN_SELECT_STMT);
@@ -1997,7 +1999,7 @@ mod tests {
             );
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                err_code,
+                ERR_DATA_OUT_OF_RANGE,
                 "unexpected warning: {:?}",
                 ctx.warnings.warnings
             );
