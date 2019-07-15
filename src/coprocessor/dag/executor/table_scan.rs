@@ -5,6 +5,7 @@ use tikv_util::collections::HashSet;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
@@ -44,9 +45,8 @@ impl InnerExecutor for TableInnerExecutor {
         util::is_point(&range)
     }
 
-    #[inline]
-    fn scan_on(&self) -> super::super::scanner::ScanOn {
-        super::super::scanner::ScanOn::Table
+    fn collect_executor_metrics(&self, m: &mut ExecutorMetrics) {
+        m.executor_count.table_scan += 1;
     }
 
     #[inline]
