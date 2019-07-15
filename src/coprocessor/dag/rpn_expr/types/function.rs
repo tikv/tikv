@@ -142,6 +142,7 @@ impl<'a> RpnFnCallExtra<'_> {
     /// Note: The TiDB will push down the `inUnion` flag by implicit constant arguments,
     /// but some CAST expressions inserted by TiKV coprocessor use an empty vector to represent
     /// the `inUnion` flag is false.
+    /// See: https://github.com/pingcap/tidb/blob/1e403873d905b2d0ad3be06bd8cd261203d84638/expression/builtin.go#L260
     pub fn in_union(&self) -> bool {
         self.implicit_args.get(0) == Some(&ScalarValue::Int(Some(1)))
     }
@@ -394,13 +395,7 @@ mod tests {
                         ret_field_type: field_type,
                         implicit_args,
                     };
-                    assert_eq!(
-                        call_extra.in_union(),
-                        expect,
-                        "expect: {}, got: {}",
-                        expect,
-                        !expect
-                    );
+                    assert_eq!(call_extra.in_union(), expect,);
                 }
                 _ => unreachable!(),
             }

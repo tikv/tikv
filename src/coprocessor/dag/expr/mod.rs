@@ -68,6 +68,7 @@ pub struct ScalarFunc {
 
 impl ScalarFunc {
     /// Indicates whether the current expression is evaluated in union statement
+    /// See: https://github.com/pingcap/tidb/blob/1e403873d905b2d0ad3be06bd8cd261203d84638/expression/builtin.go#L260
     pub fn in_union(&self) -> bool {
         self.implicit_args.get(0) == Some(&Datum::I64(1))
     }
