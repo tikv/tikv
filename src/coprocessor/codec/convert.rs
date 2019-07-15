@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::convert::AsRef;
 use std::convert::TryFrom;
+use std::fmt::Write;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
 use chrono::Datelike;
@@ -392,39 +393,50 @@ pub fn convert_datetime_to_numeric_string(dt: &DateTime) -> String {
             format!("{:04}{:02}{:02}", time.year(), time.month(), time.day())
         }
     } else {
-        let s = if dt.is_zero() {
-            String::from("00000000000000")
-        } else {
-            format!("{}", time.format("%Y%m%d%H%M%S"))
-        };
         let fsp = dt.get_fsp();
-        if fsp > 0 {
-            // Do we need to round the result?
-            let nanos = time.nanosecond() / TEN_POW[9 - fsp as usize];
-            format!("{}.{1:02$}", s, nanos, fsp as usize)
+        if dt.is_zero() {
+            if fsp > 0 {
+                // Do we need to round the result?
+                let nanos = time.nanosecond() / TEN_POW[9 - fsp as usize];
+                format!("{}.{1:02$}", "00000000000000", nanos, fsp as usize)
+            } else {
+                String::from("00000000000000")
+            }
         } else {
-            s
+            if fsp > 0 {
+                let nanos = time.nanosecond() / TEN_POW[9 - fsp as usize];
+                format!(
+                    "{}.{1:02$}",
+                    time.format("%Y%m%d%H%M%S"),
+                    nanos,
+                    fsp as usize
+                )
+            } else {
+                format!("{}", time.format("%Y%m%d%H%M%S"))
+            }
         }
     }
 }
 
-/// Converts a `Duration` to printable numberic string representation
+/// Converts a `Duration` to printable numeric string representation
 #[inline]
 pub fn convert_duration_to_numeric_string(dur: Duration) -> String {
     let mut buf = String::with_capacity(13);
     if dur.neg() {
         buf.push_str("-");
     }
-    buf.push_str(&format!(
+    write!(
+        buf,
         "{:02}{:02}{:02}",
         dur.hours(),
         dur.minutes(),
         dur.secs(),
-    ));
+    )
+    .unwrap();
     let fsp = dur.fsp();
     if fsp > 0 {
-        let nanos = dur.subsec_micros() / (10u32.pow(MICRO_WIDTH as u32 - u32::from(fsp)));
-        buf.push_str(&format!(".{:01$}", nanos, fsp as usize));
+        let nanos = dur.subsec_micros() / (TEN_POW[MICRO_WIDTH - usize::from(fsp)]) as u32;
+        write!(buf, ".{:01$}", nanos, fsp as usize).unwrap();
     }
     buf
 }
