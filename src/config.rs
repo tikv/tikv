@@ -38,7 +38,7 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
 use crate::storage::lock_manager::Config as PessimisticTxnConfig;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use engine::rocks::util::config::{self as rocks_config, CompressionType};
+use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
@@ -85,6 +85,7 @@ pub struct TitanCfConfig {
     pub discardable_ratio: f64,
     pub sample_ratio: f64,
     pub merge_small_file_threshold: ReadableSize,
+    pub blob_run_mode: BlobRunMode,
 }
 
 impl Default for TitanCfConfig {
@@ -98,6 +99,7 @@ impl Default for TitanCfConfig {
             discardable_ratio: 0.5,
             sample_ratio: 0.1,
             merge_small_file_threshold: ReadableSize::mb(8),
+            blob_run_mode: BlobRunMode::Normal,
         }
     }
 }
@@ -113,6 +115,7 @@ impl TitanCfConfig {
         opts.set_discardable_ratio(self.discardable_ratio);
         opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
+        opts.set_blob_run_mode(self.blob_run_mode.into());
         opts
     }
 }
@@ -402,8 +405,9 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4);
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -476,8 +480,9 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4);
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -532,8 +537,9 @@ cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
-        titan.min_blob_size = ReadableSize::gb(4);
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),

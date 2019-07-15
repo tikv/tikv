@@ -2,7 +2,19 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
-## [Unreleased]
+## [3.0.1]
++ Engine
+  - Count size of blob files in used size
+  - Add titan metrics
+  - Check max required open files for titan
+  - Add blob-run-mode for titan
+  - Set `blob_run_mode=ReadOnly` for non-default CFs
+  - Update rust-rocksdb
++ Server
+  - Call `_exit` instead of exit in panic hook
++ Transaction
+  - Scan versions from u64::max to `start_ts` in `get_txn`
+  - Improve the performance of dead lock detection
 
 ## [3.0.0]
 

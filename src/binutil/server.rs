@@ -433,8 +433,15 @@ fn pre_start(cfg: &TiKvConfig) {
 }
 
 fn check_system_config(config: &TiKvConfig) {
+    let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
+    if config.rocksdb.titan.enabled {
+        // Titan engine maintains yet another pool of blob files and uses the same max
+        // number of open files setup as rocksdb does. So we double the max required
+        // open files here
+        rocksdb_max_open_files *= 2;
+    }
     if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
+        RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
     ) {
         fatal!("{}", e);
     }
