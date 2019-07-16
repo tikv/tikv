@@ -6,6 +6,7 @@ use cop_codegen::rpn_fn;
 use cop_datatype::{EvalType, FieldTypeAccessor};
 use tipb::expression::FieldType;
 
+use crate::coprocessor::codec::convert::*;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
@@ -33,6 +34,63 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::DateTime, EvalType::Real) => cast_time_as_real_fn_meta(),
         (EvalType::Duration, EvalType::Real) => cast_duration_as_real_fn_meta(),
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
+        (EvalType::Int, EvalType::Int) => {
+            if !from_field_type.is_unsigned() {
+                if !to_field_type.is_unsigned() {
+                    cast_int_as_int_fn_meta()
+                } else {
+                    cast_int_as_uint_fn_meta()
+                }
+            } else {
+                if !to_field_type.is_unsigned() {
+                    cast_uint_as_int_fn_meta()
+                } else {
+                    cast_uint_as_uint_fn_meta()
+                }
+            }
+        }
+        (EvalType::Real, EvalType::Int) => {
+            if !to_field_type.is_unsigned() {
+                cast_float_as_int_fn_meta()
+            } else {
+                cast_float_as_uint_fn_meta()
+            }
+        }
+        (EvalType::Bytes, EvalType::Int) => {
+            if !to_field_type.is_unsigned() {
+                cast_bytes_as_int_fn_meta()
+            } else {
+                cast_bytes_as_uint_fn_meta()
+            }
+        }
+        (EvalType::Decimal, EvalType::Int) => {
+            if !to_field_type.is_unsigned() {
+                cast_decimal_as_int_fn_meta()
+            } else {
+                cast_decimal_as_uint_fn_meta()
+            }
+        }
+        (EvalType::DateTime, EvalType::Int) => {
+            if !to_field_type.is_unsigned() {
+                cast_datetime_as_int_fn_meta()
+            } else {
+                cast_datetime_as_uint_fn_meta()
+            }
+        }
+        (EvalType::Duration, EvalType::Int) => {
+            if !to_field_type.is_unsigned() {
+                cast_duration_as_int_fn_meta()
+            } else {
+                cast_duration_as_uint_fn_meta()
+            }
+        }
+        (EvalType::Json, EvalType::Int) => {
+            if !to_field_type.is_unsigned() {
+                cast_json_as_int_fn_meta()
+            } else {
+                cast_json_as_uint_fn_meta()
+            }
+        }
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
     };
     // This cast function is inserted by `Coprocessor` automatically,
@@ -114,6 +172,125 @@ pub fn cast_int_as_decimal(
         }
     }
 }
+
+macro_rules! cast_as_integer {
+    ($ty:ty, $as_int_fn:ident, $as_uint_fn:ident, $as_int_conv:ident, $as_uint_conv:ident) => {
+        cast_as_integer!(
+            _inner,
+            $ty,
+            $as_int_fn,
+            $as_uint_fn,
+            $as_int_conv,
+            $as_uint_conv,
+            val
+        );
+    };
+    ($ty:ty, $as_int_fn:ident, $as_uint_fn:ident, $as_int_conv:ident, $as_uint_conv:ident, $extra:expr) => {
+        cast_as_integer!(
+            _inner,
+            $ty,
+            $as_int_fn,
+            $as_uint_fn,
+            $as_int_conv,
+            $as_uint_conv,
+            $extra
+        );
+    };
+    (_inner, $ty:ty, $as_int_fn:ident, $as_uint_fn:ident, $as_int_conv:ident, $as_uint_conv:ident, $expr:expr) => {
+        #[rpn_fn(capture = [ctx, extra])]
+        #[inline]
+        pub fn $as_int_fn(
+            ctx: &mut EvalContext,
+            extra: &RpnFnCallExtra<'_>,
+            val: &Option<$ty>,
+        ) -> Result<Option<i64>> {
+            match val {
+                None => Ok(None),
+                Some(val) => {
+                    let val = $as_int_conv(ctx, $expr, extra.ret_field_type.tp())?;
+                    Ok(Some(val))
+                }
+            }
+        }
+
+        #[rpn_fn(capture = [ctx, extra])]
+        #[inline]
+        pub fn $as_uint_fn(
+            ctx: &mut EvalContext,
+            extra: &RpnFnCallExtra<'_>,
+            val: &Option<$ty>,
+        ) -> Result<Option<i64>> {
+            match val {
+                None => Ok(None),
+                Some(val) => {
+                    let val = $as_uint_conv(ctx, $expr, extra.ret_field_type.tp())?;
+                    Ok(Some(val as i64))
+                }
+            }
+        }
+    };
+}
+
+cast_as_integer!(
+    Int,
+    cast_int_as_int,
+    cast_int_as_uint,
+    convert_int_to_int,
+    convert_int_to_uint,
+    *val
+);
+cast_as_integer!(
+    Int,
+    cast_uint_as_int,
+    cast_uint_as_uint,
+    convert_uint_to_int,
+    convert_uint_to_uint,
+    *val as u64
+);
+cast_as_integer!(
+    Real,
+    cast_float_as_int,
+    cast_float_as_uint,
+    convert_float_to_int,
+    convert_float_to_uint,
+    val.into_inner()
+);
+cast_as_integer!(
+    Bytes,
+    cast_bytes_as_int,
+    cast_bytes_as_uint,
+    convert_bytes_to_int,
+    convert_bytes_to_uint
+);
+cast_as_integer!(
+    Decimal,
+    cast_decimal_as_int,
+    cast_decimal_as_uint,
+    convert_decimal_to_int,
+    convert_decimal_to_uint
+);
+cast_as_integer!(
+    DateTime,
+    cast_datetime_as_int,
+    cast_datetime_as_uint,
+    convert_datetime_to_int,
+    convert_datetime_to_uint
+);
+cast_as_integer!(
+    Duration,
+    cast_duration_as_int,
+    cast_duration_as_uint,
+    convert_duration_to_int,
+    convert_duration_to_uint,
+    *val
+);
+cast_as_integer!(
+    Json,
+    cast_json_as_int,
+    cast_json_as_uint,
+    convert_json_to_int,
+    convert_json_to_uint
+);
 
 /// The implementation for push down signature `CastStringAsReal`.
 #[rpn_fn(capture = [ctx])]
