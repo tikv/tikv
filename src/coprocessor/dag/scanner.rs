@@ -2,19 +2,12 @@
 
 use kvproto::coprocessor::KeyRange;
 
-use crate::coprocessor::codec::table::truncate_as_row_key;
 use crate::coprocessor::util;
 use crate::coprocessor::Result;
 use crate::storage::{Key, Scanner as KvScanner, Statistics, Store, Value};
 use tikv_util::set_panic_mark;
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
-
-#[derive(Copy, Clone, PartialEq)]
-pub enum ScanOn {
-    Table,
-    Index,
-}
 
 fn create_range_scanner<S: Store>(
     store: &S,
@@ -31,7 +24,6 @@ fn create_range_scanner<S: Store>(
 // for `TableScanExecutor` and `IndexScanExecutor`
 pub struct Scanner<S: Store> {
     desc: bool,
-    scan_on: ScanOn,
     key_only: bool,
     last_scanned_key: Vec<u8>,
     scanner: S::Scanner,
@@ -42,16 +34,9 @@ pub struct Scanner<S: Store> {
 }
 
 impl<S: Store> Scanner<S> {
-    pub fn new(
-        store: &S,
-        scan_on: ScanOn,
-        desc: bool,
-        key_only: bool,
-        range: KeyRange,
-    ) -> Result<Self> {
+    pub fn new(store: &S, desc: bool, key_only: bool, range: KeyRange) -> Result<Self> {
         Ok(Self {
             desc,
-            scan_on,
             key_only,
             last_scanned_key: Vec::with_capacity(MIN_KEY_BUFFER_CAPACITY),
             scanner: create_range_scanner(store, desc, key_only, &range)?,
@@ -142,11 +127,6 @@ impl<S: Store> Scanner<S> {
             util::convert_to_prefix_next(&mut self.last_scanned_key);
             range.set_end(self.last_scanned_key.clone());
         } else {
-            // TODO: We may don't need `truncate_as_row_key`. Needs investigation.
-            if self.scan_on == ScanOn::Table {
-                let row_key_len = truncate_as_row_key(&self.last_scanned_key).unwrap().len();
-                self.last_scanned_key.truncate(row_key_len);
-            }
             range.set_start(self.last_scanned_key.clone());
         }
         true
@@ -260,7 +240,7 @@ pub mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let range = get_range(table_id, i64::MIN, i64::MAX);
-        let mut scanner = Scanner::new(&store, ScanOn::Table, false, false, range).unwrap();
+        let mut scanner = Scanner::new(&store, false, false, range).unwrap();
         for &(ref k, ref v) in &test_data {
             let (key, value) = scanner.next_row().unwrap().unwrap();
             assert_eq!(k, &key);
@@ -278,7 +258,7 @@ pub mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let range = get_range(table_id, i64::MIN, i64::MAX);
-        let mut scanner = Scanner::new(&store, ScanOn::Table, true, false, range).unwrap();
+        let mut scanner = Scanner::new(&store, true, false, range).unwrap();
         data.kv_data.reverse();
         for &(ref k, ref v) in &data.kv_data {
             let (key, value) = scanner.next_row().unwrap().unwrap();
@@ -301,7 +281,7 @@ pub mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let range = get_range(table_id, i64::MIN, i64::MAX);
-        let mut scanner = Scanner::new(&store, ScanOn::Table, false, true, range).unwrap();
+        let mut scanner = Scanner::new(&store, false, true, range).unwrap();
         let (_, value) = scanner.next_row().unwrap().unwrap();
         assert!(value.is_empty());
     }
@@ -361,7 +341,7 @@ pub mod tests {
         };
 
         let range = get_range(table_id, 1, 26);
-        let mut scanner = Scanner::new(&store, ScanOn::Table, false, true, range.clone()).unwrap();
+        let mut scanner = Scanner::new(&store, false, true, range.clone()).unwrap();
         let mut res = test_take(&mut scanner, 3, 1, 4);
         res.append(&mut test_take(&mut scanner, 3, 4, 8));
         res.append(&mut test_take(&mut scanner, 3, 8, 21));
@@ -373,7 +353,7 @@ pub mod tests {
             .collect();
         assert_eq!(res, expect_keys);
 
-        let mut scanner = Scanner::new(&store, ScanOn::Table, true, true, range).unwrap();
+        let mut scanner = Scanner::new(&store, true, true, range).unwrap();
         let mut res = test_take(&mut scanner, 3, 15, 26);
         res.append(&mut test_take(&mut scanner, 3, 5, 15));
         res.append(&mut test_take(&mut scanner, 10, -1, 5));

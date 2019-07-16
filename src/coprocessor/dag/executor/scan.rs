@@ -23,8 +23,7 @@ pub trait InnerExecutor {
     // checks if the key range represents a point.
     fn is_point(&self, range: &KeyRange) -> bool;
 
-    // indicate which scan it will perform, Table or Index, this will pass to Scanner.
-    fn scan_on(&self) -> super::super::scanner::ScanOn;
+    fn collect_executor_metrics(&self, m: &mut ExecutorMetrics);
 
     // indicate whether the scan is a key only scan.
     fn key_only(&self) -> bool;
@@ -107,14 +106,8 @@ impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
     }
 
     fn new_scanner(&self, range: KeyRange) -> Result<super::super::scanner::Scanner<S>> {
-        super::super::Scanner::new(
-            &self.store,
-            self.inner.scan_on(),
-            self.desc,
-            self.inner.key_only(),
-            range,
-        )
-        .map_err(Error::from)
+        super::super::Scanner::new(&self.store, self.desc, self.inner.key_only(), range)
+            .map_err(Error::from)
     }
 }
 
@@ -163,11 +156,7 @@ impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
             scanner.collect_statistics_into(&mut metrics.cf_stats);
         }
         if self.first_collect {
-            if self.inner.scan_on() == super::super::ScanOn::Table {
-                metrics.executor_count.table_scan += 1;
-            } else {
-                metrics.executor_count.index_scan += 1;
-            }
+            self.inner.collect_executor_metrics(metrics);
             self.first_collect = false;
         }
     }
