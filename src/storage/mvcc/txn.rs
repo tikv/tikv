@@ -960,7 +960,7 @@ mod tests {
         test_gc_imp(b"k2", &v1, &v2, &v3, &v4);
     }
 
-    fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8], k3: &[u8]) {
+    fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v, k, 5);
@@ -968,31 +968,27 @@ mod tests {
 
         must_commit(&engine, k, 5, 10);
         must_seek_write(&engine, k, u64::max_value(), 5, 10, WriteType::Put);
-        must_reverse_seek_write(&engine, k, 5, 5, 10, WriteType::Put);
         must_seek_write_none(&engine, k2, u64::max_value());
-        must_reverse_seek_write_none(&engine, k3, 5);
         must_get_commit_ts(&engine, k, 5, 10);
 
         must_prewrite_delete(&engine, k, k, 15);
         must_rollback(&engine, k, 15);
         must_seek_write(&engine, k, u64::max_value(), 15, 15, WriteType::Rollback);
-        must_reverse_seek_write(&engine, k, 15, 15, 15, WriteType::Rollback);
         must_get_commit_ts(&engine, k, 5, 10);
         must_get_commit_ts_none(&engine, k, 15);
 
         must_prewrite_lock(&engine, k, k, 25);
         must_commit(&engine, k, 25, 30);
         must_seek_write(&engine, k, u64::max_value(), 25, 30, WriteType::Lock);
-        must_reverse_seek_write(&engine, k, 25, 25, 30, WriteType::Lock);
         must_get_commit_ts(&engine, k, 25, 30);
     }
 
     #[test]
     fn test_write() {
-        test_write_imp(b"kk", b"v1", b"k", b"kkk");
+        test_write_imp(b"kk", b"v1", b"k");
 
         let v2 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_write_imp(b"kk", &v2, b"k", b"kkk");
+        test_write_imp(b"kk", &v2, b"k");
     }
 
     fn test_scan_keys_imp(keys: Vec<&[u8]>, values: Vec<&[u8]>) {
