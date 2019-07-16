@@ -1,3 +1,5 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use cop_codegen::rpn_fn;
 
 use super::super::expr::EvalContext;
