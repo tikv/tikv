@@ -796,9 +796,26 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
         // families.
-        let cf_used_size = engine
+        let mut cf_used_size = engine
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .expect("rocksdb is too old, missing total-sst-files-size property");
+        // For memtable
+        if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
+        {
+            cf_used_size += mem_table;
+        }
+        // For blob files
+        if let Some(live_blob) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE)
+        {
+            cf_used_size += live_blob;
+        }
+        if let Some(obsolete_blob) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+        {
+            cf_used_size += obsolete_blob;
+        }
+        
         STORE_ENGINE_SIZE_GAUGE_VEC
             .with_label_values(&[name, cf])
             .set(cf_used_size as i64);
