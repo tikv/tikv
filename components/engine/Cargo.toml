@@ -32,7 +32,9 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+#git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/GlitterIsMe/rust-rocksdb.git"
+branch = "zyw-titan"
 package = "rocksdb"
 
 [dev-dependencies]
