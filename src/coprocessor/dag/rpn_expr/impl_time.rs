@@ -35,12 +35,64 @@ pub fn date_format(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::dag::rpn_expr::test_util::RpnFnScalarEvaluator;
+    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_date_format() {
-        unimplemented!()
+        let cases = vec![
+            (
+                "2010-01-07 23:12:34.12345",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u
+                %V %v %a %W %w %X %x %Y %y %%",
+                "Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01
+                01 01 Thu Thursday 4 2010 2010 2010 10 %",
+            ),
+            (
+                "2012-12-21 23:12:34.123456",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U
+                %u %V %v %a %W %w %X %x %Y %y %%",
+                "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51
+                51 51 51 Fri Friday 5 2012 2012 2012 12 %",
+            ),
+            (
+                "0000-01-01 00:00:00.123456",
+                // Functions week() and yearweek() don't support multi mode,
+                // so the result of "%U %u %V %Y" is different from MySQL.
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v
+                %x %Y %y %%",
+                "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 52
+                4294967295 0000 00 %",
+            ),
+            (
+                "2016-09-3 00:59:59.123456",
+                "abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U
+                %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z",
+                "abcSep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35
+                35 35 35 Sat Saturday 6 2016 2016 2016 16!123 %xyz z",
+            ),
+            (
+                "2012-10-01 00:00:00",
+                "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v
+                %x %Y %y %%",
+                "Oct October 10 10 1st 01 1 275 0 00 00 AM 12:00:00 AM 00:00:00 00 000000 40
+                2012 2012 12 %",
+            ),
+        ];
+        for (date, format, expect) in cases {
+            let date = Some(DateTime::parse_utc_datetime(date, 6).unwrap());
+            let format = Some(format.as_bytes().to_vec());
+            let expect = Some(expect.as_bytes().to_vec());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(date.clone())
+                .push_param(format.clone())
+                .evaluate(ScalarFuncSig::DateFormatSig)
+                .unwrap();
+            assert_eq!(output, expect, "{:?} {:?}", date, format);
+        }
     }
 }
