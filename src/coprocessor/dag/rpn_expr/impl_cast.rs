@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 
 use cop_codegen::rpn_fn;
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
+use cop_datatype::{EvalType, FieldTypeAccessor};
 use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::data_type::*;
@@ -23,7 +23,7 @@ pub fn get_cast_fn_rpn_node(
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
     let func_meta = match (from, to) {
         (EvalType::Int, EvalType::Decimal) => {
-            if !is_unsigned(from_field_type) && !is_unsigned(&to_field_type) {
+            if !from_field_type.is_unsigned() && !to_field_type.is_unsigned() {
                 cast_int_as_decimal_fn_meta()
             } else {
                 cast_uint_as_decimal_fn_meta()
@@ -45,11 +45,6 @@ pub fn get_cast_fn_rpn_node(
         field_type: to_field_type,
         implicit_args: Vec::new(),
     })
-}
-
-#[inline]
-fn is_unsigned(ft: &FieldType) -> bool {
-    ft.as_accessor().flag().contains(FieldTypeFlag::UNSIGNED)
 }
 
 fn produce_dec_with_specified_tp(
