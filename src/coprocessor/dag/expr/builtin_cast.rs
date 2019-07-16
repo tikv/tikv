@@ -8,11 +8,22 @@ use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use crate::coprocessor::codec::convert::{
+    self, convert_bytes_to_int, convert_bytes_to_uint, convert_float_to_int, convert_float_to_uint,
+};
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
 use crate::coprocessor::dag::expr::Flag;
+
+// TODO: remove it after CAST function use `in_union` function
+#[allow(dead_code)]
+
+/// Indicates whether the current expression is evaluated in union statement
+/// See: https://github.com/pingcap/tidb/blob/1e403873d905b2d0ad3be06bd8cd261203d84638/expression/builtin.go#L260
+fn in_union(implicit_args: &[Datum]) -> bool {
+    implicit_args.get(0) == Some(&Datum::I64(1))
+}
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -22,10 +33,10 @@ impl ScalarFunc {
     pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
-            let uval = convert_float_to_uint(val, u64::MAX, FieldTypeTp::Double)?;
+            let uval = convert_float_to_uint(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(uval as i64))
         } else {
-            let res = convert_float_to_int(val, i64::MIN, i64::MAX, FieldTypeTp::Double)?;
+            let res = convert_float_to_int(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(res))
         }
     }
@@ -61,13 +72,16 @@ impl ScalarFunc {
             _ => false,
         };
         let res = if is_negative {
-            convert::bytes_to_int(ctx, &val).map(|v| {
-                ctx.warnings
-                    .append_warning(Error::cast_neg_int_as_unsigned());
+            convert_bytes_to_int(ctx, &val, FieldTypeTp::LongLong).map(|v| {
+                // TODO: handle inUion flag
+                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                    ctx.warnings
+                        .append_warning(Error::cast_neg_int_as_unsigned());
+                }
                 v
             })
         } else {
-            convert::bytes_to_uint(ctx, &val).map(|urs| {
+            convert_bytes_to_uint(ctx, &val, FieldTypeTp::LongLong).map(|urs| {
                 if !self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
                     && urs > (i64::MAX as u64)
                 {
@@ -117,7 +131,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let res = val.cast_to_int();
+        let res = val.cast_to_int(ctx)?;
         Ok(Some(res))
     }
 
@@ -1931,7 +1945,7 @@ mod tests {
                 0,
             ),
             (
-                FieldTypeFlag::empty(),
+                FieldTypeFlag::UNSIGNED,
                 vec![Datum::Bytes(b"-1".to_vec())],
                 -1,
                 1,
@@ -1947,9 +1961,18 @@ mod tests {
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
+            assert_eq!(
+                ctx.warnings.warning_cnt, warnings_cnt,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
+            );
             if warnings_cnt > 0 {
-                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code(),
+                    ERR_UNKNOWN,
+                    "unexpected warning: {:?}",
+                    ctx.warnings.warnings
+                );
             }
         }
 
@@ -1957,16 +1980,20 @@ mod tests {
             (
                 vec![Datum::Bytes(b"-9223372036854775810".to_vec())],
                 i64::MIN,
+                FieldTypeFlag::empty(),
             ),
             (
                 vec![Datum::Bytes(b"18446744073709551616".to_vec())],
                 u64::MAX as i64,
+                FieldTypeFlag::UNSIGNED,
             ),
         ];
 
-        for (cols, exp) in cases {
+        for (cols, exp, flag) in cases {
             let col_expr = col_expr(0, FieldTypeTp::String);
-            let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            ex.mut_field_type().as_mut_accessor().set_flag(flag);
+
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();
             cfg.set_flag(Flag::OVERFLOW_AS_WARNING | Flag::IN_SELECT_STMT);
@@ -1974,10 +2001,16 @@ mod tests {
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(
+                ctx.warnings.warning_cnt, 1,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
+            );
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                ERR_TRUNCATE_WRONG_VALUE
+                ERR_DATA_OUT_OF_RANGE,
+                "unexpected warning: {:?}",
+                ctx.warnings.warnings
             );
 
             // test overflow as error
@@ -2010,4 +2043,20 @@ mod tests {
     //     let res = e.eval_duration(&mut ctx, &cols);
     //     assert!(res.is_err());
     // }
+
+    #[test]
+    fn test_in_union() {
+        use super::*;
+
+        // empty implicit arguments
+        assert!(!in_union(&[]));
+
+        // single implicit arguments
+        assert!(!in_union(&[Datum::I64(0)]));
+        assert!(in_union(&[Datum::I64(1)]));
+
+        // multiple implicit arguments
+        assert!(!in_union(&[Datum::I64(0), Datum::I64(1)]));
+        assert!(in_union(&[Datum::I64(1), Datum::I64(0)]));
+    }
 }

@@ -7,13 +7,9 @@ use std::result;
 
 use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;
-use kvproto::errorpb;
-use kvproto::metapb::*;
-use uuid::{ParseError, Uuid};
+use uuid::ParseError;
 
-use crate::pd::{Error as PdError, RegionInfo};
 use crate::raftstore::errors::Error as RaftStoreError;
-use tikv_util::codec::Error as CodecError;
 
 quick_error! {
     #[derive(Debug)]
@@ -29,11 +25,6 @@ quick_error! {
             description(err.description())
         }
         Uuid(err: ParseError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        Codec(err: CodecError) {
             from()
             cause(err)
             description(err.description())
@@ -64,66 +55,13 @@ quick_error! {
         FileExists(path: PathBuf) {
             display("File {:?} exists", path)
         }
-        FileNotExists(path: PathBuf) {
-            display("File {:?} not exists", path)
-        }
         FileCorrupted(path: PathBuf, reason: String) {
             display("File {:?} corrupted: {}", path, reason)
         }
         InvalidSSTPath(path: PathBuf) {
             display("Invalid SST path {:?}", path)
         }
-        EngineInUse(uuid: Uuid) {
-            display("Engine {} is in use", uuid)
-        }
-        EngineNotFound(uuid: Uuid) {
-            display("Engine {} not found", uuid)
-        }
-        InvalidProtoMessage(reason: String) {
-            display("Invalid proto message {}", reason)
-        }
         InvalidChunk {}
-        PdRPC(err: PdError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        TikvRPC(err: errorpb::Error) {
-            display("TikvRPC {:?}", err)
-        }
-        NotLeader(new_leader: Option<Peer>) {}
-        EpochNotMatch(current_regions: Vec<Region>) {}
-        UpdateRegion(new_region: RegionInfo) {}
-        ImportJobFailed(tag: String) {
-            display("{}", tag)
-        }
-        ImportSSTJobFailed(tag: String) {
-            display("{}", tag)
-        }
-        PrepareRangeJobFailed(tag: String) {
-            display("{}", tag)
-        }
-        ResourceTemporarilyUnavailable(msg: String) {
-            display("{}", msg)
-        }
-    }
-}
-
-impl From<errorpb::Error> for Error {
-    fn from(mut err: errorpb::Error) -> Self {
-        if err.has_not_leader() {
-            let mut error = err.take_not_leader();
-            if error.has_leader() {
-                Error::NotLeader(Some(error.take_leader()))
-            } else {
-                Error::NotLeader(None)
-            }
-        } else if err.has_epoch_not_match() {
-            let mut error = err.take_epoch_not_match();
-            Error::EpochNotMatch(error.take_current_regions().to_vec())
-        } else {
-            Error::TikvRPC(err)
-        }
     }
 }
 
