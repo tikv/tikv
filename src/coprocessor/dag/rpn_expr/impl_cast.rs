@@ -23,15 +23,7 @@ pub fn get_cast_fn_rpn_node(
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
     let func_meta = match (from, to) {
         (EvalType::Int, EvalType::Decimal) => {
-            if !from_field_type
-                .as_accessor()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED)
-                && !to_field_type
-                    .as_accessor()
-                    .flag()
-                    .contains(FieldTypeFlag::UNSIGNED)
-            {
+            if !is_unsigned(from_field_type) && !is_unsigned(&to_field_type) {
                 cast_int_as_decimal_fn_meta()
             } else {
                 cast_uint_as_decimal_fn_meta()
@@ -53,6 +45,11 @@ pub fn get_cast_fn_rpn_node(
         field_type: to_field_type,
         implicit_args: Vec::new(),
     })
+}
+
+#[inline]
+fn is_unsigned(ft: &FieldType) -> bool {
+    ft.as_accessor().flag().contains(FieldTypeFlag::UNSIGNED)
 }
 
 fn produce_dec_with_specified_tp(
