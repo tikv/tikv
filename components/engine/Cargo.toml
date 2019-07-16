@@ -3,7 +3,6 @@ name = "engine"
 version = "0.0.1"
 edition = "2018"
 publish = false
-
 [features]
 portable = ["engine_rocksdb/portable"]
 sse = ["engine_rocksdb/sse"]
@@ -32,7 +31,9 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/GlitterIsMe/rust-rocksdb.git"
+branch = "zyw-titan"
+#git = "https://github.com/pingcap/rust-rocksdb.git"
 package = "rocksdb"
 
 [dev-dependencies]
