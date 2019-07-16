@@ -653,6 +653,30 @@ impl Duration {
 
         string
     }
+
+    /// Converts a `Duration` to printable numeric string representation
+    #[inline]
+    pub fn to_numeric_string(self) -> String {
+        use std::fmt::Write;
+        let mut buf = String::with_capacity(13);
+        if self.neg() {
+            buf.push('-');
+        }
+        write!(
+            buf,
+            "{:02}{:02}{:02}",
+            self.hours(),
+            self.minutes(),
+            self.secs(),
+        )
+        .unwrap();
+        if self.get_fsp() > 0 {
+            let nanos =
+                self.subsec_micros() / (TEN_POW[MICRO_WIDTH - usize::from(self.get_fsp())]) as u32;
+            write!(buf, ".{:01$}", nanos, self.get_fsp() as usize).unwrap();
+        }
+        buf
+    }
 }
 
 impl TryFrom<Duration> for Decimal {
@@ -1109,5 +1133,24 @@ mod benches {
                 let _ = test::black_box(lhs.checked_sub(rhs).unwrap());
             }
         })
+    }
+
+    #[test]
+    fn test_to_numeric_string() {
+        let cases: Vec<(&[u8], i8, &str)> = vec![
+            (b"11:30:45.123456", 4, "113045.1235"),
+            (b"11:30:45.123456", 6, "113045.123456"),
+            (b"11:30:45.123456", 0, "113045"),
+            (b"11:30:45.999999", 0, "113046"),
+            (b"08:40:59.575601", 0, "084100"),
+            (b"23:59:59.575601", 0, "240000"),
+            (b"00:00:00", 0, "000000"),
+            (b"00:00:00", 6, "000000.000000"),
+        ];
+        for (s, fsp, expect) in cases {
+            let du = Duration::parse(s, fsp).unwrap();
+            let get = du.to_numeric_string();
+            assert_eq!(get, expect.to_string());
+        }
     }
 }

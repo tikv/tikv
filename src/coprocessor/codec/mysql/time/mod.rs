@@ -5,7 +5,7 @@ mod tz;
 pub mod weekmode;
 
 use std::cmp::{min, Ordering};
-use std::convert::{AsRef, TryFrom, TryInto};
+use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
 use std::fmt::{self, Display, Formatter};
 use std::{mem, str};
@@ -16,7 +16,6 @@ use cop_datatype::FieldTypeTp;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use crate::coprocessor::codec::convert::convert_datetime_to_numeric_string;
 use crate::coprocessor::codec::mysql::duration::{
     Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
 };
@@ -264,22 +263,60 @@ impl Time {
         self.time = time
     }
 
+    /// Converts a `DateTime` to printable string representation
+    #[inline]
+    pub fn to_numeric_string(&self) -> String {
+        if self.time_type == TimeType::Date {
+            if self.is_zero() {
+                String::from("00000000")
+            } else {
+                format!(
+                    "{:04}{:02}{:02}",
+                    self.time.year(),
+                    self.time.month(),
+                    self.time.day()
+                )
+            }
+        } else {
+            if self.is_zero() {
+                if self.fsp > 0 {
+                    // Do we need to round the result?
+                    let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
+                    format!("{}.{1:02$}", "00000000000000", nanos, self.fsp as usize)
+                } else {
+                    String::from("00000000000000")
+                }
+            } else {
+                if self.fsp > 0 {
+                    let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
+                    format!(
+                        "{}.{1:02$}",
+                        self.time.format("%Y%m%d%H%M%S"),
+                        nanos,
+                        self.fsp as usize
+                    )
+                } else {
+                    format!("{}", self.time.format("%Y%m%d%H%M%S"))
+                }
+            }
+        }
+    }
+
     /// Returns the `Decimal` representation of the `DateTime/Date`
-    /// TODO: remove this method after implementing `convert_datetime_to_decimal`
     pub fn to_decimal(&self) -> Result<Decimal> {
         if self.is_zero() {
             return Ok(0.into());
         }
 
-        convert_datetime_to_numeric_string(&self).parse()
+        self.to_numeric_string().parse()
     }
 
-    /// TODO: remove this method after implementing `convert_datetime_to_f64`
+    /// Returns the `Decimal` representaton of the `DateTime/Date`
     pub fn to_f64(&self) -> Result<f64> {
         if self.is_zero() {
             return Ok(0f64);
         }
-        let f: f64 = box_try!(convert_datetime_to_numeric_string(&self).parse());
+        let f: f64 = box_try!(self.to_numeric_string().parse());
         Ok(f)
     }
 
@@ -783,12 +820,6 @@ impl Time {
     }
 }
 
-impl AsRef<DateTime<Tz>> for Time {
-    fn as_ref(&self) -> &DateTime<Tz> {
-        &self.time
-    }
-}
-
 impl PartialOrd for Time {
     fn partial_cmp(&self, right: &Time) -> Option<Ordering> {
         Some(self.cmp(right))
@@ -1238,6 +1269,24 @@ mod tests {
                 );
                 assert_eq!(reverted_timestamp.to_packed_u64(), packed);
             })
+        }
+    }
+
+    #[test]
+    fn test_to_numeric_string() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "00000000000000"),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get = t.to_numeric_string();
+            assert_eq!(get, expect);
         }
     }
 
