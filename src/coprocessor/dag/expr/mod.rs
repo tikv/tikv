@@ -315,18 +315,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::{i64, u64};
+    // use std::sync::Arc;
+    // use std::{i64, u64};
+    use std::i64;
 
     use cop_datatype::{self, Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-    use super::{Error, EvalConfig, EvalContext, Expression};
+    use super::{Error, EvalContext, Expression};
     use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use crate::coprocessor::codec::mysql::json::JsonEncoder;
-    use crate::coprocessor::codec::mysql::{
-        charset, Decimal, DecimalEncoder, Duration, Json, Time,
-    };
+    use crate::coprocessor::codec::mysql::{charset, DecimalEncoder};
     use crate::coprocessor::codec::{mysql, Datum};
     use tikv_util::codec::number::{self, NumberEncoder};
 
