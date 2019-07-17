@@ -114,19 +114,18 @@ macro_rules! overflow {
 /// Converts an int value to a different int value.
 #[inline]
 pub fn convert_int_to_int(ctx: &mut EvalContext, val: i64, tp: FieldTypeTp) -> Result<i64> {
-    //    let lower_bound = integer_signed_lower_bound(tp);
-    //    // https://dev.mysql.com/doc/refman/8.0/en/out-of-range-and-overflow.html
-    //    if val < lower_bound {
-    //        ctx.handle_overflow(overflow!(val, lower_bound))?;
-    //        return Ok(lower_bound);
-    //    }
-    //    let upper_bound = integer_signed_upper_bound(tp);
-    //    if val > upper_bound {
-    //        ctx.handle_overflow(overflow!(val, upper_bound))?;
-    //        return Ok(upper_bound);
-    //    }
-    //    Ok(val)
-    Ok(10)
+    let lower_bound = integer_signed_lower_bound(tp);
+    // https://dev.mysql.com/doc/refman/8.0/en/out-of-range-and-overflow.html
+    if val < lower_bound {
+        ctx.handle_overflow(overflow!(val, lower_bound))?;
+        return Ok(lower_bound);
+    }
+    let upper_bound = integer_signed_upper_bound(tp);
+    if val > upper_bound {
+        ctx.handle_overflow(overflow!(val, upper_bound))?;
+        return Ok(upper_bound);
+    }
+    Ok(val)
 }
 
 /// Converts an uint value to an int value.
