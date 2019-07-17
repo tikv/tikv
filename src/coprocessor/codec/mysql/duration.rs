@@ -670,10 +670,10 @@ impl Duration {
             self.secs(),
         )
         .unwrap();
-        if self.get_fsp() > 0 {
-            let nanos =
-                self.subsec_micros() / (TEN_POW[MICRO_WIDTH - usize::from(self.get_fsp())]) as u32;
-            write!(buf, ".{:01$}", nanos, self.get_fsp() as usize).unwrap();
+        let fsp = self.get_fsp();
+        if fsp > 0 {
+            let nanos = self.subsec_micros() / (TEN_POW[MICRO_WIDTH - usize::from(fsp)]) as u32;
+            write!(buf, ".{:01$}", nanos, fsp as usize).unwrap();
         }
         buf
     }

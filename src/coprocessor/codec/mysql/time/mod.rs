@@ -282,7 +282,7 @@ impl Time {
                 if self.fsp > 0 {
                     // Do we need to round the result?
                     let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
-                    format!("{}.{1:02$}", "00000000000000", nanos, self.fsp as usize)
+                    format!("00000000000000.{:01$}", nanos, self.fsp as usize)
                 } else {
                     String::from("00000000000000")
                 }
