@@ -748,130 +748,130 @@ mod tests {
         expr
     }
 
-    #[test]
-    fn test_cast_as_int() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
-        let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[allow(clippy::inconsistent_digit_grouping)]
-        let time_int = 2012_12_12_12_00_23i64;
-        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
-        let cases = vec![
-            (
-                ScalarFuncSig::CastIntAsInt,
-                FieldTypeTp::LongLong,
-                Some(FieldTypeFlag::UNSIGNED),
-                vec![Datum::U64(1)],
-                1,
-            ),
-            (
-                ScalarFuncSig::CastIntAsInt,
-                FieldTypeTp::LongLong,
-                None,
-                vec![Datum::I64(-1)],
-                -1,
-            ),
-            (
-                ScalarFuncSig::CastStringAsInt,
-                FieldTypeTp::String,
-                None,
-                vec![Datum::Bytes(b"1".to_vec())],
-                1,
-            ),
-            (
-                ScalarFuncSig::CastRealAsInt,
-                FieldTypeTp::Double,
-                None,
-                vec![Datum::F64(1f64)],
-                1,
-            ),
-            (
-                ScalarFuncSig::CastRealAsInt,
-                FieldTypeTp::Double,
-                None,
-                vec![Datum::F64(1234.000)],
-                1234,
-            ),
-            (
-                ScalarFuncSig::CastTimeAsInt,
-                FieldTypeTp::DateTime,
-                None,
-                vec![Datum::Time(t)],
-                time_int,
-            ),
-            (
-                ScalarFuncSig::CastDurationAsInt,
-                FieldTypeTp::Duration,
-                None,
-                vec![Datum::Dur(duration_t)],
-                120023,
-            ),
-            (
-                ScalarFuncSig::CastJsonAsInt,
-                FieldTypeTp::JSON,
-                None,
-                vec![Datum::Json(Json::I64(-1))],
-                -1,
-            ),
-            (
-                ScalarFuncSig::CastJsonAsInt,
-                FieldTypeTp::JSON,
-                None,
-                vec![Datum::Json(Json::U64(1))],
-                1,
-            ),
-            (
-                ScalarFuncSig::CastDecimalAsInt,
-                FieldTypeTp::NewDecimal,
-                None,
-                vec![Datum::Dec(Decimal::from(1))],
-                1,
-            ),
-        ];
-
-        let null_cols = vec![Datum::Null];
-        for (sig, tp, flag, col, expect) in cases {
-            let col_expr = col_expr(0, tp);
-            let mut exp = scalar_func_expr(sig, &[col_expr]);
-            if flag.is_some() {
-                exp.mut_field_type()
-                    .as_mut_accessor()
-                    .set_flag(flag.unwrap());
-            }
-            let e = Expression::build(&ctx, exp).unwrap();
-            let res = e.eval_int(&mut ctx, &col).unwrap();
-            assert_eq!(res.unwrap(), expect);
-            // test None
-            let res = e.eval_int(&mut ctx, &null_cols).unwrap();
-            assert!(res.is_none());
-        }
-
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-        let cases = vec![
-            (
-                ScalarFuncSig::CastDecimalAsInt,
-                FieldTypeTp::NewDecimal,
-                vec![Datum::Dec(
-                    Decimal::from_str("1111111111111111111111111").unwrap(),
-                )],
-                9223372036854775807,
-            ),
-            (
-                ScalarFuncSig::CastDecimalAsInt,
-                FieldTypeTp::NewDecimal,
-                vec![Datum::Dec(
-                    Decimal::from_str("-1111111111111111111111111").unwrap(),
-                )],
-                -9223372036854775808,
-            ),
-        ];
-        for (sig, tp, col, expect) in cases {
-            let col_expr = col_expr(0, tp);
-            let exp = scalar_func_expr(sig, &[col_expr]);
-            let e = Expression::build(&ctx, exp).unwrap();
-            let res = e.eval_int(&mut ctx, &col).unwrap();
-            assert_eq!(res.unwrap(), expect);
-        }
-    }
+    //    #[test]
+    //    fn test_cast_as_int() {
+    //        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
+    //        let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
+    //        #[allow(clippy::inconsistent_digit_grouping)]
+    //        let time_int = 2012_12_12_12_00_23i64;
+    //        let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
+    //        let cases = vec![
+    //            (
+    //                ScalarFuncSig::CastIntAsInt,
+    //                FieldTypeTp::LongLong,
+    //                Some(FieldTypeFlag::UNSIGNED),
+    //                vec![Datum::U64(1)],
+    //                1,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastIntAsInt,
+    //                FieldTypeTp::LongLong,
+    //                None,
+    //                vec![Datum::I64(-1)],
+    //                -1,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastStringAsInt,
+    //                FieldTypeTp::String,
+    //                None,
+    //                vec![Datum::Bytes(b"1".to_vec())],
+    //                1,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastRealAsInt,
+    //                FieldTypeTp::Double,
+    //                None,
+    //                vec![Datum::F64(1f64)],
+    //                1,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastRealAsInt,
+    //                FieldTypeTp::Double,
+    //                None,
+    //                vec![Datum::F64(1234.000)],
+    //                1234,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastTimeAsInt,
+    //                FieldTypeTp::DateTime,
+    //                None,
+    //                vec![Datum::Time(t)],
+    //                time_int,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastDurationAsInt,
+    //                FieldTypeTp::Duration,
+    //                None,
+    //                vec![Datum::Dur(duration_t)],
+    //                120023,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastJsonAsInt,
+    //                FieldTypeTp::JSON,
+    //                None,
+    //                vec![Datum::Json(Json::I64(-1))],
+    //                -1,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastJsonAsInt,
+    //                FieldTypeTp::JSON,
+    //                None,
+    //                vec![Datum::Json(Json::U64(1))],
+    //                1,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastDecimalAsInt,
+    //                FieldTypeTp::NewDecimal,
+    //                None,
+    //                vec![Datum::Dec(Decimal::from(1))],
+    //                1,
+    //            ),
+    //        ];
+    //
+    //        let null_cols = vec![Datum::Null];
+    //        for (sig, tp, flag, col, expect) in cases {
+    //            let col_expr = col_expr(0, tp);
+    //            let mut exp = scalar_func_expr(sig, &[col_expr]);
+    //            if flag.is_some() {
+    //                exp.mut_field_type()
+    //                    .as_mut_accessor()
+    //                    .set_flag(flag.unwrap());
+    //            }
+    //            let e = Expression::build(&ctx, exp).unwrap();
+    //            let res = e.eval_int(&mut ctx, &col).unwrap();
+    //            assert_eq!(res.unwrap(), expect);
+    //            // test None
+    //            let res = e.eval_int(&mut ctx, &null_cols).unwrap();
+    //            assert!(res.is_none());
+    //        }
+    //
+    //        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+    //        let cases = vec![
+    //            (
+    //                ScalarFuncSig::CastDecimalAsInt,
+    //                FieldTypeTp::NewDecimal,
+    //                vec![Datum::Dec(
+    //                    Decimal::from_str("1111111111111111111111111").unwrap(),
+    //                )],
+    //                9223372036854775807,
+    //            ),
+    //            (
+    //                ScalarFuncSig::CastDecimalAsInt,
+    //                FieldTypeTp::NewDecimal,
+    //                vec![Datum::Dec(
+    //                    Decimal::from_str("-1111111111111111111111111").unwrap(),
+    //                )],
+    //                -9223372036854775808,
+    //            ),
+    //        ];
+    //        for (sig, tp, col, expect) in cases {
+    //            let col_expr = col_expr(0, tp);
+    //            let exp = scalar_func_expr(sig, &[col_expr]);
+    //            let e = Expression::build(&ctx, exp).unwrap();
+    //            let res = e.eval_int(&mut ctx, &col).unwrap();
+    //            assert_eq!(res.unwrap(), expect);
+    //        }
+    //    }
 
     #[test]
     fn test_cast_as_real() {
