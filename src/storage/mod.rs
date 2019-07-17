@@ -76,6 +76,22 @@ impl Mutation {
             Mutation::Insert((ref key, _)) => key,
         }
     }
+
+    pub fn into_key_value(self) -> (Key, Option<Value>) {
+        match self {
+            Mutation::Put((key, value)) => (key, Some(value)),
+            Mutation::Delete(key) => (key, None),
+            Mutation::Lock(key) => (key, None),
+            Mutation::Insert((key, value)) => (key, Some(value)),
+        }
+    }
+
+    pub fn is_insert(&self) -> bool {
+        match *self {
+            Mutation::Insert(_) => true,
+            _ => false,
+        }
+    }
 }
 
 pub enum StorageCb {
