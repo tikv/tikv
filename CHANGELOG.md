@@ -3,7 +3,7 @@ All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [2.1.15]
-- Unify Log Format [#5083](https://github.com/tikv/tikv/pull/5083)
+- Unify log format [#5083](https://github.com/tikv/tikv/pull/5083)
 - Change the way of calculating the approximate distance [#4017](https://github.com/tikv/tikv/pull/4017)
 
 ## [2.1.14]
