@@ -84,9 +84,12 @@ extern crate serde_json;
 #[cfg_attr(
     test,
     macro_use(
+        kv,
         slog_o,
         slog_kv,
-        slog_crit,
+        slog_info,
+        slog_debug,
+        slog_warn,
         slog_log,
         slog_record,
         slog_b,
