@@ -577,11 +577,14 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         self.timer = SlowTimer::new();
     }
 
-    fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
+    fn handle_control(&mut self, store: &mut StoreFsm, counter: &mut i32) -> Option<usize> {
         let mut expected_msg_count = None;
         while self.store_msg_buf.len() < self.messages_per_tick {
             match store.receiver.try_recv() {
-                Ok(msg) => self.store_msg_buf.push(msg),
+                Ok(msg) => {
+                    self.store_msg_buf.push(msg);
+                    *counter += 1;
+                }
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);
                     break;
@@ -601,7 +604,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         expected_msg_count
     }
 
-    fn handle_normal(&mut self, peer: &mut PeerFsm) -> Option<usize> {
+    fn handle_normal(&mut self, peer: &mut PeerFsm, counter: &mut i32) -> Option<usize> {
         let mut expected_msg_count = None;
         if peer.have_pending_merge_apply_result() {
             expected_msg_count = Some(peer.receiver.len());
@@ -633,7 +636,8 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                             },
                         |_| unreachable!()
                     );
-                    self.peer_msg_buf.push(msg)
+                    *counter += 1;
+                    self.peer_msg_buf.push(msg);
                 }
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);

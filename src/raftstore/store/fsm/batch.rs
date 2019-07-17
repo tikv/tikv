@@ -5,6 +5,7 @@
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
+use super::metrics::WORKER_POLL_HANDLE_BATCH_COUNTER;
 use super::router::{BasicMailbox, Router};
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
@@ -243,12 +244,12 @@ pub trait PollHandler<N, C> {
     /// larger than the value. If it returns None, then this function will
     /// still be called for the same FSM in the next loop unless the FSM is
     /// stopped.
-    fn handle_control(&mut self, control: &mut C) -> Option<usize>;
+    fn handle_control(&mut self, control: &mut C, counter: &mut i32) -> Option<usize>;
 
     /// This function is called when handling readiness for normal FSM.
     ///
     /// The returned value is handled in the same way as `handle_control`.
-    fn handle_normal(&mut self, normal: &mut N) -> Option<usize>;
+    fn handle_normal(&mut self, normal: &mut N, counter: &mut i32) -> Option<usize>;
 
     /// This function is called at the end of every round.
     fn end(&mut self, batch: &mut [Box<N>]);
@@ -300,11 +301,16 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut batch = Batch::with_capacity(self.max_batch_size);
         let mut exhausted_fsms = Vec::with_capacity(self.max_batch_size);
 
+        let thread = thread::current();
+        let threadname = thread.name().unwrap();
         self.fetch_batch(&mut batch, self.max_batch_size);
         while !batch.is_empty() {
             self.handler.begin(batch.len());
+            let mut counter = 0;
             if batch.control.is_some() {
-                let len = self.handler.handle_control(batch.control.as_mut().unwrap());
+                let len = self
+                    .handler
+                    .handle_control(batch.control.as_mut().unwrap(), &mut counter);
                 if batch.control.as_ref().unwrap().is_stopped() {
                     batch.remove_control(&self.router.control_box);
                 } else if let Some(len) = len {
@@ -313,7 +319,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
             if !batch.normals.is_empty() {
                 for (i, p) in batch.normals.iter_mut().enumerate() {
-                    let len = self.handler.handle_normal(p);
+                    let len = self.handler.handle_normal(p, &mut counter);
                     if p.is_stopped() {
                         exhausted_fsms.push((i, None));
                     } else if len.is_some() {
@@ -322,6 +328,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             self.handler.end(batch.normals_mut());
+            WORKER_POLL_HANDLE_BATCH_COUNTER
+                .with_label_values(&[&threadname])
+                .inc_by(counter as f64);
+
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.
             while let Some((r, mark)) = exhausted_fsms.pop() {
@@ -496,21 +506,23 @@ pub mod tests {
             self.local.begin += 1;
         }
 
-        fn handle_control(&mut self, control: &mut Runner) -> Option<usize> {
+        fn handle_control(&mut self, control: &mut Runner, counter: &mut i32) -> Option<usize> {
             self.local.control += 1;
             while let Ok(r) = control.recv.try_recv() {
                 if let Some(r) = r {
                     r(control);
+                    *counter += 1;
                 }
             }
             Some(0)
         }
 
-        fn handle_normal(&mut self, normal: &mut Runner) -> Option<usize> {
+        fn handle_normal(&mut self, normal: &mut Runner, counter: &mut i32) -> Option<usize> {
             self.local.normal += 1;
             while let Ok(r) = normal.recv.try_recv() {
                 if let Some(r) = r {
                     r(normal);
+                    *counter += 1;
                 }
             }
             Some(0)

@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::{exponential_buckets, Histogram};
+use prometheus::{exponential_buckets, CounterVec, Histogram};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -9,6 +9,12 @@ lazy_static! {
         "tikv_raftstore_apply_proposal",
         "The count of proposals sent by a region at once",
         exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref WORKER_POLL_HANDLE_BATCH_COUNTER: CounterVec = register_counter_vec!(
+        "tikv_raftstore_poll_handle",
+        "The count of batch handle by every thread worker poll",
+        &["threadName"]
     )
     .unwrap();
 }

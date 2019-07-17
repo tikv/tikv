@@ -2768,11 +2768,11 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {}
 
     /// There is no control fsm in apply poller.
-    fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {
+    fn handle_control(&mut self, _: &mut ControlFsm, _counter: &mut i32) -> Option<usize> {
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
+    fn handle_normal(&mut self, normal: &mut ApplyFsm, counter: &mut i32) -> Option<usize> {
         let mut expected_msg_count = None;
         if normal.delegate.wait_merge_state.is_some() {
             // We need to query the length first, otherwise there is a race
@@ -2786,7 +2786,10 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         }
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
-                Ok(msg) => self.msg_buf.push(msg),
+                Ok(msg) => {
+                    self.msg_buf.push(msg);
+                    *counter += 1;
+                }
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);
                     break;
