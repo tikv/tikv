@@ -26,6 +26,8 @@ pub use self::extension::*;
 pub use self::tz::Tz;
 pub use self::weekmode::WeekMode;
 
+const ZERO_DATETIME_NUMERIC_STR: &str = "00000000000000";
+const ZERO_DATE_NUMERIC_STR: &str = "00000000";
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -268,23 +270,21 @@ impl Time {
     pub fn to_numeric_string(&self) -> String {
         if self.time_type == TimeType::Date {
             if self.is_zero() {
-                String::from("00000000")
+                String::from(ZERO_DATE_NUMERIC_STR)
             } else {
-                format!(
-                    "{:04}{:02}{:02}",
-                    self.time.year(),
-                    self.time.month(),
-                    self.time.day()
-                )
+                format!("{}", self.time.format("%Y%m%d"))
             }
         } else {
             if self.is_zero() {
                 if self.fsp > 0 {
                     // Do we need to round the result?
                     let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
-                    format!("00000000000000.{:01$}", nanos, self.fsp as usize)
+                    format!(
+                        "{}.{1:02$}",
+                        ZERO_DATETIME_NUMERIC_STR, nanos, self.fsp as usize
+                    )
                 } else {
-                    String::from("00000000000000")
+                    String::from(ZERO_DATETIME_NUMERIC_STR)
                 }
             } else {
                 if self.fsp > 0 {
