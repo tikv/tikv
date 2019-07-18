@@ -109,13 +109,13 @@ impl Conn {
                             drop(receiver);
                             match r {
                                 Ok(_) => info!("raft RPC finished success"),
-                                Err(ref e) => error!("raft RPC finished fail"; "err" => ?e),
+                                Err(ref e) => warn!("raft RPC finished fail"; "err" => ?e),
                             };
                             r
                         }))
                     }
                     Err(e) => {
-                        error!("batch_raft RPC finished fail"; "err" => ?e);
+                        warn!("batch_raft RPC finished fail"; "err" => ?e);
                         Box::new(future::err(e))
                     }
                 }
@@ -204,7 +204,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
             .stream
             .send(msg)
         {
-            error!("RaftClient fails to send");
+            warn!("send to {} fail, the gRPC connection could be broken", addr);
             let index = msg.region_id as usize % self.cfg.grpc_raft_conn_num;
             self.conns.remove(&(addr.to_owned(), index));
 
@@ -213,6 +213,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
                     self.addrs.insert(store_id, current_addr);
                 }
             }
+            return Err(box_err!("RaftClient send fail"));
         }
         Ok(())
     }
@@ -230,7 +231,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
                 let _ = self.stats_pool.spawn(
                     self.timer
                         .delay(Instant::now() + wait)
-                        .map_err(|_| error!("RaftClient delay flush error"))
+                        .map_err(|_| warn!("RaftClient delay flush error"))
                         .inspect(move |_| notifier.notify()),
                 );
             }
