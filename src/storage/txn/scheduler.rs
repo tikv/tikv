@@ -542,65 +542,65 @@ mod tests {
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
             Command::ScanLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 max_ts: 5,
                 start_key: None,
                 limit: 0,
             },
             Command::ResolveLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![],
             },
             Command::MvccByKey {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 key: Key::from_raw(b"k"),
             },
             Command::MvccByStartTs {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 start_ts: 25,
             },
         ];
         let write_cmds = vec![
             Command::Prewrite {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),
             },
             Command::AcquirePessimisticLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![(Key::from_raw(b"k"), false)],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),
             },
             Command::Commit {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 lock_ts: 10,
                 commit_ts: 20,
             },
             Command::Cleanup {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 key: Key::from_raw(b"k"),
                 start_ts: 10,
             },
             Command::Rollback {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
             },
             Command::PessimisticRollback {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
                 for_update_ts: 20,
             },
             Command::ResolveLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![(
@@ -609,7 +609,7 @@ mod tests {
                 )],
             },
             Command::ResolveLockLite {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 start_ts: 10,
                 commit_ts: 0,
                 resolve_keys: vec![Key::from_raw(b"k")],

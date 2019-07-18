@@ -330,7 +330,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             self.handler.end(batch.normals_mut());
             WORKER_POLL_HANDLE_BATCH_COUNTER
                 .with_label_values(&[&threadname])
-                .inc_by(counter as f64);
+                .inc_by(f64::from(counter));
 
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.

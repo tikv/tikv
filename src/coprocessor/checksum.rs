@@ -5,12 +5,12 @@ use std::vec::IntoIter;
 use crc::crc64::{self, Digest, Hasher64};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
+use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
 use crate::storage::{Snapshot, SnapshotStore};
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
-use crate::coprocessor::dag::{ScanOn, Scanner};
+use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
@@ -70,11 +70,7 @@ impl<S: Snapshot> ChecksumContext<S> {
     }
 
     fn new_scanner(&self, range: KeyRange) -> Result<Scanner<SnapshotStore<S>>> {
-        let scan_on = match self.req.get_scan_on() {
-            ChecksumScanOn::Table => ScanOn::Table,
-            ChecksumScanOn::Index => ScanOn::Index,
-        };
-        Scanner::new(&self.store, scan_on, false, false, range).map_err(Error::from)
+        Scanner::new(&self.store, false, false, range).map_err(Error::from)
     }
 }
 
@@ -94,13 +90,13 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
             total_bytes += k.len() + v.len();
         }
 
-        let mut resp = ChecksumResponse::new();
+        let mut resp = ChecksumResponse::default();
         resp.set_checksum(checksum);
         resp.set_total_kvs(total_kvs);
         resp.set_total_bytes(total_bytes as u64);
         let data = box_try!(resp.write_to_bytes());
 
-        let mut resp = Response::new();
+        let mut resp = Response::default();
         resp.set_data(data);
         Ok(resp)
     }

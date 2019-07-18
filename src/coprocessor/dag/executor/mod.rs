@@ -426,7 +426,7 @@ pub mod tests {
     impl TestStore {
         pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
             let engine = TestEngineBuilder::new().build().unwrap();
-            let ctx = Context::new();
+            let ctx = Context::default();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
                 snapshot,
@@ -485,7 +485,7 @@ pub mod tests {
 
     #[inline]
     pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(table::encode_row_key(table_id, start));
         key_range.set_end(table::encode_row_key(table_id, end));
         key_range
