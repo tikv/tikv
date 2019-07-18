@@ -960,6 +960,7 @@ impl RaftDbConfig {
         opts.add_event_listener(EventListener::new("raft"));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
+        opts.set_titandb_options(&TitanDBConfig::default().build_opts());
         // TODO maybe create a new env for raft engine
 
         opts
