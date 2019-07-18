@@ -35,18 +35,11 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::Duration, EvalType::Real) => cast_duration_as_real_fn_meta(),
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         (EvalType::Int, EvalType::Int) => {
-            if !from_field_type.is_unsigned() {
-                if !to_field_type.is_unsigned() {
-                    cast_int_as_int_fn_meta()
-                } else {
-                    cast_int_as_uint_fn_meta()
-                }
-            } else {
-                if !to_field_type.is_unsigned() {
-                    cast_uint_as_int_fn_meta()
-                } else {
-                    cast_uint_as_uint_fn_meta()
-                }
+            match (from_field_type.is_unsigned(), to_field_type.is_unsigned()) {
+                (false, false) => cast_int_as_int_fn_meta(),
+                (false, true) => cast_int_as_uint_fn_meta(),
+                (true, false) => cast_uint_as_int_fn_meta(),
+                (true, true) => cast_uint_as_uint_fn_meta(),
             }
         }
         (EvalType::Real, EvalType::Int) => {
@@ -172,12 +165,9 @@ pub fn cast_int_as_decimal(
 
 macro_rules! cast_as_integer {
     ($ty:ty, $as_int_fn:ident, $as_int_conv:ident) => {
-        cast_as_integer!(_inner, $ty, $as_int_fn, $as_int_conv, val);
+        cast_as_integer!($ty, $as_int_fn, $as_int_conv, val);
     };
-    ($ty:ty, $as_int_fn:ident, $as_int_conv:ident, $extra:expr) => {
-        cast_as_integer!(_inner, $ty, $as_int_fn, $as_int_conv, $extra);
-    };
-    (_inner, $ty:ty, $as_int_fn:ident, $as_int_conv:ident, $expr:expr) => {
+    ($ty:ty, $as_int_fn:ident, $as_int_conv:ident, $expr:expr) => {
         #[rpn_fn(capture = [ctx])]
         #[inline]
         pub fn $as_int_fn(ctx: &mut EvalContext, val: &Option<$ty>) -> Result<Option<i64>> {
