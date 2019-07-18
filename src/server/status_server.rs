@@ -355,7 +355,6 @@ mod tests {
     use crate::config::TiKvConfig;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
-    #[cfg(not(feature = "no-fail"))]
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
 

@@ -143,7 +143,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 impl From<Error> for errorpb::Error {
     fn from(err: Error) -> errorpb::Error {
-        let mut errorpb = errorpb::Error::new();
+        let mut errorpb = errorpb::Error::default();
         errorpb.set_message(format!("{}", err));
 
         match err {
@@ -183,15 +183,15 @@ impl From<Error> for errorpb::Error {
                     .set_end_key(region.get_end_key().to_vec());
             }
             Error::EpochNotMatch(_, new_regions) => {
-                let mut e = errorpb::EpochNotMatch::new();
+                let mut e = errorpb::EpochNotMatch::default();
                 e.set_current_regions(RepeatedField::from_vec(new_regions));
                 errorpb.set_epoch_not_match(e);
             }
             Error::StaleCommand => {
-                errorpb.set_stale_command(errorpb::StaleCommand::new());
+                errorpb.set_stale_command(errorpb::StaleCommand::default());
             }
             Error::Transport(reason) if reason == DiscardReason::Full => {
-                let mut server_is_busy_err = errorpb::ServerIsBusy::new();
+                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
             }
