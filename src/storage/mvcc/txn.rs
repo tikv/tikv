@@ -162,7 +162,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     /// Checks whether the existence of the key is according to `should_not_exist`.
-    /// If not,returns an `AlreadyExist` error.
+    /// If not, returns an `AlreadyExist` error.
     fn check_data_constraint(
         &mut self,
         should_not_exist: bool,
