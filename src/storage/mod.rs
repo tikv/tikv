@@ -69,11 +69,27 @@ pub enum Mutation {
 #[allow(clippy::match_same_arms)]
 impl Mutation {
     pub fn key(&self) -> &Key {
-        match *self {
+        match self {
             Mutation::Put((ref key, _)) => key,
             Mutation::Delete(ref key) => key,
             Mutation::Lock(ref key) => key,
             Mutation::Insert((ref key, _)) => key,
+        }
+    }
+
+    pub fn into_key_value(self) -> (Key, Option<Value>) {
+        match self {
+            Mutation::Put((key, value)) => (key, Some(value)),
+            Mutation::Delete(key) => (key, None),
+            Mutation::Lock(key) => (key, None),
+            Mutation::Insert((key, value)) => (key, Some(value)),
+        }
+    }
+
+    pub fn is_insert(&self) -> bool {
+        match self {
+            Mutation::Insert(_) => true,
+            _ => false,
         }
     }
 }
