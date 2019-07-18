@@ -1071,7 +1071,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/GlitterIsMe/rust-rocksdb.git?branch=zyw-titan#a5e83bfc3208d3da0125291cf4666d61cfa6fefa"
+source = "git+https://github.com/GlitterIsMe/rust-rocksdb.git?branch=zyw-titan#acec2ef6be3778951d41bb4ed6099941d2e2338a"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1087,7 +1087,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/GlitterIsMe/rust-rocksdb.git?branch=zyw-titan#a5e83bfc3208d3da0125291cf4666d61cfa6fefa"
+source = "git+https://github.com/GlitterIsMe/rust-rocksdb.git?branch=zyw-titan#acec2ef6be3778951d41bb4ed6099941d2e2338a"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1878,7 +1878,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/GlitterIsMe/rust-rocksdb.git?branch=zyw-titan#a5e83bfc3208d3da0125291cf4666d61cfa6fefa"
+source = "git+https://github.com/GlitterIsMe/rust-rocksdb.git?branch=zyw-titan#acec2ef6be3778951d41bb4ed6099941d2e2338a"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
