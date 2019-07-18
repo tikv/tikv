@@ -32,9 +32,9 @@ const TXN_DETECT_INFO_TTL: u64 = 120000;
 
 /// Used to detect the deadlock of wait-for-lock in the cluster.
 struct DetectTable {
-    /// Keeps the DAG of wait-for-lock. Every edge from txn_ts to lock_ts has a survival time -- `ttl`.
+    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts` has a survival time -- `ttl`.
     /// When checking the deadlock, if the ttl has elpased, the corresponding edge will be removed.
-    /// `last_detect_time` is the start time of the edge. Detect requests will refresh it.
+    /// `last_detect_time` is the start time of the edge. `Detect` requests will refresh it.
     // txn_ts => (lock_ts => (Vec<lock_hash>, last_detect_time))
     wait_for_map: HashMap<u64, HashMap<u64, (Vec<u64>, time::Instant)>>,
 
@@ -44,7 +44,7 @@ struct DetectTable {
 }
 
 impl DetectTable {
-    /// Creates a detect table with
+    /// Creates a auto-expiring detect table.
     pub fn new(ttl: time::Duration) -> Self {
         Self {
             wait_for_map: HashMap::default(),
@@ -59,7 +59,7 @@ impl DetectTable {
         TASK_COUNTER_VEC.detect.inc();
 
         self.now = time::Instant::now_coarse();
-        // If txn_ts is waiting for lock_ts, it won't cause deadlock.
+        // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
         if self.register_if_existed(txn_ts, lock_ts, lock_hash) {
             return None;
         }
@@ -101,7 +101,7 @@ impl DetectTable {
         None
     }
 
-    /// Returns true and adds to the detect table if txn_ts is waiting for lock_ts.
+    /// Returns true and adds to the detect table if `txn_ts` is waiting for `lock_ts`.
     fn register_if_existed(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some((lock_hashes, time)) = wait_for.get_mut(&lock_ts) {
@@ -115,7 +115,7 @@ impl DetectTable {
         false
     }
 
-    /// Adds to the detect table. The edge from txn_ts to lock_ts must not exist.
+    /// Adds to the detect table. The edge from `txn_ts` to `lock_ts` must not exist.
     fn register(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
         let wait_for = self.wait_for_map.entry(txn_ts).or_default();
         assert!(!wait_for.contains_key(&lock_ts));
