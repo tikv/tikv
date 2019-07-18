@@ -231,7 +231,7 @@ mod tests {
     }
 
     fn new_store(addr: &str, state: metapb::StoreState) -> metapb::Store {
-        let mut store = metapb::Store::new();
+        let mut store = metapb::Store::default();
         store.set_id(1);
         store.set_state(state);
         store.set_address(addr.into());

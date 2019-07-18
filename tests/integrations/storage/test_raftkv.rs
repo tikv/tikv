@@ -25,7 +25,7 @@ fn test_raftkv() {
     let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader_id.get_id()].clone();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
@@ -56,7 +56,7 @@ fn test_read_leader_in_lease() {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
@@ -88,7 +88,7 @@ fn test_read_index_on_replica() {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
@@ -143,7 +143,7 @@ fn test_read_on_replica() {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let leader_storage = cluster.sim.rl().storages[&leader.get_id()].clone();
 
-    let mut leader_ctx = Context::new();
+    let mut leader_ctx = Context::default();
     leader_ctx.set_region_id(region.get_id());
     leader_ctx.set_region_epoch(region.get_region_epoch().clone());
     leader_ctx.set_peer(leader.clone());
@@ -165,7 +165,7 @@ fn test_read_on_replica() {
     }
 
     assert!(follower_peer.is_some());
-    let mut follower_ctx = Context::new();
+    let mut follower_ctx = Context::default();
     follower_ctx.set_region_id(region.get_id());
     follower_ctx.set_region_epoch(region.get_region_epoch().clone());
     follower_ctx.set_peer(follower_peer.as_ref().unwrap().clone());

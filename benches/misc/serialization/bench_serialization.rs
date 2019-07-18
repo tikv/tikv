@@ -20,7 +20,7 @@ fn gen_rand_str(len: usize) -> Vec<u8> {
 fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
     let mut reqs = vec![];
     for (key, value) in map {
-        let mut r = Request::new();
+        let mut r = Request::default();
         r.set_cmd_type(CmdType::Put);
         r.mut_put().set_cf("tikv".to_owned());
         r.mut_put().set_key(key.to_vec());
@@ -31,8 +31,8 @@ fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
 }
 
 fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
-    let mut e = Entry::new();
-    let mut cmd = RaftCmdRequest::new();
+    let mut e = Entry::default();
+    let mut cmd = RaftCmdRequest::default();
     let reqs = generate_requests(map);
     cmd.set_requests(protobuf::RepeatedField::from_vec(reqs));
     let cmd_msg = cmd.write_to_bytes().unwrap();
@@ -41,9 +41,9 @@ fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
 }
 
 fn decode(data: &[u8]) {
-    let mut entry = Entry::new();
+    let mut entry = Entry::default();
     entry.merge_from_bytes(data).unwrap();
-    let mut cmd = RaftCmdRequest::new();
+    let mut cmd = RaftCmdRequest::default();
     cmd.merge_from_bytes(entry.get_data()).unwrap();
 }
 

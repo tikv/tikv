@@ -18,7 +18,7 @@ pub fn bind_error(resp: &mut RaftCmdResponse, err: Error) {
 }
 
 pub fn new_error(err: Error) -> RaftCmdResponse {
-    let mut resp = RaftCmdResponse::new();
+    let mut resp = RaftCmdResponse::default();
     bind_error(&mut resp, err);
     resp
 }
