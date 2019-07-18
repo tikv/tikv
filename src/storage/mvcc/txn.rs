@@ -161,8 +161,8 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    /// check whether the existence of the key is according to `should_not_exist`.
-    /// If not,returns an AlreadyExist error.
+    /// Checks whether the existence of the key is according to `should_not_exist`.
+    /// If not,returns an `AlreadyExist` error.
     fn check_data_constraint(
         &mut self,
         should_not_exist: bool,
@@ -173,6 +173,9 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
+        // The current key is exist when meet any of the following conditions:
+        // 1.The current write type is `PUT`
+        // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
         if write.write_type == WriteType::Put || self.key_exist(&key, write.start_ts - 1)? {
             return Err(Error::AlreadyExist { key: key.to_raw()? });
         }
@@ -359,10 +362,10 @@ impl<S: Snapshot> MvccTxn<S> {
         options: &Options,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
-        // for the insert operation, the old key should not in the system.
+        // For the insert operation, the old key should not be in the system.
         let should_not_exist = mutation.is_insert();
         let (key, value) = mutation.into_key_value();
-        // check whether there is a newer version.
+        // Check whether there is a newer version.
         if !options.skip_constraint_check {
             if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
                 // Abort on writes after our start timestamp ...
@@ -383,7 +386,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
 
-        // check whether the current key is locked at any timestamp.
+        // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
