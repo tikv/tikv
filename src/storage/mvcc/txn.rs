@@ -1020,7 +1020,7 @@ mod tests {
 
     fn test_write_size_imp(k: &[u8], v: &[u8], pk: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 10, true).unwrap();
         let key = Key::from_raw(k);
@@ -1058,7 +1058,7 @@ mod tests {
         must_prewrite_put(&engine, key, value, key, 5);
         must_commit(&engine, key, 5, 10);
 
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         assert!(txn
@@ -1069,7 +1069,7 @@ mod tests {
             )
             .is_err());
 
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         let mut opt = Options::default();
@@ -1162,7 +1162,7 @@ mod tests {
         );
         must_commit(&engine, &[6], 3, 6);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),
@@ -1206,7 +1206,7 @@ mod tests {
         must_prewrite_put(&engine, &[6], b"xxx", &[6], 3);
         must_commit(&engine, &[6], 3, 6);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),

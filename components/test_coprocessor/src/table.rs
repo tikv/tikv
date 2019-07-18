@@ -86,7 +86,7 @@ impl Table {
 
     /// Create a `KeyRange` which select all records in current table.
     pub fn get_record_range_all(&self) -> KeyRange {
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_start(table::encode_row_key(self.id, std::i64::MIN));
         range.set_end(table::encode_row_key(self.id, std::i64::MAX));
         range
@@ -97,7 +97,7 @@ impl Table {
         let start_key = table::encode_row_key(self.id, handle_id);
         let mut end_key = start_key.clone();
         coprocessor::util::convert_to_prefix_next(&mut end_key);
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_start(start_key);
         range.set_end(end_key);
         range
@@ -105,7 +105,7 @@ impl Table {
 
     /// Create a `KeyRange` which select all index records of a specified index in current table.
     pub fn get_index_range_all(&self, idx: i64) -> KeyRange {
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(::std::i64::MIN).unwrap();
         range.set_start(table::encode_index_seek_key(self.id, idx, &buf));

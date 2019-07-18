@@ -134,7 +134,7 @@ impl Error {
 
 impl From<Error> for select::Error {
     fn from(error: Error) -> select::Error {
-        let mut err = select::Error::new();
+        let mut err = select::Error::default();
         err.set_code(error.code());
         err.set_msg(format!("{:?}", error));
         err

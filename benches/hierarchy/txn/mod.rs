@@ -14,7 +14,7 @@ where
     E: Engine,
     F: EngineFactory<E>,
 {
-    let ctx = Context::new();
+    let ctx = Context::default();
     let option = Options::default();
 
     let snapshot = engine.snapshot(&ctx).unwrap();
@@ -36,7 +36,7 @@ where
 
 fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     let option = Options::default();
     b.iter_batched(
         || {
@@ -63,7 +63,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
 
 fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |keys| {
@@ -81,7 +81,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
 
 fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     b.iter_batched(
         || setup_prewrite(&engine, &config, 1),
         |keys| {
@@ -99,7 +99,7 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
 
 fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     b.iter_batched(
         || setup_prewrite(&engine, &config, 2),
         |keys| {
@@ -120,7 +120,7 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)

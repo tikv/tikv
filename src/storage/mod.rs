@@ -1956,12 +1956,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .async_get(Context::default(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
@@ -1976,12 +1976,12 @@ mod tests {
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 101)
+                .async_get(Context::default(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"x")],
                 100,
                 101,
@@ -1991,13 +1991,13 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .async_get(Context::default(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 101)
+                .async_get(Context::default(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
     }
@@ -2010,7 +2010,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
@@ -2033,7 +2033,7 @@ mod tests {
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 1)
+                .async_get(Context::default(), Key::from_raw(b"x"), 1)
                 .wait(),
         );
         expect_error(
@@ -2043,7 +2043,7 @@ mod tests {
             },
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"x"),
                     None,
                     1000,
@@ -2056,7 +2056,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_batch_get(
-                    Context::new(),
+                    Context::default(),
                     vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                     1,
                 )
@@ -2070,7 +2070,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
@@ -2088,7 +2088,7 @@ mod tests {
             vec![None, None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
@@ -2102,7 +2102,7 @@ mod tests {
             vec![None, None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
@@ -2116,7 +2116,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
@@ -2130,7 +2130,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
@@ -2144,7 +2144,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     None,
                     2,
@@ -2158,7 +2158,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     None,
                     2,
@@ -2170,7 +2170,7 @@ mod tests {
 
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![
                     Key::from_raw(b"a"),
                     Key::from_raw(b"b"),
@@ -2191,7 +2191,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
@@ -2209,7 +2209,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
@@ -2226,7 +2226,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
@@ -2243,7 +2243,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
@@ -2261,7 +2261,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     None,
                     2,
@@ -2278,7 +2278,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     None,
                     2,
@@ -2295,7 +2295,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
@@ -2312,7 +2312,7 @@ mod tests {
             vec![None],
             storage
                 .async_batch_get(
-                    Context::new(),
+                    Context::default(),
                     vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                     2,
                 )
@@ -2320,7 +2320,7 @@ mod tests {
         );
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![
                     Key::from_raw(b"a"),
                     Key::from_raw(b"b"),
@@ -2340,7 +2340,7 @@ mod tests {
             ],
             storage
                 .async_batch_get(
-                    Context::new(),
+                    Context::default(),
                     vec![
                         Key::from_raw(b"c"),
                         Key::from_raw(b"x"),
@@ -2359,7 +2359,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
@@ -2369,7 +2369,7 @@ mod tests {
             .unwrap();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                 b"y".to_vec(),
                 101,
@@ -2381,7 +2381,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"x")],
                 100,
                 110,
@@ -2390,7 +2390,7 @@ mod tests {
             .unwrap();
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"y")],
                 101,
                 111,
@@ -2402,18 +2402,18 @@ mod tests {
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 120)
+                .async_get(Context::default(), Key::from_raw(b"x"), 120)
                 .wait(),
         );
         expect_value(
             b"101".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"y"), 120)
+                .async_get(Context::default(), Key::from_raw(b"y"), 120)
                 .wait(),
         );
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
                 b"x".to_vec(),
                 105,
@@ -2435,12 +2435,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .async_get(Context::default(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_pause(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"x")],
                 1000,
                 expect_ok_callback(tx.clone(), 1),
@@ -2448,7 +2448,7 @@ mod tests {
             .unwrap();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                 b"y".to_vec(),
                 101,
@@ -2460,7 +2460,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
                 b"y".to_vec(),
                 102,
@@ -2477,7 +2477,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
@@ -2488,7 +2488,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_cleanup(
-                Context::new(),
+                Context::default(),
                 Key::from_raw(b"x"),
                 100,
                 expect_ok_callback(tx.clone(), 1),
@@ -2497,7 +2497,7 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 105)
+                .async_get(Context::default(), Key::from_raw(b"x"), 105)
                 .wait(),
         );
     }
@@ -2506,10 +2506,10 @@ mod tests {
     fn test_high_priority_get_put() {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_none(storage.async_get(ctx, Key::from_raw(b"x"), 100).wait());
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
             .async_prewrite(
@@ -2522,7 +2522,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
             .async_commit(
@@ -2534,10 +2534,10 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_none(storage.async_get(ctx, Key::from_raw(b"x"), 100).wait());
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
@@ -2553,12 +2553,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .async_get(Context::default(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
@@ -2569,7 +2569,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"x")],
                 100,
                 101,
@@ -2580,13 +2580,13 @@ mod tests {
 
         storage
             .async_pause(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"y")],
                 1000,
                 expect_ok_callback(tx.clone(), 3),
             )
             .unwrap();
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
@@ -2603,7 +2603,7 @@ mod tests {
         // Write x and y.
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"x"), b"100".to_vec())),
                     Mutation::Put((Key::from_raw(b"y"), b"100".to_vec())),
@@ -2618,7 +2618,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![
                     Key::from_raw(b"x"),
                     Key::from_raw(b"y"),
@@ -2633,26 +2633,26 @@ mod tests {
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 101)
+                .async_get(Context::default(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"y"), 101)
+                .async_get(Context::default(), Key::from_raw(b"y"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"z"), 101)
+                .async_get(Context::default(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
 
         // Delete range [x, z)
         storage
             .async_delete_range(
-                Context::new(),
+                Context::default(),
                 Key::from_raw(b"x"),
                 Key::from_raw(b"z"),
                 false,
@@ -2662,24 +2662,24 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 101)
+                .async_get(Context::default(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"y"), 101)
+                .async_get(Context::default(), Key::from_raw(b"y"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"z"), 101)
+                .async_get(Context::default(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
 
         storage
             .async_delete_range(
-                Context::new(),
+                Context::default(),
                 Key::from_raw(b""),
                 Key::from_raw(&[255]),
                 false,
@@ -2689,7 +2689,7 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"z"), 101)
+                .async_get(Context::default(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
     }
@@ -2711,7 +2711,7 @@ mod tests {
         for kv in &test_data {
             storage
                 .async_raw_put(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     kv.0.to_vec(),
                     kv.1.to_vec(),
@@ -2723,14 +2723,14 @@ mod tests {
         expect_value(
             b"004".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"d".to_vec())
                 .wait(),
         );
 
         // Delete ["d", "e")
         storage
             .async_raw_delete_range(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 b"d".to_vec(),
                 b"e".to_vec(),
@@ -2743,25 +2743,25 @@ mod tests {
         expect_value(
             b"003".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"c".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"c".to_vec())
                 .wait(),
         );
         expect_none(
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"d".to_vec())
                 .wait(),
         );
         expect_value(
             b"005".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"e".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"e".to_vec())
                 .wait(),
         );
 
         // Delete ["aa", "ab")
         storage
             .async_raw_delete_range(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 b"aa".to_vec(),
                 b"ab".to_vec(),
@@ -2774,20 +2774,20 @@ mod tests {
         expect_value(
             b"001".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"a".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"a".to_vec())
                 .wait(),
         );
         expect_value(
             b"002".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"b".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"b".to_vec())
                 .wait(),
         );
 
         // Delete all
         storage
             .async_raw_delete_range(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 b"a".to_vec(),
                 b"z".to_vec(),
@@ -2800,7 +2800,7 @@ mod tests {
         for kv in &test_data {
             expect_none(
                 storage
-                    .async_raw_get(Context::new(), "".to_string(), kv.0.to_vec())
+                    .async_raw_get(Context::default(), "".to_string(), kv.0.to_vec())
                     .wait(),
             );
         }
@@ -2824,7 +2824,7 @@ mod tests {
         // Write key-value pairs in a batch
         storage
             .async_raw_batch_put(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
@@ -2837,7 +2837,7 @@ mod tests {
             expect_value(
                 val,
                 storage
-                    .async_raw_get(Context::new(), "".to_string(), key)
+                    .async_raw_get(Context::default(), "".to_string(), key)
                     .wait(),
             );
         }
@@ -2860,7 +2860,7 @@ mod tests {
         for &(ref key, ref value) in &test_data {
             storage
                 .async_raw_put(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     key.clone(),
                     value.clone(),
@@ -2876,7 +2876,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .async_raw_batch_get(Context::default(), "".to_string(), keys)
                 .wait(),
         );
     }
@@ -2897,7 +2897,7 @@ mod tests {
         // Write key-value pairs in batch
         storage
             .async_raw_batch_put(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
@@ -2914,14 +2914,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .async_raw_batch_get(Context::default(), "".to_string(), keys)
                 .wait(),
         );
 
         // Delete ["b", "d"]
         storage
             .async_raw_batch_delete(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 vec![b"b".to_vec(), b"d".to_vec()],
                 expect_ok_callback(tx.clone(), 1),
@@ -2933,36 +2933,36 @@ mod tests {
         expect_value(
             b"aa".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"a".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"a".to_vec())
                 .wait(),
         );
         expect_none(
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"b".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"b".to_vec())
                 .wait(),
         );
         expect_value(
             b"cc".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"c".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"c".to_vec())
                 .wait(),
         );
         expect_none(
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"d".to_vec())
                 .wait(),
         );
         expect_value(
             b"ee".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"e".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"e".to_vec())
                 .wait(),
         );
 
         // Delete ["a", "c", "e"]
         storage
             .async_raw_batch_delete(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
                 expect_ok_callback(tx.clone(), 2),
@@ -2974,7 +2974,7 @@ mod tests {
         for (k, _) in test_data {
             expect_none(
                 storage
-                    .async_raw_get(Context::new(), "".to_string(), k)
+                    .async_raw_get(Context::default(), "".to_string(), k)
                     .wait(),
             );
         }
@@ -3011,7 +3011,7 @@ mod tests {
         // Write key-value pairs in batch
         storage
             .async_raw_batch_put(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
@@ -3028,7 +3028,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     vec![],
                     None,
@@ -3043,7 +3043,7 @@ mod tests {
             results,
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"c2".to_vec(),
                     None,
@@ -3062,7 +3062,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     vec![],
                     None,
@@ -3077,7 +3077,7 @@ mod tests {
             results,
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"c2".to_vec(),
                     None,
@@ -3097,7 +3097,7 @@ mod tests {
             results,
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"z".to_vec(),
                     None,
@@ -3118,7 +3118,7 @@ mod tests {
             results,
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"z".to_vec(),
                     None,
@@ -3141,7 +3141,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"b2".to_vec(),
                     Some(b"c2".to_vec()),
@@ -3162,7 +3162,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"b2".to_vec(),
                     Some(b"b2\x00".to_vec()),
@@ -3186,7 +3186,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"c2".to_vec(),
                     Some(b"b2".to_vec()),
@@ -3207,7 +3207,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"b2\x00".to_vec(),
                     Some(b"b2".to_vec()),
@@ -3219,7 +3219,7 @@ mod tests {
         );
 
         // End key tests. Confirm that lower/upper bound works correctly.
-        let ctx = Context::new();
+        let ctx = Context::default();
         let results = vec![
             (b"c1".to_vec(), b"cc11".to_vec()),
             (b"c2".to_vec(), b"cc22".to_vec()),
@@ -3271,7 +3271,7 @@ mod tests {
             ranges
                 .into_iter()
                 .map(|(s, e)| {
-                    let mut range = KeyRange::new();
+                    let mut range = KeyRange::default();
                     range.set_start_key(s);
                     if !e.is_empty() {
                         range.set_end_key(e);
@@ -3394,7 +3394,7 @@ mod tests {
         // Write key-value pairs in batch
         storage
             .async_raw_batch_put(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
@@ -3408,7 +3408,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .async_raw_batch_get(Context::default(), "".to_string(), keys)
                 .wait(),
         );
 
@@ -3430,7 +3430,7 @@ mod tests {
         let ranges: Vec<KeyRange> = vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
             .into_iter()
             .map(|k| {
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 range.set_start_key(k);
                 range
             })
@@ -3439,7 +3439,7 @@ mod tests {
             results,
             storage
                 .async_raw_batch_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     ranges.clone(),
                     5,
@@ -3468,7 +3468,7 @@ mod tests {
             results,
             storage
                 .async_raw_batch_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     ranges.clone(),
                     5,
@@ -3493,7 +3493,7 @@ mod tests {
             results,
             storage
                 .async_raw_batch_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     ranges.clone(),
                     3,
@@ -3517,7 +3517,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 3, true, false)
+                .async_raw_batch_scan(Context::default(), "".to_string(), ranges, 3, true, false)
                 .wait(),
         );
 
@@ -3539,7 +3539,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(s, e)| {
-            let mut range = KeyRange::new();
+            let mut range = KeyRange::default();
             range.set_start_key(s);
             range.set_end_key(e);
             range
@@ -3548,7 +3548,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, false, true)
+                .async_raw_batch_scan(Context::default(), "".to_string(), ranges, 5, false, true)
                 .wait(),
         );
 
@@ -3563,7 +3563,7 @@ mod tests {
         let ranges: Vec<KeyRange> = vec![b"c3".to_vec(), b"b3".to_vec(), b"a3".to_vec()]
             .into_iter()
             .map(|s| {
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 range.set_start_key(s);
                 range
             })
@@ -3571,7 +3571,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 2, false, true)
+                .async_raw_batch_scan(Context::default(), "".to_string(), ranges, 2, false, true)
                 .wait(),
         );
 
@@ -3593,7 +3593,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(s, e)| {
-            let mut range = KeyRange::new();
+            let mut range = KeyRange::default();
             range.set_start_key(s);
             range.set_end_key(e);
             range
@@ -3602,7 +3602,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true, true)
+                .async_raw_batch_scan(Context::default(), "".to_string(), ranges, 5, true, true)
                 .wait(),
         );
     }
@@ -3613,7 +3613,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"y"), b"foo".to_vec())),
@@ -3628,7 +3628,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
@@ -3643,42 +3643,42 @@ mod tests {
         rx.recv().unwrap();
         let (lock_a, lock_b, lock_c, lock_x, lock_y, lock_z) = (
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"a".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"b".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"c".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"x".to_vec());
                 lock.set_lock_version(100);
                 lock.set_key(b"x".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"x".to_vec());
                 lock.set_lock_version(100);
                 lock.set_key(b"y".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"x".to_vec());
                 lock.set_lock_version(100);
                 lock.set_key(b"z".to_vec());
@@ -3687,7 +3687,7 @@ mod tests {
         );
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 99,
                 vec![],
                 10,
@@ -3697,7 +3697,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 100,
                 vec![],
                 10,
@@ -3711,7 +3711,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 100,
                 b"a".to_vec(),
                 10,
@@ -3725,7 +3725,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 100,
                 b"y".to_vec(),
                 10,
@@ -3735,7 +3735,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 vec![],
                 10,
@@ -3756,7 +3756,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 vec![],
                 4,
@@ -3775,7 +3775,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 b"b".to_vec(),
                 4,
@@ -3794,7 +3794,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 b"b".to_vec(),
                 0,
@@ -3824,7 +3824,7 @@ mod tests {
         // These locks (transaction ts=99) are not going to be resolved.
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
@@ -3840,21 +3840,21 @@ mod tests {
 
         let (lock_a, lock_b, lock_c) = (
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(99);
                 lock.set_key(b"a".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(99);
                 lock.set_key(b"b".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(99);
                 lock.set_key(b"c".to_vec());
@@ -3892,7 +3892,7 @@ mod tests {
 
                 storage
                     .async_prewrite(
-                        Context::new(),
+                        Context::default(),
                         mutations,
                         b"x".to_vec(),
                         ts,
@@ -3913,7 +3913,7 @@ mod tests {
                 );
                 storage
                     .async_resolve_lock(
-                        Context::new(),
+                        Context::default(),
                         txn_status,
                         expect_ok_callback(tx.clone(), 0),
                     )
@@ -3923,7 +3923,7 @@ mod tests {
                 // All locks should be resolved except for a, b and c.
                 storage
                     .async_scan_locks(
-                        Context::new(),
+                        Context::default(),
                         ts,
                         vec![],
                         0,
@@ -3948,7 +3948,7 @@ mod tests {
 
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
@@ -3966,7 +3966,7 @@ mod tests {
         let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
         storage
             .async_resolve_lock_lite(
-                Context::new(),
+                Context::default(),
                 99,
                 0,
                 resolve_keys,
@@ -3977,7 +3977,7 @@ mod tests {
 
         // Check lock for key 'a'.
         let lock_a = {
-            let mut lock = LockInfo::new();
+            let mut lock = LockInfo::default();
             lock.set_primary_lock(b"c".to_vec());
             lock.set_lock_version(99);
             lock.set_key(b"a".to_vec());
@@ -3985,7 +3985,7 @@ mod tests {
         };
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 99,
                 vec![],
                 0,
@@ -3997,7 +3997,7 @@ mod tests {
         // Resolve lock for key 'a'.
         storage
             .async_resolve_lock_lite(
-                Context::new(),
+                Context::default(),
                 99,
                 0,
                 vec![Key::from_raw(b"a")],
@@ -4008,7 +4008,7 @@ mod tests {
 
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
@@ -4026,7 +4026,7 @@ mod tests {
         let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
         storage
             .async_resolve_lock_lite(
-                Context::new(),
+                Context::default(),
                 101,
                 102,
                 resolve_keys,
@@ -4037,7 +4037,7 @@ mod tests {
 
         // Check lock for key 'a'.
         let lock_a = {
-            let mut lock = LockInfo::new();
+            let mut lock = LockInfo::default();
             lock.set_primary_lock(b"c".to_vec());
             lock.set_lock_version(101);
             lock.set_key(b"a".to_vec());
@@ -4045,7 +4045,7 @@ mod tests {
         };
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 vec![],
                 0,

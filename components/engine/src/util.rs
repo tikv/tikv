@@ -58,7 +58,7 @@ pub fn delete_all_in_range_cf(
     use_delete_range: bool,
 ) -> Result<()> {
     let handle = rocks::util::get_cf_handle(db, cf)?;
-    let wb = WriteBatch::new();
+    let wb = WriteBatch::default();
     if use_delete_range && cf != CF_LOCK {
         wb.delete_range_cf(handle, start_key, end_key)?;
     } else {
@@ -159,7 +159,7 @@ mod tests {
             .collect();
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
-        let wb = WriteBatch::new();
+        let wb = WriteBatch::default();
         let ts: u8 = 12;
         let keys: Vec<_> = vec![
             b"k1".to_vec(),
@@ -266,7 +266,7 @@ mod tests {
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
         let cf = "default";
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
-        let wb = WriteBatch::new();
+        let wb = WriteBatch::default();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),
             (b"kabcdefg2", b"v2"),
