@@ -161,7 +161,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    /// Checks whether the existence of the key is according to `should_not_exist`.
+    /// Checks the existence of the key according to `should_not_exist`.
     /// If not, returns an `AlreadyExist` error.
     fn check_data_constraint(
         &mut self,
@@ -173,7 +173,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
-        // The current key is exist when meet any of the following conditions:
+        // The current key exists under any of the following conditions:
         // 1.The current write type is `PUT`
         // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
         if write.write_type == WriteType::Put || self.key_exist(&key, write.start_ts - 1)? {
