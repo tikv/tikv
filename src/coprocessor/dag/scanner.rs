@@ -221,7 +221,7 @@ pub mod tests {
         let start_key = table::encode_row_key(table_id, handle);
         let mut end = start_key.clone();
         util::convert_to_prefix_next(&mut end);
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end);
         key_range
@@ -307,7 +307,7 @@ pub mod tests {
         // beginning, `stop_scan` in the end, producing a range. the range will be checked against
         // `expect_start_pk` and `expect_end_pk`. Pass -1 as pk means the end.
         let test_take = |scanner: &mut Scanner<_>, count, expect_start_pk, expect_end_pk| {
-            let mut range = KeyRange::new();
+            let mut range = KeyRange::default();
             scanner.start_scan(&mut range);
 
             let mut keys = Vec::new();

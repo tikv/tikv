@@ -90,13 +90,13 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
             total_bytes += k.len() + v.len();
         }
 
-        let mut resp = ChecksumResponse::new();
+        let mut resp = ChecksumResponse::default();
         resp.set_checksum(checksum);
         resp.set_total_kvs(total_kvs);
         resp.set_total_bytes(total_bytes as u64);
         let data = box_try!(resp.write_to_bytes());
 
-        let mut resp = Response::new();
+        let mut resp = Response::default();
         resp.set_data(data);
         Ok(resp)
     }
