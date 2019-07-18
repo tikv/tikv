@@ -168,6 +168,9 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::MinusReal => arithmetic_fn_meta::<RealMinus>(),
         ScalarFuncSig::MinusDecimal => arithmetic_fn_meta::<DecimalMinus>(),
         ScalarFuncSig::MultiplyDecimal => arithmetic_fn_meta::<DecimalMultiply>(),
+        ScalarFuncSig::MultiplyInt => arithmetic_fn_meta::<IntMultiply>(),
+        ScalarFuncSig::MultiplyIntUnsigned => arithmetic_fn_meta::<IntUintMultiply>(),
+        ScalarFuncSig::MultiplyReal => arithmetic_fn_meta::<RealMultiply>(),
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_fn_meta::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
@@ -207,8 +210,8 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::InDuration => compare_in_fn_meta::<Duration>(),
         ScalarFuncSig::InJson => compare_in_fn_meta::<Json>(),
         _ => return Err(box_err!(
-            "ScalarFunction {:?} is not supported in batch mode",
-            value
+                "ScalarFunction {:?} is not supported in batch mode",
+                value
         )),
     })
 }
