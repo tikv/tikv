@@ -3,6 +3,7 @@
 mod test_bootstrap;
 mod test_conf_change;
 mod test_coprocessor;
+mod test_follower_read;
 mod test_merge;
 mod test_pending_peers;
 mod test_snap;

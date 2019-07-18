@@ -161,20 +161,25 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
+    /// Checks the existence of the key according to `should_not_exist`.
+    /// If not, returns an `AlreadyExist` error.
     fn check_data_constraint(
         &mut self,
         should_not_exist: bool,
         write: &Write,
         key: &Key,
     ) -> Result<()> {
-        if should_not_exist {
-            if write.write_type == WriteType::Put
-                || (write.write_type != WriteType::Delete
-                    && self.key_exist(&key, write.start_ts - 1)?)
-            {
-                return Err(Error::AlreadyExist { key: key.to_raw()? });
-            }
+        if !should_not_exist || write.write_type == WriteType::Delete {
+            return Ok(());
         }
+
+        // The current key exists under any of the following conditions:
+        // 1.The current write type is `PUT`
+        // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
+        if write.write_type == WriteType::Put || self.key_exist(&key, write.start_ts - 1)? {
+            return Err(Error::AlreadyExist { key: key.to_raw()? });
+        }
+
         Ok(())
     }
 
@@ -305,13 +310,7 @@ impl<S: Snapshot> MvccTxn<S> {
         options: &Options,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
-        let (key, value) = match mutation {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-            Mutation::Insert((key, value)) => (key, Some(value)),
-        };
-
+        let (key, value) = mutation.into_key_value();
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 // Abort on lock belonging to other transaction if
@@ -363,56 +362,52 @@ impl<S: Snapshot> MvccTxn<S> {
         options: &Options,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
-        let (key, value, should_not_exist) = match mutation {
-            Mutation::Put((key, value)) => (key, Some(value), false),
-            Mutation::Delete(key) => (key, None, false),
-            Mutation::Lock(key) => (key, None, false),
-            Mutation::Insert((key, value)) => (key, Some(value), true),
-        };
-
-        {
-            if !options.skip_constraint_check {
-                if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
-                    // Abort on writes after our start timestamp ...
-                    // If exists a commit version whose commit timestamp is larger than or equal to
-                    // current start timestamp, we should abort current prewrite, even if the commit
-                    // type is Rollback.
-                    if commit_ts >= self.start_ts {
-                        MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                        return Err(Error::WriteConflict {
-                            start_ts: self.start_ts,
-                            conflict_start_ts: write.start_ts,
-                            conflict_commit_ts: commit_ts,
-                            key: key.into_raw()?,
-                            primary: primary.to_vec(),
-                        });
-                    }
-                    self.check_data_constraint(should_not_exist, &write, &key)?;
-                }
-            }
-            // ... or locks at any timestamp.
-            if let Some(lock) = self.reader.load_lock(&key)? {
-                if lock.ts != self.start_ts {
-                    return Err(Error::KeyIsLocked {
-                        key: key.into_raw()?,
-                        primary: lock.primary,
-                        ts: lock.ts,
-                        ttl: lock.ttl,
-                        txn_size: lock.txn_size,
-                    });
-                }
-                // TODO: remove it in future
-                if lock.lock_type == LockType::Pessimistic {
-                    return Err(Error::LockTypeNotMatch {
+        // For the insert operation, the old key should not be in the system.
+        let should_not_exist = mutation.is_insert();
+        let (key, value) = mutation.into_key_value();
+        // Check whether there is a newer version.
+        if !options.skip_constraint_check {
+            if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
+                // Abort on writes after our start timestamp ...
+                // If exists a commit version whose commit timestamp is larger than or equal to
+                // current start timestamp, we should abort current prewrite, even if the commit
+                // type is Rollback.
+                if commit_ts >= self.start_ts {
+                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                    return Err(Error::WriteConflict {
                         start_ts: self.start_ts,
+                        conflict_start_ts: write.start_ts,
+                        conflict_commit_ts: commit_ts,
                         key: key.into_raw()?,
-                        pessimistic: true,
+                        primary: primary.to_vec(),
                     });
                 }
-                // Duplicated command. No need to overwrite the lock and data.
-                MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                return Ok(());
+                self.check_data_constraint(should_not_exist, &write, &key)?;
             }
+        }
+
+        // Check whether the current key is locked at any timestamp.
+        if let Some(lock) = self.reader.load_lock(&key)? {
+            if lock.ts != self.start_ts {
+                return Err(Error::KeyIsLocked {
+                    key: key.into_raw()?,
+                    primary: lock.primary,
+                    ts: lock.ts,
+                    ttl: lock.ttl,
+                    txn_size: lock.txn_size,
+                });
+            }
+            // TODO: remove it in future
+            if lock.lock_type == LockType::Pessimistic {
+                return Err(Error::LockTypeNotMatch {
+                    start_ts: self.start_ts,
+                    key: key.into_raw()?,
+                    pessimistic: true,
+                });
+            }
+            // Duplicated command. No need to overwrite the lock and data.
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+            return Ok(());
         }
 
         self.prewrite_key_value(key, lock_type, primary.to_vec(), value, options);
@@ -1020,7 +1015,7 @@ mod tests {
 
     fn test_write_size_imp(k: &[u8], v: &[u8], pk: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 10, true).unwrap();
         let key = Key::from_raw(k);
@@ -1058,7 +1053,7 @@ mod tests {
         must_prewrite_put(&engine, key, value, key, 5);
         must_commit(&engine, key, 5, 10);
 
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         assert!(txn
@@ -1069,7 +1064,7 @@ mod tests {
             )
             .is_err());
 
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         let mut opt = Options::default();
@@ -1162,7 +1157,7 @@ mod tests {
         );
         must_commit(&engine, &[6], 3, 6);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),
@@ -1206,7 +1201,7 @@ mod tests {
         must_prewrite_put(&engine, &[6], b"xxx", &[6], 3);
         must_commit(&engine, &[6], 3, 6);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),

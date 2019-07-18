@@ -418,7 +418,7 @@ impl<T: PdClient> Runner<T> {
         stats.set_keys_read(
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
-        let mut interval = pdpb::TimeInterval::new();
+        let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts);
         stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
@@ -742,7 +742,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
 }
 
 fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeer);
     req.mut_change_peer().set_change_type(change_type);
     req.mut_change_peer().set_peer(peer);
@@ -755,7 +755,7 @@ fn new_split_region_request(
     peer_ids: Vec<u64>,
     right_derive: bool,
 ) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::Split);
     req.mut_split().set_split_key(split_key);
     req.mut_split().set_new_region_id(new_region_id);
@@ -769,12 +769,12 @@ fn new_batch_split_region_request(
     ids: Vec<pdpb::SplitID>,
     right_derive: bool,
 ) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::BatchSplit);
     req.mut_splits().set_right_derive(right_derive);
     let mut requests = Vec::with_capacity(ids.len());
     for (mut id, key) in ids.into_iter().zip(split_keys) {
-        let mut split = SplitRequest::new();
+        let mut split = SplitRequest::default();
         split.set_split_key(key);
         split.set_new_region_id(id.get_new_region_id());
         split.set_new_peer_ids(id.take_new_peer_ids());
@@ -786,14 +786,14 @@ fn new_batch_split_region_request(
 }
 
 fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::TransferLeader);
     req.mut_transfer_leader().set_peer(peer);
     req
 }
 
 fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::PrepareMerge);
     req.mut_prepare_merge()
         .set_target(merge.get_target().to_owned());
@@ -810,7 +810,7 @@ fn send_admin_request(
 ) {
     let cmd_type = request.get_cmd_type();
 
-    let mut req = RaftCmdRequest::new();
+    let mut req = RaftCmdRequest::default();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);
     req.mut_header().set_peer(peer);
@@ -849,7 +849,7 @@ fn send_destroy_peer_message(
     peer: metapb::Peer,
     pd_region: metapb::Region,
 ) {
-    let mut message = RaftMessage::new();
+    let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());
     message.set_to_peer(peer.clone());

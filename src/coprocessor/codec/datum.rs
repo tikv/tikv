@@ -10,6 +10,9 @@ use std::str::FromStr;
 use std::{i64, str};
 
 use cop_datatype::FieldTypeTp;
+use tikv_util::codec::bytes::{self, BytesEncoder};
+use tikv_util::codec::{number, BytesSlice};
+use tikv_util::escape;
 
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
@@ -17,9 +20,6 @@ use super::mysql::{
 };
 use super::{convert, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
-use tikv_util::codec::bytes::{self, BytesEncoder};
-use tikv_util::codec::{number, BytesSlice};
-use tikv_util::escape;
 
 pub const NIL_FLAG: u8 = 0;
 pub const BYTES_FLAG: u8 = 1;

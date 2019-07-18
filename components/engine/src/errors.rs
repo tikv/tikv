@@ -51,7 +51,7 @@ impl From<Error> for raft::Error {
 
 impl From<Error> for kvproto::errorpb::Error {
     fn from(err: Error) -> kvproto::errorpb::Error {
-        let mut errorpb = kvproto::errorpb::Error::new();
+        let mut errorpb = kvproto::errorpb::Error::default();
         errorpb.set_message(format!("{}", err));
 
         if let Error::NotInRange(key, region_id, start_key, end_key) = err {

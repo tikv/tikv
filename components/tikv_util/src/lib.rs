@@ -663,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_limit_size() {
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_data(b"0123456789".to_vec());
         let size = u64::from(e.compute_size());
 

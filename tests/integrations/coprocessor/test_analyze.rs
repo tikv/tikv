@@ -13,7 +13,7 @@ use test_coprocessor::*;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
 fn new_analyze_req(data: Vec<u8>, range: KeyRange) -> Request {
-    let mut req = Request::new();
+    let mut req = Request::default();
     req.set_data(data);
     req.set_ranges(RepeatedField::from_vec(vec![range]));
     req.set_tp(REQ_TYPE_ANALYZE);
@@ -81,7 +81,7 @@ fn test_analyze_column_with_lock() {
         let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_column_req(&product, 3, 3, 3, 4, 32);
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
 
@@ -146,7 +146,7 @@ fn test_analyze_index_with_lock() {
         let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
 
@@ -205,7 +205,7 @@ fn test_invalid_range() {
     let product = ProductTable::new();
     let (_, endpoint) = init_data_with_commit(&product, &data, true);
     let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
-    let mut key_range = KeyRange::new();
+    let mut key_range = KeyRange::default();
     key_range.set_start(b"xxx".to_vec());
     key_range.set_end(b"zzz".to_vec());
     req.set_ranges(RepeatedField::from_vec(vec![key_range]));

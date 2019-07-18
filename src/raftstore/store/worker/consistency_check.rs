@@ -168,8 +168,8 @@ mod tests {
         .unwrap();
         let db = Arc::new(db);
 
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
         let mut runner = Runner::new(tx);
