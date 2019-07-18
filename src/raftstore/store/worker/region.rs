@@ -329,7 +329,7 @@ impl SnapContext {
         };
         s.apply(options)?;
 
-        let wb = WriteBatch::new();
+        let wb = WriteBatch::default();
         region_state.set_state(PeerState::Normal);
         let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
@@ -835,7 +835,7 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let wb = WriteBatch::new();
+            let wb = WriteBatch::default();
             let handle = engine.kv.cf_handle(CF_RAFT).unwrap();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine

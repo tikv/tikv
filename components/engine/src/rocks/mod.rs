@@ -38,7 +38,7 @@ mod tests {
         let engine =
             Arc::new(util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap());
 
-        let mut r = Region::new();
+        let mut r = Region::default();
         r.set_id(10);
 
         let key = b"key";
