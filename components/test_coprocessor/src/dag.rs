@@ -173,7 +173,7 @@ impl DAGSelect {
     }
 
     pub fn build(self) -> Request {
-        self.build_with(Context::new(), &[0])
+        self.build_with(Context::default(), &[0])
     }
 
     pub fn build_with(mut self, ctx: Context, flags: &[u64]) -> Request {
@@ -213,7 +213,7 @@ impl DAGSelect {
             self.execs.push(exec);
         }
 
-        let mut dag = DAGRequest::new();
+        let mut dag = DAGRequest::default();
         dag.set_executors(RepeatedField::from_vec(self.execs));
         dag.set_start_ts(next_id() as u64);
         dag.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
@@ -226,7 +226,7 @@ impl DAGSelect {
         };
         dag.set_output_offsets(output_offsets);
 
-        let mut req = Request::new();
+        let mut req = Request::default();
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
         req.set_ranges(RepeatedField::from_vec(vec![self.key_range]));

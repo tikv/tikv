@@ -16,15 +16,15 @@ use tikv::storage::{Engine, SnapshotStore};
 use test_coprocessor::*;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_isolation_level(IsolationLevel::SI);
 
-    let mut checksum = ChecksumRequest::new();
+    let mut checksum = ChecksumRequest::default();
     checksum.set_start_ts(u64::MAX);
     checksum.set_scan_on(scan_on);
     checksum.set_algorithm(ChecksumAlgorithm::Crc64_Xor);
 
-    let mut req = Request::new();
+    let mut req = Request::default();
     req.set_context(ctx);
     req.set_tp(REQ_TYPE_CHECKSUM);
     req.set_data(checksum.write_to_bytes().unwrap());
@@ -57,7 +57,7 @@ fn test_checksum() {
         let expected = reversed_checksum_crc64_xor(&store, range);
 
         let response = handle_request(&endpoint, request);
-        let mut resp = ChecksumResponse::new();
+        let mut resp = ChecksumResponse::default();
         resp.merge_from_bytes(response.get_data()).unwrap();
         assert_eq!(resp.get_checksum(), expected);
         assert_eq!(resp.get_total_kvs(), data.len() as u64);
@@ -65,7 +65,7 @@ fn test_checksum() {
 }
 
 fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> u64 {
-    let ctx = Context::new();
+    let ctx = Context::default();
     let snap = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),
         u64::MAX,

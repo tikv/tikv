@@ -129,7 +129,7 @@ mod tests {
         use byteorder::{BigEndian, WriteBytesExt};
 
         let v = RANGE_INDEX.fetch_add(1, atomic::Ordering::SeqCst);
-        let mut r = KeyRange::new();
+        let mut r = KeyRange::default();
         r.mut_start().write_u64::<BigEndian>(v).unwrap();
         // Enough to pass `util::is_point`.
         r.mut_end().write_u64::<BigEndian>(v + 1).unwrap();
@@ -140,7 +140,7 @@ mod tests {
         use byteorder::{BigEndian, WriteBytesExt};
 
         let v = RANGE_INDEX.fetch_add(2, atomic::Ordering::SeqCst);
-        let mut r = KeyRange::new();
+        let mut r = KeyRange::default();
         r.mut_start().write_u64::<BigEndian>(v).unwrap();
         // Enough to not pass `util::is_point`.
         r.mut_end().write_u64::<BigEndian>(v + 2).unwrap();

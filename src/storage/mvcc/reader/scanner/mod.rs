@@ -223,7 +223,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, &[3], &[3], 105, 110);
         must_prewrite_put(&engine, &[4], b"a", &[4], 105);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         let mut expected_result = vec![
             (vec![0], Some(vec![b'v', 0])),

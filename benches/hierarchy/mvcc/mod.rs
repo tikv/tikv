@@ -14,7 +14,7 @@ where
     E: Engine,
     F: EngineFactory<E>,
 {
-    let ctx = Context::new();
+    let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
     let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
 
@@ -41,7 +41,7 @@ where
 
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     let option = Options::default();
     b.iter_batched(
         || {
@@ -120,7 +120,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     b.iter_batched(
         || {
             let kvs = KvGenerator::with_seed(
