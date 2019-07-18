@@ -69,7 +69,7 @@ pub enum Mutation {
 #[allow(clippy::match_same_arms)]
 impl Mutation {
     pub fn key(&self) -> &Key {
-        match *self {
+        match self {
             Mutation::Put((ref key, _)) => key,
             Mutation::Delete(ref key) => key,
             Mutation::Lock(ref key) => key,
@@ -87,7 +87,7 @@ impl Mutation {
     }
 
     pub fn is_insert(&self) -> bool {
-        match *self {
+        match self {
             Mutation::Insert(_) => true,
             _ => false,
         }
