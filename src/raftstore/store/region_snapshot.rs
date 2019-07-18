@@ -822,6 +822,7 @@ mod tests {
         cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
         cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
         cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
+        cfg.rocksdb.defaultcf.titan.merge_small_file_threshold = ReadableSize(0);
         let kv_db_opts = cfg.rocksdb.build_opt();
         let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
