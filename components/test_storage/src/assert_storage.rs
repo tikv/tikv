@@ -20,7 +20,7 @@ pub struct AssertionStorage<E: Engine> {
 impl Default for AssertionStorage<RocksEngine> {
     fn default() -> Self {
         AssertionStorage {
-            ctx: Context::new(),
+            ctx: Context::default(),
             store: SyncTestStorageBuilder::new().build().unwrap(),
         }
     }

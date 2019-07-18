@@ -41,7 +41,7 @@ impl PdMocker for Retry {
     fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         if self.is_ok() {
             info!("[Retry] get_region_by_id returns Ok(_)");
-            Some(Ok(GetRegionResponse::new()))
+            Some(Ok(GetRegionResponse::default()))
         } else {
             info!("[Retry] get_region_by_id returns Err(_)");
             Some(Err("please retry".to_owned()))
@@ -51,7 +51,7 @@ impl PdMocker for Retry {
     fn get_store(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
         if self.is_ok() {
             info!("[Retry] get_store returns Ok(_)");
-            Some(Ok(GetStoreResponse::new()))
+            Some(Ok(GetStoreResponse::default()))
         } else {
             info!("[Retry] get_store returns Err(_)");
             Some(Err("please retry".to_owned()))
@@ -82,14 +82,14 @@ impl PdMocker for NotRetry {
             info!(
                 "[NotRetry] get_region_by_id returns Ok(_) with header has INCOMPATIBLE_VERSION error"
             );
-            let mut err = Error::new();
+            let mut err = Error::default();
             err.set_field_type(ErrorType::INCOMPATIBLE_VERSION);
-            let mut resp = GetRegionResponse::new();
+            let mut resp = GetRegionResponse::default();
             resp.mut_header().set_error(err);
             Some(Ok(resp))
         } else {
             info!("[NotRetry] get_region_by_id returns Ok()");
-            Some(Ok(GetRegionResponse::new()))
+            Some(Ok(GetRegionResponse::default()))
         }
     }
 
@@ -98,14 +98,14 @@ impl PdMocker for NotRetry {
             info!(
                 "[NotRetry] get_region_by_id returns Ok(_) with header has INCOMPATIBLE_VERSION error"
             );
-            let mut err = Error::new();
+            let mut err = Error::default();
             err.set_field_type(ErrorType::INCOMPATIBLE_VERSION);
-            let mut resp = GetStoreResponse::new();
+            let mut resp = GetStoreResponse::default();
             resp.mut_header().set_error(err);
             Some(Ok(resp))
         } else {
             info!("[NotRetry] get_region_by_id returns Ok()");
-            Some(Ok(GetStoreResponse::new()))
+            Some(Ok(GetStoreResponse::default()))
         }
     }
 }

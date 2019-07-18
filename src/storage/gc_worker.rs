@@ -1279,7 +1279,7 @@ mod tests {
         let regions: BTreeMap<_, _> = regions
             .into_iter()
             .map(|(start_key, end_key, id)| {
-                let mut r = metapb::Region::new();
+                let mut r = metapb::Region::default();
                 r.set_id(id);
                 r.set_start_key(start_key.clone());
                 r.set_end_key(end_key);

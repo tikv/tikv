@@ -63,7 +63,7 @@ impl RpcClient {
 
     /// Creates a new request header.
     fn header(&self) -> pdpb::RequestHeader {
-        let mut header = pdpb::RequestHeader::new();
+        let mut header = pdpb::RequestHeader::default();
         header.set_cluster_id(self.cluster_id);
         header
     }
@@ -88,7 +88,7 @@ impl RpcClient {
             .with_label_values(&["get_region"])
             .start_coarse_timer();
 
-        let mut req = pdpb::GetRegionRequest::new();
+        let mut req = pdpb::GetRegionRequest::default();
         req.set_header(self.header());
         req.set_region_key(key.to_vec());
 
@@ -132,7 +132,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["bootstrap_cluster"])
             .start_coarse_timer();
 
-        let mut req = pdpb::BootstrapRequest::new();
+        let mut req = pdpb::BootstrapRequest::default();
         req.set_header(self.header());
         req.set_store(stores);
         req.set_region(region);
@@ -149,7 +149,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["is_cluster_bootstrapped"])
             .start_coarse_timer();
 
-        let mut req = pdpb::IsBootstrappedRequest::new();
+        let mut req = pdpb::IsBootstrappedRequest::default();
         req.set_header(self.header());
 
         let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
@@ -165,7 +165,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["alloc_id"])
             .start_coarse_timer();
 
-        let mut req = pdpb::AllocIDRequest::new();
+        let mut req = pdpb::AllocIDRequest::default();
         req.set_header(self.header());
 
         let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
@@ -181,7 +181,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["put_store"])
             .start_coarse_timer();
 
-        let mut req = pdpb::PutStoreRequest::new();
+        let mut req = pdpb::PutStoreRequest::default();
         req.set_header(self.header());
         req.set_store(store);
 
@@ -198,7 +198,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["get_store"])
             .start_coarse_timer();
 
-        let mut req = pdpb::GetStoreRequest::new();
+        let mut req = pdpb::GetStoreRequest::default();
         req.set_header(self.header());
         req.set_store_id(store_id);
 
@@ -220,7 +220,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["get_all_stores"])
             .start_coarse_timer();
 
-        let mut req = pdpb::GetAllStoresRequest::new();
+        let mut req = pdpb::GetAllStoresRequest::default();
         req.set_header(self.header());
         req.set_exclude_tombstone_stores(exclude_tombstone);
 
@@ -237,7 +237,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["get_cluster_config"])
             .start_coarse_timer();
 
-        let mut req = pdpb::GetClusterConfigRequest::new();
+        let mut req = pdpb::GetClusterConfigRequest::default();
         req.set_header(self.header());
 
         let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
@@ -260,7 +260,7 @@ impl PdClient for RpcClient {
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         let timer = Instant::now();
 
-        let mut req = pdpb::GetRegionByIDRequest::new();
+        let mut req = pdpb::GetRegionByIDRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
 
@@ -296,7 +296,7 @@ impl PdClient for RpcClient {
     ) -> PdFuture<()> {
         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
 
-        let mut req = pdpb::RegionHeartbeatRequest::new();
+        let mut req = pdpb::RegionHeartbeatRequest::default();
         req.set_header(self.header());
         req.set_region(region);
         req.set_leader(leader);
@@ -308,7 +308,7 @@ impl PdClient for RpcClient {
         req.set_keys_read(region_stat.read_keys);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
-        let mut interval = pdpb::TimeInterval::new();
+        let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(region_stat.last_report_ts);
         interval.set_end_timestamp(time_now_sec());
         req.set_interval(interval);
@@ -364,7 +364,7 @@ impl PdClient for RpcClient {
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
         let timer = Instant::now();
 
-        let mut req = pdpb::AskSplitRequest::new();
+        let mut req = pdpb::AskSplitRequest::default();
         req.set_header(self.header());
         req.set_region(region);
 
@@ -395,7 +395,7 @@ impl PdClient for RpcClient {
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         let timer = Instant::now();
 
-        let mut req = pdpb::AskBatchSplitRequest::new();
+        let mut req = pdpb::AskBatchSplitRequest::default();
         req.set_header(self.header());
         req.set_region(region);
         req.set_split_count(count as u32);
@@ -423,7 +423,7 @@ impl PdClient for RpcClient {
     fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<()> {
         let timer = Instant::now();
 
-        let mut req = pdpb::StoreHeartbeatRequest::new();
+        let mut req = pdpb::StoreHeartbeatRequest::default();
         req.set_header(self.header());
         stats.mut_interval().set_end_timestamp(time_now_sec());
         req.set_stats(stats);
@@ -450,7 +450,7 @@ impl PdClient for RpcClient {
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
         let timer = Instant::now();
 
-        let mut req = pdpb::ReportBatchSplitRequest::new();
+        let mut req = pdpb::ReportBatchSplitRequest::default();
         req.set_header(self.header());
         req.set_regions(RepeatedField::from_vec(regions));
 
@@ -479,7 +479,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["scatter_region"])
             .start_coarse_timer();
 
-        let mut req = pdpb::ScatterRegionRequest::new();
+        let mut req = pdpb::ScatterRegionRequest::default();
         req.set_header(self.header());
         req.set_region_id(region.get_id());
         if let Some(leader) = region.leader.take() {
@@ -500,7 +500,7 @@ impl PdClient for RpcClient {
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
         let timer = Instant::now();
 
-        let mut req = pdpb::GetGCSafePointRequest::new();
+        let mut req = pdpb::GetGCSafePointRequest::default();
         req.set_header(self.header());
 
         let executor = move |client: &RwLock<Inner>, req: pdpb::GetGCSafePointRequest| {
@@ -529,7 +529,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["get_store"])
             .start_coarse_timer();
 
-        let mut req = pdpb::GetStoreRequest::new();
+        let mut req = pdpb::GetStoreRequest::default();
         req.set_header(self.header());
         req.set_store_id(store_id);
 
@@ -551,7 +551,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["get_operator"])
             .start_coarse_timer();
 
-        let mut req = pdpb::GetOperatorRequest::new();
+        let mut req = pdpb::GetOperatorRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
 
