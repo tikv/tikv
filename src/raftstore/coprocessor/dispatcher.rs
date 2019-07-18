@@ -373,25 +373,25 @@ mod tests {
             .register_role_observer(1, Box::new(ob.clone()));
         host.registry
             .register_region_change_observer(1, Box::new(ob.clone()));
-        let region = Region::new();
-        let mut admin_req = RaftCmdRequest::new();
-        admin_req.set_admin_request(AdminRequest::new());
+        let region = Region::default();
+        let mut admin_req = RaftCmdRequest::default();
+        admin_req.set_admin_request(AdminRequest::default());
         host.pre_propose(&region, &mut admin_req).unwrap();
         assert_all!(&[&ob.called], &[1]);
         host.pre_apply(&region, &admin_req);
         assert_all!(&[&ob.called], &[3]);
-        let mut admin_resp = RaftCmdResponse::new();
-        admin_resp.set_admin_response(AdminResponse::new());
+        let mut admin_resp = RaftCmdResponse::default();
+        admin_resp.set_admin_response(AdminResponse::default());
         host.post_apply(&region, &mut admin_resp);
         assert_all!(&[&ob.called], &[6]);
 
-        let mut query_req = RaftCmdRequest::new();
-        query_req.set_requests(RepeatedField::from_vec(vec![Request::new()]));
+        let mut query_req = RaftCmdRequest::default();
+        query_req.set_requests(RepeatedField::from_vec(vec![Request::default()]));
         host.pre_propose(&region, &mut query_req).unwrap();
         assert_all!(&[&ob.called], &[10]);
         host.pre_apply(&region, &query_req);
         assert_all!(&[&ob.called], &[15]);
-        host.post_apply(&region, &mut RaftCmdResponse::new());
+        host.post_apply(&region, &mut RaftCmdResponse::default());
         assert_all!(&[&ob.called], &[21]);
 
         host.on_role_change(&region, StateRole::Leader);
@@ -416,13 +416,13 @@ mod tests {
         host.registry
             .register_query_observer(2, Box::new(ob2.clone()));
 
-        let region = Region::new();
-        let mut admin_req = RaftCmdRequest::new();
-        admin_req.set_admin_request(AdminRequest::new());
-        let mut admin_resp = RaftCmdResponse::new();
-        admin_resp.set_admin_response(AdminResponse::new());
-        let query_req = RaftCmdRequest::new();
-        let query_resp = RaftCmdResponse::new();
+        let region = Region::default();
+        let mut admin_req = RaftCmdRequest::default();
+        admin_req.set_admin_request(AdminRequest::default());
+        let mut admin_resp = RaftCmdResponse::default();
+        admin_resp.set_admin_response(AdminResponse::default());
+        let query_req = RaftCmdRequest::default();
+        let query_resp = RaftCmdResponse::default();
 
         let cases = vec![(0, admin_req, admin_resp), (3, query_req, query_resp)];
 

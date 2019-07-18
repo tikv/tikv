@@ -356,11 +356,11 @@ mod tests {
         server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();
-        trans.report_unreachable(RaftMessage::new());
+        trans.report_unreachable(RaftMessage::default());
         let mut resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);
 
-        let mut msg = RaftMessage::new();
+        let mut msg = RaftMessage::default();
         msg.set_region_id(1);
         trans.send(msg.clone()).unwrap();
         trans.flush();

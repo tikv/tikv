@@ -359,12 +359,12 @@ mod tests {
         assert!(validate_data_key(&data_key(b"abc")));
         assert!(!validate_data_key(b"abc"));
 
-        let mut region = Region::new();
+        let mut region = Region::default();
         // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.
         assert!(::panic_hook::recover_safe(|| enc_start_key(&region)).is_err());
         assert!(::panic_hook::recover_safe(|| enc_end_key(&region)).is_err());
 
-        region.mut_peers().push(Peer::new());
+        region.mut_peers().push(Peer::default());
         assert_eq!(enc_start_key(&region), vec![DATA_PREFIX]);
         assert_eq!(enc_end_key(&region), vec![DATA_PREFIX + 1]);
 
