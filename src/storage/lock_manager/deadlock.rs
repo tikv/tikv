@@ -76,7 +76,7 @@ impl DetectTable {
         let now = self.now;
         let ttl = self.ttl;
 
-        // Memorize the searched vertex.
+        // Memorize the searched vertexes.
         let mut visited: HashSet<u64> = HashSet::default();
         let mut stack = vec![wait_for_ts];
         while let Some(wait_for_ts) = stack.pop() {
@@ -94,8 +94,8 @@ impl DetectTable {
                             stack.push(*lock_ts);
                         }
                     }
+                    visited.insert(wait_for_ts);
                 }
-                visited.insert(wait_for_ts);
             }
         }
         None
