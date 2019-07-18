@@ -1,21 +1,22 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::WriteBytesExt;
-use num;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
+use std::string::ToString;
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
-use crate::coprocessor::dag::expr::EvalContext;
-
+use byteorder::WriteBytesExt;
+use num;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 use tikv_util::escape;
+
+use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
+use crate::coprocessor::dag::expr::EvalContext;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -971,51 +972,6 @@ impl Decimal {
         (buf, word_start_idx, int_len, int_cnt, frac_cnt)
     }
 
-    /// `to_string` converts decimal to its printable string representation without rounding.
-    fn to_string(&self) -> String {
-        let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
-        if self.negative {
-            buf.push(b'-');
-        }
-        for _ in 0..int_len - cmp::max(int_cnt, 1) {
-            buf.push(b'0');
-        }
-        if int_cnt > 0 {
-            let base_idx = buf.len();
-            let mut idx = base_idx + int_cnt as usize;
-            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
-            buf.resize(idx, 0);
-            while idx > base_idx {
-                widx -= 1;
-                let mut x = self.word_buf[widx];
-                for _ in 0..cmp::min((idx - base_idx) as u8, DIGITS_PER_WORD) {
-                    idx -= 1;
-                    buf[idx] = b'0' + (x % 10) as u8;
-                    x /= 10;
-                }
-            }
-        } else {
-            buf.push(b'0');
-        };
-        if frac_cnt > 0 {
-            buf.push(b'.');
-            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
-            let exp_idx = buf.len() + frac_cnt as usize;
-            while buf.len() < exp_idx {
-                let mut x = self.word_buf[widx];
-                for _ in 0..cmp::min((exp_idx - buf.len()) as u8, DIGITS_PER_WORD) {
-                    buf.push((x / DIG_MASK) as u8 + b'0');
-                    x = (x % DIG_MASK) * 10;
-                }
-                widx += 1;
-            }
-            while buf.capacity() != buf.len() {
-                buf.push(b'0');
-            }
-        }
-        unsafe { String::from_utf8_unchecked(buf) }
-    }
-
     /// Get the least precision and fraction count to encode this decimal completely.
     pub fn prec_and_frac(&self) -> (u8, u8) {
         if self.precision == 0 {
@@ -1778,6 +1734,52 @@ impl FromStr for Decimal {
             Res::Overflow(_) => Err(box_err!("parsing {} will overflow", s)),
             Res::Truncated(_) => Err(box_err!("parsing {} will truncated", s)),
         }
+    }
+}
+
+impl ToString for Decimal {
+    fn to_string(&self) -> String {
+        let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
+        if self.negative {
+            buf.push(b'-');
+        }
+        for _ in 0..int_len - cmp::max(int_cnt, 1) {
+            buf.push(b'0');
+        }
+        if int_cnt > 0 {
+            let base_idx = buf.len();
+            let mut idx = base_idx + int_cnt as usize;
+            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
+            buf.resize(idx, 0);
+            while idx > base_idx {
+                widx -= 1;
+                let mut x = self.word_buf[widx];
+                for _ in 0..cmp::min((idx - base_idx) as u8, DIGITS_PER_WORD) {
+                    idx -= 1;
+                    buf[idx] = b'0' + (x % 10) as u8;
+                    x /= 10;
+                }
+            }
+        } else {
+            buf.push(b'0');
+        };
+        if frac_cnt > 0 {
+            buf.push(b'.');
+            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
+            let exp_idx = buf.len() + frac_cnt as usize;
+            while buf.len() < exp_idx {
+                let mut x = self.word_buf[widx];
+                for _ in 0..cmp::min((exp_idx - buf.len()) as u8, DIGITS_PER_WORD) {
+                    buf.push((x / DIG_MASK) as u8 + b'0');
+                    x = (x % DIG_MASK) * 10;
+                }
+                widx += 1;
+            }
+            while buf.capacity() != buf.len() {
+                buf.push(b'0');
+            }
+        }
+        unsafe { String::from_utf8_unchecked(buf) }
     }
 }
 

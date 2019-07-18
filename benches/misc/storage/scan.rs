@@ -22,7 +22,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
         let mut ts = ts_generator.next().unwrap();
         store
             .prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(&k), v))],
                 k.clone(),
                 ts,
@@ -30,7 +30,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
             .expect("");
         store
             .commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(&k)],
                 ts,
                 ts_generator.next().unwrap(),
@@ -40,7 +40,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
         ts = ts_generator.next().unwrap();
         store
             .prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Delete(Key::from_raw(&k))],
                 k.clone(),
                 ts,
@@ -48,7 +48,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
             .expect("");
         store
             .commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(&k)],
                 ts,
                 ts_generator.next().unwrap(),
@@ -61,7 +61,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
         let (k, _) = kvs.next().unwrap();
         assert!(store
             .scan(
-                Context::new(),
+                Context::default(),
                 Key::from_raw(&k),
                 None,
                 1,

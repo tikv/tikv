@@ -6,13 +6,14 @@ use serde_json;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
+use std::string::ToString;
 use std::{f64, str};
 
 use super::Json;
 use crate::coprocessor::codec::Error;
 
-impl Json {
-    pub fn to_string(&self) -> String {
+impl ToString for Json {
+    fn to_string(&self) -> String {
         serde_json::to_string(self).unwrap()
     }
 }

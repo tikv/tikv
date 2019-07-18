@@ -40,7 +40,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     use tikv::coprocessor::Deadline;
     use tipb::select::DAGRequest;
 
-    let mut dag = DAGRequest::new();
+    let mut dag = DAGRequest::default();
     dag.set_executors(RepeatedField::from_vec(executors.to_vec()));
 
     DAGBuilder::build(
