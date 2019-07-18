@@ -376,7 +376,13 @@ impl SliceTransform for FixedPrefixSliceTransform {
 }
 
 pub struct SequentialRowInsertTransform {
-    pub id: usize,
+    pub _id: usize,
+}
+
+impl SequentialRowInsertTransform {
+    pub fn new(id: usize) -> Self {
+        Self { _id: id }
+    }
 }
 
 impl SliceTransform for SequentialRowInsertTransform {
