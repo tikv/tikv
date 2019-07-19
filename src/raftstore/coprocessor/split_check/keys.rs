@@ -278,11 +278,11 @@ mod tests {
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(1);
         region.set_start_key(vec![]);
         region.set_end_key(vec![]);
-        region.mut_peers().push(Peer::new());
+        region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
@@ -381,8 +381,8 @@ mod tests {
             db.flush_cf(default_cf, true).unwrap();
         }
 
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let range_keys = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
     }

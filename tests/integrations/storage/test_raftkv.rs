@@ -4,6 +4,8 @@ use kvproto::kvrpcpb::Context;
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
+use std::thread;
+use std::time;
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::{CFStatistics, Key};
@@ -23,7 +25,7 @@ fn test_raftkv() {
     let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader_id.get_id()].clone();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
@@ -54,7 +56,7 @@ fn test_read_leader_in_lease() {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
@@ -86,7 +88,7 @@ fn test_read_index_on_replica() {
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
@@ -121,6 +123,66 @@ fn test_read_index_on_replica() {
             .get_read_index(),
         0
     );
+}
+
+#[test]
+fn test_read_on_replica() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+
+    let k1 = b"k1";
+    let (k2, v2) = (b"k2", b"v2");
+    let (k3, v3) = (b"k3", b"v3");
+    let (k4, v4) = (b"k4", b"v4");
+
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(k1), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let leader_storage = cluster.sim.rl().storages[&leader.get_id()].clone();
+
+    let mut leader_ctx = Context::default();
+    leader_ctx.set_region_id(region.get_id());
+    leader_ctx.set_region_epoch(region.get_region_epoch().clone());
+    leader_ctx.set_peer(leader.clone());
+
+    // write some data
+    let peers = region.get_peers();
+    assert_none(&leader_ctx, &leader_storage, k2);
+    must_put(&leader_ctx, &leader_storage, k2, v2);
+
+    // read on follower
+    let mut follower_peer = None;
+    let mut follower_id = 0;
+    for p in peers {
+        if p.get_id() != leader.get_id() {
+            follower_id = p.get_id();
+            follower_peer = Some(p.clone());
+            break;
+        }
+    }
+
+    assert!(follower_peer.is_some());
+    let mut follower_ctx = Context::default();
+    follower_ctx.set_region_id(region.get_id());
+    follower_ctx.set_region_epoch(region.get_region_epoch().clone());
+    follower_ctx.set_peer(follower_peer.as_ref().unwrap().clone());
+    follower_ctx.set_follower_read(true);
+    let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
+    assert_has(&follower_ctx, &follower_storage, k2, v2);
+
+    must_put(&leader_ctx, &leader_storage, k3, v3);
+    assert_has(&follower_ctx, &follower_storage, k3, v3);
+
+    cluster.stop_node(follower_id);
+    must_put(&leader_ctx, &leader_storage, k4, v4);
+    cluster.run_node(follower_id).unwrap();
+    let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
+    // sleep to ensure the follower has received a heartbeat from the leader
+    thread::sleep(time::Duration::from_millis(300));
+    assert_has(&follower_ctx, &follower_storage, k4, v4);
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {

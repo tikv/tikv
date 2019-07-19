@@ -1,21 +1,22 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::WriteBytesExt;
-use num;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
+use std::string::ToString;
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
-use crate::coprocessor::dag::expr::EvalContext;
-
+use byteorder::WriteBytesExt;
+use num;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 use tikv_util::escape;
+
+use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
+use crate::coprocessor::dag::expr::EvalContext;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -724,8 +725,8 @@ fn do_div_mod_impl(
     Some(res)
 }
 
-fn do_div_mod(lhs: Decimal, rhs: Decimal, frac_incr: u8, do_mod: bool) -> Option<Res<Decimal>> {
-    do_div_mod_impl(&lhs, &rhs, frac_incr, do_mod)
+fn do_div_mod(lhs: &Decimal, rhs: &Decimal, frac_incr: u8, do_mod: bool) -> Option<Res<Decimal>> {
+    do_div_mod_impl(lhs, rhs, frac_incr, do_mod)
 }
 
 /// `do_mul` multiplies two decimals.
@@ -965,51 +966,6 @@ impl Decimal {
         }
         let buf = Vec::with_capacity(len as usize);
         (buf, word_start_idx, int_len, int_cnt, frac_cnt)
-    }
-
-    /// `to_string` converts decimal to its printable string representation without rounding.
-    fn to_string(&self) -> String {
-        let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
-        if self.negative {
-            buf.push(b'-');
-        }
-        for _ in 0..int_len - cmp::max(int_cnt, 1) {
-            buf.push(b'0');
-        }
-        if int_cnt > 0 {
-            let base_idx = buf.len();
-            let mut idx = base_idx + int_cnt as usize;
-            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
-            buf.resize(idx, 0);
-            while idx > base_idx {
-                widx -= 1;
-                let mut x = self.word_buf[widx];
-                for _ in 0..cmp::min((idx - base_idx) as u8, DIGITS_PER_WORD) {
-                    idx -= 1;
-                    buf[idx] = b'0' + (x % 10) as u8;
-                    x /= 10;
-                }
-            }
-        } else {
-            buf.push(b'0');
-        };
-        if frac_cnt > 0 {
-            buf.push(b'.');
-            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
-            let exp_idx = buf.len() + frac_cnt as usize;
-            while buf.len() < exp_idx {
-                let mut x = self.word_buf[widx];
-                for _ in 0..cmp::min((exp_idx - buf.len()) as u8, DIGITS_PER_WORD) {
-                    buf.push((x / DIG_MASK) as u8 + b'0');
-                    x = (x % DIG_MASK) * 10;
-                }
-                widx += 1;
-            }
-            while buf.capacity() != buf.len() {
-                buf.push(b'0');
-            }
-        }
-        unsafe { String::from_utf8_unchecked(buf) }
     }
 
     /// Get the least precision and fraction count to encode this decimal completely.
@@ -1691,7 +1647,7 @@ impl Decimal {
         dec_encoded_len(&[prec, frac]).unwrap_or(3)
     }
 
-    fn div(self, rhs: Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
+    fn div(&self, rhs: &Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
         let result_frac_cnt =
             cmp::min(self.result_frac_cnt.saturating_add(frac_incr), MAX_FRACTION);
         let mut res = do_div_mod(self, rhs, frac_incr, false);
@@ -1774,6 +1730,52 @@ impl FromStr for Decimal {
             Res::Overflow(_) => Err(box_err!("parsing {} will overflow", s)),
             Res::Truncated(_) => Err(box_err!("parsing {} will truncated", s)),
         }
+    }
+}
+
+impl ToString for Decimal {
+    fn to_string(&self) -> String {
+        let (mut buf, word_start_idx, int_len, int_cnt, frac_cnt) = self.prepare_buf();
+        if self.negative {
+            buf.push(b'-');
+        }
+        for _ in 0..int_len - cmp::max(int_cnt, 1) {
+            buf.push(b'0');
+        }
+        if int_cnt > 0 {
+            let base_idx = buf.len();
+            let mut idx = base_idx + int_cnt as usize;
+            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
+            buf.resize(idx, 0);
+            while idx > base_idx {
+                widx -= 1;
+                let mut x = self.word_buf[widx];
+                for _ in 0..cmp::min((idx - base_idx) as u8, DIGITS_PER_WORD) {
+                    idx -= 1;
+                    buf[idx] = b'0' + (x % 10) as u8;
+                    x /= 10;
+                }
+            }
+        } else {
+            buf.push(b'0');
+        };
+        if frac_cnt > 0 {
+            buf.push(b'.');
+            let mut widx = word_start_idx + word_cnt!(int_cnt) as usize;
+            let exp_idx = buf.len() + frac_cnt as usize;
+            while buf.len() < exp_idx {
+                let mut x = self.word_buf[widx];
+                for _ in 0..cmp::min((exp_idx - buf.len()) as u8, DIGITS_PER_WORD) {
+                    buf.push((x / DIG_MASK) as u8 + b'0');
+                    x = (x % DIG_MASK) * 10;
+                }
+                widx += 1;
+            }
+            while buf.capacity() != buf.len() {
+                buf.push(b'0');
+            }
+        }
+        unsafe { String::from_utf8_unchecked(buf) }
     }
 }
 
@@ -2172,10 +2174,10 @@ impl<'a, 'b> Mul<&'a Decimal> for &'b Decimal {
     }
 }
 
-impl Div for Decimal {
+impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
     type Output = Option<Res<Decimal>>;
 
-    fn div(self, rhs: Decimal) -> Option<Res<Decimal>> {
+    fn div(self, rhs: &'a Decimal) -> Self::Output {
         self.div(rhs, DEFAULT_DIV_FRAC_INCR)
     }
 }
@@ -3240,11 +3242,12 @@ mod tests {
         for (frac_incr, lhs_str, rhs_str, div_exp, rem_exp) in cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res = super::do_div_mod(lhs.clone(), rhs.clone(), frac_incr, false)
-                .map(|d| d.unwrap().to_string());
+            let res =
+                super::do_div_mod(&lhs, &rhs, frac_incr, false).map(|d| d.unwrap().to_string());
             assert_eq!(res, div_exp.map(|s| s.to_owned()));
 
-            let res = super::do_div_mod(lhs, rhs, frac_incr, true).map(|d| d.unwrap().to_string());
+            let res =
+                super::do_div_mod(&lhs, &rhs, frac_incr, true).map(|d| d.unwrap().to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
         }
 
@@ -3258,7 +3261,7 @@ mod tests {
         for (lhs_str, rhs_str, rem_exp) in div_cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res = (lhs / rhs).unwrap().map(|d| d.to_string());
+            let res = (&lhs / &rhs).unwrap().map(|d| d.to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()))
         }
     }

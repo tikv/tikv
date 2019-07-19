@@ -310,7 +310,7 @@ pub mod tests {
         for (k, v) in &test_data {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
-        let snap = engine.snapshot(&Context::new()).unwrap();
+        let snap = engine.snapshot(&Context::default()).unwrap();
         let mut statistics = CFStatistics::default();
 
         // lower bound > upper bound, seek() returns false.
