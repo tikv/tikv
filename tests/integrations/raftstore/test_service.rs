@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::*;
 
 use futures::{future, Future, Stream};
 use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
@@ -16,11 +17,17 @@ use raft::eraftpb;
 use engine::rocks::Writable;
 use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use tempfile::Builder;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
+use tikv::import::SSTImporter;
+use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::store::fsm::store::StoreMeta;
 use tikv::raftstore::store::keys;
+use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType};
 use tikv::storage::Key;
+use tikv_util::worker::FutureWorker;
 use tikv_util::HandyRwLock;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
@@ -706,7 +713,7 @@ fn test_debug_region_size() {
 }
 
 #[test]
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 fn test_debug_fail_point() {
     let (_cluster, debug_client, _) = must_new_cluster_and_debug_client();
 
@@ -768,4 +775,41 @@ fn test_debug_scan_mvcc() {
     let keys = future.wait().unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0], keys::data_key(b"meta_lock_1"));
+}
+
+#[test]
+fn test_double_run_node() {
+    let count = 1;
+    let mut cluster = new_node_cluster(0, count);
+    cluster.run();
+    let id = *cluster.engines.keys().next().unwrap();
+    let engines = cluster.engines.values().next().unwrap().clone();
+    let router = cluster.sim.rl().get_router(id).unwrap();
+    let mut sim = cluster.sim.wl();
+    let node = sim.get_node(id).unwrap();
+    let pd_worker = FutureWorker::new("test-pd-worker");
+    let simulate_trans = SimulateTransport::new(ChannelTransport::new());
+    let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
+    let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
+    let coprocessor_host = CoprocessorHost::new(Default::default(), router.clone());
+    let importer = {
+        let dir = Path::new(engines.kv.path()).join("import-sst");
+        Arc::new(SSTImporter::new(dir).unwrap())
+    };
+
+    let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
+    let e = node
+        .start(
+            engines,
+            simulate_trans,
+            snap_mgr,
+            pd_worker,
+            store_meta,
+            coprocessor_host,
+            importer,
+        )
+        .unwrap_err();
+    assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
+    drop(sim);
+    cluster.shutdown();
 }
