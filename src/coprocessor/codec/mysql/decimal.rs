@@ -913,6 +913,10 @@ impl Decimal {
         }
     }
 
+    pub fn is_negative(&self) -> bool {
+        self.negative
+    }
+
     /// reset the decimal to zero.
     fn reset_to_zero(&mut self) {
         self.int_cnt = 1;
