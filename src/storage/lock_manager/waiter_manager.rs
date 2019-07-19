@@ -161,7 +161,7 @@ impl WaitTable {
             .iter()
             .flat_map(|(_, waiters)| {
                 waiters.iter().map(|waiter| {
-                    let mut wait_for_entry = WaitForEntry::new();
+                    let mut wait_for_entry = WaitForEntry::default();
                     wait_for_entry.set_txn(waiter.start_ts);
                     wait_for_entry.set_wait_for_txn(waiter.lock.ts);
                     wait_for_entry.set_key_hash(waiter.lock.hash);

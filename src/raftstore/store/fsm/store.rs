@@ -316,7 +316,7 @@ impl<T: Transport, C> PollContext<T, C> {
             "msg_type" => ?msg_type,
         );
 
-        let mut gc_msg = RaftMessage::new();
+        let mut gc_msg = RaftMessage::default();
         gc_msg.set_region_id(region_id);
         gc_msg.set_from_peer(to_peer.clone());
         gc_msg.set_to_peer(from_peer.clone());
@@ -716,8 +716,8 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut region_peers = vec![];
 
         let t = Instant::now();
-        let mut kv_wb = WriteBatch::new();
-        let mut raft_wb = WriteBatch::new();
+        let mut kv_wb = WriteBatch::default();
+        let mut raft_wb = WriteBatch::default();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
@@ -897,7 +897,7 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
-            kv_wb: WriteBatch::new(),
+            kv_wb: WriteBatch::default(),
             raft_wb: WriteBatch::with_capacity(4 * 1024),
             pending_count: 0,
             sync_log: false,
@@ -1560,7 +1560,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 
     fn store_heartbeat_pd(&mut self) {
-        let mut stats = StoreStats::new();
+        let mut stats = StoreStats::default();
 
         let used_size = self.ctx.snap_mgr.get_total_snap_size();
         stats.set_used_size(used_size);
@@ -1884,7 +1884,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .consistency_check_time
             .insert(target_region_id, Instant::now());
         let mut request = new_admin_request(target_region_id, target_peer);
-        let mut admin = AdminRequest::new();
+        let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::ComputeHash);
         request.set_admin_request(admin);
 
@@ -2113,8 +2113,8 @@ mod tests {
 
         {
             for (i, (start, end)) in meta.into_iter().enumerate() {
-                let mut region = metapb::Region::new();
-                let peer = metapb::Peer::new();
+                let mut region = metapb::Region::default();
+                let peer = metapb::Peer::default();
                 region.set_peers(RepeatedField::from_vec(vec![peer]));
                 region.set_start_key(start.to_vec());
                 region.set_end_key(end.to_vec());
@@ -2149,8 +2149,8 @@ mod tests {
         region_peers.clear();
         {
             for (i, (start, end)) in meta.into_iter().enumerate() {
-                let mut region = metapb::Region::new();
-                let peer = metapb::Peer::new();
+                let mut region = metapb::Region::default();
+                let peer = metapb::Peer::default();
                 region.set_peers(RepeatedField::from_vec(vec![peer]));
                 region.set_start_key(start.to_vec());
                 region.set_end_key(end.to_vec());

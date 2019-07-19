@@ -172,7 +172,7 @@ fn test_engine_leader_change_twice() {
         .get_header()
         .get_current_term();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peers[0].clone());

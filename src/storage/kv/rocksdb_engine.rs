@@ -194,7 +194,7 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::new();
+    let wb = WriteBatch::default();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -424,7 +424,7 @@ mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();

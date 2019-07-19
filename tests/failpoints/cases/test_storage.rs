@@ -59,7 +59,7 @@ fn test_storage_gcworker_busy() {
     let (tx2, rx2) = channel();
     storage
         .async_gc(
-            Context::new(),
+            Context::default(),
             1,
             Box::new(move |res: storage::Result<()>| {
                 match res {
@@ -92,7 +92,7 @@ fn test_scheduler_leader_change_twice() {
         .build()
         .unwrap();
 
-    let mut ctx0 = Context::new();
+    let mut ctx0 = Context::default();
     ctx0.set_region_id(region0.get_id());
     ctx0.set_region_epoch(region0.get_region_epoch().clone());
     ctx0.set_peer(peers[0].clone());
@@ -144,14 +144,14 @@ fn test_server_catching_api_error() {
         ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
 
-    let mut prewrite_req = PrewriteRequest::new();
+    let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx.clone());
-    let mut mutation = kvrpcpb::Mutation::new();
+    let mut mutation = kvrpcpb::Mutation::default();
     mutation.op = Op::Put;
     mutation.key = b"k3".to_vec();
     mutation.value = b"v3".to_vec();
@@ -168,7 +168,7 @@ fn test_server_catching_api_error() {
     );
     must_get_none(&cluster.get_engine(1), b"k3");
 
-    let mut put_req = RawPutRequest::new();
+    let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
     put_req.key = b"k3".to_vec();
     put_req.value = b"v3".to_vec();

@@ -32,7 +32,7 @@ const LAST_INDEX: u64 = 11;
 const STALE_LAST_INDEX: u64 = APPLIED_INDEX - 1;
 
 fn write_store_ident(db: &DB, cf: &str, key: &[u8]) -> StoreIdent {
-    let mut store_ident = StoreIdent::new();
+    let mut store_ident = StoreIdent::default();
     store_ident.set_cluster_id(CLUSTER_ID);
     store_ident.set_store_id(STOER_ID);
 
@@ -43,7 +43,7 @@ fn write_store_ident(db: &DB, cf: &str, key: &[u8]) -> StoreIdent {
 }
 
 fn write_region(db: &DB, cf: &str, key: &[u8]) -> Region {
-    let mut region = Region::new();
+    let mut region = Region::default();
     region.set_id(REGION_ID);
     region.set_peers(vec![new_peer(STOER_ID, PEER_ID)].into());
     region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
@@ -56,9 +56,9 @@ fn write_region(db: &DB, cf: &str, key: &[u8]) -> Region {
 }
 
 fn write_apply_state(db: &DB, cf: &str, key: &[u8]) -> RaftApplyState {
-    let mut apply_state = RaftApplyState::new();
+    let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(APPLIED_INDEX);
-    let mut truncated_state = RaftTruncatedState::new();
+    let mut truncated_state = RaftTruncatedState::default();
     truncated_state.set_index(SNAPSHOT_INDEX);
     truncated_state.set_term(TERM);
     apply_state.set_truncated_state(truncated_state);
@@ -70,7 +70,7 @@ fn write_apply_state(db: &DB, cf: &str, key: &[u8]) -> RaftApplyState {
 }
 
 fn write_snap_raft_state(db: &DB, cf: &str, key: &[u8]) -> RaftLocalState {
-    let mut snap_raft_state = RaftLocalState::new();
+    let mut snap_raft_state = RaftLocalState::default();
     snap_raft_state.set_last_index(SNAPSHOT_INDEX);
     snap_raft_state.mut_hard_state().set_term(TERM);
     snap_raft_state.mut_hard_state().set_vote(PEER_ID);
@@ -83,7 +83,7 @@ fn write_snap_raft_state(db: &DB, cf: &str, key: &[u8]) -> RaftLocalState {
 }
 
 fn write_region_state(db: &DB, cf: &str, key: &[u8], region: Region) -> RegionLocalState {
-    let mut region_state = RegionLocalState::new();
+    let mut region_state = RegionLocalState::default();
     region_state.set_region(region);
     region_state.set_state(PeerState::Normal);
 
@@ -109,7 +109,7 @@ fn write_stale_raft_state(
 }
 
 fn write_log_entry(db: &DB, cf: &str, key: &[u8], idx: u64) -> Entry {
-    let mut entry = Entry::new();
+    let mut entry = Entry::default();
     entry.set_term(TERM);
     entry.set_index(idx);
 
