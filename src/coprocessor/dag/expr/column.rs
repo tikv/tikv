@@ -17,8 +17,8 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_int(&self, row: &[Datum]) -> Result<Option<i64>> {
-        row[self.offset].as_int()
+    pub fn eval_int(&self, row: &[Datum], ctx: &mut EvalContext) -> Result<Option<i64>> {
+        row[self.offset].as_int(ctx)
     }
 
     #[inline]

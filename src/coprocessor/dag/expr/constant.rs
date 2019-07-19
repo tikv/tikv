@@ -3,17 +3,78 @@
 use std::borrow::Cow;
 
 use super::{Constant, Result};
+use crate::coprocessor::codec::convert::{
+    convert_bytes_to_int, convert_datetime_to_int, convert_decimal_to_int, convert_duration_to_int,
+    convert_float_to_int, convert_int_to_int, convert_json_to_int, convert_uint_to_int,
+};
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use crate::coprocessor::codec::Datum;
+use crate::coprocessor::codec::{Datum, Error};
+use crate::coprocessor::dag::expr::EvalContext;
+use cop_datatype::FieldTypeTp;
 
 impl Datum {
     #[inline]
-    pub fn as_int(&self) -> Result<Option<i64>> {
+    pub fn as_bool(&self, ctx: &mut EvalContext) -> Result<Option<bool>> {
         match *self {
             Datum::Null => Ok(None),
-            Datum::I64(i) => Ok(Some(i)),
-            Datum::U64(u) => Ok(Some(u as i64)),
-            _ => Err(box_err!("Can't eval_int from Datum")),
+            Datum::I64(i) => Ok(Some(i != 0)),
+            Datum::U64(u) => Ok(Some(u != 0)),
+            Datum::F64(f) => Ok(Some(f.round() != 0f64)),
+            Datum::Dur(d) => Ok(Some(!d.is_zero())),
+            Datum::Bytes(ref bs) => Ok(Some(
+                !bs.is_empty() && convert_bytes_to_int(ctx, bs, FieldTypeTp::LongLong)? != 0,
+            )),
+            Datum::Dec(ref d) => Ok(Some(d.as_f64()?.round() != 0f64)),
+            Datum::Time(ref x) => Ok(Some(!x.is_zero())),
+            Datum::Json(ref j) => Err(Error::InvalidDataType(format!(
+                "cannot convert {:?}(type Json) to bool",
+                j
+            ))),
+            Datum::Min | Datum::Max => {
+                panic!("This type[{}] should not appear here", *self);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn as_int(&self, ctx: &mut EvalContext) -> Result<Option<i64>> {
+        match *self {
+            Datum::Null => Ok(None),
+            Datum::I64(i) => {
+                let n = convert_int_to_int(ctx, i, FieldTypeTp::LongLong)?;
+                Ok(Some(n))
+            }
+            Datum::U64(u) => {
+                let n = convert_uint_to_int(ctx, u, FieldTypeTp::LongLong)?;
+                Ok(Some(n))
+            }
+            Datum::F64(f) => {
+                let n = convert_float_to_int(ctx, f, FieldTypeTp::LongLong)?;
+                Ok(Some(n))
+            }
+            Datum::Dur(d) => {
+                let n = convert_duration_to_int(ctx, d, FieldTypeTp::LongLong)?;
+                Ok(Some(n))
+            }
+            Datum::Bytes(ref bs) => {
+                let n = convert_bytes_to_int(ctx, bs, FieldTypeTp::LongLong)?;
+                Ok(Some(n))
+            }
+            Datum::Dec(ref d) => {
+                let n = convert_decimal_to_int(ctx, d, FieldTypeTp::LongLong)?;
+                Ok(Some(n))
+            }
+            Datum::Time(ref t) => {
+                let n = convert_datetime_to_int(ctx, t, FieldTypeTp::LongLong)?;
+                Ok(Some(n))
+            }
+            Datum::Json(ref j) => {
+                let n = convert_json_to_int(ctx, j, FieldTypeTp::LongLong)?;
+                Ok(Some(n))
+            }
+            Datum::Min | Datum::Max => {
+                panic!("This type[{}] should not appear here", *self);
+            }
         }
     }
 
@@ -77,9 +138,13 @@ impl Constant {
         self.val.clone()
     }
 
+    pub fn eval_bool(&self, ctx: &mut EvalContext) -> Result<Option<bool>> {
+        self.val.as_bool(ctx)
+    }
+
     #[inline]
-    pub fn eval_int(&self) -> Result<Option<i64>> {
-        self.val.as_int()
+    pub fn eval_int(&self, ctx: &mut EvalContext) -> Result<Option<i64>> {
+        self.val.as_int(ctx)
     }
 
     #[inline]

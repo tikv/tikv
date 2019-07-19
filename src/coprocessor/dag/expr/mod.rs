@@ -109,8 +109,8 @@ impl Expression {
 
     fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
-            Expression::Constant(ref constant) => constant.eval_int(),
-            Expression::ColumnRef(ref column) => column.eval_int(row),
+            Expression::Constant(ref constant) => constant.eval_int(ctx),
+            Expression::ColumnRef(ref column) => column.eval_int(row, ctx),
             Expression::ScalarFn(ref f) => f.eval_int(ctx, row),
         }
     }
