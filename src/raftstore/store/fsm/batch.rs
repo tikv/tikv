@@ -303,6 +303,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
         let thread = thread::current();
         let threadname = thread.name().unwrap();
+        let handler_task_counter =
+            WORKER_POLL_HANDLE_BATCH_COUNTER.with_label_values(&[&threadname]);
+
         self.fetch_batch(&mut batch, self.max_batch_size);
         while !batch.is_empty() {
             self.handler.begin(batch.len());
@@ -328,9 +331,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             self.handler.end(batch.normals_mut());
-            WORKER_POLL_HANDLE_BATCH_COUNTER
-                .with_label_values(&[&threadname])
-                .inc_by(f64::from(counter));
+            handler_task_counter.inc_by(f64::from(counter));
 
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.

@@ -13,7 +13,7 @@ lazy_static! {
     .unwrap();
     pub static ref WORKER_POLL_HANDLE_BATCH_COUNTER: CounterVec = register_counter_vec!(
         "tikv_raftstore_poll_handle",
-        "The count of batch handle by every thread worker poll",
+        "the total count of task batches handled by each thread of the raftstore worker pool",
         &["threadName"]
     )
     .unwrap();
