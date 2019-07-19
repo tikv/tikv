@@ -1585,13 +1585,11 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        (|| {
-            fail_point!(
-                "apply_before_split_1_3",
-                { self.id == 3 && self.region_id() == 1 },
-                |_| {}
-            );
-        })();
+        fail_point!(
+            "apply_before_split_1_3",
+            { self.id == 3 && self.region_id() == 1 },
+            |_| {}
+        );
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["batch-split", "all"])
@@ -2641,9 +2639,7 @@ impl ApplyFsm {
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_sync_apply_index != applied_index;
-        (|| {
-            fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
-        })();
+        fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
         if need_sync {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(SlowTimer::new());

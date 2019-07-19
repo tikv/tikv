@@ -27,7 +27,7 @@
 
 #[macro_use]
 extern crate bitflags;
-#[macro_use]
+#[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
 extern crate lazy_static;

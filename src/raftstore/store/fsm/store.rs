@@ -30,7 +30,7 @@ use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
