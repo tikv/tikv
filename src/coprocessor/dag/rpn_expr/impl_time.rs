@@ -97,4 +97,37 @@ mod tests {
             assert_eq!(output, expect, "{:?} {:?}", date, format);
         }
     }
+
+    #[test]
+    fn test_date_format_null() {
+        // test date format when format is None
+        let cases = vec![
+            ("2010-01-07 23:12:34.12345", None),
+            ("", None),
+            (
+                "0000-00-00 00:00:00.00000",
+                Some(
+                    "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v
+                %x %Y %y %%",
+                ),
+            ),
+        ];
+
+        for (date, format) in cases {
+            let date = if date.is_empty() {
+                None
+            } else {
+                Some(DateTime::parse_utc_datetime(date, 6).unwrap())
+            };
+
+            let format = format.map(|s| s.as_bytes().to_vec());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(date.clone())
+                .push_param(format.clone())
+                .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig)
+                .unwrap();
+            assert_eq!(output, None, "{:?} {:?}", date, format);
+        }
+    }
 }
