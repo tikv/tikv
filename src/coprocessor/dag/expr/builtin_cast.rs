@@ -18,7 +18,8 @@ use crate::coprocessor::dag::expr::Flag;
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let _ = self.children[0].eval_int(ctx, row);
+        let x = self.children[0].eval_int(ctx, row);
+        println!("---------{:?}------", x);
         Ok(Some(10))
     }
 
