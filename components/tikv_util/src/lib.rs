@@ -2,6 +2,8 @@
 
 #![cfg_attr(test, feature(test))]
 
+#[macro_use(fail_point)]
+extern crate fail;
 #[macro_use]
 extern crate futures;
 #[macro_use]
@@ -29,8 +31,6 @@ extern crate slog;
 extern crate slog_global;
 #[cfg(test)]
 extern crate test;
-#[macro_use]
-extern crate fail;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
