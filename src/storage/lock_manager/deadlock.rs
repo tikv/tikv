@@ -38,9 +38,13 @@ struct DetectTable {
     // txn_ts => (lock_ts => (Vec<lock_hash>, last_detect_time))
     wait_for_map: HashMap<u64, HashMap<u64, (Vec<u64>, time::Instant)>>,
 
-    now: time::Instant,
-
+    /// The ttl of every edge.
     ttl: time::Duration,
+
+    /// The time of last `active_expire`.
+    last_active_expire: time::Instant,
+
+    now: time::Instant,
 }
 
 impl DetectTable {
@@ -48,8 +52,9 @@ impl DetectTable {
     pub fn new(ttl: time::Duration) -> Self {
         Self {
             wait_for_map: HashMap::default(),
-            now: time::Instant::now_coarse(),
             ttl,
+            last_active_expire: time::Instant::now_coarse(),
+            now: time::Instant::now_coarse(),
         }
     }
 
@@ -59,6 +64,8 @@ impl DetectTable {
         TASK_COUNTER_VEC.detect.inc();
 
         self.now = time::Instant::now_coarse();
+        self.active_expire();
+
         // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
         if self.register_if_existed(txn_ts, lock_ts, lock_hash) {
             return None;
@@ -159,6 +166,26 @@ impl DetectTable {
         F: Fn(u64) -> bool,
     {
         self.wait_for_map.retain(|ts, _| !is_expired(*ts));
+    }
+
+    /// The threshold of detect table size to trigger `active_expire`.
+    const ACTIVE_EXPIRE_THRESHOLD: usize = 100000;
+    /// The interval between `active_expire`.
+    const ACTIVE_EXPIRE_INTERVAL: Duration = Duration::from_secs(60);
+
+    /// Iterates the whole table to remove all expired entries.
+    fn active_expire(&mut self) {
+        if self.wait_for_map.len() >= Self::ACTIVE_EXPIRE_THRESHOLD
+            && self.now.duration_since(self.last_active_expire) >= Self::ACTIVE_EXPIRE_INTERVAL
+        {
+            let now = self.now;
+            let ttl = self.ttl;
+            for (_, wait_for) in self.wait_for_map.iter_mut() {
+                wait_for.retain(|_, (_, time)| now.duration_since(*time) < ttl);
+            }
+            self.wait_for_map.retain(|_, wait_for| !wait_for.is_empty());
+            self.last_active_expire = self.now;
+        }
     }
 }
 
