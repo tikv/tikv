@@ -7,8 +7,6 @@ use std::collections::BTreeMap;
 use kvproto::coprocessor::KeyRange;
 use tipb::schema::{self, ColumnInfo};
 
-use protobuf::RepeatedField;
-
 use tikv::coprocessor;
 use tikv::coprocessor::codec::table;
 use tikv_util::codec::number::NumberEncoder;
@@ -45,7 +43,7 @@ impl Table {
     pub fn table_info(&self) -> schema::TableInfo {
         let mut info = schema::TableInfo::new();
         info.set_table_id(self.id);
-        info.set_columns(RepeatedField::from_vec(self.columns_info()));
+        info.set_columns(self.columns_info().into());
         info
     }
 

@@ -34,7 +34,7 @@ fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
     let mut e = Entry::default();
     let mut cmd = RaftCmdRequest::default();
     let reqs = generate_requests(map);
-    cmd.set_requests(protobuf::RepeatedField::from_vec(reqs));
+    cmd.set_requests(reqs.into());
     let cmd_msg = cmd.write_to_bytes().unwrap();
     e.set_data(cmd_msg);
     e.write_to_bytes().unwrap()

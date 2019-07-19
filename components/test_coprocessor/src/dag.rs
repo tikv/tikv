@@ -3,7 +3,6 @@
 use super::*;
 
 use protobuf::Message;
-use protobuf::RepeatedField;
 
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::Context;
@@ -182,11 +181,11 @@ impl DAGSelect {
             exec.set_tp(ExecType::TypeAggregation);
             let mut aggr = Aggregation::new();
             if !self.aggregate.is_empty() {
-                aggr.set_agg_func(RepeatedField::from_vec(self.aggregate));
+                aggr.set_agg_func(self.aggregate.into());
             }
 
             if !self.group_by.is_empty() {
-                aggr.set_group_by(RepeatedField::from_vec(self.group_by));
+                aggr.set_group_by(self.group_by.into());
             }
             exec.set_aggregation(aggr);
             self.execs.push(exec);
@@ -196,7 +195,7 @@ impl DAGSelect {
             let mut exec = Executor::new();
             exec.set_tp(ExecType::TypeTopN);
             let mut topn = TopN::new();
-            topn.set_order_by(RepeatedField::from_vec(self.order_by));
+            topn.set_order_by(self.order_by.into());
             if let Some(limit) = self.limit.take() {
                 topn.set_limit(limit);
             }
@@ -214,7 +213,7 @@ impl DAGSelect {
         }
 
         let mut dag = DAGRequest::default();
-        dag.set_executors(RepeatedField::from_vec(self.execs));
+        dag.set_executors(self.execs.into());
         dag.set_start_ts(next_id() as u64);
         dag.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
         dag.set_collect_range_counts(true);
@@ -229,7 +228,7 @@ impl DAGSelect {
         let mut req = Request::default();
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
-        req.set_ranges(RepeatedField::from_vec(vec![self.key_range]));
+        req.set_ranges(vec![self.key_range].into());
         req.set_context(ctx);
         req
     }

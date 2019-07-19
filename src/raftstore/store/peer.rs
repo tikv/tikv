@@ -2620,7 +2620,7 @@ impl ReadExecutor {
         }
 
         let mut response = RaftCmdResponse::default();
-        response.set_responses(protobuf::RepeatedField::from_vec(responses));
+        response.set_responses(responses.into());
         let snapshot = if need_snapshot {
             Some(RegionSnapshot::from_snapshot(
                 self.snapshot.clone().unwrap(),
