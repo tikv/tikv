@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2018"
 publish = false
 
+[features]
+failpoints = ["fail/failpoints"]
+
 [dependencies]
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -38,7 +41,7 @@ serde_json = "1.0"
 serde_derive = "1.0"
 grpcio = { version = "0.4", features = [ "secure" ] }
 crossbeam = "0.5"
-fail = "0.2"
+fail = "0.3"
 fxhash = "0.2.1"
 
 [dependencies.prometheus]

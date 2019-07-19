@@ -61,8 +61,8 @@ ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
-ifneq ($(FAIL_POINT),1)
-ENABLE_FEATURES += no-fail
+ifeq ($(FAIL_POINT),1)
+ENABLE_FEATURES += failpoints
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
