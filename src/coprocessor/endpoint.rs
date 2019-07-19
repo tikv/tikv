@@ -97,7 +97,7 @@ impl<E: Engine> Endpoint<E> {
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
-                let mut dag = DAGRequest::new();
+                let mut dag = DAGRequest::default();
                 box_try!(dag.merge_from(&mut is));
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
@@ -159,7 +159,7 @@ impl<E: Engine> Endpoint<E> {
                 });
             }
             REQ_TYPE_CHECKSUM => {
-                let mut checksum = ChecksumRequest::new();
+                let mut checksum = ChecksumRequest::default();
                 box_try!(checksum.merge_from(&mut is));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 req_ctx = ReqContext::new(
@@ -455,7 +455,7 @@ fn make_error_response(e: Error) -> coppb::Response {
         "error-response";
         "err" => %e
     );
-    let mut resp = coppb::Response::new();
+    let mut resp = coppb::Response::default();
     let tag;
     match e {
         Error::Region(e) => {
@@ -475,9 +475,9 @@ fn make_error_response(e: Error) -> coppb::Response {
         }
         Error::Full => {
             tag = "full";
-            let mut errorpb = errorpb::Error::new();
+            let mut errorpb = errorpb::Error::default();
             errorpb.set_message("Coprocessor end-point is full".to_owned());
-            let mut server_is_busy_err = errorpb::ServerIsBusy::new();
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(BUSY_ERROR_MSG.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
@@ -632,7 +632,7 @@ mod tests {
 
         // a normal request
         let handler_builder =
-            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed()));
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -642,10 +642,10 @@ mod tests {
 
         // an outdated request
         let handler_builder =
-            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed()));
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
             "test",
-            kvrpcpb::Context::new(),
+            kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(0),
             None,
@@ -680,9 +680,9 @@ mod tests {
             }
             let mut e = Executor::new();
             e.mut_selection().mut_conditions().push(expr);
-            let mut dag = DAGRequest::new();
+            let mut dag = DAGRequest::default();
             dag.mut_executors().push(e);
-            let mut req = coppb::Request::new();
+            let mut req = coppb::Request::default();
             req.set_tp(REQ_TYPE_DAG);
             req.set_data(dag.write_to_bytes().unwrap());
             req
@@ -701,7 +701,7 @@ mod tests {
         let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
-        let mut req = coppb::Request::new();
+        let mut req = coppb::Request::default();
         req.set_tp(9999);
 
         let resp: coppb::Response = cop
@@ -717,7 +717,7 @@ mod tests {
         let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
-        let mut req = coppb::Request::new();
+        let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(vec![1, 2, 3]);
 
@@ -749,10 +749,10 @@ mod tests {
 
         // first 2 requests are processed as normal and laters are returned as errors
         for i in 0..5 {
-            let mut response = coppb::Response::new();
+            let mut response = coppb::Response::default();
             response.set_data(vec![1, 2, i]);
 
-            let mut context = kvrpcpb::Context::new();
+            let mut context = kvrpcpb::Context::default();
             context.set_priority(kvrpcpb::CommandPri::Normal);
 
             let handler_builder = Box::new(|_, _: &_| {
@@ -826,7 +826,7 @@ mod tests {
         // Fail after some success responses
         let mut responses = Vec::new();
         for i in 0..5 {
-            let mut resp = coppb::Response::new();
+            let mut resp = coppb::Response::default();
             resp.set_data(vec![1, 2, i]);
             responses.push(Ok(resp));
         }
@@ -876,7 +876,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
-                let mut resp = coppb::Response::new();
+                let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 7]);
                 Ok((Some(resp), true))
             }
@@ -902,7 +902,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
-                let mut resp = coppb::Response::new();
+                let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 13]);
                 Ok((Some(resp), false))
             }
@@ -928,7 +928,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
-                let mut resp = coppb::Response::new();
+                let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 23]);
                 Ok((Some(resp), false))
             }
@@ -967,7 +967,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let handler = StreamFromClosure::new(move |nth| {
             // produce an infinite stream
-            let mut resp = coppb::Response::new();
+            let mut resp = coppb::Response::default();
             resp.set_data(vec![1, 2, nth as u8]);
             counter_clone.fetch_add(1, atomic::Ordering::SeqCst);
             Ok((Some(resp), false))
@@ -1031,7 +1031,7 @@ mod tests {
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(
-                    Ok(coppb::Response::new()),
+                    Ok(coppb::Response::default()),
                     PAYLOAD_SMALL as u64,
                 )
                 .into_boxed())
@@ -1106,7 +1106,7 @@ mod tests {
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(
-                    Ok(coppb::Response::new()),
+                    Ok(coppb::Response::default()),
                     PAYLOAD_LARGE as u64,
                 )
                 .into_boxed())
@@ -1123,9 +1123,9 @@ mod tests {
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(StreamFixture::new_with_duration(
                     vec![
-                        Ok(coppb::Response::new()),
+                        Ok(coppb::Response::default()),
                         Err(box_err!("foo")),
-                        Ok(coppb::Response::new()),
+                        Ok(coppb::Response::default()),
                     ],
                     vec![
                         PAYLOAD_SMALL as u64,

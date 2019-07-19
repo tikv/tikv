@@ -38,7 +38,7 @@ fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region_id);
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(epoch);
@@ -63,7 +63,7 @@ fn test_rawkv() {
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     // Raw put
-    let mut put_req = RawPutRequest::new();
+    let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
     put_req.key = k.clone();
     put_req.value = v.clone();
@@ -72,7 +72,7 @@ fn test_rawkv() {
     assert!(put_resp.error.is_empty());
 
     // Raw get
-    let mut get_req = RawGetRequest::new();
+    let mut get_req = RawGetRequest::default();
     get_req.set_context(ctx.clone());
     get_req.key = k.clone();
     let get_resp = client.raw_get(&get_req).unwrap();
@@ -81,7 +81,7 @@ fn test_rawkv() {
     assert_eq!(get_resp.value, v);
 
     // Raw scan
-    let mut scan_req = RawScanRequest::new();
+    let mut scan_req = RawScanRequest::default();
     scan_req.set_context(ctx.clone());
     scan_req.start_key = k.clone();
     scan_req.limit = 1;
@@ -95,7 +95,7 @@ fn test_rawkv() {
     }
 
     // Raw delete
-    let mut delete_req = RawDeleteRequest::new();
+    let mut delete_req = RawDeleteRequest::default();
     delete_req.set_context(ctx.clone());
     delete_req.key = k.clone();
     let delete_resp = client.raw_delete(&delete_req).unwrap();
@@ -104,7 +104,7 @@ fn test_rawkv() {
 }
 
 fn must_kv_prewrite(client: &TikvClient, ctx: Context, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-    let mut prewrite_req = PrewriteRequest::new();
+    let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
@@ -130,7 +130,7 @@ fn must_kv_commit(
     start_ts: u64,
     commit_ts: u64,
 ) {
-    let mut commit_req = CommitRequest::new();
+    let mut commit_req = CommitRequest::default();
     commit_req.set_context(ctx);
     commit_req.start_version = start_ts;
     commit_req.set_keys(keys.into_iter().collect());
@@ -154,7 +154,7 @@ fn test_mvcc_basic() {
     // Prewrite
     ts += 1;
     let prewrite_start_version = ts;
-    let mut mutation = Mutation::new();
+    let mut mutation = Mutation::default();
     mutation.op = Op::Put;
     mutation.key = k.clone();
     mutation.value = v.clone();
@@ -180,7 +180,7 @@ fn test_mvcc_basic() {
     // Get
     ts += 1;
     let get_version = ts;
-    let mut get_req = GetRequest::new();
+    let mut get_req = GetRequest::default();
     get_req.set_context(ctx.clone());
     get_req.key = k.clone();
     get_req.version = get_version;
@@ -192,7 +192,7 @@ fn test_mvcc_basic() {
     // Scan
     ts += 1;
     let scan_version = ts;
-    let mut scan_req = ScanRequest::new();
+    let mut scan_req = ScanRequest::default();
     scan_req.set_context(ctx.clone());
     scan_req.start_key = k.clone();
     scan_req.limit = 1;
@@ -209,7 +209,7 @@ fn test_mvcc_basic() {
     // Batch get
     ts += 1;
     let batch_get_version = ts;
-    let mut batch_get_req = BatchGetRequest::new();
+    let mut batch_get_req = BatchGetRequest::default();
     batch_get_req.set_context(ctx.clone());
     batch_get_req.set_keys(vec![k.clone()].into_iter().collect());
     batch_get_req.version = batch_get_version;
@@ -232,7 +232,7 @@ fn test_mvcc_rollback_and_cleanup() {
     // Prewrite
     ts += 1;
     let prewrite_start_version = ts;
-    let mut mutation = Mutation::new();
+    let mut mutation = Mutation::default();
     mutation.op = Op::Put;
     mutation.key = k.clone();
     mutation.value = v.clone();
@@ -259,11 +259,11 @@ fn test_mvcc_rollback_and_cleanup() {
     ts += 1;
     let prewrite_start_version2 = ts;
     let (k2, v2) = (b"key2".to_vec(), b"value2".to_vec());
-    let mut mut_pri = Mutation::new();
+    let mut mut_pri = Mutation::default();
     mut_pri.op = Op::Put;
     mut_pri.key = k2.clone();
     mut_pri.value = v2.clone();
-    let mut mut_sec = Mutation::new();
+    let mut mut_sec = Mutation::default();
     mut_sec.op = Op::Put;
     mut_sec.key = k.clone();
     mut_sec.value = b"foo".to_vec();
@@ -278,7 +278,7 @@ fn test_mvcc_rollback_and_cleanup() {
     // Scan lock, expects locks
     ts += 1;
     let scan_lock_max_version = ts;
-    let mut scan_lock_req = ScanLockRequest::new();
+    let mut scan_lock_req = ScanLockRequest::default();
     scan_lock_req.set_context(ctx.clone());
     scan_lock_req.max_version = scan_lock_max_version;
     let scan_lock_resp = client.kv_scan_lock(&scan_lock_req).unwrap();
@@ -296,7 +296,7 @@ fn test_mvcc_rollback_and_cleanup() {
 
     // Rollback
     let rollback_start_version = prewrite_start_version2;
-    let mut rollback_req = BatchRollbackRequest::new();
+    let mut rollback_req = BatchRollbackRequest::default();
     rollback_req.set_context(ctx.clone());
     rollback_req.start_version = rollback_start_version;
     rollback_req.set_keys(vec![k2.clone()].into_iter().collect());
@@ -310,7 +310,7 @@ fn test_mvcc_rollback_and_cleanup() {
 
     // Cleanup
     let cleanup_start_version = prewrite_start_version2;
-    let mut cleanup_req = CleanupRequest::new();
+    let mut cleanup_req = CleanupRequest::default();
     cleanup_req.set_context(ctx.clone());
     cleanup_req.start_version = cleanup_start_version;
     cleanup_req.set_key(k2.clone());
@@ -321,7 +321,7 @@ fn test_mvcc_rollback_and_cleanup() {
     // There should be no locks
     ts += 1;
     let scan_lock_max_version2 = ts;
-    let mut scan_lock_req = ScanLockRequest::new();
+    let mut scan_lock_req = ScanLockRequest::default();
     scan_lock_req.set_context(ctx.clone());
     scan_lock_req.max_version = scan_lock_max_version2;
     let scan_lock_resp = client.kv_scan_lock(&scan_lock_req).unwrap();
@@ -341,7 +341,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     // Prewrite
     ts += 1;
     let prewrite_start_version = ts;
-    let mut mutation = Mutation::new();
+    let mut mutation = Mutation::default();
     mutation.op = Op::Put;
     mutation.key = k.clone();
     mutation.value = v.clone();
@@ -369,11 +369,11 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     let prewrite_start_version2 = ts;
     let (k2, v2) = (b"key2".to_vec(), b"value2".to_vec());
     let new_v = b"new value".to_vec();
-    let mut mut_pri = Mutation::new();
+    let mut mut_pri = Mutation::default();
     mut_pri.op = Op::Put;
     mut_pri.key = k.clone();
     mut_pri.value = new_v.clone();
-    let mut mut_sec = Mutation::new();
+    let mut mut_sec = Mutation::default();
     mut_sec.op = Op::Put;
     mut_sec.key = k2.clone();
     mut_sec.value = v2.to_vec();
@@ -388,8 +388,8 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     // Resolve lock
     ts += 1;
     let resolve_lock_commit_version = ts;
-    let mut resolve_lock_req = ResolveLockRequest::new();
-    let mut temp_txninfo = TxnInfo::new();
+    let mut resolve_lock_req = ResolveLockRequest::default();
+    let mut temp_txninfo = TxnInfo::default();
     temp_txninfo.txn = prewrite_start_version2;
     temp_txninfo.status = resolve_lock_commit_version;
     let vec_txninfo = vec![temp_txninfo];
@@ -402,7 +402,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     // Get `k` at the latest ts.
     ts += 1;
     let get_version1 = ts;
-    let mut get_req1 = GetRequest::new();
+    let mut get_req1 = GetRequest::default();
     get_req1.set_context(ctx.clone());
     get_req1.key = k.clone();
     get_req1.version = get_version1;
@@ -414,7 +414,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     // GC `k` at the latest ts.
     ts += 1;
     let gc_safe_ponit = ts;
-    let mut gc_req = GCRequest::new();
+    let mut gc_req = GCRequest::default();
     gc_req.set_context(ctx.clone());
     gc_req.safe_point = gc_safe_ponit;
     let gc_resp = client.kv_gc(&gc_req).unwrap();
@@ -423,7 +423,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;
-    let mut get_req2 = GetRequest::new();
+    let mut get_req2 = GetRequest::default();
     get_req2.set_context(ctx.clone());
     get_req2.key = k.clone();
     get_req2.version = get_version2;
@@ -434,7 +434,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
     // Transaction debugger commands
     // MvccGetByKey
-    let mut mvcc_get_by_key_req = MvccGetByKeyRequest::new();
+    let mut mvcc_get_by_key_req = MvccGetByKeyRequest::default();
     mvcc_get_by_key_req.set_context(ctx.clone());
     mvcc_get_by_key_req.key = k.clone();
     let mvcc_get_by_key_resp = client.mvcc_get_by_key(&mvcc_get_by_key_req).unwrap();
@@ -442,7 +442,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     assert!(mvcc_get_by_key_resp.error.is_empty());
     assert!(mvcc_get_by_key_resp.has_info());
     // MvccGetByStartTs
-    let mut mvcc_get_by_start_ts_req = MvccGetByStartTsRequest::new();
+    let mut mvcc_get_by_start_ts_req = MvccGetByStartTsRequest::default();
     mvcc_get_by_start_ts_req.set_context(ctx.clone());
     mvcc_get_by_start_ts_req.start_ts = prewrite_start_version2;
     let mvcc_get_by_start_ts_resp = client
@@ -454,7 +454,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     assert_eq!(mvcc_get_by_start_ts_resp.key, k);
 
     // Delete range
-    let mut del_req = DeleteRangeRequest::new();
+    let mut del_req = DeleteRangeRequest::default();
     del_req.set_context(ctx.clone());
     del_req.start_key = b"a".to_vec();
     del_req.end_key = b"z".to_vec();
@@ -469,7 +469,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 fn test_coprocessor() {
     let (_cluster, client, _) = must_new_cluster_and_kv_client();
     // SQL push down commands
-    let mut req = Request::new();
+    let mut req = Request::default();
     req.set_tp(REQ_TYPE_DAG);
     client.coprocessor(&req).unwrap();
 }
@@ -480,7 +480,7 @@ fn test_split_region() {
 
     // Split region commands
     let key = b"b";
-    let mut req = SplitRegionRequest::new();
+    let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
     req.set_split_key(key.to_vec());
     let resp = client.split_region(&req).unwrap();
@@ -503,7 +503,7 @@ fn test_read_index() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
 
     // Read index
-    let mut req = ReadIndexRequest::new();
+    let mut req = ReadIndexRequest::default();
     req.set_context(ctx.clone());
     let mut resp = client.read_index(&req).unwrap();
     let last_index = resp.get_read_index();
@@ -511,7 +511,7 @@ fn test_read_index() {
 
     // Raw put
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
-    let mut put_req = RawPutRequest::new();
+    let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
     put_req.key = k.clone();
     put_req.value = v.clone();
@@ -547,7 +547,7 @@ fn test_debug_get() {
     assert_eq!(engine.get(&key).unwrap().unwrap(), v);
 
     // Debug get
-    let mut req = debugpb::GetRequest::new();
+    let mut req = debugpb::GetRequest::default();
     req.set_cf(CF_DEFAULT.to_owned());
     req.set_db(debugpb::DB::KV);
     req.set_key(key);
@@ -571,7 +571,7 @@ fn test_debug_raft_log() {
     let engine = cluster.get_raft_engine(store_id);
     let (region_id, log_index) = (200, 200);
     let key = keys::raft_log_key(region_id, log_index);
-    let mut entry = eraftpb::Entry::new();
+    let mut entry = eraftpb::Entry::default();
     entry.set_term(1);
     entry.set_index(1);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
@@ -583,13 +583,13 @@ fn test_debug_raft_log() {
     );
 
     // Debug raft_log
-    let mut req = debugpb::RaftLogRequest::new();
+    let mut req = debugpb::RaftLogRequest::default();
     req.set_region_id(region_id);
     req.set_log_index(log_index);
     let resp = debug_client.raft_log(&req).unwrap();
-    assert_ne!(resp.get_entry(), &eraftpb::Entry::new());
+    assert_ne!(resp.get_entry(), &eraftpb::Entry::default());
 
-    let mut req = debugpb::RaftLogRequest::new();
+    let mut req = debugpb::RaftLogRequest::default();
     req.set_region_id(region_id + 1);
     req.set_log_index(region_id + 1);
     match debug_client.raft_log(&req).unwrap_err() {
@@ -610,7 +610,7 @@ fn test_debug_region_info() {
 
     let region_id = 100;
     let raft_state_key = keys::raft_state_key(region_id);
-    let mut raft_state = raft_serverpb::RaftLocalState::new();
+    let mut raft_state = raft_serverpb::RaftLocalState::default();
     raft_state.set_last_index(42);
     raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
     assert_eq!(
@@ -622,7 +622,7 @@ fn test_debug_region_info() {
     );
 
     let apply_state_key = keys::apply_state_key(region_id);
-    let mut apply_state = raft_serverpb::RaftApplyState::new();
+    let mut apply_state = raft_serverpb::RaftApplyState::default();
     apply_state.set_applied_index(42);
     kv_engine
         .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
@@ -636,7 +636,7 @@ fn test_debug_region_info() {
     );
 
     let region_state_key = keys::region_state_key(region_id);
-    let mut region_state = raft_serverpb::RegionLocalState::new();
+    let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     kv_engine
         .put_msg_cf(raft_cf, &region_state_key, &region_state)
@@ -650,7 +650,7 @@ fn test_debug_region_info() {
     );
 
     // Debug region_info
-    let mut req = debugpb::RegionInfoRequest::new();
+    let mut req = debugpb::RegionInfoRequest::default();
     req.set_region_id(region_id);
     let mut resp = debug_client.region_info(&req.clone()).unwrap();
     assert_eq!(resp.take_raft_local_state(), raft_state);
@@ -674,11 +674,11 @@ fn test_debug_region_size() {
     // Put some data.
     let region_id = 100;
     let region_state_key = keys::region_state_key(region_id);
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.set_start_key(b"a".to_vec());
     region.set_end_key(b"z".to_vec());
-    let mut state = RegionLocalState::new();
+    let mut state = RegionLocalState::default();
     state.set_region(region);
     let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
     engine
@@ -693,7 +693,7 @@ fn test_debug_region_size() {
         engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
     }
 
-    let mut req = debugpb::RegionSizeRequest::new();
+    let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
     req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
     let entries = debug_client.region_size(&req).unwrap().take_entries();
@@ -719,13 +719,13 @@ fn test_debug_fail_point() {
 
     let (fp, act) = ("raft_between_save", "off");
 
-    let mut inject_req = debugpb::InjectFailPointRequest::new();
+    let mut inject_req = debugpb::InjectFailPointRequest::default();
     inject_req.set_name(fp.to_owned());
     inject_req.set_actions(act.to_owned());
     debug_client.inject_fail_point(&inject_req).unwrap();
 
     let resp = debug_client
-        .list_fail_points(&debugpb::ListFailPointsRequest::new())
+        .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
     assert_eq!(entries.len(), 1);
@@ -734,12 +734,12 @@ fn test_debug_fail_point() {
         assert_eq!(e.get_actions(), act);
     }
 
-    let mut recover_req = debugpb::RecoverFailPointRequest::new();
+    let mut recover_req = debugpb::RecoverFailPointRequest::default();
     recover_req.set_name(fp.to_owned());
     debug_client.recover_fail_point(&recover_req).unwrap();
 
     let resp = debug_client
-        .list_fail_points(&debugpb::ListFailPointsRequest::new())
+        .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
     assert_eq!(entries.len(), 0);
@@ -761,7 +761,7 @@ fn test_debug_scan_mvcc() {
         engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
     }
 
-    let mut req = debugpb::ScanMvccRequest::new();
+    let mut req = debugpb::ScanMvccRequest::default();
     req.set_from_key(keys::data_key(b"m"));
     req.set_to_key(keys::data_key(b"n"));
     req.set_limit(1);

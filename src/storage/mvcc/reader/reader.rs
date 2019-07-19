@@ -129,19 +129,6 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        self.seek_write_impl(key, ts, false)
-    }
-
-    pub fn reverse_seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        self.seek_write_impl(key, ts, true)
-    }
-
-    fn seek_write_impl(
-        &mut self,
-        key: &Key,
-        ts: u64,
-        reverse: bool,
-    ) -> Result<Option<(u64, Write)>> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 let iter_opt = IterOption::new(None, None, self.fill_cache);
@@ -160,11 +147,7 @@ impl<S: Snapshot> MvccReader<S> {
         }
 
         let cursor = self.write_cursor.as_mut().unwrap();
-        let ok = if reverse {
-            cursor.near_seek_for_prev(&key.clone().append_ts(ts), &mut self.statistics.write)?
-        } else {
-            cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?
-        };
+        let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
         if !ok {
             return Ok(None);
         }
@@ -601,7 +584,7 @@ mod tests {
 
         fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let wb = WriteBatch::new();
+            let wb = WriteBatch::default();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
@@ -660,10 +643,10 @@ mod tests {
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_id(id);
         peer.set_store_id(id);
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(id);
         region.set_start_key(start_key);
         region.set_end_key(end_key);

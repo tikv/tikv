@@ -79,7 +79,7 @@ where
         store_cfg: &StoreConfig,
         pd_client: Arc<C>,
     ) -> Node<C> {
-        let mut store = metapb::Store::new();
+        let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
@@ -90,7 +90,7 @@ where
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
-            let mut label = metapb::StoreLabel::new();
+            let mut label = metapb::StoreLabel::default();
             label.set_key(k.to_owned());
             label.set_value(v.to_owned());
             labels.push(label);

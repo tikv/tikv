@@ -10,6 +10,9 @@ use std::str::FromStr;
 use std::{i64, str};
 
 use cop_datatype::FieldTypeTp;
+use tikv_util::codec::bytes::{self, BytesEncoder};
+use tikv_util::codec::{number, BytesSlice};
+use tikv_util::escape;
 
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
@@ -17,9 +20,6 @@ use super::mysql::{
 };
 use super::{convert, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
-use tikv_util::codec::bytes::{self, BytesEncoder};
-use tikv_util::codec::{number, BytesSlice};
-use tikv_util::escape;
 
 pub const NIL_FLAG: u8 = 0;
 pub const BYTES_FLAG: u8 = 1;
@@ -363,13 +363,9 @@ impl Datum {
             }
             Datum::Dec(d) => {
                 let res: Result<Decimal> = d.round(mysql::DEFAULT_FSP, RoundMode::HalfEven).into();
-                if let Err(e) = res {
-                    Err(e)
-                } else {
-                    res.unwrap().as_i64().into()
-                }
+                res?.as_i64().into()
             }
-            Datum::Json(j) => Ok(j.cast_to_int()),
+            Datum::Json(j) => j.cast_to_int(ctx),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }

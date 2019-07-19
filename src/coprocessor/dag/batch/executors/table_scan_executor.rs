@@ -154,13 +154,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Scanner::new(
-            store,
-            crate::coprocessor::dag::ScanOn::Table,
-            desc,
-            self.key_only,
-            range,
-        )
+        Scanner::new(store, desc, self.key_only, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -448,7 +442,7 @@ mod tests {
             self.data
                 .iter()
                 .map(|(row_id, _, _)| {
-                    let mut r = KeyRange::new();
+                    let mut r = KeyRange::default();
                     r.set_start(table::encode_row_key(self.table_id, *row_id));
                     r.set_end(r.get_start().to_vec());
                     convert_to_prefix_next(r.mut_end());
@@ -462,7 +456,7 @@ mod tests {
             vec![
                 self.table_range(std::i64::MIN, 3),
                 {
-                    let mut r = KeyRange::new();
+                    let mut r = KeyRange::default();
                     r.set_start(table::encode_row_key(self.table_id, 3));
                     r.set_end(r.get_start().to_vec());
                     convert_to_prefix_next(r.mut_end());
@@ -495,7 +489,7 @@ mod tests {
 
         /// Returns the range for handle in [start_id,end_id)
         fn table_range(&self, start_id: i64, end_id: i64) -> KeyRange {
-            let mut range = KeyRange::new();
+            let mut range = KeyRange::default();
             range.set_start(table::encode_row_key(self.table_id, start_id));
             range.set_end(table::encode_row_key(self.table_id, end_id));
             range
@@ -753,7 +747,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, _)| {
-                let mut r = KeyRange::new();
+                let mut r = KeyRange::default();
                 r.set_start(table::encode_row_key(TABLE_ID, index as i64));
                 r.set_end(r.get_start().to_vec());
                 convert_to_prefix_next(r.mut_end());
@@ -859,7 +853,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, _)| {
-                let mut r = KeyRange::new();
+                let mut r = KeyRange::default();
                 r.set_start(table::encode_row_key(TABLE_ID, index as i64));
                 r.set_end(r.get_start().to_vec());
                 convert_to_prefix_next(r.mut_end());
