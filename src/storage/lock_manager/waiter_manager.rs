@@ -97,7 +97,7 @@ struct WaitTable {
 impl WaitTable {
     fn new() -> Self {
         Self {
-            wait_table: HashMap::new(),
+            wait_table: HashMap::default(),
         }
     }
 
@@ -113,7 +113,7 @@ impl WaitTable {
     }
 
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
-        self.wait_table.entry(ts).or_insert(vec![]).push(waiter);
+        self.wait_table.entry(ts).or_default().push(waiter);
         true
     }
 
@@ -161,7 +161,7 @@ impl WaitTable {
             .iter()
             .flat_map(|(_, waiters)| {
                 waiters.iter().map(|waiter| {
-                    let mut wait_for_entry = WaitForEntry::new();
+                    let mut wait_for_entry = WaitForEntry::default();
                     wait_for_entry.set_txn(waiter.start_ts);
                     wait_for_entry.set_wait_for_txn(waiter.lock.ts);
                     wait_for_entry.set_key_hash(waiter.lock.hash);

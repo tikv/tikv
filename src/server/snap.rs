@@ -79,7 +79,7 @@ impl Stream for SnapChunk {
         match result {
             Ok(_) => {
                 self.remain_bytes -= buf.len();
-                let mut chunk = SnapshotChunk::new();
+                let mut chunk = SnapshotChunk::default();
                 chunk.set_data(buf);
                 Ok(Async::Ready(Some((
                     chunk,
@@ -131,7 +131,7 @@ fn send_snap(
     let total_size = s.total_size()?;
 
     let chunks = {
-        let mut first_chunk = SnapshotChunk::new();
+        let mut first_chunk = SnapshotChunk::default();
         first_chunk.set_message(msg);
 
         SnapChunk {
@@ -281,7 +281,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
         },
     );
     f.then(move |res| match res {
-        Ok(()) => sink.success(Done::new()),
+        Ok(()) => sink.success(Done::default()),
         Err(e) => {
             let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
             sink.fail(status)

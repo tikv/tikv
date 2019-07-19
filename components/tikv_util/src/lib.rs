@@ -528,7 +528,13 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         if panic_abort {
             process::abort();
         } else {
-            process::exit(1);
+            unsafe {
+                // Calling process::exit would trigger global static to destroy, like C++
+                // static variables of RocksDB, which may cause other threads encounter
+                // pure virtual method call. So calling libc::_exit() instead to skip the
+                // cleanup process.
+                libc::_exit(1);
+            }
         }
     }))
 }
@@ -657,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_limit_size() {
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_data(b"0123456789".to_vec());
         let size = u64::from(e.compute_size());
 

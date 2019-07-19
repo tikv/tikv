@@ -413,7 +413,7 @@ fn process_read_impl<E: Engine>(
             let (kv_pairs, _) = result?;
             let mut locks = Vec::with_capacity(kv_pairs.len());
             for (key, lock) in kv_pairs {
-                let mut lock_info = LockInfo::new();
+                let mut lock_info = LockInfo::default();
                 lock_info.set_primary_lock(lock.primary);
                 lock_info.set_lock_version(lock.ts);
                 lock_info.set_key(key.into_raw()?);
@@ -712,7 +712,7 @@ fn process_write_impl<S: Snapshot>(
             let wait_table_is_empty = wait_table_is_empty();
             // Map (txn's start_ts, is_pessimistic_txn) => Option<key_hashes>
             let mut txn_to_keys = if waiter_mgr_scheduler.is_some() {
-                Some(HashMap::new())
+                Some(HashMap::default())
             } else {
                 None
             };

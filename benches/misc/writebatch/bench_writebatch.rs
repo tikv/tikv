@@ -7,7 +7,7 @@ use test::Bencher;
 fn writebatch(db: &DB, round: usize, batch_keys: usize) {
     let v = b"operators are syntactic sugar for calls to methods of built-in traits";
     for r in 0..round {
-        let batch = WriteBatch::new();
+        let batch = WriteBatch::default();
         for i in 0..batch_keys {
             let k = format!("key_round{}_key{}", r, i);
             batch.put(k.as_bytes(), v).unwrap();
@@ -97,7 +97,7 @@ fn fill_writebatch(wb: &WriteBatch, target_size: usize) {
 #[bench]
 fn bench_writebatch_without_capacity(b: &mut Bencher) {
     b.iter(|| {
-        let wb = WriteBatch::new();
+        let wb = WriteBatch::default();
         fill_writebatch(&wb, 4096);
     });
 }
