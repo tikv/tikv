@@ -410,6 +410,7 @@ mod tests {
 
         // For a unique index, the PK handle is stored in the value.
 
+        let mut ctx = EvalContext::default();
         let store = {
             let kv = data
                 .iter()
@@ -420,7 +421,7 @@ mod tests {
                     // PK handle in the value
                     let mut value = vec![];
                     value
-                        .write_i64::<BigEndian>(datums[2].as_int().unwrap().unwrap())
+                        .write_i64::<BigEndian>(datums[2].as_int(&mut ctx).unwrap().unwrap())
                         .unwrap();
                     (key, Ok(value))
                 })

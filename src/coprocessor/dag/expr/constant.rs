@@ -181,7 +181,7 @@ impl Constant {
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::codec::{Datum, Error};
     use crate::coprocessor::dag::expr::tests::datum_expr;
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::u64;
@@ -249,6 +249,44 @@ mod tests {
 
             let result = EvalResults(i, r, dec, s, t, dur, j);
             assert_eq!(expected, result);
+        }
+    }
+
+    #[test]
+    fn test_datum_as_bool() {
+        let dec = "1.1".parse::<Decimal>().unwrap();
+        let s = "10".as_bytes().to_owned();
+        let dur = Duration::parse(b"01:00:00", 0).unwrap();
+        let json = Json::String(String::from("test_json"));
+
+        let tests = vec![
+            (Datum::Null, Ok(None)),
+            (Datum::I64(0), Ok(Some(false))),
+            (Datum::U64(u64::MAX), Ok(Some(true))),
+            (Datum::F64(124.32), Ok(Some(true))),
+            (Datum::Dec(dec), Ok(Some(true))),
+            (Datum::Bytes(s), Ok(Some(true))),
+            (Datum::Dur(dur), Ok(Some(true))),
+            (
+                Datum::Json(json),
+                Err(Error::InvalidDataType(String::new())),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (case, expected) in tests {
+            let r = case.as_bool(&mut ctx);
+            assert_eq!(
+                r.is_err(),
+                expected.is_err(),
+                "{}, {}, {}",
+                case,
+                expected.is_err(),
+                r.is_err()
+            );
+            if let Ok(x) = r {
+                assert_eq!(x, expected.unwrap())
+            }
         }
     }
 }
