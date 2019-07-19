@@ -470,6 +470,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
         },
+        titan:TitanDBConfig::default(),
     };
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
