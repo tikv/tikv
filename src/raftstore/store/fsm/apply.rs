@@ -1585,6 +1585,7 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
+        #[allow(clippy::redundant_closure_call)]
         (|| {
             fail_point!(
                 "apply_before_split_1_3",
