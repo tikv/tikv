@@ -470,7 +470,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
         },
-        titan: TitanDBConfig{
+        titan: TitanDBConfig {
             enabled: true,
             dirname: "foo".to_owned(),
             disable_gc: false,
