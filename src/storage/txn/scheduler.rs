@@ -85,7 +85,7 @@ impl Debug for Msg {
 impl Display for Msg {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
+            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {}", cmd),
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
@@ -114,7 +114,7 @@ impl TaskContext {
         let lock = gen_command_lock(latches, task.cmd());
         // Write command should acquire write lock.
         if !task.cmd().readonly() && !lock.is_write_lock() {
-            panic!("write lock is expected for command {:?}", task.cmd());
+            panic!("write lock is expected for command {}", task.cmd());
         }
         let write_bytes = if lock.is_write_lock() {
             task.cmd().write_bytes()

@@ -52,7 +52,7 @@ impl Tz {
 impl fmt::Debug for Tz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Tz::Offset(ref offset) => write!(f, "Tz::Offset({:?})", offset),
+            Tz::Offset(ref offset) => write!(f, "Tz::Offset({})", offset),
             Tz::Name(ref offset) => write!(f, "Tz::Name({:?})", offset),
             Tz::Local(_) => write!(f, "Tz::Local"),
         }
