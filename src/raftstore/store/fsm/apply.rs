@@ -1585,14 +1585,11 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        #[allow(clippy::redundant_closure_call)]
-        (|| {
-            fail_point!(
-                "apply_before_split_1_3",
-                { self.id == 3 && self.region_id() == 1 },
-                |_| {}
-            );
-        })();
+        fail_point!(
+            "apply_before_split_1_3",
+            { self.id == 3 && self.region_id() == 1 },
+            |_| { unreachable!() }
+        );
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["batch-split", "all"])
