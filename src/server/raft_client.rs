@@ -74,7 +74,7 @@ impl Conn {
         let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
         let batch_send_or_fallback = batch_sink
             .send_all(Reusable(rx1).map(move |v| {
-                let mut batch_msgs = BatchRaftMessage::new();
+                let mut batch_msgs = BatchRaftMessage::default();
                 batch_msgs.set_msgs(RepeatedField::from(v));
                 (batch_msgs, WriteFlags::default().buffer_hint(false))
             }))

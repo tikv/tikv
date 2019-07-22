@@ -39,7 +39,7 @@ impl SyncBenchRouter {
 
 impl SyncBenchRouter {
     fn invoke(&self, cmd: RaftCommand) {
-        let mut response = RaftCmdResponse::new();
+        let mut response = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
             Callback::Read(cb) => {
@@ -51,7 +51,7 @@ impl SyncBenchRouter {
                 })
             }
             Callback::Write(cb) => {
-                let mut resp = Response::new();
+                let mut resp = Response::default();
                 let cmd_type = cmd.request.get_requests()[0].get_cmd_type();
                 resp.set_cmd_type(cmd_type);
                 response.mut_responses().push(resp);
@@ -96,10 +96,10 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let (_dir, db) = new_engine();
     let snapshot = engine::Snapshot::new(Arc::clone(&db));
     let resp = ReadResponse {
-        response: RaftCmdResponse::new(),
+        response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
             snapshot.into_sync(),
-            Region::new(),
+            Region::default(),
         )),
     };
 
@@ -125,7 +125,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
 #[bench]
 fn bench_async_snapshot(b: &mut test::Bencher) {
     let leader = util::new_peer(2, 3);
-    let mut region = Region::new();
+    let mut region = Region::default();
     region.set_id(1);
     region.set_start_key(vec![]);
     region.set_end_key(vec![]);
@@ -135,7 +135,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     let (_tmp, db) = new_engine();
     let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
@@ -150,7 +150,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
 #[bench]
 fn bench_async_write(b: &mut test::Bencher) {
     let leader = util::new_peer(2, 3);
-    let mut region = Region::new();
+    let mut region = Region::default();
     region.set_id(1);
     region.set_start_key(vec![]);
     region.set_end_key(vec![]);
@@ -160,7 +160,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     let (_tmp, db) = new_engine();
     let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db));
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());

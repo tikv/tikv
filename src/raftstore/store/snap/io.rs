@@ -108,7 +108,7 @@ pub fn apply_plain_cf_file(
 ) -> Result<(), Error> {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
     let cf_handle = box_try!(get_cf_handle(&db, cf));
-    let wb = WriteBatch::new();
+    let wb = WriteBatch::default();
     loop {
         if stale_detector.is_stale() {
             return Err(Error::Abort);
