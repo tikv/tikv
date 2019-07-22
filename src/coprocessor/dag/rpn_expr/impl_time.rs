@@ -96,15 +96,35 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect, "{:?} {:?}", date, format);
         }
-    }
 
-    #[test]
-    fn test_date_format_null() {
+//        // TODO: pass this test after refactoring the issue #3953 is fixed.
+//        {
+//            // test for warning context
+//            use std::sync::Arc;
+//            use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Flag, SqlMode};
+//
+//            let format = Some("abc%b %M %m %c %D %d %e %j").map(|s| s.as_bytes().to_vec());
+//            let time = Some(DateTime::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap());
+//
+//            let mut cfg = EvalConfig::new();
+//            cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+//                .set_sql_mode(m::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES);
+//            let ctx = EvalContext::new(Arc::new(cfg));
+//
+//            let output = RpnFnScalarEvaluator::new()
+//                .context(ctx)
+//                .push_param(time.clone())
+//                .push_param(format)
+//                .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig)
+//                .unwrap();
+//            assert_eq!(output, None, "{:?} {:?}", time, "");
+//        }
+
         // test date format when format is None
         let cases: Vec<(&str, Option<&str>)> = vec![
             ("2010-01-07 23:12:34.12345", None),
             ("", None),
-            // TODO: pass this test after refactoring the DateTime.
+            // TODO: pass this test after refactoring the issue #3953 is fixed.
             //            (
             //                "0000-00-00 00:00:00",
             //                Some(
@@ -115,6 +135,7 @@ mod tests {
         ];
 
         for (date, format) in cases {
+
             let date = if date.is_empty() {
                 None
             } else {
