@@ -1588,7 +1588,7 @@ impl ApplyDelegate {
         fail_point!(
             "apply_before_split_1_3",
             { self.id == 3 && self.region_id() == 1 },
-            |_| {}
+            |_| { unreachable!() }
         );
 
         PEER_ADMIN_CMD_COUNTER_VEC
