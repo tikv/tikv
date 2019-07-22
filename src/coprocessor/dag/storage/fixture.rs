@@ -4,11 +4,11 @@ use std::collections::{btree_map, BTreeMap};
 use std::sync::Arc;
 
 use super::range::*;
-use crate::coprocessor::Error;
+use crate::coprocessor::{Error, Result};
 
 type ErrorBuilder = Box<dyn Send + Sync + Fn() -> Error>;
 
-type FixtureValue = Result<Vec<u8>, ErrorBuilder>;
+type FixtureValue = std::result::Result<Vec<u8>, ErrorBuilder>;
 
 /// A `Storage` implementation that returns fixed source data (i.e. fixture). Useful in tests.
 #[derive(Clone)]
@@ -45,7 +45,7 @@ impl super::Storage for FixtureStorage {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let data_view = self
             .data
             .range(range.lower_inclusive..range.upper_exclusive);
@@ -56,8 +56,7 @@ impl super::Storage for FixtureStorage {
         Ok(())
     }
 
-    #[allow(clippy::type_complexity)]
-    fn scan_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>, Error> {
+    fn scan_next(&mut self) -> Result<Option<super::OwnedKvPair>> {
         let value = if !self.is_backward_scan {
             // During the call of this function, `data` must be valid and we are only returning
             // data clones to outside, so this access is safe.
@@ -78,12 +77,7 @@ impl super::Storage for FixtureStorage {
         }
     }
 
-    #[allow(clippy::type_complexity)]
-    fn get(
-        &mut self,
-        _is_key_only: bool,
-        range: PointRange,
-    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, Error> {
+    fn get(&mut self, _is_key_only: bool, range: PointRange) -> Result<Option<super::OwnedKvPair>> {
         let r = self.data.get(&range.0);
         match r {
             None => Ok(None),

@@ -44,7 +44,8 @@ impl std::fmt::Debug for Range {
                 write!(f, "[")?;
                 lower_inclusive.as_slice().write_hex_upper(f)?;
                 write!(f, ", ")?;
-                upper_exclusive.as_slice().write_hex_upper(f)
+                upper_exclusive.as_slice().write_hex_upper(f)?;
+                write!(f, ")")
             }
         }
     }

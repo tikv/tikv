@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::coprocessor::dag::storage::{IntervalRange, PointRange, Storage};
-use crate::coprocessor::Error;
+use crate::coprocessor::dag::storage::{IntervalRange, OwnedKvPair, PointRange, Storage};
+use crate::coprocessor::Result;
 use crate::storage::Statistics;
 use crate::storage::{Key, Scanner, Store};
 
@@ -36,7 +36,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         if let Some(scanner) = &mut self.scanner {
             self.cf_stats_backlog.add(&scanner.take_statistics());
         }
@@ -49,19 +49,13 @@ impl<S: Store> Storage for TiKVStorage<S> {
         Ok(())
     }
 
-    #[allow(clippy::type_complexity)]
-    fn scan_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>, Error> {
+    fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
         // Unwrap is fine because we must have called `reset_range` before calling `scan_next`.
         let kv = self.scanner.as_mut().unwrap().next()?;
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
     }
 
-    #[allow(clippy::type_complexity)]
-    fn get(
-        &mut self,
-        _is_key_only: bool,
-        range: PointRange,
-    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, Error> {
+    fn get(&mut self, _is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
         // TODO: Default CF does not need to be accessed if KeyOnly.
         let key = range.0;
         let value = self
