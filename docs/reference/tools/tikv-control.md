@@ -29,8 +29,7 @@ When you compile TiKV, the `tikv-ctl` command is also compiled at the same time.
     store:"127.0.0.1:20160" compact db:KV cf:default range:([], []) success!
     ```
 
-- Local mode:
-  - Use the `--db` option to specify the local TiKV data directory path
+- Local mode: Use the `--db` option to specify the local TiKV data directory path. In this mode, you need to stop the running TiKV instance.
 
 Unless otherwise noted, all commands support both the remote mode and the local mode.
 

@@ -528,7 +528,13 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         if panic_abort {
             process::abort();
         } else {
-            process::exit(1);
+            unsafe {
+                // Calling process::exit would trigger global static to destroy, like C++
+                // static variables of RocksDB, which may cause other threads encounter
+                // pure virtual method call. So calling libc::_exit() instead to skip the
+                // cleanup process.
+                libc::_exit(1);
+            }
         }
     }))
 }

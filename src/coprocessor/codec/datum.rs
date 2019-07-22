@@ -363,13 +363,9 @@ impl Datum {
             }
             Datum::Dec(d) => {
                 let res: Result<Decimal> = d.round(mysql::DEFAULT_FSP, RoundMode::HalfEven).into();
-                if let Err(e) = res {
-                    Err(e)
-                } else {
-                    res.unwrap().as_i64().into()
-                }
+                res?.as_i64().into()
             }
-            Datum::Json(j) => Ok(j.cast_to_int()),
+            Datum::Json(j) => j.cast_to_int(ctx),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
@@ -555,7 +551,7 @@ impl Datum {
             (a, b) => {
                 let a = a.into_dec()?;
                 let b = b.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let d: Result<Decimal> = res.into();
@@ -715,7 +711,7 @@ impl Datum {
             (left, right) => {
                 let a = left.into_dec()?;
                 let b = right.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let i = res.unwrap().as_i64().unwrap();
