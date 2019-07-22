@@ -106,11 +106,7 @@ impl Write {
         }
 
         let flag = b.read_u8()?;
-        assert_eq!(
-            flag, SHORT_VALUE_PREFIX,
-            "invalid flag [{:?}] in write",
-            flag
-        );
+        assert_eq!(flag, SHORT_VALUE_PREFIX, "invalid flag [{}] in write", flag);
 
         let len = b.read_u8()?;
         if len as usize != b.len() {
