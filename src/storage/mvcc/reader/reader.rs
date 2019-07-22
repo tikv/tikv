@@ -305,7 +305,7 @@ impl<S: Snapshot> MvccReader<S> {
         IterOption::new(l_bound, u_bound, true)
     }
 
-    // Return the first committed key which start_ts equals to ts
+    /// Return the first committed key for which `start_ts` equals to `ts`
     pub fn seek_ts(&mut self, ts: u64) -> Result<Option<Key>> {
         assert!(self.scan_mode.is_some());
         self.create_write_cursor()?;
@@ -584,7 +584,7 @@ mod tests {
 
         fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let wb = WriteBatch::new();
+            let wb = WriteBatch::default();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
@@ -643,10 +643,10 @@ mod tests {
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_id(id);
         peer.set_store_id(id);
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(id);
         region.set_start_key(start_key);
         region.set_end_key(end_key);

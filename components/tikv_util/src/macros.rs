@@ -212,7 +212,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_safe_panic() {
         struct S;
         impl Drop for S {

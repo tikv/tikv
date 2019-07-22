@@ -447,7 +447,7 @@ mod tests {
         // Assume REVERSE_SEEK_BOUND == 4, we have keys:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND, true)
             .range(None, Some(Key::from_raw(&[11 as u8])))
             .build()
@@ -642,7 +642,7 @@ mod tests {
             REVERSE_SEEK_BOUND * 2,
         );
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2, true)
             .range(None, None)
             .build()
@@ -712,7 +712,7 @@ mod tests {
             REVERSE_SEEK_BOUND * 2,
         );
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2, true)
             .range(None, None)
             .build()
@@ -779,7 +779,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 1, true)
             .range(None, None)
             .build()
@@ -850,7 +850,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 1, true)
             .range(None, None)
             .build()
@@ -929,7 +929,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND + 1, true)
             .range(None, None)
             .build()
@@ -1014,7 +1014,7 @@ mod tests {
             must_commit(&engine, &[i], 14, 14);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         // Test both bound specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
@@ -1119,7 +1119,7 @@ mod tests {
             must_prewrite_put(&engine, pk, b"", pk, start_ts);
         }
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let row = &[255 as u8];
         let k = Key::from_raw(row);
 

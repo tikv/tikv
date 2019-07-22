@@ -294,7 +294,7 @@ mod tests {
             // Case 1.1. Normal index, without PK, scan total index in reverse order.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::Min]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -344,7 +344,7 @@ mod tests {
             // Case 1.2. Normal index, with PK, scan index prefix.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(2)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -420,7 +420,7 @@ mod tests {
             // Case 2.1. Unique index, prefix range scan.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(5)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -474,7 +474,7 @@ mod tests {
             // Case 2.2. Unique index, point scan.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(5), Datum::F64(5.1)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);

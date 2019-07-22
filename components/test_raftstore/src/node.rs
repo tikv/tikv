@@ -151,6 +151,10 @@ impl NodeCluster {
     pub fn post_create_coprocessor_host(&mut self, op: Box<dyn Fn(u64, &mut CoprocessorHost)>) {
         self.post_create_coprocessor_host = Some(op)
     }
+
+    pub fn get_node(&mut self, node_id: u64) -> Option<&mut Node<TestPdClient>> {
+        self.nodes.get_mut(&node_id)
+    }
 }
 
 impl Simulator for NodeCluster {

@@ -258,9 +258,9 @@ mod tests {
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(1);
-        region.mut_peers().push(Peer::new());
+        region.mut_peers().push(Peer::default());
 
         // arbitrary padding.
         let padding = b"_r00000005";
@@ -313,9 +313,9 @@ mod tests {
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(1);
-        region.mut_peers().push(Peer::new());
+        region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 

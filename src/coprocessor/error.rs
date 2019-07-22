@@ -68,7 +68,7 @@ impl From<storage::txn::Error> for Error {
                 ttl,
                 txn_size,
             }) => {
-                let mut info = kvrpcpb::LockInfo::new();
+                let mut info = kvrpcpb::LockInfo::default();
                 info.set_primary_lock(primary);
                 info.set_lock_version(ts);
                 info.set_key(key);

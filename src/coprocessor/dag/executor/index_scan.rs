@@ -140,7 +140,7 @@ pub mod tests {
     ) -> KeyRange {
         let (_, start_key) = generate_index_data(table_id, idx_id, start, val_start, unique);
         let (_, end_key) = generate_index_data(table_id, idx_id, end, val_end, unique);
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end_key);
         key_range

@@ -420,7 +420,7 @@ fn test_txn_store_scan_key_only() {
 }
 
 fn lock(key: &[u8], primary: &[u8], ts: u64) -> LockInfo {
-    let mut lock = LockInfo::new();
+    let mut lock = LockInfo::default();
     lock.set_key(key.to_vec());
     lock.set_primary_lock(primary.to_vec());
     lock.set_lock_version(ts);
@@ -852,7 +852,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let number: i32 = match store.get(Context::new(), &key_address, start_ts) {
+        let number: i32 = match store.get(Context::default(), &key_address, start_ts) {
             Ok(Some(x)) => String::from_utf8(x).unwrap().parse().unwrap(),
             Ok(None) => 0,
             Err(_) => {
@@ -863,7 +863,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
         let next = number + 1;
         if store
             .prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((
                     Key::from_raw(key),
                     next.to_string().into_bytes(),
@@ -879,7 +879,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
         let commit_ts = oracle.get_ts();
         if store
             .commit(
-                Context::new(),
+                Context::default(),
                 vec![key_address.clone()],
                 start_ts,
                 commit_ts,
@@ -935,7 +935,7 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
         let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();
         let mut mutations = vec![];
         for key in keys.iter().take(n) {
-            let number = match store.get(Context::new(), key, start_ts) {
+            let number = match store.get(Context::default(), key, start_ts) {
                 Ok(Some(n)) => String::from_utf8(n).unwrap().parse().unwrap(),
                 Ok(None) => 0,
                 Err(_) => {
@@ -947,7 +947,7 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
             mutations.push(Mutation::Put((key.clone(), next.to_string().into_bytes())));
         }
         if store
-            .prewrite(Context::new(), mutations, b"k0".to_vec(), start_ts)
+            .prewrite(Context::default(), mutations, b"k0".to_vec(), start_ts)
             .is_err()
         {
             backoff(i);
@@ -955,7 +955,7 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
         }
         let commit_ts = oracle.get_ts();
         if store
-            .commit(Context::new(), keys, start_ts, commit_ts)
+            .commit(Context::default(), keys, start_ts, commit_ts)
             .is_err()
         {
             backoff(i);

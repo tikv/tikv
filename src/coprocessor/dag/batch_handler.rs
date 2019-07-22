@@ -78,8 +78,8 @@ impl<SS> BatchDAGHandler<SS> {
             // Check error first, because it means that we should directly respond error.
             match result.is_drained {
                 Err(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
+                    let mut resp = Response::default();
+                    let mut sel_resp = SelectResponse::default();
                     sel_resp.set_error(err);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
@@ -124,8 +124,8 @@ impl<SS> BatchDAGHandler<SS> {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
 
-                let mut resp = Response::new();
-                let mut sel_resp = SelectResponse::new();
+                let mut resp = Response::default();
+                let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(

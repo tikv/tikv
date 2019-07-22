@@ -42,7 +42,7 @@ impl<SS> DAGHandler<SS> {
     fn make_stream_response(&mut self, chunk: Chunk, range: IntervalRange) -> Result<Response> {
         self.executor.collect_exec_stats(&mut self.exec_stats);
 
-        let mut s_resp = StreamResponse::new();
+        let mut s_resp = StreamResponse::default();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
         if let Some(eval_warnings) = self.executor.take_eval_warnings() {
             s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
@@ -55,7 +55,7 @@ impl<SS> DAGHandler<SS> {
                 .map(|v| *v as i64)
                 .collect(),
         );
-        let mut resp = Response::new();
+        let mut resp = Response::default();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
         resp.mut_range().set_start(range.lower_inclusive);
         resp.mut_range().set_end(range.upper_exclusive);
@@ -86,8 +86,8 @@ impl<SS> DAGHandler<SS> {
                 Ok(None) => {
                     self.executor.collect_exec_stats(&mut self.exec_stats);
 
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
+                    let mut resp = Response::default();
+                    let mut sel_resp = SelectResponse::default();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
                     if let Some(eval_warnings) = self.executor.take_eval_warnings() {
                         sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
@@ -126,8 +126,8 @@ impl<SS> DAGHandler<SS> {
                     return Ok(resp);
                 }
                 Err(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
+                    let mut resp = Response::default();
+                    let mut sel_resp = SelectResponse::default();
                     sel_resp.set_error(err);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
@@ -154,8 +154,8 @@ impl<SS> DAGHandler<SS> {
                     break;
                 }
                 Err(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = StreamResponse::new();
+                    let mut resp = Response::default();
+                    let mut sel_resp = StreamResponse::default();
                     sel_resp.set_error(err);
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);

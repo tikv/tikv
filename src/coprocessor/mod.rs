@@ -173,7 +173,7 @@ impl ReqContext {
     pub fn default_for_test() -> Self {
         Self::new(
             "test",
-            kvrpcpb::Context::new(),
+            kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),
             None,

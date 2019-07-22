@@ -68,7 +68,7 @@ fn test_batch_row_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
-        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
+        init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
 
     // for dag selection
@@ -101,7 +101,7 @@ fn test_stream_batch_row_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
-        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
+        init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
 
     let req = DAGSelect::from(&product).build();
@@ -186,7 +186,7 @@ fn test_scan_detail() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
-        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
+        init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
 
     let reqs = vec![
@@ -1301,7 +1301,7 @@ fn test_handle_truncate() {
         // Ignore truncate error.
         let req = DAGSelect::from(&product)
             .where_expr(cond.clone())
-            .build_with(Context::new(), &[FLAG_IGNORE_TRUNCATE]);
+            .build_with(Context::default(), &[FLAG_IGNORE_TRUNCATE]);
         let resp = handle_select(&endpoint, req);
         assert!(!resp.has_error());
         assert!(resp.get_warnings().is_empty());
@@ -1309,7 +1309,7 @@ fn test_handle_truncate() {
         // truncate as warning
         let req = DAGSelect::from(&product)
             .where_expr(cond.clone())
-            .build_with(Context::new(), &[FLAG_TRUNCATE_AS_WARNING]);
+            .build_with(Context::default(), &[FLAG_TRUNCATE_AS_WARNING]);
         let mut resp = handle_select(&endpoint, req);
         assert!(!resp.has_error());
         assert!(!resp.get_warnings().is_empty());
@@ -1474,7 +1474,7 @@ fn test_exec_details() {
     let flags = &[0];
 
     // get handle_time
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_handle_time(true);
     let req = DAGSelect::from(&product).build_with(ctx, flags);
     let resp = handle_request(&endpoint, req);
@@ -1484,7 +1484,7 @@ fn test_exec_details() {
     assert!(!exec_details.has_scan_detail());
 
     // get scan detail
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_scan_detail(true);
     let req = DAGSelect::from(&product).build_with(ctx, flags);
     let resp = handle_request(&endpoint, req);
@@ -1494,7 +1494,7 @@ fn test_exec_details() {
     assert!(exec_details.has_scan_detail());
 
     // get both
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_scan_detail(true);
     ctx.set_handle_time(true);
     let req = DAGSelect::from(&product).build_with(ctx, flags);

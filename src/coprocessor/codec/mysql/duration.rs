@@ -4,13 +4,14 @@ use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
-use std::{i64, str, u64};
+use std::{i64, u64};
+
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use super::super::{Result, TEN_POW};
-use super::MAX_FSP;
 use super::{check_fsp, Decimal};
+use crate::coprocessor::codec::mysql::MAX_FSP;
+use crate::coprocessor::codec::{Result, TEN_POW};
 
 use bitfield::bitfield;
 
@@ -320,6 +321,11 @@ impl Duration {
     #[inline]
     pub fn to_bits(self) -> u64 {
         self.0
+    }
+
+    #[inline]
+    pub fn neg(self) -> bool {
+        self.get_neg()
     }
 
     #[inline]
@@ -647,6 +653,30 @@ impl Duration {
 
         string
     }
+
+    /// Converts a `Duration` to printable numeric string representation
+    #[inline]
+    pub fn to_numeric_string(self) -> String {
+        use std::fmt::Write;
+        let mut buf = String::with_capacity(13);
+        if self.neg() {
+            buf.push('-');
+        }
+        write!(
+            buf,
+            "{:02}{:02}{:02}",
+            self.hours(),
+            self.minutes(),
+            self.secs(),
+        )
+        .unwrap();
+        let fsp = self.get_fsp();
+        if fsp > 0 {
+            let nanos = self.subsec_micros() / (TEN_POW[MICRO_WIDTH - usize::from(fsp)]) as u32;
+            write!(buf, ".{:01$}", nanos, fsp as usize).unwrap();
+        }
+        buf
+    }
 }
 
 impl TryFrom<Duration> for Decimal {
@@ -872,7 +902,9 @@ mod tests {
                     expect,
                     &format!(
                         "{}",
-                        got.unwrap_or_else(|_| panic!(str::from_utf8(input).unwrap().to_string()))
+                        got.unwrap_or_else(|_| panic!(std::str::from_utf8(input)
+                            .unwrap()
+                            .to_string()))
                     )
                 );
             } else {
@@ -880,7 +912,7 @@ mod tests {
                     got.is_err(),
                     format!(
                         "{} should not be passed, got {:?}",
-                        str::from_utf8(input).unwrap(),
+                        std::str::from_utf8(input).unwrap(),
                         got
                     )
                 );
@@ -1101,5 +1133,24 @@ mod benches {
                 let _ = test::black_box(lhs.checked_sub(rhs).unwrap());
             }
         })
+    }
+
+    #[test]
+    fn test_to_numeric_string() {
+        let cases: Vec<(&[u8], i8, &str)> = vec![
+            (b"11:30:45.123456", 4, "113045.1235"),
+            (b"11:30:45.123456", 6, "113045.123456"),
+            (b"11:30:45.123456", 0, "113045"),
+            (b"11:30:45.999999", 0, "113046"),
+            (b"08:40:59.575601", 0, "084100"),
+            (b"23:59:59.575601", 0, "240000"),
+            (b"00:00:00", 0, "000000"),
+            (b"00:00:00", 6, "000000.000000"),
+        ];
+        for (s, fsp, expect) in cases {
+            let du = Duration::parse(s, fsp).unwrap();
+            let get = du.to_numeric_string();
+            assert_eq!(get, expect.to_string());
+        }
     }
 }

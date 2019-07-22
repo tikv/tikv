@@ -128,12 +128,12 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         };
         match ret {
             Ok(data) => {
-                let mut resp = Response::new();
+                let mut resp = Response::default();
                 resp.set_data(data);
                 Ok(resp)
             }
             Err(Error::Other(e)) => {
-                let mut resp = Response::new();
+                let mut resp = Response::default();
                 resp.set_other_error(format!("{}", e));
                 Ok(resp)
             }

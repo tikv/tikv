@@ -1083,7 +1083,7 @@ impl ApplyDelegate {
         }?;
         response.set_cmd_type(cmd_type);
 
-        let mut resp = RaftCmdResponse::new();
+        let mut resp = RaftCmdResponse::default();
         if !req.get_header().get_uuid().is_empty() {
             let uuid = req.get_header().get_uuid().to_vec();
             resp.mut_header().set_uuid(uuid);
@@ -1138,7 +1138,7 @@ impl ApplyDelegate {
             responses.push(resp);
         }
 
-        let mut resp = RaftCmdResponse::new();
+        let mut resp = RaftCmdResponse::default();
         if !req.get_header().get_uuid().is_empty() {
             let uuid = req.get_header().get_uuid().to_vec();
             resp.mut_header().set_uuid(uuid);
@@ -1165,7 +1165,7 @@ impl ApplyDelegate {
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 
-        let resp = Response::new();
+        let resp = Response::default();
         let key = keys::data_key(key);
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
@@ -1211,7 +1211,7 @@ impl ApplyDelegate {
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
         self.metrics.size_diff_hint -= key.len() as i64;
-        let resp = Response::new();
+        let resp = Response::default();
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
@@ -1272,7 +1272,7 @@ impl ApplyDelegate {
             return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
         }
 
-        let resp = Response::new();
+        let resp = Response::default();
         let mut cf = req.get_delete_range().get_cf();
         if cf.is_empty() {
             cf = CF_DEFAULT;
@@ -1358,7 +1358,7 @@ impl ApplyDelegate {
             });
 
         ssts.push(sst.clone());
-        Ok(Response::new())
+        Ok(Response::default())
     }
 }
 
@@ -1545,7 +1545,7 @@ impl ApplyDelegate {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
-        let mut resp = AdminResponse::new();
+        let mut resp = AdminResponse::default();
         resp.mut_change_peer().set_region(region.clone());
 
         Ok((
@@ -1569,7 +1569,7 @@ impl ApplyDelegate {
             "peer_id" => self.id(),
         );
         let split = req.get_split().to_owned();
-        let mut admin_req = AdminRequest::new();
+        let mut admin_req = AdminRequest::default();
         admin_req
             .mut_splits()
             .set_right_derive(split.get_right_derive());
@@ -1585,13 +1585,11 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        (|| {
-            fail_point!(
-                "apply_before_split_1_3",
-                { self.id == 3 && self.region_id() == 1 },
-                |_| {}
-            );
-        })();
+        fail_point!(
+            "apply_before_split_1_3",
+            { self.id == 3 && self.region_id() == 1 },
+            |_| {}
+        );
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["batch-split", "all"])
@@ -1653,7 +1651,7 @@ impl ApplyDelegate {
         let kv = &ctx.engines.kv;
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
         for req in split_reqs.get_requests() {
-            let mut new_region = Region::new();
+            let mut new_region = Region::default();
             // TODO: check new region id validation.
             new_region.set_id(req.get_new_region_id());
             new_region.set_region_epoch(derived.get_region_epoch().to_owned());
@@ -1684,7 +1682,7 @@ impl ApplyDelegate {
         write_peer_state(kv, kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
-        let mut resp = AdminResponse::new();
+        let mut resp = AdminResponse::default();
         resp.mut_splits()
             .set_regions(RepeatedField::from_slice(&regions));
         PEER_ADMIN_CMD_COUNTER_VEC
@@ -1730,7 +1728,7 @@ impl ApplyDelegate {
         // backward compatible.
         let conf_version = region.get_region_epoch().get_conf_ver() + 1;
         region.mut_region_epoch().set_conf_ver(conf_version);
-        let mut merging_state = MergeState::new();
+        let mut merging_state = MergeState::default();
         merging_state.set_min_index(index);
         merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
@@ -1753,7 +1751,7 @@ impl ApplyDelegate {
             .inc();
 
         Ok((
-            AdminResponse::new(),
+            AdminResponse::default(),
             ApplyResult::Res(ExecResult::PrepareMerge {
                 region,
                 state: merging_state,
@@ -1911,7 +1909,7 @@ impl ApplyDelegate {
         write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
-                let mut merging_state = MergeState::new();
+                let mut merging_state = MergeState::default();
                 merging_state.set_target(self.region.clone());
                 write_peer_state(
                     kv,
@@ -1932,7 +1930,7 @@ impl ApplyDelegate {
             .with_label_values(&["commit_merge", "success"])
             .inc();
 
-        let resp = AdminResponse::new();
+        let resp = AdminResponse::default();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::CommitMerge {
@@ -1979,7 +1977,7 @@ impl ApplyDelegate {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "success"])
             .inc();
-        let resp = AdminResponse::new();
+        let resp = AdminResponse::default();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::RollbackMerge {
@@ -1999,7 +1997,7 @@ impl ApplyDelegate {
             .inc();
 
         let compact_index = req.get_compact_log().get_compact_index();
-        let resp = AdminResponse::new();
+        let resp = AdminResponse::default();
         let apply_state = &mut ctx.exec_ctx.as_mut().unwrap().apply_state;
         let first_index = peer_storage::first_index(apply_state);
         if compact_index <= first_index {
@@ -2058,7 +2056,7 @@ impl ApplyDelegate {
         ctx: &ApplyContext,
         _: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
-        let resp = AdminResponse::new();
+        let resp = AdminResponse::default();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ComputeHash {
@@ -2081,7 +2079,7 @@ impl ApplyDelegate {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
-        let resp = AdminResponse::new();
+        let resp = AdminResponse::default();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::VerifyHash { index, hash }),
@@ -2641,9 +2639,7 @@ impl ApplyFsm {
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_sync_apply_index != applied_index;
-        (|| {
-            fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
-        })();
+        fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
         if need_sync {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(SlowTimer::new());
@@ -3002,7 +2998,7 @@ mod tests {
     }
 
     pub fn new_entry(term: u64, index: u64, req: Option<RaftCmdRequest>) -> Entry {
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_index(index);
         e.set_term(term);
         if let Some(r) = req {
@@ -3014,24 +3010,24 @@ mod tests {
     #[test]
     fn test_should_write_to_engine() {
         // ComputeHash command
-        let mut req = RaftCmdRequest::new();
+        let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        let wb = WriteBatch::new();
+        let wb = WriteBatch::default();
         assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // IngestSST command
-        let mut req = Request::new();
+        let mut req = Request::default();
         req.set_cmd_type(CmdType::IngestSST);
-        req.set_ingest_sst(IngestSSTRequest::new());
-        let mut cmd = RaftCmdRequest::new();
+        req.set_ingest_sst(IngestSSTRequest::default());
+        let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = WriteBatch::new();
+        let wb = WriteBatch::default();
         assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
-        let req = RaftCmdRequest::new();
-        let wb = WriteBatch::new();
+        let req = RaftCmdRequest::default();
+        let wb = WriteBatch::default();
         for i in 0..WRITE_BATCH_MAX_KEYS {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3039,8 +3035,8 @@ mod tests {
         assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
-        let req = RaftCmdRequest::new();
-        let wb = WriteBatch::new();
+        let req = RaftCmdRequest::default();
+        let wb = WriteBatch::default();
         for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3296,8 +3292,8 @@ mod tests {
 
     impl EntryBuilder {
         fn new(index: u64, term: u64) -> EntryBuilder {
-            let req = RaftCmdRequest::new();
-            let mut entry = Entry::new();
+            let req = RaftCmdRequest::default();
+            let mut entry = Entry::default();
             entry.set_index(index);
             entry.set_term(term);
             EntryBuilder { entry, req }
@@ -3327,7 +3323,7 @@ mod tests {
         }
 
         fn epoch(mut self, conf_ver: u64, version: u64) -> EntryBuilder {
-            let mut epoch = RegionEpoch::new();
+            let mut epoch = RegionEpoch::default();
             epoch.set_version(version);
             epoch.set_conf_ver(conf_ver);
             self.req.mut_header().set_region_epoch(epoch);
@@ -3343,7 +3339,7 @@ mod tests {
         }
 
         fn add_put_req(mut self, cf: Option<&str>, key: &[u8], value: &[u8]) -> EntryBuilder {
-            let mut cmd = Request::new();
+            let mut cmd = Request::default();
             cmd.set_cmd_type(CmdType::Put);
             if let Some(cf) = cf {
                 cmd.mut_put().set_cf(cf.to_owned());
@@ -3371,7 +3367,7 @@ mod tests {
         }
 
         fn add_delete_req(mut self, cf: Option<&str>, key: &[u8]) -> EntryBuilder {
-            let mut cmd = Request::new();
+            let mut cmd = Request::default();
             cmd.set_cmd_type(CmdType::Delete);
             if let Some(cf) = cf {
                 cmd.mut_delete().set_cf(cf.to_owned());
@@ -3387,7 +3383,7 @@ mod tests {
             start_key: &[u8],
             end_key: &[u8],
         ) -> EntryBuilder {
-            let mut cmd = Request::new();
+            let mut cmd = Request::default();
             cmd.set_cmd_type(CmdType::DeleteRange);
             if let Some(cf) = cf {
                 cmd.mut_delete_range().set_cf(cf.to_owned());
@@ -3399,7 +3395,7 @@ mod tests {
         }
 
         fn ingest_sst(mut self, meta: &SSTMeta) -> EntryBuilder {
-            let mut cmd = Request::new();
+            let mut cmd = Request::default();
             cmd.set_cmd_type(CmdType::IngestSST);
             cmd.mut_ingest_sst().set_sst(meta.clone());
             self.req.mut_requests().push(cmd);
@@ -3407,7 +3403,7 @@ mod tests {
         }
 
         fn split(mut self, splits: BatchSplitRequest) -> EntryBuilder {
-            let mut req = AdminRequest::new();
+            let mut req = AdminRequest::default();
             req.set_cmd_type(AdminCmdType::BatchSplit);
             req.set_splits(splits);
             self.req.set_admin_request(req);
@@ -3606,7 +3602,7 @@ mod tests {
 
         // UploadSST
         let sst_path = import_dir.path().join("test.sst");
-        let mut sst_epoch = RegionEpoch::new();
+        let mut sst_epoch = RegionEpoch::default();
         sst_epoch.set_conf_ver(1);
         sst_epoch.set_version(3);
         let sst_range = (0, 100);
@@ -3679,7 +3675,7 @@ mod tests {
     #[test]
     fn test_check_sst_for_ingestion() {
         let mut sst = SSTMeta::new();
-        let mut region = Region::new();
+        let mut region = Region::default();
 
         // Check uuid and cf name
         assert!(check_sst_for_ingestion(&sst, &region).is_err());
@@ -3721,7 +3717,7 @@ mod tests {
     }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {
-        let mut req = SplitRequest::new();
+        let mut req = SplitRequest::default();
         req.set_split_key(key.to_vec());
         req.set_new_region_id(id);
         req.set_new_peer_ids(children);
@@ -3825,7 +3821,7 @@ mod tests {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap()
         };
 
-        let mut splits = BatchSplitRequest::new();
+        let mut splits = BatchSplitRequest::default();
         splits.set_right_derive(true);
         splits.mut_requests().push(new_split_req(b"k1", 8, vec![]));
         let resp = exec_split(&router, splits.clone());
