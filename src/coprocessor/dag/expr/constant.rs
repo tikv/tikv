@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn test_datum_as_bool() {
         let dec = "1.1".parse::<Decimal>().unwrap();
-        let s = "10".as_bytes().to_owned();
+        let s = b"10".to_vec();
         let dur = Duration::parse(b"01:00:00", 0).unwrap();
         let json = Json::String(String::from("test_json"));
 
