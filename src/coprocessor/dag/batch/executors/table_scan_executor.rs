@@ -8,41 +8,34 @@ use tipb::executor::TableScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Store};
 use tikv_util::collections::HashMap;
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::Scanner;
+use crate::coprocessor::dag::storage::Storage;
 use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<S: Store>(
-    super::util::scan_executor::ScanExecutor<
-        S,
-        TableScanExecutorImpl,
-        super::util::ranges_iter::PointRangeEnable,
-    >,
+pub struct BatchTableScanExecutor<S: Storage>(
+    super::util::scan_executor::ScanExecutor<S, TableScanExecutorImpl>,
 );
 
-impl BatchTableScanExecutor<FixtureStore> {
+impl<S: Storage> BatchTableScanExecutor<S> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
         super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
     }
-}
 
-impl<S: Store> BatchTableScanExecutor<S> {
     pub fn new(
-        store: S,
+        storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
-        desc: bool,
+        is_backward: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
-        let mut key_only = true;
+        let mut is_key_only = true;
         let mut handle_index = None;
         let mut schema = Vec::with_capacity(columns_info.len());
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
@@ -61,7 +54,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             if ci.get_pk_handle() {
                 handle_index = Some(index);
             } else {
-                key_only = false;
+                is_key_only = false;
                 column_id_index.insert(ci.get_column_id(), index);
             }
 
@@ -74,22 +67,24 @@ impl<S: Store> BatchTableScanExecutor<S> {
             schema,
             columns_default_value,
             column_id_index,
-            key_only,
             handle_index,
             is_column_filled,
         };
         let wrapper = super::util::scan_executor::ScanExecutor::new(
             imp,
-            store,
-            desc,
+            storage,
+            is_backward,
+            is_key_only,
             key_ranges,
-            super::util::ranges_iter::PointRangeEnable,
+            true,
         )?;
         Ok(Self(wrapper))
     }
 }
 
-impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
+impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
+    type StorageStats = S::Statistics;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -101,8 +96,13 @@ impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
@@ -122,11 +122,6 @@ struct TableScanExecutorImpl {
     /// The output position in the schema giving the column id.
     column_id_index: HashMap<i64, usize>,
 
-    /// Whether or not KV value can be omitted.
-    ///
-    /// It will be set to `true` if only PK handle column exists in `schema`.
-    key_only: bool,
-
     /// The index in output row to put the handle.
     handle_index: Option<usize>,
 
@@ -145,16 +140,6 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
-    }
-
-    #[inline]
-    fn build_scanner<S: Store>(
-        &self,
-        store: &S,
-        desc: bool,
-        range: KeyRange,
-    ) -> Result<Scanner<S>> {
-        Scanner::new(store, desc, self.key_only, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -305,10 +290,10 @@ mod tests {
     use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::exec_summary::*;
+    use crate::coprocessor::dag::execute_stats::*;
     use crate::coprocessor::dag::expr::EvalConfig;
+    use crate::coprocessor::dag::storage::fixture::FixtureStorage;
     use crate::coprocessor::util::convert_to_prefix_next;
-    use crate::storage::{FixtureStore, Key};
 
     /// Test Helper for normal test with fixed schema and data.
     /// Table Schema:  ID (INT, PK),   Foo (INT),     Bar (FLOAT, Default 4.5)
@@ -325,7 +310,7 @@ mod tests {
         pub table_id: i64,
         pub columns_info: Vec<ColumnInfo>,
         pub field_types: Vec<FieldType>,
-        pub store: FixtureStore,
+        pub store: FixtureStorage,
     }
 
     impl TableScanTestHelper {
@@ -413,19 +398,19 @@ mod tests {
             ];
 
             let store = {
-                let kv = data
+                let kv: Vec<_> = data
                     .iter()
                     .map(|(row_id, columns)| {
-                        let key = Key::from_raw(&table::encode_row_key(TABLE_ID, *row_id));
+                        let key = table::encode_row_key(TABLE_ID, *row_id);
                         let value = {
                             let row = columns.iter().map(|(_, datum)| datum.clone()).collect();
                             let col_ids: Vec<_> = columns.iter().map(|(id, _)| *id).collect();
                             table::encode_row(row, &col_ids).unwrap()
                         };
-                        (key, Ok(value))
+                        (key, value)
                     })
                     .collect();
-                FixtureStore::new(kv)
+                FixtureStorage::from(kv)
             };
 
             TableScanTestHelper {
@@ -466,7 +451,7 @@ mod tests {
             ]
         }
 
-        fn store(&self) -> FixtureStore {
+        fn store(&self) -> FixtureStorage {
             self.store.clone()
         }
 
@@ -646,9 +631,10 @@ mod tests {
         executor.next_batch(1);
         executor.next_batch(2);
 
-        let mut s = BatchExecuteStatistics::new(2, 1);
-        executor.collect_statistics(&mut s);
+        let mut s = ExecuteStats::new(2);
+        executor.collect_exec_stats(&mut s);
 
+        assert_eq!(s.scanned_rows_per_range.len(), 1);
         assert_eq!(s.scanned_rows_per_range[0], 3);
         // 0 remains Default because our output index is 1
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
@@ -656,9 +642,10 @@ mod tests {
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
-        executor.collect_statistics(&mut s);
+        executor.collect_exec_stats(&mut s);
 
         // Collected statistics remain unchanged because of no newly generated delta statistics.
+        assert_eq!(s.scanned_rows_per_range.len(), 1);
         assert_eq!(s.scanned_rows_per_range[0], 3);
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
         let exec_summary = s.summary_per_executor[1];
@@ -668,8 +655,9 @@ mod tests {
         // Reset collected statistics so that now we will only collect statistics in this round.
         s.clear();
         executor.next_batch(10);
-        executor.collect_statistics(&mut s);
+        executor.collect_exec_stats(&mut s);
 
+        assert_eq!(s.scanned_rows_per_range.len(), 1);
         assert_eq!(s.scanned_rows_per_range[0], 2);
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
         let exec_summary = s.summary_per_executor[1];
@@ -711,36 +699,36 @@ mod tests {
         let mut kv = vec![];
         {
             // row 0, which is not corrupted
-            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 0));
+            let key = table::encode_row_key(TABLE_ID, 0);
             let value = table::encode_row(vec![Datum::I64(5), Datum::I64(7)], &[2, 3]).unwrap();
-            kv.push((key, Ok(value)));
+            kv.push((key, value));
         }
         {
             // row 1, which is not corrupted
-            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 1));
+            let key = table::encode_row_key(TABLE_ID, 1);
             let value = vec![];
-            kv.push((key, Ok(value)));
+            kv.push((key, value));
         }
         {
             // row 2, which is partially corrupted
-            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 2));
+            let key = table::encode_row_key(TABLE_ID, 2);
             let mut value = table::encode_row(vec![Datum::I64(5), Datum::I64(7)], &[2, 3]).unwrap();
             // resize the value to make it partially corrupted
             value.truncate(value.len() - 3);
-            kv.push((key, Ok(value)));
+            kv.push((key, value));
         }
         {
             // row 3, which is totally corrupted due to invalid datum flag for column id
-            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 3));
+            let key = table::encode_row_key(TABLE_ID, 3);
             // this datum flag does not exist
             let value = vec![255];
-            kv.push((key, Ok(value)));
+            kv.push((key, value));
         }
         {
             // row 4, which is totally corrupted due to missing datum for column value
-            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 4));
+            let key = table::encode_row_key(TABLE_ID, 4);
             let value = datum::encode_value(&[Datum::I64(2)]).unwrap(); // col_id = 2
-            kv.push((key, Ok(value)));
+            kv.push((key, value));
         }
 
         let key_range_point: Vec<_> = kv
@@ -755,7 +743,7 @@ mod tests {
             })
             .collect();
 
-        let store = FixtureStore::new(kv.into_iter().collect());
+        let store = FixtureStorage::from(kv);
 
         // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an error.
         for corrupted_row_index in 2..=4 {
@@ -824,27 +812,33 @@ mod tests {
         let mut kv = vec![];
         {
             // row 0: not locked
-            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 0));
+            let key = table::encode_row_key(TABLE_ID, 0);
             let value = table::encode_row(vec![Datum::I64(7)], &[2]).unwrap();
             kv.push((key, Ok(value)));
         }
         {
             // row 1: locked
-            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 1));
-            let value =
-                crate::storage::txn::Error::Mvcc(crate::storage::mvcc::Error::KeyIsLocked {
-                    // We won't check error detail in tests, so we can just fill fields casually.
-                    key: vec![],
-                    primary: vec![],
-                    ts: 1,
-                    ttl: 2,
-                    txn_size: 0,
-                });
-            kv.push((key, Err(value)));
+            let key = table::encode_row_key(TABLE_ID, 1);
+            let value: std::result::Result<
+                _,
+                Box<dyn Send + Sync + Fn() -> crate::coprocessor::Error>,
+            > = Err(Box::new(|| {
+                crate::coprocessor::Error::from(crate::storage::txn::Error::Mvcc(
+                    crate::storage::mvcc::Error::KeyIsLocked {
+                        // We won't check error detail in tests, so we can just fill fields casually.
+                        key: vec![],
+                        primary: vec![],
+                        ts: 1,
+                        ttl: 2,
+                        txn_size: 0,
+                    },
+                ))
+            }));
+            kv.push((key, value));
         }
         {
             // row 2: not locked
-            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 2));
+            let key = table::encode_row_key(TABLE_ID, 2);
             let value = table::encode_row(vec![Datum::I64(5)], &[2]).unwrap();
             kv.push((key, Ok(value)));
         }
@@ -861,7 +855,7 @@ mod tests {
             })
             .collect();
 
-        let store = FixtureStore::new(kv.into_iter().collect());
+        let store = FixtureStorage::new(kv.into_iter().collect());
 
         // Case 1: row 0 + row 1 + row 2
         // We should get row 0 and error because no further rows should be scanned when there is

@@ -107,7 +107,7 @@ fn test_stream_batch_row_limit() {
     let req = DAGSelect::from(&product).build();
     assert_eq!(req.get_ranges().len(), 1);
 
-    let mut expected_ranges_last_byte = vec![(0, 3), (3, 6), (6, 255)];
+    let mut expected_ranges_last_byte = vec![(0, 3), (3, 6), (6, 9)];
     let check_range = move |resp: &Response| {
         let (start_last_byte, end_last_byte) = expected_ranges_last_byte.remove(0);
         let start = resp.get_range().get_start();

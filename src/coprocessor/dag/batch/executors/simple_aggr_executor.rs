@@ -22,6 +22,8 @@ pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
 );
 
 impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -33,8 +35,30 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination)
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.0.collect_storage_stats(dest);
+    }
+}
+
+impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
+        assert_eq!(descriptor.get_group_by().len(), 0);
+        let aggr_definitions = descriptor.get_agg_func();
+        if aggr_definitions.is_empty() {
+            return Err(box_err!("Aggregation expression is empty"));
+        }
+
+        for def in aggr_definitions {
+            AllAggrDefinitionParser.check_supported(def)?;
+        }
+        Ok(())
     }
 }
 
@@ -53,26 +77,7 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
         )
         .unwrap()
     }
-}
 
-impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor>> {
-    /// Checks whether this executor can be used.
-    #[inline]
-    pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
-        assert_eq!(descriptor.get_group_by().len(), 0);
-        let aggr_definitions = descriptor.get_agg_func();
-        if aggr_definitions.is_empty() {
-            return Err(box_err!("Aggregation expression is empty"));
-        }
-
-        for def in aggr_definitions {
-            AllAggrDefinitionParser.check_supported(def)?;
-        }
-        Ok(())
-    }
-}
-
-impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
     pub fn new(config: Arc<EvalConfig>, src: Src, aggr_defs: Vec<Expr>) -> Result<Self> {
         Self::new_impl(config, src, aggr_defs, AllAggrDefinitionParser)
     }

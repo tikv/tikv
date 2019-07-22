@@ -8,8 +8,7 @@ use kvproto::coprocessor::Response;
 use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse};
 
-use super::batch::interface::{BatchExecuteStatistics, BatchExecutor};
-use super::executor::ExecutorMetrics;
+use super::batch::interface::{BatchExecutor, ExecuteStats};
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::*;
 
@@ -24,14 +23,13 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
-/// Must be built from DAGRequestHandler.
-pub struct BatchDAGHandler {
+pub struct BatchDAGHandler<SS> {
     /// The deadline of this handler. For each check point (e.g. each iteration) we need to check
     /// whether or not the deadline is exceeded and break the process if so.
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
 
-    out_most_executor: Box<dyn BatchExecutor>,
+    out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
 
     /// The offset of the columns need to be outputted. For example, TiDB may only needs a subset
     /// of the columns in the result so that unrelated columns don't need to be encoded and
@@ -40,44 +38,32 @@ pub struct BatchDAGHandler {
 
     config: Arc<EvalConfig>,
 
-    /// Accumulated statistics.
-    // TODO: Currently we return statistics only once, so these statistics are accumulated only
-    // once. However in future when we introduce reenterable DAG processor, these statistics may
-    // be accumulated and returned several times during the life time of the request. At that time
-    // we may remove this field.
-    statistics: BatchExecuteStatistics,
-
-    /// Traditional metric interface.
-    // TODO: Deprecate it in Coprocessor DAG v2.
-    metrics: ExecutorMetrics,
-
     /// Whether or not execution summary need to be collected.
     collect_exec_summary: bool,
+
+    exec_stats: ExecuteStats,
 }
 
-impl BatchDAGHandler {
+impl<SS> BatchDAGHandler<SS> {
     pub fn new(
         deadline: Deadline,
-        out_most_executor: Box<dyn BatchExecutor>,
+        out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
-        statistics: BatchExecuteStatistics,
         collect_exec_summary: bool,
+        exec_stats: ExecuteStats,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
             config,
-            statistics,
-            metrics: ExecutorMetrics::default(),
             collect_exec_summary,
+            exec_stats,
         }
     }
-}
 
-impl RequestHandler for BatchDAGHandler {
-    fn handle_request(&mut self) -> Result<Response> {
+    pub fn handle_request(&mut self) -> Result<Response> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
@@ -136,15 +122,14 @@ impl RequestHandler for BatchDAGHandler {
 
             if is_drained {
                 self.out_most_executor
-                    .collect_statistics(&mut self.statistics);
-                self.metrics.cf_stats.add(&self.statistics.cf_stats);
+                    .collect_exec_stats(&mut self.exec_stats);
 
                 let mut resp = Response::new();
                 let mut sel_resp = SelectResponse::new();
                 sel_resp.set_chunks(chunks.into());
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
-                    self.statistics
+                    self.exec_stats
                         .scanned_rows_per_range
                         .iter()
                         .map(|v| *v as i64)
@@ -153,7 +138,7 @@ impl RequestHandler for BatchDAGHandler {
 
                 if self.collect_exec_summary {
                     let summaries = self
-                        .statistics
+                        .exec_stats
                         .summary_per_executor
                         .iter()
                         .map(|summary| {
@@ -173,9 +158,8 @@ impl RequestHandler for BatchDAGHandler {
                 let data = box_try!(sel_resp.write_to_bytes());
                 resp.set_data(data);
 
-                // Not really useful here, because we only collect it once. But when we change it
-                // in future, hope we will not forget it.
-                self.statistics.clear();
+                // In case of this function is called multiple times.
+                self.exec_stats.clear();
 
                 return Ok(resp);
             }
@@ -190,10 +174,20 @@ impl RequestHandler for BatchDAGHandler {
         }
     }
 
-    fn collect_metrics_into(&mut self, target_metrics: &mut ExecutorMetrics) {
-        // FIXME: This interface will be broken in streaming mode.
-        target_metrics.merge(&mut self.metrics);
+    pub fn collect_storage_stats(&mut self, dest: &mut SS) {
+        self.out_most_executor.collect_storage_stats(dest);
+    }
+}
 
-        // Notice: Exec count is collected during building the batch handler.
+// TODO: This should stay in Coprocessor instead of DAG
+use crate::storage::Statistics;
+
+impl RequestHandler for BatchDAGHandler<Statistics> {
+    fn handle_request(&mut self) -> Result<Response> {
+        BatchDAGHandler::handle_request(self)
+    }
+
+    fn collect_scan_statistics(&mut self, stats: &mut Statistics) {
+        BatchDAGHandler::collect_storage_stats(self, stats);
     }
 }
