@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
+jemalloc = ["engine_rocksdb/jemalloc"]
 portable = ["engine_rocksdb/portable"]
 sse = ["engine_rocksdb/sse"]
 
@@ -32,8 +33,9 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/yiwu-arbug/rust-rocksdb.git"
 package = "rocksdb"
+branch = "with_jemalloc"
 
 [dev-dependencies]
 tempfile = "3.0"
