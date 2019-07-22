@@ -501,7 +501,7 @@ impl Time {
         let t = t.unwrap();
         if t.year() < 1000 || t.year() > 9999 {
             return Err(box_err!(
-                "datetime :{:?} out of range ('1000-01-01' to '9999-12-31')",
+                "datetime :{} out of range ('1000-01-01' to '9999-12-31')",
                 t
             ));
         }

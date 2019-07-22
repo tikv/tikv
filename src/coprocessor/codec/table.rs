@@ -234,7 +234,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
                     FieldTypeTp::JSON
                 ]
                 .contains(&t),
-                "unknown type {} {:?}",
+                "unknown type {} {}",
                 t,
                 datum
             );

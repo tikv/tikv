@@ -400,7 +400,7 @@ mod tests {
                 expr.mut_field_type().set_charset(charset);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
-            d => panic!("unsupport datum: {:?}", d),
+            d => panic!("unsupport datum: {}", d),
         }
         expr
     }
@@ -467,7 +467,7 @@ mod tests {
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
-            d => panic!("unsupport datum: {:?}", d),
+            d => panic!("unsupport datum: {}", d),
         };
         expr
     }
