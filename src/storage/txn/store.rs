@@ -10,12 +10,16 @@ use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 use super::{Error, Result};
 
 pub trait Store: Send {
+    /// The scanner type returned by `scanner()`.
     type Scanner: Scanner;
 
+    /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
+    /// Fetch the provided set of keys.
     fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Value>>>;
 
+    /// Retrieve a scanner over the bounds.
     fn scanner(
         &self,
         desc: bool,
@@ -25,9 +29,14 @@ pub trait Store: Send {
     ) -> Result<Self::Scanner>;
 }
 
+/// [`Scanner`]s allow retrieving items or batches from a scan result.
+///
+/// Commonly they are obtained as a result of a [`scanner`](Store::scanner) operation.
 pub trait Scanner: Send {
+    /// Get the next [`KvPair`](KvPair) if it exists.
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
+    /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
     fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = Vec::with_capacity(limit);
         while results.len() < limit {
@@ -45,6 +54,7 @@ pub trait Scanner: Send {
         Ok(results)
     }
 
+    /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
 }
 
