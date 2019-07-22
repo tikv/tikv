@@ -171,7 +171,7 @@ impl DetectTable {
     /// The threshold of detect table size to trigger `active_expire`.
     const ACTIVE_EXPIRE_THRESHOLD: usize = 100000;
     /// The interval between `active_expire`.
-    const ACTIVE_EXPIRE_INTERVAL: Duration = Duration::from_secs(60);
+    const ACTIVE_EXPIRE_INTERVAL: Duration = Duration::from_secs(3600);
 
     /// Iterates the whole table to remove all expired entries.
     fn active_expire(&mut self) {
