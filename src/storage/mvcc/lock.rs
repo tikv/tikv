@@ -144,7 +144,7 @@ impl Lock {
                 }
                 FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?,
                 TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
-                flag => panic!("invalid flag [{:?}] in lock", flag),
+                flag => panic!("invalid flag [{}] in lock", flag),
             }
         }
         Ok(Lock::new(
