@@ -101,22 +101,31 @@ mod tests {
             assert_eq!(output, expect, "{:?} {:?}", date, format);
         }
 
-        let cases: Vec<(Option<&str>, Option<&str>)> = vec![
-            //            // TODO: pass this test after refactoring the issue #3953 is fixed.
-            //            (
-            //                Some("abc%b %M %m %c %D %d %e %j"),
-            //                Some("0000-00-00 00:00:00"),
-            //            ),
-            (None, None),
-        ];
+        //                // TODO: pass this test after refactoring the issue #3953 is fixed.
+        //                {
+        //                    let format: Option<Bytes> =  Some("abc%b %M %m %c %D %d %e %j".as_bytes().to_vec());
+        //                    let time: Option<DateTime> = Some( DateTime::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap());
+        //
+        //                    let mut cfg = EvalConfig::new();
+        //                    cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+        //                        .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
+        //                    let ctx = EvalContext::new(Arc::new(cfg));
+        //
+        //                    let output = RpnFnScalarEvaluator::new()
+        //                        .context(ctx)
+        //                        .push_param(time.clone())
+        //                        .push_param(format)
+        //                        .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig);
+        //                    assert!(output.is_err());
+        //                }
 
-        for (format, time) in cases {
-            let format: Option<Bytes> = format.map(|s| s.as_bytes().to_vec());
-            let time: Option<DateTime> = time.map(|d| DateTime::parse_utc_datetime(d, 6).unwrap());
+        {
+            let format: Option<Bytes> = None;
+            let time: Option<DateTime> = None;
 
             let mut cfg = EvalConfig::new();
             cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
-                .set_sql_mode(SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES);
+                .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
             let ctx = EvalContext::new(Arc::new(cfg));
 
             let output = RpnFnScalarEvaluator::new()
