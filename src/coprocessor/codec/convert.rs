@@ -583,6 +583,9 @@ fn float_str_to_int_string<'a>(
     }
 
     if e_idx.is_none() {
+        // 1. If there is digit after dot, round.
+        // 2. Only when the final result <0, add '-' in the front of it.
+        // 3. The result has no '+'.
         let dot_idx = dot_idx.unwrap();
         // NOTE: to make compatible with TiDB, +0.5 -> 1, -0.5 -> -1
         let int_str = if int_cnt == 0 && valid_float.starts_with('-') {

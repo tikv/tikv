@@ -532,7 +532,10 @@ mod tests {
             ),
         ];
         let mut ctx = EvalContext::default();
+        let mut ind = 0;
         for tt in tests {
+            println!("{}", ind);
+            ind += 1;
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
@@ -999,7 +1002,7 @@ mod tests {
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
             )
-            .unwrap();
+                .unwrap();
             op.mut_field_type()
                 .as_mut_accessor()
                 .set_flag(FieldTypeFlag::UNSIGNED);
@@ -1023,7 +1026,7 @@ mod tests {
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
             )
-            .unwrap();
+                .unwrap();
             op.mut_field_type()
                 .as_mut_accessor()
                 .set_flag(FieldTypeFlag::UNSIGNED);

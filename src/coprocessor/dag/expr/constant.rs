@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use super::{Constant, Result};
 use crate::coprocessor::codec::convert::{
     convert_bytes_to_int, convert_datetime_to_int, convert_decimal_to_int, convert_duration_to_int,
-    convert_float_to_int, convert_int_to_int, convert_json_to_int, convert_uint_to_int,
+    convert_float_to_int, convert_json_to_int,
 };
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::coprocessor::codec::{Datum, Error};
@@ -40,14 +40,8 @@ impl Datum {
     pub fn as_int(&self, ctx: &mut EvalContext) -> Result<Option<i64>> {
         match *self {
             Datum::Null => Ok(None),
-            Datum::I64(i) => {
-                let n = convert_int_to_int(ctx, i, FieldTypeTp::LongLong)?;
-                Ok(Some(n))
-            }
-            Datum::U64(u) => {
-                let n = convert_uint_to_int(ctx, u, FieldTypeTp::LongLong)?;
-                Ok(Some(n))
-            }
+            Datum::I64(i) => Ok(Some(i)),
+            Datum::U64(u) => Ok(Some(u as i64)),
             Datum::F64(f) => {
                 let n = convert_float_to_int(ctx, f, FieldTypeTp::LongLong)?;
                 Ok(Some(n))
@@ -204,27 +198,17 @@ mod tests {
         let dur = Duration::parse(b"01:00:00", 0).unwrap();
 
         let tests = vec![
-            datum_expr(Datum::Null),
-            datum_expr(Datum::I64(-30)),
-            datum_expr(Datum::U64(u64::MAX)),
-            datum_expr(Datum::F64(124.32)),
-            datum_expr(Datum::Dec(dec.clone())),
-            datum_expr(Datum::Bytes(s.clone())),
-            datum_expr(Datum::Dur(dur)),
-        ];
-
-        let expecteds = vec![
-            EvalResults(None, None, None, None, None, None, None),
-            EvalResults(Some(-30), None, None, None, None, None, None),
-            EvalResults(Some(-1), None, None, None, None, None, None),
-            EvalResults(None, Some(124.32), None, None, None, None, None),
-            EvalResults(None, None, Some(dec.clone()), None, None, None, None),
-            EvalResults(None, None, None, Some(s.clone()), None, None, None),
-            EvalResults(None, None, None, None, None, Some(dur), None),
+            (datum_expr(Datum::Null), EvalResults(None, None, None, None, None, None, None)),
+            (datum_expr(Datum::I64(-30)), EvalResults(Some(-30), None, None, None, None, None, None)),
+            (datum_expr(Datum::U64(u64::MAX)), EvalResults(Some(-1), None, None, None, None, None, None)),
+            (datum_expr(Datum::F64(124.32)), EvalResults(Some(124), Some(124.32), None, None, None, None, None)),
+            (datum_expr(Datum::Dec(dec.clone())), EvalResults(Some(1), None, Some(dec.clone()), None, None, None, None)),
+            (datum_expr(Datum::Bytes(s.clone())), EvalResults(None, None, None, Some(s.clone()), None, None, None)),
+            (datum_expr(Datum::Dur(dur)), EvalResults(Some(10000), None, None, None, None, Some(dur), None)),
         ];
 
         let mut ctx = EvalContext::default();
-        for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
+        for (case, expected) in tests {
             let e = Expression::build(&ctx, case).unwrap();
 
             let i = e.eval_int(&mut ctx, &[]).unwrap_or(None);
@@ -248,7 +232,7 @@ mod tests {
                 .map(|t| t.into_owned());
 
             let result = EvalResults(i, r, dec, s, t, dur, j);
-            assert_eq!(expected, result);
+            assert_eq!(result, expected);
         }
     }
 
