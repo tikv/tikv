@@ -120,9 +120,6 @@ mod tests {
         //                }
 
         {
-            let format: Option<Bytes> = None;
-            let time: Option<DateTime> = None;
-
             let mut cfg = EvalConfig::new();
             cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
                 .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
@@ -130,11 +127,11 @@ mod tests {
 
             let output = RpnFnScalarEvaluator::new()
                 .context(ctx)
-                .push_param(time.clone())
-                .push_param(format)
+                .push_param(Option::<Bytes>::None)
+                .push_param(Option::<DateTime>::None)
                 .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig)
                 .unwrap();
-            assert_eq!(output, None, "{:?} {:?}", time, "");
+            assert_eq!(output, None);
         }
 
         // test date format when format is None
