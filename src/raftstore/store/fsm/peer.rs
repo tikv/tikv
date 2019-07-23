@@ -25,7 +25,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
@@ -1793,9 +1793,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .mut_commit_merge()
                 .set_source(self.fsm.peer.region().clone());
             admin.mut_commit_merge().set_commit(state.get_commit());
-            admin
-                .mut_commit_merge()
-                .set_entries(RepeatedField::from_vec(entries));
+            admin.mut_commit_merge().set_entries(entries.into());
             request.set_admin_request(admin);
             (request, target_id)
         };

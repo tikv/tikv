@@ -15,7 +15,6 @@ use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
-use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 
 use super::metrics::*;
@@ -780,8 +779,7 @@ fn new_batch_split_region_request(
         split.set_new_peer_ids(id.take_new_peer_ids());
         requests.push(split);
     }
-    req.mut_splits()
-        .set_requests(RepeatedField::from_vec(requests));
+    req.mut_splits().set_requests(requests.into());
     req
 }
 
