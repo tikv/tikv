@@ -2,7 +2,7 @@
 
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use tipb::analyze::{
     AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp, AnalyzeReq,
     AnalyzeType,
@@ -15,7 +15,7 @@ pub const REQ_TYPE_ANALYZE: i64 = 104;
 fn new_analyze_req(data: Vec<u8>, range: KeyRange) -> Request {
     let mut req = Request::default();
     req.set_data(data);
-    req.set_ranges(RepeatedField::from_vec(vec![range]));
+    req.set_ranges(vec![range].into());
     req.set_tp(REQ_TYPE_ANALYZE);
     req
 }
@@ -29,7 +29,7 @@ fn new_analyze_column_req(
     cm_sketch_width: i32,
 ) -> Request {
     let mut col_req = AnalyzeColumnsReq::new();
-    col_req.set_columns_info(RepeatedField::from_vec(table.columns_info()));
+    col_req.set_columns_info(table.columns_info().into());
     col_req.set_bucket_size(bucket_size);
     col_req.set_sketch_size(fm_sketch_size);
     col_req.set_sample_size(sample_size);
@@ -208,7 +208,7 @@ fn test_invalid_range() {
     let mut key_range = KeyRange::default();
     key_range.set_start(b"xxx".to_vec());
     key_range.set_end(b"zzz".to_vec());
-    req.set_ranges(RepeatedField::from_vec(vec![key_range]));
+    req.set_ranges(vec![key_range].into());
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_other_error().is_empty());
 }

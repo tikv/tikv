@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 
 use kvproto::coprocessor::Response;
 use tipb::executor::ExecutorExecutionSummary;
@@ -153,8 +153,8 @@ impl RequestHandler for BatchDAGHandler {
                             ret.set_time_processed_ns(summary.time_processed_ns as u64);
                             ret
                         })
-                        .collect();
-                    sel_resp.set_execution_summaries(RepeatedField::from_vec(summaries));
+                        .collect::<Vec<_>>();
+                    sel_resp.set_execution_summaries(summaries.into());
                 }
 
                 sel_resp.set_warnings(warnings.warnings.into());

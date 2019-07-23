@@ -146,7 +146,6 @@ pub mod tests {
     use std::sync::Arc;
 
     use cop_datatype::FieldTypeTp;
-    use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType};
 
     use crate::coprocessor::codec::table::RowColsDict;
@@ -382,7 +381,7 @@ pub mod tests {
         ob_vec.push(new_order_by(1, false));
         ob_vec.push(new_order_by(2, true));
         let mut topn = TopN::default();
-        topn.set_order_by(RepeatedField::from_vec(ob_vec));
+        topn.set_order_by(ob_vec.into());
         let limit = 4;
         topn.set_limit(limit);
         // init topn executor
@@ -428,7 +427,7 @@ pub mod tests {
         ob_vec.push(new_order_by(1, false));
         ob_vec.push(new_order_by(2, true));
         let mut topn = TopN::default();
-        topn.set_order_by(RepeatedField::from_vec(ob_vec));
+        topn.set_order_by(ob_vec.into());
         // test with limit=0
         topn.set_limit(0);
         let mut topn_ect =

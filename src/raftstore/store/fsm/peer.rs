@@ -25,7 +25,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
@@ -1793,9 +1793,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .mut_commit_merge()
                 .set_source(self.fsm.peer.region().clone());
             admin.mut_commit_merge().set_commit(state.get_commit());
-            admin
-                .mut_commit_merge()
-                .set_entries(RepeatedField::from_vec(entries));
+            admin.mut_commit_merge().set_entries(entries.into());
             request.set_admin_request(admin);
             (request, target_id)
         };
@@ -2261,8 +2259,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 _ => read_only = false,
             }
         }
-        let allow_follower_read = read_only && msg.get_header().get_follower_read();
-        if !(self.fsm.peer.is_leader() || is_read_index_request || allow_follower_read) {
+        let allow_replica_read = read_only && msg.get_header().get_replica_read();
+        if !(self.fsm.peer.is_leader() || is_read_index_request || allow_replica_read) {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             self.fsm.group_state = GroupState::Chaos;

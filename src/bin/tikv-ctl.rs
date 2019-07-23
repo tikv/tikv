@@ -21,7 +21,6 @@ use clap::{crate_authors, crate_version, App, AppSettings, Arg, ArgMatches, SubC
 use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
-use protobuf::RepeatedField;
 
 use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
@@ -584,9 +583,9 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
-        let cfs = cfs.into_iter().map(ToOwned::to_owned).collect();
+        let cfs = cfs.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
         let mut req = RegionSizeRequest::default();
-        req.set_cfs(RepeatedField::from_vec(cfs));
+        req.set_cfs(cfs.into());
         req.set_region_id(region);
         self.region_size(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::region_size", e))

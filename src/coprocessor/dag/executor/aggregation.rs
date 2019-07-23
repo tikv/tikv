@@ -386,7 +386,6 @@ mod tests {
 
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
-    use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
@@ -477,10 +476,10 @@ mod tests {
         let mut aggregation = Aggregation::default();
         let group_by_cols = vec![0, 1];
         let group_by = build_group_by(&group_by_cols);
-        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        aggregation.set_group_by(group_by.into());
         let funcs = vec![(ExprType::Count, 0), (ExprType::Sum, 1), (ExprType::Avg, 1)];
         let agg_funcs = build_aggr_func(&funcs);
-        aggregation.set_agg_func(RepeatedField::from_vec(agg_funcs));
+        aggregation.set_agg_func(agg_funcs.into());
 
         // test no row
         let idx_vals = vec![];
@@ -704,7 +703,7 @@ mod tests {
         let mut aggregation = Aggregation::default();
         let group_by_cols = vec![1, 2];
         let group_by = build_group_by(&group_by_cols);
-        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        aggregation.set_group_by(group_by.into());
         let aggr_funcs = vec![
             (ExprType::Avg, 0),
             (ExprType::Count, 2),
@@ -712,7 +711,7 @@ mod tests {
             (ExprType::Avg, 4),
         ];
         let aggr_funcs = build_aggr_func(&aggr_funcs);
-        aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
+        aggregation.set_agg_func(aggr_funcs.into());
         // init the hash aggregation executor
         let mut aggr_ect =
             HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_ect).unwrap();
