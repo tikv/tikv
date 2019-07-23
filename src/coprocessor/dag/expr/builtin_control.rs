@@ -521,7 +521,7 @@ mod tests {
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(sig);
 

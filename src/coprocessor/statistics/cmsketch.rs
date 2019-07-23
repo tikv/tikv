@@ -51,7 +51,7 @@ impl CMSketch {
     }
 
     pub fn into_proto(self) -> analyze::CMSketch {
-        let mut proto = analyze::CMSketch::new();
+        let mut proto = analyze::CMSketch::default();
         let mut rows = vec![analyze::CMSketchRow::default(); self.depth];
         for (i, row) in self.table.iter().enumerate() {
             rows[i].set_counters(row.to_vec());

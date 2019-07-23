@@ -14,7 +14,6 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
     StatusCmdType, StatusRequest,
 };
-use protobuf::text_format::print_to_string;
 
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
@@ -437,8 +436,7 @@ fn region_detail<T: RaftStoreRouter>(
                     if r.response.get_header().has_error() {
                         let e = r.response.get_header().get_error();
                         warn!("region_detail got error"; "err" => ?e);
-                        let msg = print_to_string(e);
-                        return Err(Error::Other(msg.into()));
+                        return Err(Error::Other(e.message.clone().into()));
                     }
                     let detail = r.response.take_status_response().take_region_detail();
                     debug!("region_detail got region detail"; "detail" => ?detail);
@@ -475,8 +473,7 @@ fn consistency_check<T: RaftStoreRouter>(
                     if r.response.get_header().has_error() {
                         let e = r.response.get_header().get_error();
                         warn!("consistency-check got error"; "err" => ?e);
-                        let msg = print_to_string(e);
-                        return Err(Error::Other(msg.into()));
+                        return Err(Error::Other(e.message.clone().into()));
                     }
                     Ok(())
                 })

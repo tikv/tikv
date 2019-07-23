@@ -139,7 +139,7 @@ impl<E: Engine> Endpoint<E> {
                 });
             }
             REQ_TYPE_ANALYZE => {
-                let mut analyze = AnalyzeReq::new();
+                let mut analyze = AnalyzeReq::default();
                 box_try!(analyze.merge_from(&mut is));
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 req_ctx = ReqContext::new(
@@ -665,13 +665,13 @@ mod tests {
         );
 
         let req = {
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             for _ in 0..10 {
-                let mut e = Expr::new();
+                let mut e = Expr::default();
                 e.mut_children().push(expr);
                 expr = e;
             }
-            let mut e = Executor::new();
+            let mut e = Executor::default();
             e.mut_selection().mut_conditions().push(expr);
             let mut dag = DAGRequest::default();
             dag.mut_executors().push(e);

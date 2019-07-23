@@ -1894,7 +1894,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         Err(Error::Closed) => {
             // TiKV is closing, return an RegionError to tell the client that this region is unavailable
             // temporarily, the client should retry the request in other TiKVs.
-            let mut err = RegionError::new();
+            let mut err = RegionError::default();
             err.set_message("TiKV is Closing".to_string());
             Some(err)
         }

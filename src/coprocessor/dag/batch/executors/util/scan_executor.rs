@@ -175,7 +175,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
 /// Extracts `FieldType` from `ColumnInfo`.
 // TODO: Embed FieldType in ColumnInfo directly in Cop DAG v2 to remove this function.
 pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
-    let mut field_type = FieldType::new();
+    let mut field_type = FieldType::default();
     field_type.set_tp(ci.get_tp());
     field_type.set_flag(ci.get_flag() as u32); // FIXME: This `as u32` is really awful.
     field_type.set_flen(ci.get_columnLen());

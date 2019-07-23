@@ -78,7 +78,7 @@ impl RequestHandler for DAGRequestHandler {
                 Ok(Some(row)) => {
                     self.deadline.check_if_exceeded()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
-                        let chunk = Chunk::new();
+                        let chunk = Chunk::default();
                         chunks.push(chunk);
                         record_cnt = 0;
                     }
@@ -113,7 +113,7 @@ impl RequestHandler for DAGRequestHandler {
                             .summary_per_executor
                             .iter()
                             .map(|summary| {
-                                let mut ret = ExecutorExecutionSummary::new();
+                                let mut ret = ExecutorExecutionSummary::default();
                                 ret.set_num_iterations(summary.num_iterations as u64);
                                 ret.set_num_produced_rows(summary.num_produced_rows as u64);
                                 ret.set_time_processed_ns(summary.time_processed_ns as u64);
@@ -145,7 +145,7 @@ impl RequestHandler for DAGRequestHandler {
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
-        let mut chunk = Chunk::new();
+        let mut chunk = Chunk::default();
         self.executor.start_scan();
         while record_cnt < self.batch_row_limit {
             match self.executor.next() {
