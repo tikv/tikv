@@ -17,7 +17,6 @@ use grpcio::{
 };
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
-use protobuf::RepeatedField;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
@@ -586,7 +585,7 @@ impl deadlock_grpc::Deadlock for Service {
                 f.map_err(Error::from)
                     .map(|v| {
                         let mut resp = WaitForEntriesResponse::default();
-                        resp.set_entries(RepeatedField::from_vec(v));
+                        resp.set_entries(v.into());
                         resp
                     })
                     .and_then(|resp| sink.success(resp).map_err(Error::Grpc))

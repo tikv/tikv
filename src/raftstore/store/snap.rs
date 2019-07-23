@@ -21,7 +21,6 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use protobuf::Message;
-use protobuf::RepeatedField;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::raftstore::errors::Error as RaftStoreError;
@@ -235,7 +234,7 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
         meta.push(cf_file_meta);
     }
     let mut snapshot_meta = SnapshotMeta::default();
-    snapshot_meta.set_cf_files(RepeatedField::from_vec(meta));
+    snapshot_meta.set_cf_files(meta.into());
     Ok(snapshot_meta)
 }
 

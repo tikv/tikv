@@ -43,7 +43,7 @@ fn test_wait_for_apply_index() {
         false,
     );
     request.mut_header().set_peer(p3.clone());
-    request.mut_header().set_follower_read(true);
+    request.mut_header().set_replica_read(true);
     let (cb, rx) = make_cb(&request);
     cluster
         .sim

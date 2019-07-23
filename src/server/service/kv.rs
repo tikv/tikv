@@ -28,7 +28,6 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
-use protobuf::RepeatedField;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
@@ -897,7 +896,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         header.set_sync_log(req.get_context().get_sync_log());
         header.set_read_quorum(true);
         cmd.set_header(header);
-        cmd.set_requests(RepeatedField::from_vec(vec![inner_req]));
+        cmd.set_requests(vec![inner_req].into());
 
         let (cb, future) = paired_future_callback();
 
@@ -1339,7 +1338,7 @@ fn future_scan<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1382,7 +1381,7 @@ fn future_prewrite<E: Engine>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1423,7 +1422,7 @@ fn future_acquire_pessimistic_lock<E: Engine>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1448,7 +1447,7 @@ fn future_pessimistic_rollback<E: Engine>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1518,7 +1517,7 @@ fn future_batch_get<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1563,7 +1562,7 @@ fn future_scan_lock<E: Engine>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
+                Ok(locks) => resp.set_locks(locks.into()),
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1689,7 +1688,7 @@ fn future_raw_batch_get<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1806,7 +1805,7 @@ fn future_raw_scan<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_kvs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1830,7 +1829,7 @@ fn future_raw_batch_scan<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_kvs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -2022,8 +2021,8 @@ fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
     }
     let vv = extract_2pc_values(mvcc.values);
     let vw = extract_2pc_writes(mvcc.writes);
-    mvcc_info.set_writes(RepeatedField::from_vec(vw));
-    mvcc_info.set_values(RepeatedField::from_vec(vv));
+    mvcc_info.set_writes(vw.into());
+    mvcc_info.set_values(vv.into());
     mvcc_info
 }
 

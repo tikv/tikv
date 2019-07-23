@@ -26,7 +26,6 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
-use protobuf::RepeatedField;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
 use raft::NO_LIMIT;
 use uuid::Uuid;
@@ -1143,7 +1142,7 @@ impl ApplyDelegate {
             let uuid = req.get_header().get_uuid().to_vec();
             resp.mut_header().set_uuid(uuid);
         }
-        resp.set_responses(RepeatedField::from_vec(responses));
+        resp.set_responses(responses.into());
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
@@ -1588,7 +1587,7 @@ impl ApplyDelegate {
         fail_point!(
             "apply_before_split_1_3",
             { self.id == 3 && self.region_id() == 1 },
-            |_| {}
+            |_| { unreachable!() }
         );
 
         PEER_ADMIN_CMD_COUNTER_VEC
@@ -1657,7 +1656,7 @@ impl ApplyDelegate {
             new_region.set_region_epoch(derived.get_region_epoch().to_owned());
             new_region.set_start_key(keys.pop_front().unwrap());
             new_region.set_end_key(keys.front().unwrap().to_vec());
-            new_region.set_peers(RepeatedField::from_slice(derived.get_peers()));
+            new_region.set_peers(derived.get_peers().into());
             for (peer, peer_id) in new_region
                 .mut_peers()
                 .iter_mut()
@@ -1683,8 +1682,7 @@ impl ApplyDelegate {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
         let mut resp = AdminResponse::default();
-        resp.mut_splits()
-            .set_regions(RepeatedField::from_slice(&regions));
+        resp.mut_splits().set_regions(regions.clone().into());
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["batch-split", "success"])
             .inc();
@@ -3431,7 +3429,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut RepeatedField<Response>) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -3784,7 +3782,7 @@ mod tests {
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
         let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
-        reg.region.set_peers(RepeatedField::from_vec(peers.clone()));
+        reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
         let host = Arc::new(CoprocessorHost::default());
