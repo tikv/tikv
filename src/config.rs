@@ -700,7 +700,13 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
-            titan: TitanDBConfig::default(),
+            titan: TitanDBConfig {
+                enabled: true,
+                dirname: "dbtitan".to_owned(),
+                disable_gc: false,
+                max_background_gc: 1,
+                purge_obsolete_files_period: ReadableDuration::secs(10),
+            },
         }
     }
 }
@@ -921,7 +927,7 @@ impl Default for RaftDbConfig {
             defaultcf: RaftDefaultCfConfig::default(),
             titan: TitanDBConfig {
                 enabled: true,
-                dirname: "titandb".to_owned(),
+                dirname: "rafttitan".to_owned(),
                 disable_gc: false,
                 max_background_gc: 2,
                 purge_obsolete_files_period: ReadableDuration::secs(10),
