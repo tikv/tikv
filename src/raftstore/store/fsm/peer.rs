@@ -2261,8 +2261,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 _ => read_only = false,
             }
         }
-        let allow_follower_read = read_only && msg.get_header().get_follower_read();
-        if !(self.fsm.peer.is_leader() || is_read_index_request || allow_follower_read) {
+        let allow_replica_read = read_only && msg.get_header().get_replica_read();
+        if !(self.fsm.peer.is_leader() || is_read_index_request || allow_replica_read) {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             self.fsm.group_state = GroupState::Chaos;
