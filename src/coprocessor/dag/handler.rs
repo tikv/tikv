@@ -5,56 +5,66 @@ use protobuf::{Message, RepeatedField};
 use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse, StreamResponse};
 
-use super::executor::{Executor, ExecutorMetrics};
-
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use super::executor::Executor;
+use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::*;
+use crate::storage::Statistics;
 
 /// Handles Coprocessor DAG requests.
 pub struct DAGRequestHandler {
     deadline: Deadline,
-    executor: Box<dyn Executor + Send>,
+    executor: Box<dyn Executor>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
-    /// To construct ExecutionSummary target.
-    number_of_executors: usize,
     collect_exec_summary: bool,
+    exec_stats: ExecuteStats,
 }
 
 impl DAGRequestHandler {
     pub fn new(
         deadline: Deadline,
-        executor: Box<dyn Executor + Send>,
+        executor: Box<dyn Executor>,
         output_offsets: Vec<u32>,
         batch_row_limit: usize,
-        number_of_executors: usize,
         collect_exec_summary: bool,
+        exec_stats: ExecuteStats,
     ) -> Self {
         Self {
             deadline,
             executor,
             output_offsets,
             batch_row_limit,
-            number_of_executors,
             collect_exec_summary,
+            exec_stats,
         }
     }
 
     fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
+        self.executor.collect_exec_stats(&mut self.exec_stats);
+
         let mut s_resp = StreamResponse::default();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
         if let Some(eval_warnings) = self.executor.take_eval_warnings() {
             s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
             s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
         }
-        self.executor
-            .collect_output_counts(s_resp.mut_output_counts());
+
+        s_resp.set_output_counts(
+            self.exec_stats
+                .scanned_rows_per_range
+                .iter()
+                .map(|v| *v as i64)
+                .collect(),
+        );
 
         let mut resp = Response::default();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
         if let Some(range) = range {
             resp.set_range(range);
         }
+
+        self.exec_stats.clear();
+
         Ok(resp)
     }
 }
@@ -79,6 +89,8 @@ impl RequestHandler for DAGRequestHandler {
                     chunk.mut_rows_data().extend_from_slice(&value);
                 }
                 Ok(None) => {
+                    self.executor.collect_exec_stats(&mut self.exec_stats);
+
                     let mut resp = Response::default();
                     let mut sel_resp = SelectResponse::default();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
@@ -86,15 +98,19 @@ impl RequestHandler for DAGRequestHandler {
                         sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
                         sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
                     }
-                    self.executor
-                        .collect_output_counts(sel_resp.mut_output_counts());
+
+                    sel_resp.set_output_counts(
+                        self.exec_stats
+                            .scanned_rows_per_range
+                            .iter()
+                            .map(|v| *v as i64)
+                            .collect(),
+                    );
 
                     if self.collect_exec_summary {
-                        let mut summary_per_executor =
-                            vec![ExecSummary::default(); self.number_of_executors];
-                        self.executor
-                            .collect_execution_summaries(&mut summary_per_executor);
-                        let summaries = summary_per_executor
+                        let summaries = self
+                            .exec_stats
+                            .summary_per_executor
                             .iter()
                             .map(|summary| {
                                 let mut ret = ExecutorExecutionSummary::new();
@@ -106,6 +122,9 @@ impl RequestHandler for DAGRequestHandler {
                             .collect();
                         sel_resp.set_execution_summaries(RepeatedField::from_vec(summaries));
                     }
+
+                    // In case of this function is called multiple times.
+                    self.exec_stats.clear();
 
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
@@ -160,7 +179,9 @@ impl RequestHandler for DAGRequestHandler {
         Ok((None, true))
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.executor.collect_metrics_into(metrics);
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        // TODO: A better way is to fill storage stats in `handle_request`, or
+        // return SelectResponse in `handle_request`.
+        self.executor.collect_storage_stats(dest);
     }
 }

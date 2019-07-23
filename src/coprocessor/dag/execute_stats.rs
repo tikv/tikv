@@ -33,7 +33,7 @@ pub trait ExecSummaryCollector: Send {
     fn on_finish_iterate(&mut self, dr: Self::DurationRecorder, rows: usize);
 
     /// Takes and appends current execution summary into `target`.
-    fn collect_into(&mut self, target: &mut [ExecSummary]);
+    fn collect(&mut self, target: &mut [ExecSummary]);
 }
 
 /// A normal `ExecSummaryCollector` that simply collects execution summaries.
@@ -68,7 +68,7 @@ impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
     }
 
     #[inline]
-    fn collect_into(&mut self, target: &mut [ExecSummary]) {
+    fn collect(&mut self, target: &mut [ExecSummary]) {
         let current_summary = std::mem::replace(&mut self.counts, ExecSummary::default());
         target[self.output_index] += current_summary;
     }
@@ -92,7 +92,7 @@ impl ExecSummaryCollector for ExecSummaryCollectorDisabled {
     fn on_finish_iterate(&mut self, _dr: Self::DurationRecorder, _rows: usize) {}
 
     #[inline]
-    fn collect_into(&mut self, _target: &mut [ExecSummary]) {}
+    fn collect(&mut self, _target: &mut [ExecSummary]) {}
 }
 
 /// Combines an `ExecSummaryCollector` with another type. This inner type `T`
@@ -101,4 +101,36 @@ impl ExecSummaryCollector for ExecSummaryCollectorDisabled {
 pub struct WithSummaryCollector<C: ExecSummaryCollector, T> {
     pub(super) summary_collector: C,
     pub(super) inner: T,
+}
+
+/// Execution statistics to be flowed between parent and child executors at once during
+/// `collect_exec_stats()` invocation.
+pub struct ExecuteStats {
+    /// The execution summary of each executor. If execution summary is not needed, it will
+    /// be zero sized.
+    pub summary_per_executor: Vec<ExecSummary>,
+
+    /// For each range given in the request, how many rows are scanned.
+    pub scanned_rows_per_range: Vec<usize>,
+}
+
+impl ExecuteStats {
+    /// Creates a new statistics instance.
+    ///
+    /// If execution summary does not need to be collected, it is safe to pass 0 to the `executors`
+    /// argument, which will avoid one allocation.
+    pub fn new(executors_len: usize) -> Self {
+        Self {
+            summary_per_executor: vec![ExecSummary::default(); executors_len],
+            scanned_rows_per_range: Vec::new(),
+        }
+    }
+
+    /// Clears the statistics instance.
+    pub fn clear(&mut self) {
+        for item in self.summary_per_executor.iter_mut() {
+            *item = ExecSummary::default();
+        }
+        self.scanned_rows_per_range.clear();
+    }
 }

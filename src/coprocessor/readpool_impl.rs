@@ -6,14 +6,12 @@ use std::sync::{Arc, Mutex};
 use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, Config, ReadPool};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::Engine;
+use crate::storage::{Engine, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;
 use prometheus::local::*;
-
-use crate::coprocessor::dag::executor::ExecutorMetrics;
 
 pub struct CopLocalMetrics {
     pub local_copr_req_histogram_vec: LocalHistogramVec,
@@ -116,8 +114,7 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
     });
 }
 
-pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: ExecutorMetrics) {
-    let stats = &metrics.cf_stats;
+pub fn tls_collect_cf_stats(region_id: u64, type_str: &str, stats: &Statistics) {
     // cf statistics group by type
     for (cf, details) in stats.details() {
         for (tag, count) in details {
@@ -131,15 +128,6 @@ pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: Exe
     }
     // flow statistics group by region
     tls_collect_read_flow(region_id, stats);
-
-    // scan count
-    let scan_counter = metrics.scan_counter;
-    // exec count
-    let executor_count = metrics.executor_count;
-    TLS_COP_METRICS.with(|m| {
-        scan_counter.consume(&mut m.borrow_mut().local_copr_get_or_scan_count);
-        executor_count.consume(&mut m.borrow_mut().local_copr_executor_count);
-    });
 }
 
 #[inline]
