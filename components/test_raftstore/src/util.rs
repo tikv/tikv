@@ -5,7 +5,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
 
-use protobuf;
 use rand::RngCore;
 use tempfile::{Builder, TempDir};
 
@@ -198,7 +197,7 @@ pub fn new_request(
     read_quorum: bool,
 ) -> RaftCmdRequest {
     let mut req = new_base_request(region_id, epoch, read_quorum);
-    req.set_requests(protobuf::RepeatedField::from_vec(requests));
+    req.set_requests(requests.into());
     req
 }
 

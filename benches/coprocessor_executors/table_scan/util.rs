@@ -5,8 +5,6 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use protobuf::RepeatedField;
-
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
@@ -43,7 +41,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         _: (),
     ) -> Self::E {
         let mut req = TableScan::new();
-        req.set_columns(RepeatedField::from_slice(columns));
+        req.set_columns(columns.into());
 
         let mut executor = TableScanExecutor::table_scan(
             black_box(req),

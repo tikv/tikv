@@ -19,7 +19,7 @@ use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
-use protobuf::{self, Message, RepeatedField};
+use protobuf::{self, Message};
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
@@ -581,9 +581,7 @@ impl Debugger {
                     "new_peers" => ?new_peers,
                 );
                 // We need to leave epoch untouched to avoid inconsistency.
-                region_state
-                    .mut_region()
-                    .set_peers(RepeatedField::from_vec(new_peers));
+                region_state.mut_region().set_peers(new_peers.into());
                 box_try!(wb.put_msg_cf(handle, key, &region_state));
                 Ok(())
             };
@@ -1220,7 +1218,7 @@ impl MvccInfoIterator {
         Ok(None)
     }
 
-    fn next_default(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<MvccValue>)>> {
+    fn next_default(&mut self) -> Result<Option<(Vec<u8>, Vec<MvccValue>)>> {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.default_iter) {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
@@ -1230,12 +1228,12 @@ impl MvccInfoIterator {
                 value_info.set_value(value);
                 values.push(value_info);
             }
-            return Ok(Some((prefix, RepeatedField::from_vec(values))));
+            return Ok(Some((prefix, values)));
         }
         Ok(None)
     }
 
-    fn next_write(&mut self) -> Result<Option<(Vec<u8>, RepeatedField<MvccWrite>)>> {
+    fn next_write(&mut self) -> Result<Option<(Vec<u8>, Vec<MvccWrite>)>> {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
@@ -1253,7 +1251,7 @@ impl MvccInfoIterator {
                 write_info.set_short_value(write.short_value.unwrap_or_default());
                 writes.push(write_info);
             }
-            return Ok(Some((prefix, RepeatedField::from_vec(writes))));
+            return Ok(Some((prefix, writes)));
         }
         Ok(None)
     }
@@ -1300,7 +1298,7 @@ impl MvccInfoIterator {
         }
         if writes_ok {
             if let Some((prefix, writes)) = self.next_write()? {
-                mvcc_info.set_writes(writes);
+                mvcc_info.set_writes(writes.into());
                 min_prefix = prefix;
             }
         }
@@ -1308,7 +1306,7 @@ impl MvccInfoIterator {
             match box_try!(Key::truncate_ts_for(self.default_iter.key())).cmp(&min_prefix) {
                 Ordering::Equal => {
                     if let Some((_, values)) = self.next_default()? {
-                        mvcc_info.set_values(values);
+                        mvcc_info.set_values(values.into());
                     }
                 }
                 Ordering::Greater => {}
@@ -1475,7 +1473,6 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec
 
 #[cfg(test)]
 mod tests {
-    use std::iter::FromIterator;
     use std::sync::Arc;
 
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
@@ -1936,13 +1933,17 @@ mod tests {
                 {
                     let region = region_state.mut_region();
                     region.set_id(region_id);
-                    let peers = peers.iter().enumerate().map(|(i, &sid)| {
-                        let mut peer = Peer::default();
-                        peer.id = i as u64;
-                        peer.store_id = sid;
-                        peer
-                    });
-                    region.set_peers(RepeatedField::from_iter(peers));
+                    let peers = peers
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &sid)| {
+                            let mut peer = Peer::default();
+                            peer.id = i as u64;
+                            peer.store_id = sid;
+                            peer
+                        })
+                        .collect::<Vec<_>>();
+                    region.set_peers(peers.into());
                 }
                 wb2.put_msg_cf(handle2, &region_state_key, &region_state)
                     .unwrap();

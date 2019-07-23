@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use protobuf::RepeatedField;
 use std::mem;
 use tipb::analyze;
 
@@ -80,7 +79,7 @@ impl Histogram {
             .into_iter()
             .map(|bucket| bucket.into_proto())
             .collect();
-        hist.set_buckets(RepeatedField::from_vec(buckets));
+        hist.set_buckets(buckets.into());
         hist
     }
 

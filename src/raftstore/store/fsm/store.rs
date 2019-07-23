@@ -2058,7 +2058,6 @@ mod tests {
 
     use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::storage::kv::CompactedEvent;
-    use protobuf::RepeatedField;
 
     use super::*;
 
@@ -2115,7 +2114,7 @@ mod tests {
             for (i, (start, end)) in meta.into_iter().enumerate() {
                 let mut region = metapb::Region::default();
                 let peer = metapb::Peer::default();
-                region.set_peers(RepeatedField::from_vec(vec![peer]));
+                region.set_peers(vec![peer].into());
                 region.set_start_key(start.to_vec());
                 region.set_end_key(end.to_vec());
 
@@ -2151,7 +2150,7 @@ mod tests {
             for (i, (start, end)) in meta.into_iter().enumerate() {
                 let mut region = metapb::Region::default();
                 let peer = metapb::Peer::default();
-                region.set_peers(RepeatedField::from_vec(vec![peer]));
+                region.set_peers(vec![peer].into());
                 region.set_start_key(start.to_vec());
                 region.set_end_key(end.to_vec());
 

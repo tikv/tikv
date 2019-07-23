@@ -3,7 +3,7 @@
 use std::mem;
 
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
@@ -62,7 +62,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
         let res_data = {
             let mut res = analyze::AnalyzeColumnsResp::new();
-            res.set_collectors(RepeatedField::from_vec(cols));
+            res.set_collectors(cols.into());
             res.set_pk_hist(pk_hist);
             box_try!(res.write_to_bytes())
         };
@@ -260,7 +260,7 @@ impl SampleCollector {
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
         s.set_fm_sketch(self.fm_sketch.into_proto());
-        s.set_samples(RepeatedField::from_vec(self.samples));
+        s.set_samples(self.samples.into());
         if let Some(c) = self.cm_sketch {
             s.set_cm_sketch(c.into_proto())
         }
