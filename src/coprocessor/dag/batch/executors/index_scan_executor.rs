@@ -258,17 +258,17 @@ mod tests {
         // The column info for each column in `data`. Used to build the executor.
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci

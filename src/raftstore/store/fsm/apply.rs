@@ -3672,7 +3672,7 @@ mod tests {
 
     #[test]
     fn test_check_sst_for_ingestion() {
-        let mut sst = SSTMeta::new();
+        let mut sst = SSTMeta::default();
         let mut region = Region::default();
 
         // Check uuid and cf name
