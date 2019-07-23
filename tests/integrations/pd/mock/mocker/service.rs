@@ -7,8 +7,6 @@ use tikv_util::collections::HashMap;
 use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;
 
-use protobuf::RepeatedField;
-
 use super::*;
 
 #[derive(Debug)]
@@ -52,13 +50,13 @@ fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
         let mut m = Member::default();
         m.set_name(format!("pd{}", i));
         m.set_member_id(100 + i as u64);
-        m.set_client_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
-        m.set_peer_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
+        m.set_client_urls(vec![ep.to_owned()].into());
+        m.set_peer_urls(vec![ep.to_owned()].into());
         members.push(m);
     }
 
     let mut members_resp = GetMembersResponse::default();
-    members_resp.set_members(RepeatedField::from_vec(members.clone()));
+    members_resp.set_members(members.clone().into());
     members_resp.set_leader(members.pop().unwrap());
     members_resp.set_header(Service::header());
 

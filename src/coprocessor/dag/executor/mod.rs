@@ -371,7 +371,6 @@ pub mod tests {
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
-    use protobuf::RepeatedField;
     use tikv_util::codec::number::NumberEncoder;
     use tipb::{
         executor::TableScan,
@@ -502,7 +501,7 @@ pub mod tests {
 
         let mut table_scan = TableScan::new();
         table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+        table_scan.set_columns(cis.clone().into());
 
         let key_ranges = key_ranges.unwrap_or_else(|| vec![get_range(tid, 0, i64::max_value())]);
 

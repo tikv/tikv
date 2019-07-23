@@ -10,8 +10,6 @@ pub use self::fixture::FixtureBuilder;
 
 use criterion::black_box;
 
-use protobuf::RepeatedField;
-
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::Executor as PbExecutor;
 
@@ -41,7 +39,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     use tipb::select::DAGRequest;
 
     let mut dag = DAGRequest::default();
-    dag.set_executors(RepeatedField::from_vec(executors.to_vec()));
+    dag.set_executors(executors.to_vec().into());
 
     DAGBuilder::build(
         black_box(dag),
