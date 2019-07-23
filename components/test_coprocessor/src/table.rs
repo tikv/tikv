@@ -41,7 +41,7 @@ impl Table {
 
     /// Create `schema::TableInfo` from current table.
     pub fn table_info(&self) -> schema::TableInfo {
-        let mut info = schema::TableInfo::new();
+        let mut info = schema::TableInfo::default();
         info.set_table_id(self.id);
         info.set_columns(self.columns_info().into());
         info
@@ -57,13 +57,13 @@ impl Table {
 
     /// Create `schema::IndexInfo` from current table.
     pub fn index_info(&self, index: i64, store_handle: bool) -> schema::IndexInfo {
-        let mut idx_info = schema::IndexInfo::new();
+        let mut idx_info = schema::IndexInfo::default();
         idx_info.set_table_id(self.id);
         idx_info.set_index_id(index);
         let mut has_pk = false;
         for col_id in &self.idxs[&index] {
             let col = self.column_by_id(*col_id).unwrap();
-            let mut c_info = ColumnInfo::new();
+            let mut c_info = ColumnInfo::default();
             c_info.set_tp(col.col_type);
             c_info.set_column_id(col.id);
             if col.id == self.handle_id {
@@ -73,7 +73,7 @@ impl Table {
             idx_info.mut_columns().push(c_info);
         }
         if !has_pk && store_handle {
-            let mut handle_info = ColumnInfo::new();
+            let mut handle_info = ColumnInfo::default();
             handle_info.set_tp(TYPE_LONG);
             handle_info.set_column_id(-1);
             handle_info.set_pk_handle(true);

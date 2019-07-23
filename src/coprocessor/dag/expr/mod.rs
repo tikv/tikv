@@ -359,10 +359,10 @@ mod tests {
     }
 
     pub fn scalar_func_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
-        expr.set_field_type(FieldType::new());
+        expr.set_field_type(FieldType::default());
         for child in children {
             expr.mut_children().push(child.clone());
         }
@@ -370,7 +370,7 @@ mod tests {
     }
 
     pub fn col_expr(col_id: i64) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(col_id).unwrap();
@@ -386,7 +386,7 @@ mod tests {
         charset: String,
         collate: Collation,
     ) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         match datum {
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
@@ -406,7 +406,7 @@ mod tests {
     }
 
     pub fn datum_expr(datum: Datum) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         match datum {
             Datum::I64(i) => {
                 expr.set_tp(ExprType::Int64);
@@ -450,7 +450,7 @@ mod tests {
             }
             Datum::Time(t) => {
                 expr.set_tp(ExprType::MysqlTime);
-                let mut ft = FieldType::new();
+                let mut ft = FieldType::default();
                 ft.as_mut_accessor()
                     .set_tp(t.get_time_type().into())
                     .set_decimal(isize::from(t.get_fsp()));

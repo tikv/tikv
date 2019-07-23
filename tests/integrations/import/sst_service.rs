@@ -167,7 +167,7 @@ fn test_cleanup_sst() {
 }
 
 fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
-    let mut m = SSTMeta::new();
+    let mut m = SSTMeta::default();
     m.set_uuid(Uuid::new_v4().as_bytes().to_vec());
     m.set_crc32(crc32);
     m.set_length(length);

@@ -112,7 +112,7 @@ mod tests {
         fn default() -> TableScanTestWrapper {
             let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
             let test_store = TestStore::new(&test_data.kv_data);
-            let mut table_scan = TableScan::new();
+            let mut table_scan = TableScan::default();
             // prepare cols
             let cols = test_data.get_prev_2_cols();
             let col_req = cols.clone().into();

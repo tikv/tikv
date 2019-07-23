@@ -61,7 +61,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             collectors.into_iter().map(|col| col.into_proto()).collect();
 
         let res_data = {
-            let mut res = analyze::AnalyzeColumnsResp::new();
+            let mut res = analyze::AnalyzeColumnsResp::default();
             res.set_collectors(cols.into());
             res.set_pk_hist(pk_hist);
             box_try!(res.write_to_bytes())
@@ -90,7 +90,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
         }
-        let mut res = analyze::AnalyzeIndexResp::new();
+        let mut res = analyze::AnalyzeIndexResp::default();
         res.set_hist(hist.into_proto());
         if let Some(c) = cms {
             res.set_cms(c.into_proto());
@@ -176,7 +176,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             col_len -= 1;
         }
 
-        let mut meta = TableScan::new();
+        let mut meta = TableScan::default();
         meta.set_columns(cols_info);
         let table_scanner = ScanExecutor::table_scan(meta, ranges, snap, false)?;
         Ok(Self {
@@ -256,7 +256,7 @@ impl SampleCollector {
     }
 
     fn into_proto(self) -> analyze::SampleCollector {
-        let mut s = analyze::SampleCollector::new();
+        let mut s = analyze::SampleCollector::default();
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
         s.set_fm_sketch(self.fm_sketch.into_proto());
