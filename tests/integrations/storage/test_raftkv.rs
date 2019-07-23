@@ -238,7 +238,7 @@ fn test_read_on_replica() {
     follower_ctx.set_region_id(region.get_id());
     follower_ctx.set_region_epoch(region.get_region_epoch().clone());
     follower_ctx.set_peer(follower_peer.as_ref().unwrap().clone());
-    follower_ctx.set_follower_read(true);
+    follower_ctx.set_replica_read(true);
     let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
     assert_has(&follower_ctx, &follower_storage, k2, v2);
 
