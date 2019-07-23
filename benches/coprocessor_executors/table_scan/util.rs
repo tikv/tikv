@@ -40,7 +40,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         store: &Store<RocksEngine>,
         _: (),
     ) -> Self::E {
-        let mut req = TableScan::new();
+        let mut req = TableScan::default();
         req.set_columns(columns.into());
 
         let mut executor = TableScanExecutor::table_scan(

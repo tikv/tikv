@@ -100,16 +100,16 @@ mod tests {
     use super::*;
 
     fn new_const_expr() -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(ScalarFuncSig::NullEQInt);
         expr.mut_children().push({
-            let mut lhs = Expr::new();
+            let mut lhs = Expr::default();
             lhs.set_tp(ExprType::Null);
             lhs
         });
         expr.mut_children().push({
-            let mut rhs = Expr::new();
+            let mut rhs = Expr::default();
             rhs.set_tp(ExprType::Null);
             rhs
         });
@@ -117,17 +117,17 @@ mod tests {
     }
 
     fn new_col_gt_u64_expr(offset: i64, val: u64) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(ScalarFuncSig::GTInt);
         expr.mut_children().push({
-            let mut lhs = Expr::new();
+            let mut lhs = Expr::default();
             lhs.set_tp(ExprType::ColumnRef);
             lhs.mut_val().encode_i64(offset).unwrap();
             lhs
         });
         expr.mut_children().push({
-            let mut rhs = Expr::new();
+            let mut rhs = Expr::default();
             rhs.set_tp(ExprType::Uint64);
             rhs.mut_val().encode_u64(val).unwrap();
             rhs
@@ -183,7 +183,7 @@ mod tests {
         let inner_table_scan = gen_table_scan_executor(1, cis, &raw_data, None);
 
         // selection executor
-        let mut selection = Selection::new();
+        let mut selection = Selection::default();
         let expr = new_const_expr();
         selection.mut_conditions().push(expr);
 
@@ -222,7 +222,7 @@ mod tests {
         let inner_table_scan = gen_table_scan_executor(1, cis, &raw_data, None);
 
         // selection executor
-        let mut selection = Selection::new();
+        let mut selection = Selection::default();
         let expr = new_col_gt_u64_expr(2, 5);
         selection.mut_conditions().push(expr);
 
