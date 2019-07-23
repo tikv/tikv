@@ -513,7 +513,7 @@ mod tests {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
                 RpnExpressionBuilder::new().push_column_ref(0).build(),
-                vec![Expr::new()],
+                vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor>
         };
@@ -522,7 +522,7 @@ mod tests {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
                 vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
-                vec![Expr::new()],
+                vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor>
         };

@@ -385,20 +385,20 @@ mod tests {
             // The column info for each column in `data`.
             let columns_info = vec![
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                     ci.set_pk_handle(true);
                     ci.set_column_id(1);
                     ci
                 },
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                     ci.set_column_id(2);
                     ci
                 },
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                     ci.set_column_id(4);
                     ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)]).unwrap());
@@ -683,20 +683,20 @@ mod tests {
 
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci.set_column_id(1);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(2);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(3);
                 ci
@@ -806,14 +806,14 @@ mod tests {
 
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci.set_column_id(1);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(2);
                 ci
