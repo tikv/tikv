@@ -50,7 +50,6 @@ cat <<EOT >> ${output}
 RUN mkdir -p ./src/bin && \\
     echo 'fn main() {}' > ./src/bin/tikv-ctl.rs && \\
     echo 'fn main() {}' > ./src/bin/tikv-server.rs && \\
-    echo 'fn main() {}' > ./src/bin/tikv-importer.rs && \\
     echo '' > ./src/lib.rs && \\
 EOT
 
