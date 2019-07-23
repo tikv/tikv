@@ -156,7 +156,6 @@ pub mod tests {
     use std::sync::Arc;
 
     use cop_datatype::FieldTypeTp;
-    use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType};
 
     use crate::coprocessor::codec::table::RowColsDict;
@@ -169,8 +168,8 @@ pub mod tests {
     use super::*;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
-        let mut item = ByItem::new();
-        let mut expr = Expr::new();
+        let mut item = ByItem::default();
+        let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
         expr.mut_val().encode_i64(offset).unwrap();
         item.set_expr(expr);
@@ -392,7 +391,7 @@ pub mod tests {
         ob_vec.push(new_order_by(1, false));
         ob_vec.push(new_order_by(2, true));
         let mut topn = TopN::default();
-        topn.set_order_by(RepeatedField::from_vec(ob_vec));
+        topn.set_order_by(ob_vec.into());
         let limit = 4;
         topn.set_limit(limit);
         // init topn executor
@@ -438,7 +437,7 @@ pub mod tests {
         ob_vec.push(new_order_by(1, false));
         ob_vec.push(new_order_by(2, true));
         let mut topn = TopN::default();
-        topn.set_order_by(RepeatedField::from_vec(ob_vec));
+        topn.set_order_by(ob_vec.into());
         // test with limit=0
         topn.set_limit(0);
         let mut topn_ect =

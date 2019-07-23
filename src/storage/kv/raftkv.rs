@@ -16,7 +16,6 @@ use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
-use protobuf::RepeatedField;
 
 use super::metrics::*;
 use super::{
@@ -171,7 +170,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             header.set_term(ctx.get_term());
         }
         header.set_sync_log(ctx.get_sync_log());
-        header.set_follower_read(ctx.get_follower_read());
+        header.set_replica_read(ctx.get_replica_read());
         header
     }
 
@@ -185,7 +184,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
-        cmd.set_requests(RepeatedField::from_vec(reqs));
+        cmd.set_requests(reqs.into());
 
         self.router
             .send_command(
@@ -211,7 +210,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
-        cmd.set_requests(RepeatedField::from_vec(reqs));
+        cmd.set_requests(reqs.into());
 
         self.router
             .send_command(

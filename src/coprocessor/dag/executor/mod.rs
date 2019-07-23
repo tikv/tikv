@@ -371,7 +371,6 @@ pub mod tests {
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
-    use protobuf::RepeatedField;
     use tikv_util::codec::number::NumberEncoder;
     use tipb::{
         executor::TableScan,
@@ -380,7 +379,7 @@ pub mod tests {
     };
 
     pub fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(tp);
         if tp == ExprType::ColumnRef {
             expr.mut_val().encode_i64(id.unwrap()).unwrap();
@@ -391,7 +390,7 @@ pub mod tests {
     }
 
     pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
-        let mut col_info = ColumnInfo::new();
+        let mut col_info = ColumnInfo::default();
         col_info.as_mut_accessor().set_tp(tp);
         col_info.set_column_id(cid);
         col_info
@@ -500,9 +499,9 @@ pub mod tests {
         let table_data = gen_table_data(tid, &cis, raw_data);
         let mut test_store = TestStore::new(&table_data);
 
-        let mut table_scan = TableScan::new();
+        let mut table_scan = TableScan::default();
         table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+        table_scan.set_columns(cis.clone().into());
 
         let key_ranges = key_ranges.unwrap_or_else(|| vec![get_range(tid, 0, i64::max_value())]);
 

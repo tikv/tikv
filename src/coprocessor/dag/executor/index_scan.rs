@@ -119,7 +119,6 @@ pub mod tests {
 
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
-    use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::datum::{self, Datum};
@@ -227,19 +226,17 @@ pub mod tests {
             let mut wrapper = IndexTestWrapper::new(unique, test_data);
             let mut cols = wrapper.data.cols.clone();
             cols.push(wrapper.data.get_col_pk());
-            wrapper
-                .scan
-                .set_columns(RepeatedField::from_vec(cols.clone()));
+            wrapper.scan.set_columns(cols.clone().into());
             wrapper.cols = cols;
             wrapper
         }
 
         pub fn new(unique: bool, test_data: Data) -> IndexTestWrapper {
             let test_store = TestStore::new(&test_data.kv_data);
-            let mut scan = IndexScan::new();
+            let mut scan = IndexScan::default();
             // prepare cols
             let cols = test_data.cols.clone();
-            let col_req = RepeatedField::from_vec(cols.clone());
+            let col_req = cols.clone().into();
             scan.set_columns(col_req);
             // prepare range
             let val_start = Datum::Bytes(b"a".to_vec());

@@ -81,7 +81,6 @@ mod tests {
     use std::i64;
 
     use kvproto::{coprocessor::KeyRange, kvrpcpb::IsolationLevel};
-    use protobuf::RepeatedField;
     use tipb::{executor::TableScan, schema::ColumnInfo};
 
     use crate::storage::SnapshotStore;
@@ -113,10 +112,10 @@ mod tests {
         fn default() -> TableScanTestWrapper {
             let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
             let test_store = TestStore::new(&test_data.kv_data);
-            let mut table_scan = TableScan::new();
+            let mut table_scan = TableScan::default();
             // prepare cols
             let cols = test_data.get_prev_2_cols();
-            let col_req = RepeatedField::from_vec(cols.clone());
+            let col_req = cols.clone().into();
             table_scan.set_columns(col_req);
             // prepare range
             let range = get_range(TABLE_ID, i64::MIN, i64::MAX);

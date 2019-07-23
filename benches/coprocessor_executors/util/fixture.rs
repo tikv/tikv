@@ -276,7 +276,7 @@ impl FixtureBuilder {
             .into_iter()
             .enumerate()
             .map(|(index, ft)| {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.set_column_id(index as i64);
                 ci.as_mut_accessor()
                     .set_tp(ft.tp())

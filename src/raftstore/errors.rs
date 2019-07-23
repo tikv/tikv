@@ -6,7 +6,7 @@ use std::net;
 use std::result;
 
 use crossbeam::TrySendError;
-use protobuf::{ProtobufError, RepeatedField};
+use protobuf::ProtobufError;
 
 use crate::pd;
 use kvproto::{errorpb, metapb};
@@ -184,7 +184,7 @@ impl From<Error> for errorpb::Error {
             }
             Error::EpochNotMatch(_, new_regions) => {
                 let mut e = errorpb::EpochNotMatch::default();
-                e.set_current_regions(RepeatedField::from_vec(new_regions));
+                e.set_current_regions(new_regions.into());
                 errorpb.set_epoch_not_match(e);
             }
             Error::StaleCommand => {

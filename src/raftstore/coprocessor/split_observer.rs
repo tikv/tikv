@@ -7,7 +7,6 @@ use tikv_util::codec::bytes::{self, encode_bytes};
 use crate::raftstore::store::util;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-use protobuf::RepeatedField;
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't separate
@@ -153,8 +152,7 @@ impl AdminObserver for SplitObserver {
                     );
                     return Err(box_err!(e));
                 }
-                req.mut_splits()
-                    .set_requests(RepeatedField::from_vec(requests));
+                req.mut_splits().set_requests(requests.into());
             }
             _ => return Ok(()),
         }
