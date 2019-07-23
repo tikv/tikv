@@ -42,7 +42,7 @@ impl Json {
                 Ok(v.into())
             }
             _ => Err(invalid_type!(
-                "{:?} from {} to f64",
+                "{} from {} to f64",
                 ERR_CONVERT_FAILED,
                 self.to_string()
             )),
