@@ -40,7 +40,7 @@ impl Bucket {
     }
 
     fn into_proto(self) -> analyze::Bucket {
-        let mut bucket = analyze::Bucket::new();
+        let mut bucket = analyze::Bucket::default();
         bucket.set_repeats(self.repeats as i64);
         bucket.set_count(self.count as i64);
         bucket.set_lower_bound(self.lower_bound);
@@ -72,7 +72,7 @@ impl Histogram {
     }
 
     pub fn into_proto(self) -> analyze::Histogram {
-        let mut hist = analyze::Histogram::new();
+        let mut hist = analyze::Histogram::default();
         hist.set_ndv(self.ndv as i64);
         let buckets: Vec<analyze::Bucket> = self
             .buckets

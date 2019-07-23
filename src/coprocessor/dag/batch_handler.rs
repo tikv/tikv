@@ -114,7 +114,7 @@ impl RequestHandler for BatchDAGHandler {
                     result.physical_columns.columns_len(),
                     self.out_most_executor.schema().len()
                 );
-                let mut chunk = Chunk::new();
+                let mut chunk = Chunk::default();
                 {
                     let data = chunk.mut_rows_data();
                     data.reserve(
@@ -157,7 +157,7 @@ impl RequestHandler for BatchDAGHandler {
                         .summary_per_executor
                         .iter()
                         .map(|summary| {
-                            let mut ret = ExecutorExecutionSummary::new();
+                            let mut ret = ExecutorExecutionSummary::default();
                             ret.set_num_iterations(summary.num_iterations as u64);
                             ret.set_num_produced_rows(summary.num_produced_rows as u64);
                             ret.set_time_processed_ns(summary.time_processed_ns as u64);

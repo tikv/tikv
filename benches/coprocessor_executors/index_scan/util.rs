@@ -39,7 +39,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         store: &Store<RocksEngine>,
         unique: bool,
     ) -> Self::E {
-        let mut req = IndexScan::new();
+        let mut req = IndexScan::default();
         req.set_columns(columns.into());
 
         let mut executor = IndexScanExecutor::index_scan(

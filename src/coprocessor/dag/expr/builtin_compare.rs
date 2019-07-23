@@ -570,7 +570,7 @@ mod tests {
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(sig);
 
@@ -701,7 +701,7 @@ mod tests {
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(sig);
 
@@ -889,7 +889,7 @@ mod tests {
                 // Evaluate and test greatest
                 {
                     let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-                    let mut expr = Expr::new();
+                    let mut expr = Expr::default();
                     expr.set_tp(ExprType::ScalarFunc);
                     expr.set_sig(greatest_sig);
                     expr.set_children(children.into());
@@ -900,7 +900,7 @@ mod tests {
                 // Evaluate and test least
                 {
                     let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-                    let mut expr = Expr::new();
+                    let mut expr = Expr::default();
                     expr.set_tp(ExprType::ScalarFunc);
                     expr.set_sig(least_sig);
                     expr.set_children(children.into());
@@ -950,7 +950,7 @@ mod tests {
                 Datum::Bytes(t4.clone()),
             ];
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(ScalarFuncSig::GreatestTime);
             expr.set_children(children.into());
