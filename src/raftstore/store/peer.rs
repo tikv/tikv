@@ -1752,7 +1752,7 @@ impl Peer {
                 }
             }
             ConfChangeType::RemoveNode => {
-                box_try!(progress.remove(peer.get_id()));
+                progress.remove(peer.get_id())?;
             }
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
