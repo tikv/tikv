@@ -671,6 +671,8 @@ const MAX_ZERO_COUNT: i64 = 20;
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::float_cmp)]
+
     use std::fmt::Debug;
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
