@@ -198,13 +198,34 @@ mod tests {
         let dur = Duration::parse(b"01:00:00", 0).unwrap();
 
         let tests = vec![
-            (datum_expr(Datum::Null), EvalResults(None, None, None, None, None, None, None)),
-            (datum_expr(Datum::I64(-30)), EvalResults(Some(-30), None, None, None, None, None, None)),
-            (datum_expr(Datum::U64(u64::MAX)), EvalResults(Some(-1), None, None, None, None, None, None)),
-            (datum_expr(Datum::F64(124.32)), EvalResults(Some(124), Some(124.32), None, None, None, None, None)),
-            (datum_expr(Datum::Dec(dec.clone())), EvalResults(Some(1), None, Some(dec.clone()), None, None, None, None)),
-            (datum_expr(Datum::Bytes(s.clone())), EvalResults(None, None, None, Some(s.clone()), None, None, None)),
-            (datum_expr(Datum::Dur(dur)), EvalResults(Some(10000), None, None, None, None, Some(dur), None)),
+            (
+                datum_expr(Datum::Null),
+                EvalResults(None, None, None, None, None, None, None),
+            ),
+            (
+                datum_expr(Datum::I64(-30)),
+                EvalResults(Some(-30), None, None, None, None, None, None),
+            ),
+            (
+                datum_expr(Datum::U64(u64::MAX)),
+                EvalResults(Some(-1), None, None, None, None, None, None),
+            ),
+            (
+                datum_expr(Datum::F64(124.32)),
+                EvalResults(Some(124), Some(124.32), None, None, None, None, None),
+            ),
+            (
+                datum_expr(Datum::Dec(dec.clone())),
+                EvalResults(Some(1), None, Some(dec.clone()), None, None, None, None),
+            ),
+            (
+                datum_expr(Datum::Bytes(s.clone())),
+                EvalResults(None, None, None, Some(s.clone()), None, None, None),
+            ),
+            (
+                datum_expr(Datum::Dur(dur)),
+                EvalResults(Some(10000), None, None, None, None, Some(dur), None),
+            ),
         ];
 
         let mut ctx = EvalContext::default();

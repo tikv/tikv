@@ -1002,7 +1002,7 @@ mod tests {
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
             )
-                .unwrap();
+            .unwrap();
             op.mut_field_type()
                 .as_mut_accessor()
                 .set_flag(FieldTypeFlag::UNSIGNED);
@@ -1026,7 +1026,7 @@ mod tests {
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
             )
-                .unwrap();
+            .unwrap();
             op.mut_field_type()
                 .as_mut_accessor()
                 .set_flag(FieldTypeFlag::UNSIGNED);
