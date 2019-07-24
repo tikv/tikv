@@ -580,7 +580,7 @@ impl deadlock_grpc::Deadlock for Service {
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
             let status = RpcStatus::new(
                 RpcStatusCode::ResourceExhausted,
-                Some("deadlock waiter_mgr_scheduler has stopped".to_owned()),
+                Some("waiter manager has stopped".to_owned()),
             );
             ctx.spawn(sink.fail(status).map_err(|_| ()))
         } else {
@@ -610,7 +610,7 @@ impl deadlock_grpc::Deadlock for Service {
         {
             let status = RpcStatus::new(
                 RpcStatusCode::ResourceExhausted,
-                Some("deadlock detector_scheduler has stopped".to_owned()),
+                Some("deadlock detector has stopped".to_owned()),
             );
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
