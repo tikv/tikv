@@ -57,7 +57,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs" }
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
-raft = { git = "https://github.com/pingcap/raft-rs.git" }
+raft = "0.6.0-alpha"
 
 [[bench]]
 name = "channel"
