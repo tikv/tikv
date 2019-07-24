@@ -7,9 +7,8 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
-use crate::storage::{Snapshot, SnapshotStore};
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
-use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::*;
 
@@ -19,7 +18,7 @@ pub struct ChecksumContext<S: Snapshot> {
     store: SnapshotStore<S>,
     ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner<SnapshotStore<S>>>,
-    metrics: ExecutorMetrics,
+    metrics: Statistics,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -40,17 +39,16 @@ impl<S: Snapshot> ChecksumContext<S> {
             store,
             ranges: ranges.into_iter(),
             scanner: None,
-            metrics: ExecutorMetrics::default(),
+            metrics: Default::default(),
         })
     }
 
     fn next_row(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         loop {
             if let Some(scanner) = self.scanner.as_mut() {
-                self.metrics.scan_counter.inc_range();
                 match scanner.next_row()? {
                     Some(row) => return Ok(Some(row)),
-                    None => scanner.collect_statistics_into(&mut self.metrics.cf_stats),
+                    None => scanner.collect_statistics_into(&mut self.metrics),
                 }
             }
 
@@ -101,8 +99,9 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         Ok(resp)
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        metrics.merge(&mut self.metrics);
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        dest.add(&self.metrics);
+        self.metrics = Default::default();
     }
 }
 

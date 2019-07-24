@@ -4,27 +4,23 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
-use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
 
-use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use super::{Executor, ExprColumnRefVisitor, Row};
+use crate::coprocessor::dag::execute_stats::ExecuteStats;
+use crate::storage::Statistics;
 
 /// Retrieves rows from the source executor and filter rows by expressions.
-pub struct SelectionExecutor {
+pub struct SelectionExecutor<Src: Executor> {
     conditions: Vec<Expression>,
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: EvalContext,
-    src: Box<dyn Executor + Send>,
-    first_collect: bool,
+    src: Src,
 }
 
-impl SelectionExecutor {
-    pub fn new(
-        mut meta: Selection,
-        eval_cfg: Arc<EvalConfig>,
-        src: Box<dyn Executor + Send>,
-    ) -> Result<Self> {
+impl<Src: Executor> SelectionExecutor<Src> {
+    pub fn new(mut meta: Selection, eval_cfg: Arc<EvalConfig>, src: Src) -> Result<Self> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
@@ -34,12 +30,11 @@ impl SelectionExecutor {
             related_cols_offset: visitor.column_offsets(),
             ctx,
             src,
-            first_collect: true,
         })
     }
 }
 
-impl Executor for SelectionExecutor {
+impl<Src: Executor> Executor for SelectionExecutor<Src> {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let row = row.take_origin()?;
@@ -55,22 +50,17 @@ impl Executor for SelectionExecutor {
         Ok(None)
     }
 
-    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        self.src.collect_output_counts(counts);
+    #[inline]
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.src.collect_metrics_into(metrics);
-        if self.first_collect {
-            metrics.executor_count.selection += 1;
-            self.first_collect = false;
-        }
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.src.collect_storage_stats(dest);
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
-    }
-
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
@@ -244,9 +234,9 @@ mod tests {
         assert_eq!(selection_rows.len(), expect_row_handles.len());
         let result_row = selection_rows.iter().map(|r| r.handle).collect::<Vec<_>>();
         assert_eq!(result_row, expect_row_handles);
-        let expected_counts = vec![raw_data.len() as i64];
-        let mut counts = Vec::with_capacity(1);
-        selection_executor.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let expected_counts = vec![raw_data.len()];
+        let mut exec_stats = ExecuteStats::new(0);
+        selection_executor.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
     }
 }

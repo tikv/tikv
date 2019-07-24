@@ -4,14 +4,14 @@
 
 //! Batch executor common structures.
 
-pub use super::super::exec_summary::{ExecSummaryCollector, WithSummaryCollector};
-pub use super::statistics::BatchExecuteStatistics;
+pub use super::super::execute_stats::{ExecSummaryCollector, ExecuteStats, WithSummaryCollector};
 
 use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::Error;
+use crate::storage::Statistics;
 
 /// The interface for pull-based executors. It is similar to the Volcano Iterator model, but
 /// pulls data in batch and stores data by column.
@@ -30,7 +30,7 @@ pub trait BatchExecutor: Send {
     /// See `is_drained` in `BatchExecuteResult`.
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult;
 
-    /// Collects statistics (including but not limited to metrics and execution summaries)
+    /// Collects execution statistics (including but not limited to metrics and execution summaries)
     /// accumulated during execution and prepares for next collection.
     ///
     /// The executor implementation must invoke this function for each children executor. However
@@ -39,7 +39,14 @@ pub trait BatchExecutor: Send {
     /// This function may be invoked several times during execution. For each invocation, it should
     /// not contain accumulated meta data in last invocation. Normally the invocation frequency of
     /// this function is less than `next_batch()`.
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats);
+
+    /// Collects underlying storage statistics accumulated during execution and prepares for
+    /// next collection.
+    ///
+    /// Similar to `collect_exec_stats()`, the implementation must invoke this function for each
+    /// children executor and this function may be invoked several times during execution.
+    fn collect_storage_stats(&mut self, dest: &mut Statistics);
 
     fn with_summary_collector<C: ExecSummaryCollector + Send>(
         self,
@@ -64,8 +71,12 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).next_batch(scan_rows)
     }
 
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        (**self).collect_statistics(destination)
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        (**self).collect_exec_stats(dest);
+    }
+
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        (**self).collect_storage_stats(dest);
     }
 }
 
@@ -84,10 +95,14 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
         result
     }
 
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.inner.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
         self.summary_collector
-            .collect_into(&mut destination.summary_per_executor);
+            .collect(&mut dest.summary_per_executor);
+        self.inner.collect_exec_stats(dest);
+    }
+
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.inner.collect_storage_stats(dest);
     }
 }
 

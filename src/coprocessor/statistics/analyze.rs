@@ -9,11 +9,11 @@ use rand::{thread_rng, Rng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
 
-use crate::storage::{Snapshot, SnapshotStore};
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::dag::executor::{
-    Executor, ExecutorMetrics, IndexScanExecutor, ScanExecutor, TableScanExecutor,
+    Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor,
 };
 use crate::coprocessor::*;
 
@@ -26,7 +26,7 @@ pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
     snap: Option<SnapshotStore<S>>,
     ranges: Vec<KeyRange>,
-    metrics: ExecutorMetrics,
+    metrics: Statistics,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
@@ -46,7 +46,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req,
             snap: Some(snap),
             ranges,
-            metrics: ExecutorMetrics::default(),
+            metrics: Default::default(),
         })
     }
 
@@ -111,7 +111,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                     self.snap.take().unwrap(),
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_metrics_into(&mut self.metrics);
+                scanner.collect_storage_stats(&mut self.metrics);
                 res
             }
 
@@ -121,7 +121,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
                 let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_metrics_into(&mut self.metrics);
+                builder.data.collect_storage_stats(&mut self.metrics);
                 res
             }
         };
@@ -140,8 +140,9 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         }
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        metrics.merge(&mut self.metrics);
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        dest.add(&self.metrics);
+        self.metrics = Default::default();
     }
 }
 
@@ -178,7 +179,7 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::default();
         meta.set_columns(cols_info);
-        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap, false)?;
+        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap)?;
         Ok(Self {
             data: table_scanner,
             col_len,
