@@ -2,7 +2,6 @@
 
 use std::mem;
 
-use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::metrics::*;
 use crate::pd::PdTask;
 use crate::storage::kv::{FlowStatistics, Statistics};
@@ -44,50 +43,6 @@ impl CopFlowStatistics {
                 "err" => %e
             );
         };
-    }
-}
-
-/// `ExecLocalMetrics` collects metrics for request with executors.
-pub struct ExecLocalMetrics {
-    flow_stats: CopFlowStatistics,
-    scan_details: LocalIntCounterVec,
-    scan_counter: LocalIntCounterVec,
-    exec_counter: LocalIntCounterVec,
-}
-
-impl ExecLocalMetrics {
-    pub fn new(sender: FutureScheduler<PdTask>) -> ExecLocalMetrics {
-        ExecLocalMetrics {
-            flow_stats: CopFlowStatistics::new(sender),
-            scan_details: COPR_SCAN_DETAILS.local(),
-            scan_counter: COPR_GET_OR_SCAN_COUNT.local(),
-            exec_counter: COPR_EXECUTOR_COUNT.local(),
-        }
-    }
-
-    pub fn collect(&mut self, type_str: &str, region_id: u64, metrics: ExecutorMetrics) {
-        let stats = &metrics.cf_stats;
-        // cf statistics group by type
-        for (cf, details) in stats.details() {
-            for (tag, count) in details {
-                self.scan_details
-                    .with_label_values(&[type_str, cf, tag])
-                    .inc_by(count as i64);
-            }
-        }
-        // flow statistics group by region
-        self.flow_stats.add(region_id, stats);
-        // scan count
-        metrics.scan_counter.consume(&mut self.scan_counter);
-        // exec count
-        metrics.executor_count.consume(&mut self.exec_counter);
-    }
-
-    pub fn flush(&mut self) {
-        self.flow_stats.flush();
-        self.scan_details.flush();
-        self.scan_counter.flush();
-        self.exec_counter.flush();
     }
 }
 

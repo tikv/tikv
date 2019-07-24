@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
+jemalloc = ["engine_rocksdb/jemalloc"]
 portable = ["engine_rocksdb/portable"]
 sse = ["engine_rocksdb/sse"]
 

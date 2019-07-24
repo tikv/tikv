@@ -9,11 +9,12 @@ use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
 use super::topn_heap::TopNHeap;
-use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use super::{Executor, ExprColumnRefVisitor, Row};
 use crate::coprocessor::codec::datum::Datum;
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
@@ -43,23 +44,18 @@ impl OrderBy {
 
 /// Retrieves rows from the source executor, orders rows according to expressions and produces part
 /// of the rows.
-pub struct TopNExecutor {
+pub struct TopNExecutor<Src: Executor> {
     order_by: OrderBy,
     related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<Row>>,
     eval_ctx: Option<EvalContext>,
     eval_warnings: Option<EvalWarnings>,
-    src: Box<dyn Executor + Send>,
+    src: Src,
     limit: usize,
-    first_collect: bool,
 }
 
-impl TopNExecutor {
-    pub fn new(
-        mut meta: TopN,
-        eval_cfg: Arc<EvalConfig>,
-        src: Box<dyn Executor + Send>,
-    ) -> Result<Self> {
+impl<Src: Executor> TopNExecutor<Src> {
+    pub fn new(mut meta: TopN, eval_cfg: Arc<EvalConfig>, src: Src) -> Result<Self> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -76,7 +72,6 @@ impl TopNExecutor {
             eval_warnings: None,
             src,
             limit: meta.get_limit() as usize,
-            first_collect: true,
         })
     }
 
@@ -109,7 +104,7 @@ impl TopNExecutor {
     }
 }
 
-impl Executor for TopNExecutor {
+impl<Src: Executor> Executor for TopNExecutor<Src> {
     fn next(&mut self) -> Result<Option<Row>> {
         if self.iter.is_none() {
             self.fetch_all()?;
@@ -118,22 +113,17 @@ impl Executor for TopNExecutor {
         Ok(iter.next())
     }
 
-    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        self.src.collect_output_counts(counts);
+    #[inline]
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.src.collect_metrics_into(metrics);
-        if self.first_collect {
-            metrics.executor_count.topn += 1;
-            self.first_collect = false;
-        }
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.src.collect_storage_stats(dest);
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
-    }
-
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
@@ -407,9 +397,9 @@ pub mod tests {
             assert_eq!(row.handle, handle);
         }
         let expected_counts = vec![3, 3];
-        let mut counts = Vec::with_capacity(2);
-        topn_ect.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let mut exec_stats = ExecuteStats::new(0);
+        topn_ect.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
     }
 
     #[test]
