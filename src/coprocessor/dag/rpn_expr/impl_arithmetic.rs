@@ -330,9 +330,9 @@ impl ArithmeticOp for RealMultiply {
 }
 
 #[derive(Debug)]
-pub struct IntMultiply;
+pub struct IntIntMultiply;
 
-impl ArithmeticOp for IntMultiply {
+impl ArithmeticOp for IntIntMultiply {
     type T = Int;
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_mul(*rhs)
@@ -358,9 +358,34 @@ impl ArithmeticOp for IntUintMultiply {
 }
 
 #[derive(Debug)]
-pub struct IntDivideInt;
+pub struct UintIntMultiply;
 
-impl ArithmeticOp for IntDivideInt {
+impl ArithmeticOp for UintIntMultiply {
+    type T = Int;
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        IntUintMultiply::calc(rhs, lhs)
+    }
+}
+
+#[derive(Debug)]
+pub struct UintUintMultiply;
+
+impl ArithmeticOp for UintUintMultiply {
+    type T = Int;
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        (*lhs as u64)
+            .checked_mul(*rhs as u64)
+            .ok_or_else(|| {
+                Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)).into()
+            })
+            .map(|v| Some(v as i64))
+    }
+}
+
+#[derive(Debug)]
+pub struct IntIntDivide;
+
+impl ArithmeticOp for IntIntDivide {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
@@ -372,9 +397,9 @@ impl ArithmeticOp for IntDivideInt {
 }
 
 #[derive(Debug)]
-pub struct IntDivideUint;
+pub struct IntUintDivide;
 
-impl ArithmeticOp for IntDivideUint {
+impl ArithmeticOp for IntUintDivide {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
@@ -386,9 +411,9 @@ impl ArithmeticOp for IntDivideUint {
 }
 
 #[derive(Debug)]
-pub struct UintDivideUint;
+pub struct UintUintDivide;
 
-impl ArithmeticOp for UintDivideUint {
+impl ArithmeticOp for UintUintDivide {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
@@ -400,9 +425,9 @@ impl ArithmeticOp for UintDivideUint {
 }
 
 #[derive(Debug)]
-pub struct UintDivideInt;
+pub struct UintIntDivide;
 
-impl ArithmeticOp for UintDivideInt {
+impl ArithmeticOp for UintIntDivide {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
@@ -941,13 +966,11 @@ mod tests {
 
     #[test]
     fn test_real_multiply() {
-        let should_pass = unsafe {
-            vec![(
-                Some(Real::unchecked_new(-0.0101001)),
-                Real::unchecked_new(1.01001),
-                Real::unchecked_new(-0.01),
-            )]
-        };
+        let should_pass = vec![(
+            Real::new(-0.0101001).ok(),
+            Real::new(1.01001).unwrap(),
+            Real::new(-0.01).unwrap(),
+        )];
 
         for (expected, lhs, rhs) in should_pass {
             assert_eq!(
@@ -960,18 +983,16 @@ mod tests {
             );
         }
 
-        let should_fail = unsafe {
-            vec![
-                (
-                    Real::unchecked_new(std::f64::MAX),
-                    Real::unchecked_new(std::f64::MAX),
-                ),
-                (
-                    Real::unchecked_new(std::f64::MAX),
-                    Real::unchecked_new(std::f64::MIN),
-                ),
-            ]
-        };
+        let should_fail = vec![
+            (
+                Real::new(std::f64::MAX).unwrap(),
+                Real::new(std::f64::MAX).unwrap(),
+            ),
+            (
+                Real::new(std::f64::MAX).unwrap(),
+                Real::new(std::f64::MIN).unwrap(),
+            ),
+        ];
 
         for (lhs, rhs) in should_fail {
             assert!(
@@ -994,14 +1015,8 @@ mod tests {
             assert_eq!(
                 expected,
                 RpnFnScalarEvaluator::new()
-                    .push_param_with_field_type(
-                        lhs,
-                        FieldTypeBuilder::new().tp(FieldTypeTp::LongLong)
-                    )
-                    .push_param_with_field_type(
-                        rhs,
-                        FieldTypeBuilder::new().tp(FieldTypeTp::LongLong)
-                    )
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(rhs, FieldTypeTp::LongLong)
                     .evaluate(ScalarFuncSig::MultiplyInt)
                     .unwrap()
             );
@@ -1011,14 +1026,8 @@ mod tests {
         for (lhs, rhs) in should_fail {
             assert!(
                 RpnFnScalarEvaluator::new()
-                    .push_param_with_field_type(
-                        lhs,
-                        FieldTypeBuilder::new().tp(FieldTypeTp::LongLong)
-                    )
-                    .push_param_with_field_type(
-                        rhs,
-                        FieldTypeBuilder::new().tp(FieldTypeTp::LongLong)
-                    )
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(rhs, FieldTypeTp::LongLong)
                     .evaluate::<Int>(ScalarFuncSig::MultiplyInt)
                     .is_err(),
                 "{} * {} should fail",
@@ -1036,10 +1045,7 @@ mod tests {
             assert_eq!(
                 expected,
                 RpnFnScalarEvaluator::new()
-                    .push_param_with_field_type(
-                        lhs,
-                        FieldTypeBuilder::new().tp(FieldTypeTp::LongLong)
-                    )
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
                     .push_param_with_field_type(
                         rhs,
                         FieldTypeBuilder::new()
@@ -1055,10 +1061,7 @@ mod tests {
         for (lhs, rhs) in should_fail {
             assert!(
                 RpnFnScalarEvaluator::new()
-                    .push_param_with_field_type(
-                        lhs,
-                        FieldTypeBuilder::new().tp(FieldTypeTp::LongLong)
-                    )
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
                     .push_param_with_field_type(
                         rhs,
                         FieldTypeBuilder::new()

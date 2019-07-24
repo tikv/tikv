@@ -75,6 +75,15 @@ fn minus_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+fn multiply_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
+    match (lhs_is_unsigned, rhs_is_unsigned) {
+        (false, false) => arithmetic_fn_meta::<IntIntMultiply>(),
+        (false, true) => arithmetic_fn_meta::<IntUintMultiply>(),
+        (true, false) => arithmetic_fn_meta::<UintIntMultiply>(),
+        (true, true) => arithmetic_fn_meta::<UintUintMultiply>(),
+    }
+}
+
 fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     match (lhs_is_unsigned, rhs_is_unsigned) {
         (false, false) => arithmetic_fn_meta::<IntIntMod>(),
@@ -86,10 +95,10 @@ fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
 
 fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     match (lhs_is_unsigned, rhs_is_unsigned) {
-        (false, false) => arithmetic_fn_meta::<IntDivideInt>(),
-        (false, true) => arithmetic_fn_meta::<IntDivideUint>(),
-        (true, false) => arithmetic_fn_meta::<UintDivideInt>(),
-        (true, true) => arithmetic_fn_meta::<UintDivideUint>(),
+        (false, false) => arithmetic_fn_meta::<IntIntDivide>(),
+        (false, true) => arithmetic_fn_meta::<IntUintDivide>(),
+        (true, false) => arithmetic_fn_meta::<UintIntDivide>(),
+        (true, true) => arithmetic_fn_meta::<UintUintDivide>(),
     }
 }
 
@@ -168,7 +177,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::MinusReal => arithmetic_fn_meta::<RealMinus>(),
         ScalarFuncSig::MinusDecimal => arithmetic_fn_meta::<DecimalMinus>(),
         ScalarFuncSig::MultiplyDecimal => arithmetic_fn_meta::<DecimalMultiply>(),
-        ScalarFuncSig::MultiplyInt => arithmetic_fn_meta::<IntMultiply>(),
+        ScalarFuncSig::MultiplyInt => map_int_sig(value, children, multiply_mapper)?,
         ScalarFuncSig::MultiplyIntUnsigned => arithmetic_fn_meta::<IntUintMultiply>(),
         ScalarFuncSig::MultiplyReal => arithmetic_fn_meta::<RealMultiply>(),
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
