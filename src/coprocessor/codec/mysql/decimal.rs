@@ -91,9 +91,9 @@ impl<T> DerefMut for Res<T> {
 }
 
 // A `Decimal` holds 9 words.
-const WORD_BUF_LEN: u8 = 9;
+pub const WORD_BUF_LEN: u8 = 9;
 // A word holds 9 digits.
-const DIGITS_PER_WORD: u8 = 9;
+pub const DIGITS_PER_WORD: u8 = 9;
 // A word is 4 bytes i32.
 const WORD_SIZE: u8 = 4;
 const DIG_MASK: u32 = TEN_POW[8];
@@ -395,7 +395,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 /// Get the max possible decimal with giving precision and fraction digit count.
-fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
+pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     let int_cnt = prec - frac_cnt;
     let mut res = Decimal::new(int_cnt, frac_cnt, false);
     let mut idx = 0;
@@ -911,6 +911,10 @@ impl Decimal {
             negative,
             word_buf: [0; 9],
         }
+    }
+
+    pub fn is_negative(&self) -> bool {
+        self.negative
     }
 
     /// reset the decimal to zero.

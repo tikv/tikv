@@ -3,17 +3,17 @@
 use std::mem;
 
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
 
-use crate::storage::{Snapshot, SnapshotStore};
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::dag::executor::{
-    Executor, ExecutorMetrics, IndexScanExecutor, ScanExecutor, TableScanExecutor,
+    Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor,
 };
 use crate::coprocessor::*;
 
@@ -26,7 +26,7 @@ pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
     snap: Option<SnapshotStore<S>>,
     ranges: Vec<KeyRange>,
-    metrics: ExecutorMetrics,
+    metrics: Statistics,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
@@ -46,7 +46,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req,
             snap: Some(snap),
             ranges,
-            metrics: ExecutorMetrics::default(),
+            metrics: Default::default(),
         })
     }
 
@@ -61,8 +61,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
             collectors.into_iter().map(|col| col.into_proto()).collect();
 
         let res_data = {
-            let mut res = analyze::AnalyzeColumnsResp::new();
-            res.set_collectors(RepeatedField::from_vec(cols));
+            let mut res = analyze::AnalyzeColumnsResp::default();
+            res.set_collectors(cols.into());
             res.set_pk_hist(pk_hist);
             box_try!(res.write_to_bytes())
         };
@@ -90,7 +90,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
         }
-        let mut res = analyze::AnalyzeIndexResp::new();
+        let mut res = analyze::AnalyzeIndexResp::default();
         res.set_hist(hist.into_proto());
         if let Some(c) = cms {
             res.set_cms(c.into_proto());
@@ -111,7 +111,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                     self.snap.take().unwrap(),
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_metrics_into(&mut self.metrics);
+                scanner.collect_storage_stats(&mut self.metrics);
                 res
             }
 
@@ -121,7 +121,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
                 let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_metrics_into(&mut self.metrics);
+                builder.data.collect_storage_stats(&mut self.metrics);
                 res
             }
         };
@@ -140,8 +140,9 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         }
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        metrics.merge(&mut self.metrics);
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        dest.add(&self.metrics);
+        self.metrics = Default::default();
     }
 }
 
@@ -176,9 +177,9 @@ impl<S: Snapshot> SampleBuilder<S> {
             col_len -= 1;
         }
 
-        let mut meta = TableScan::new();
+        let mut meta = TableScan::default();
         meta.set_columns(cols_info);
-        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap, false)?;
+        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap)?;
         Ok(Self {
             data: table_scanner,
             col_len,
@@ -256,11 +257,11 @@ impl SampleCollector {
     }
 
     fn into_proto(self) -> analyze::SampleCollector {
-        let mut s = analyze::SampleCollector::new();
+        let mut s = analyze::SampleCollector::default();
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
         s.set_fm_sketch(self.fm_sketch.into_proto());
-        s.set_samples(RepeatedField::from_vec(self.samples));
+        s.set_samples(self.samples.into());
         if let Some(c) = self.cm_sketch {
             s.set_cm_sketch(c.into_proto())
         }

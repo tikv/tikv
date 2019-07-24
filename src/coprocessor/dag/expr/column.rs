@@ -112,7 +112,7 @@ mod tests {
         let mut pad_char_ctx = EvalContext::new(Arc::new(cfg));
 
         let mut c = col_expr(0);
-        let mut field_tp = FieldType::new();
+        let mut field_tp = FieldType::default();
         let flen = 16;
         field_tp
             .as_mut_accessor()
@@ -199,7 +199,7 @@ mod tests {
         ];
         for tp in hybrid_cases {
             let mut c = col_expr(0);
-            let mut field_tp = FieldType::new();
+            let mut field_tp = FieldType::default();
             field_tp.as_mut_accessor().set_tp(tp);
             c.set_field_type(field_tp);
             let e = Expression::build(&ctx, c).unwrap();
@@ -209,7 +209,7 @@ mod tests {
 
         for tp in in_hybrid_cases {
             let mut c = col_expr(0);
-            let mut field_tp = FieldType::new();
+            let mut field_tp = FieldType::default();
             field_tp.as_mut_accessor().set_tp(tp);
             c.set_field_type(field_tp);
             let e = Expression::build(&ctx, c).unwrap();

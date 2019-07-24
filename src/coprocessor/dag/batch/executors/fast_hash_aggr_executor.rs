@@ -17,6 +17,7 @@ use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {
@@ -45,8 +46,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination)
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
@@ -513,7 +519,7 @@ mod tests {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
                 RpnExpressionBuilder::new().push_column_ref(0).build(),
-                vec![Expr::new()],
+                vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor>
         };
@@ -522,7 +528,7 @@ mod tests {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
                 vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
-                vec![Expr::new()],
+                vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor>
         };

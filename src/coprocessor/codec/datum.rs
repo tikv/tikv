@@ -289,7 +289,7 @@ impl Datum {
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
             Datum::Null => None,
-            _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
+            _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
         Ok(b)
     }
@@ -305,7 +305,7 @@ impl Datum {
             Datum::Dur(ref d) => format!("{}", d),
             Datum::Dec(ref d) => format!("{}", d),
             Datum::Json(ref d) => d.to_string(),
-            ref d => return Err(invalid_type!("can't convert {:?} to string", d)),
+            ref d => return Err(invalid_type!("can't convert {} to string", d)),
         };
         Ok(s)
     }
@@ -330,10 +330,12 @@ impl Datum {
             Datum::F64(f) => Ok(f),
             Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs),
             Datum::Time(t) => {
+                // TODO: replace with `convert_datetime_to_f64` after implementing
                 let d = t.to_decimal()?;
                 d.as_f64()
             }
             Datum::Dur(d) => {
+                // TODO: replace with `convert_duration_to_f64` after implementing
                 let d = Decimal::try_from(d)?;
                 d.as_f64()
             }
@@ -429,7 +431,7 @@ impl Datum {
     /// Keep compatible with TiDB's `ToDecimal` function.
     pub fn into_dec(self) -> Result<Decimal> {
         match self {
-            Datum::Time(t) => t.to_decimal().map_err(From::from),
+            Datum::Time(t) => t.to_decimal(),
             Datum::Dur(d) => Decimal::try_from(d).map_err(From::from),
             d => match d.coerce_to_dec()? {
                 Datum::Dec(d) => Ok(d),
@@ -582,10 +584,10 @@ impl Datum {
                 let dec: Result<Decimal> = (l + r).into();
                 return dec.map(Datum::Dec);
             }
-            (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
+            (l, r) => return Err(invalid_type!("{} and {} can't be add together.", l, r)),
         };
         if let Datum::Null = res {
-            return Err(box_err!("{:?} + {:?} overflow", self, d));
+            return Err(box_err!("{} + {} overflow", self, d));
         }
         Ok(res)
     }
@@ -614,10 +616,10 @@ impl Datum {
                 let dec: Result<Decimal> = (l - r).into();
                 return dec.map(Datum::Dec);
             }
-            (l, r) => return Err(invalid_type!("{:?} can't minus {:?}", l, r)),
+            (l, r) => return Err(invalid_type!("{} can't minus {}", l, r)),
         };
         if let Datum::Null = res {
-            return Err(box_err!("{:?} - {:?} overflow", self, d));
+            return Err(box_err!("{} - {} overflow", self, d));
         }
         Ok(res)
     }
@@ -635,7 +637,7 @@ impl Datum {
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_mul(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l * r)),
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => return Ok(Datum::Dec((l * r).unwrap())),
-            (l, r) => return Err(invalid_type!("{:?} can't multiply {:?}", l, r)),
+            (l, r) => return Err(invalid_type!("{} can't multiply {}", l, r)),
         };
 
         if let Datum::Null = res {
@@ -670,7 +672,7 @@ impl Datum {
                     d.map(Datum::Dec)
                 }
             },
-            (l, r) => Err(invalid_type!("{:?} can't mod {:?}", l, r)),
+            (l, r) => Err(invalid_type!("{} can't mod {}", l, r)),
         }
     }
 

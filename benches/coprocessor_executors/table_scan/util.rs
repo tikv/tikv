@@ -5,8 +5,6 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use protobuf::RepeatedField;
-
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
@@ -42,14 +40,13 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         store: &Store<RocksEngine>,
         _: (),
     ) -> Self::E {
-        let mut req = TableScan::new();
-        req.set_columns(RepeatedField::from_slice(columns));
+        let mut req = TableScan::default();
+        req.set_columns(columns.into());
 
         let mut executor = TableScanExecutor::table_scan(
             black_box(req),
             black_box(ranges.to_vec()),
             black_box(ToTxnStore::<Self::T>::to_store(store)),
-            false,
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,

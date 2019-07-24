@@ -19,7 +19,6 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::{self, Engine, SnapshotStore};
 use tikv_util::Either;
 
-use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
@@ -140,7 +139,7 @@ impl<E: Engine> Endpoint<E> {
                 });
             }
             REQ_TYPE_ANALYZE => {
-                let mut analyze = AnalyzeReq::new();
+                let mut analyze = AnalyzeReq::default();
                 box_try!(analyze.merge_from(&mut is));
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 req_ctx = ReqContext::new(
@@ -241,13 +240,10 @@ impl<E: Engine> Endpoint<E> {
                 // There might be errors when handling requests. In this case, we still need its
                 // execution metrics.
                 let result = handler.handle_request();
-                let exec_metrics = {
-                    let mut metrics = ExecutorMetrics::default();
-                    handler.collect_metrics_into(&mut metrics);
-                    metrics
-                };
+                let mut storage_stats = Statistics::default();
+                handler.collect_scan_statistics(&mut storage_stats);
 
-                tracker.on_finish_item(Some(exec_metrics));
+                tracker.on_finish_item(Some(storage_stats));
                 let exec_details = tracker.get_item_exec_details();
 
                 tracker.on_finish_all_items();
@@ -356,13 +352,10 @@ impl<E: Engine> Endpoint<E> {
                             tracker.on_begin_item();
 
                             let result = handler.handle_streaming_request();
-                            let exec_metrics = {
-                                let mut metrics = ExecutorMetrics::default();
-                                handler.collect_metrics_into(&mut metrics);
-                                metrics
-                            };
+                            let mut storage_stats = Statistics::default();
+                            handler.collect_scan_statistics(&mut storage_stats);
 
-                            tracker.on_finish_item(Some(exec_metrics));
+                            tracker.on_finish_item(Some(storage_stats));
                             let exec_details = tracker.get_item_exec_details();
 
                             let (mut resp, finished) = match result {
@@ -672,13 +665,13 @@ mod tests {
         );
 
         let req = {
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             for _ in 0..10 {
-                let mut e = Expr::new();
+                let mut e = Expr::default();
                 e.mut_children().push(expr);
                 expr = e;
             }
-            let mut e = Executor::new();
+            let mut e = Executor::default();
             e.mut_selection().mut_conditions().push(expr);
             let mut dag = DAGRequest::default();
             dag.mut_executors().push(e);

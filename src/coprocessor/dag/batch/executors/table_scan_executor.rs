@@ -8,7 +8,7 @@ use tipb::executor::TableScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Store};
+use crate::storage::{FixtureStore, Statistics, Store};
 use tikv_util::collections::HashMap;
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
@@ -101,8 +101,13 @@ impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
@@ -305,7 +310,7 @@ mod tests {
     use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::exec_summary::*;
+    use crate::coprocessor::dag::execute_stats::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -385,20 +390,20 @@ mod tests {
             // The column info for each column in `data`.
             let columns_info = vec![
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                     ci.set_pk_handle(true);
                     ci.set_column_id(1);
                     ci
                 },
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                     ci.set_column_id(2);
                     ci
                 },
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                     ci.set_column_id(4);
                     ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)]).unwrap());
@@ -646,9 +651,10 @@ mod tests {
         executor.next_batch(1);
         executor.next_batch(2);
 
-        let mut s = BatchExecuteStatistics::new(2, 1);
-        executor.collect_statistics(&mut s);
+        let mut s = ExecuteStats::new(2);
+        executor.collect_exec_stats(&mut s);
 
+        assert_eq!(s.scanned_rows_per_range.len(), 1);
         assert_eq!(s.scanned_rows_per_range[0], 3);
         // 0 remains Default because our output index is 1
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
@@ -656,10 +662,12 @@ mod tests {
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
-        executor.collect_statistics(&mut s);
+        executor.collect_exec_stats(&mut s);
 
         // Collected statistics remain unchanged because of no newly generated delta statistics.
+        assert_eq!(s.scanned_rows_per_range.len(), 2);
         assert_eq!(s.scanned_rows_per_range[0], 3);
+        assert_eq!(s.scanned_rows_per_range[1], 0);
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
         let exec_summary = s.summary_per_executor[1];
         assert_eq!(3, exec_summary.num_produced_rows);
@@ -668,8 +676,9 @@ mod tests {
         // Reset collected statistics so that now we will only collect statistics in this round.
         s.clear();
         executor.next_batch(10);
-        executor.collect_statistics(&mut s);
+        executor.collect_exec_stats(&mut s);
 
+        assert_eq!(s.scanned_rows_per_range.len(), 1);
         assert_eq!(s.scanned_rows_per_range[0], 2);
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
         let exec_summary = s.summary_per_executor[1];
@@ -683,20 +692,20 @@ mod tests {
 
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci.set_column_id(1);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(2);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(3);
                 ci
@@ -806,14 +815,14 @@ mod tests {
 
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci.set_column_id(1);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(2);
                 ci

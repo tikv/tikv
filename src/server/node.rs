@@ -24,7 +24,6 @@ use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use protobuf::RepeatedField;
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -95,7 +94,7 @@ where
             label.set_value(v.to_owned());
             labels.push(label);
         }
-        store.set_labels(RepeatedField::from_vec(labels));
+        store.set_labels(labels.into());
 
         Node {
             cluster_id: cfg.cluster_id,

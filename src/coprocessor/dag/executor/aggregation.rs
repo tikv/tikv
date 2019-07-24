@@ -9,14 +9,13 @@ use tipb::expression::{Expr, ExprType};
 
 use tikv_util::collections::{OrderMap, OrderMapEntry};
 
+use super::aggregate::{self, AggrFunc};
+use super::{Executor, ExprColumnRefVisitor, Row};
 use crate::coprocessor::codec::datum::{self, Datum};
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::*;
-
-use super::aggregate::{self, AggrFunc};
-use super::ExecutorMetrics;
-use super::{Executor, ExprColumnRefVisitor, Row};
+use crate::storage::Statistics;
 
 struct AggFuncExpr {
     args: Vec<Expression>,
@@ -64,22 +63,21 @@ impl dyn AggrFunc {
     }
 }
 
-struct AggExecutor {
+struct AggExecutor<Src: Executor> {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggFuncExpr>,
     executed: bool,
     ctx: EvalContext,
     related_cols_offset: Vec<usize>, // offset of related columns
-    src: Box<dyn Executor + Send>,
-    first_collect: bool,
+    src: Src,
 }
 
-impl AggExecutor {
+impl<Src: Executor> AggExecutor<Src> {
     fn new(
         group_by: Vec<Expr>,
         aggr_func: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
-        src: Box<dyn Executor + Send>,
+        src: Src,
     ) -> Result<Self> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -93,7 +91,6 @@ impl AggExecutor {
             ctx,
             related_cols_offset: visitor.column_offsets(),
             src,
-            first_collect: true,
         })
     }
 
@@ -119,18 +116,6 @@ impl AggExecutor {
         Ok(vals)
     }
 
-    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        self.src.collect_output_counts(counts);
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.src.collect_metrics_into(metrics);
-        if self.first_collect {
-            metrics.executor_count.aggregation += 1;
-            self.first_collect = false;
-        }
-    }
-
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             warnings.merge(&mut self.ctx.take_warnings());
@@ -140,29 +125,32 @@ impl AggExecutor {
         }
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
-    }
-
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
+    }
+
+    #[inline]
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.src.collect_storage_stats(dest);
     }
 }
 // HashAggExecutor deals with the aggregate functions.
 // When Next() is called, it reads all the data from src
 // and updates all the values in group_key_aggrs, then returns a result.
-pub struct HashAggExecutor {
-    inner: AggExecutor,
+pub struct HashAggExecutor<Src: Executor> {
+    inner: AggExecutor<Src>,
     group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<dyn AggrFunc>>>,
     cursor: usize,
 }
 
-impl HashAggExecutor {
-    pub fn new(
-        mut meta: Aggregation,
-        eval_config: Arc<EvalConfig>,
-        src: Box<dyn Executor + Send>,
-    ) -> Result<Self> {
+impl<Src: Executor> HashAggExecutor<Src> {
+    pub fn new(mut meta: Aggregation, eval_config: Arc<EvalConfig>, src: Src) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
         let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
@@ -208,7 +196,7 @@ impl HashAggExecutor {
     }
 }
 
-impl Executor for HashAggExecutor {
+impl<Src: Executor> Executor for HashAggExecutor<Src> {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.inner.executed {
             self.aggregate()?;
@@ -238,28 +226,28 @@ impl Executor for HashAggExecutor {
         }
     }
 
-    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        self.inner.collect_output_counts(counts);
+    #[inline]
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.inner.collect_exec_stats(dest);
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.inner.collect_metrics_into(metrics)
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.inner.collect_storage_stats(dest);
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.inner.collect_execution_summaries(target);
-    }
-
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.inner.take_eval_warnings()
     }
 }
 
-impl Executor for StreamAggExecutor {
+impl<Src: Executor> Executor for StreamAggExecutor<Src> {
     fn next(&mut self) -> Result<Option<Row>> {
         if self.inner.executed {
             return Ok(None);
@@ -290,22 +278,22 @@ impl Executor for StreamAggExecutor {
         Ok(Some(self.get_partial_result()?))
     }
 
-    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        self.inner.collect_output_counts(counts);
+    #[inline]
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.inner.collect_exec_stats(dest);
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.inner.collect_metrics_into(metrics)
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.inner.collect_storage_stats(dest);
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.inner.collect_execution_summaries(target);
-    }
-
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.inner.take_eval_warnings()
     }
@@ -314,8 +302,8 @@ impl Executor for StreamAggExecutor {
 // StreamAggExecutor deals with the aggregation functions.
 // It assumes all the input data is sorted by group by key.
 // When next() is called, it finds a group and returns a result for the same group.
-pub struct StreamAggExecutor {
-    inner: AggExecutor,
+pub struct StreamAggExecutor<Src: Executor> {
+    inner: AggExecutor<Src>,
     // save partial agg result
     agg_funcs: Vec<Box<dyn AggrFunc>>,
     cur_group_row: Vec<Datum>,
@@ -324,12 +312,8 @@ pub struct StreamAggExecutor {
     has_data: bool,
 }
 
-impl StreamAggExecutor {
-    pub fn new(
-        eval_config: Arc<EvalConfig>,
-        src: Box<dyn Executor + Send>,
-        mut meta: Aggregation,
-    ) -> Result<Self> {
+impl<Src: Executor> StreamAggExecutor<Src> {
+    pub fn new(eval_config: Arc<EvalConfig>, src: Src, mut meta: Aggregation) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
         let group_len = group_bys.len();
@@ -402,7 +386,6 @@ mod tests {
 
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
-    use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
@@ -493,22 +476,21 @@ mod tests {
         let mut aggregation = Aggregation::default();
         let group_by_cols = vec![0, 1];
         let group_by = build_group_by(&group_by_cols);
-        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        aggregation.set_group_by(group_by.into());
         let funcs = vec![(ExprType::Count, 0), (ExprType::Sum, 1), (ExprType::Avg, 1)];
         let agg_funcs = build_aggr_func(&funcs);
-        aggregation.set_agg_func(RepeatedField::from_vec(agg_funcs));
+        aggregation.set_agg_func(agg_funcs.into());
 
         // test no row
         let idx_vals = vec![];
         let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
-        let idx_row_cnt = idx_data.kv_data.len() as i64;
+        let idx_row_cnt = idx_data.kv_data.len();
         let unique = false;
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -523,9 +505,9 @@ mod tests {
         }
         assert_eq!(row_data.len(), expect_row_cnt);
         let expected_counts = vec![idx_row_cnt];
-        let mut counts = Vec::with_capacity(1);
-        agg_ect.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let mut exec_stats = ExecuteStats::new(0);
+        agg_ect.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
 
         // test one row
         let idx_vals = vec![vec![
@@ -533,14 +515,13 @@ mod tests {
             (3, Datum::Dec(12.into())),
         ]];
         let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
-        let idx_row_cnt = idx_data.kv_data.len() as i64;
+        let idx_row_cnt = idx_data.kv_data.len();
         let unique = false;
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -569,9 +550,9 @@ mod tests {
             assert_eq!(ds[0], Datum::from(expect_cols.0));
         }
         let expected_counts = vec![idx_row_cnt];
-        let mut counts = Vec::with_capacity(1);
-        agg_ect.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let mut exec_stats = ExecuteStats::new(0);
+        agg_ect.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
 
         // test multiple rows
         let idx_vals = vec![
@@ -584,13 +565,12 @@ mod tests {
             vec![(2, Datum::Bytes(b"a".to_vec())), (3, Datum::Dec(12.into()))],
         ];
         let idx_data = prepare_index_data(tid, idx_id, col_infos.clone(), idx_vals);
-        let idx_row_cnt = idx_data.kv_data.len() as i64;
+        let idx_row_cnt = idx_data.kv_data.len();
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -648,9 +628,9 @@ mod tests {
             assert_eq!(ds[3], Datum::from(expect_cols.3));
         }
         let expected_counts = vec![idx_row_cnt];
-        let mut counts = Vec::with_capacity(1);
-        agg_ect.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let mut exec_stats = ExecuteStats::new(0);
+        agg_ect.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
     }
 
     #[test]
@@ -723,7 +703,7 @@ mod tests {
         let mut aggregation = Aggregation::default();
         let group_by_cols = vec![1, 2];
         let group_by = build_group_by(&group_by_cols);
-        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        aggregation.set_group_by(group_by.into());
         let aggr_funcs = vec![
             (ExprType::Avg, 0),
             (ExprType::Count, 2),
@@ -731,7 +711,7 @@ mod tests {
             (ExprType::Avg, 4),
         ];
         let aggr_funcs = build_aggr_func(&aggr_funcs);
-        aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
+        aggregation.set_agg_func(aggr_funcs.into());
         // init the hash aggregation executor
         let mut aggr_ect =
             HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_ect).unwrap();
@@ -793,9 +773,9 @@ mod tests {
             assert_eq!(ds[3], Datum::from(expect_cols.3));
             assert_eq!(ds[4], Datum::from(expect_cols.4));
         }
-        let expected_counts = vec![raw_data.len() as i64];
-        let mut counts = Vec::with_capacity(1);
-        aggr_ect.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let expected_counts = vec![raw_data.len()];
+        let mut exec_stats = ExecuteStats::new(0);
+        aggr_ect.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
     }
 }

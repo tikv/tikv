@@ -375,6 +375,23 @@ pub fn convert_json_to_uint(ctx: &mut EvalContext, json: &Json, tp: FieldTypeTp)
     convert_uint_to_uint(ctx, val, tp)
 }
 
+/// Converts a bytes slice to a `Decimal`
+#[inline]
+pub fn convert_bytes_to_decimal(ctx: &mut EvalContext, bytes: &[u8]) -> Result<Decimal> {
+    let dec = match Decimal::from_bytes(bytes)? {
+        Res::Ok(d) => d,
+        Res::Overflow(d) => {
+            ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
+            d
+        }
+        Res::Truncated(d) => {
+            ctx.handle_truncate(true)?;
+            d
+        }
+    };
+    Ok(dec)
+}
+
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
 pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
@@ -674,6 +691,7 @@ mod tests {
     use std::{f64, i64, isize, u64};
 
     use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+    use crate::coprocessor::codec::mysql::decimal::{self, DIGITS_PER_WORD, WORD_BUF_LEN};
     use crate::coprocessor::dag::expr::Flag;
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 
@@ -1313,6 +1331,45 @@ mod tests {
         let val = convert_bytes_to_uint(&mut ctx, bs, FieldTypeTp::LongLong);
         assert_eq!(val.unwrap(), 123);
         assert_eq!(ctx.warnings.warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_convert_bytes_to_decimal() {
+        let cases: Vec<(&[u8], Decimal)> = vec![
+            (b"123456.1", Decimal::from_f64(123456.1).unwrap()),
+            (b"-123456.1", Decimal::from_f64(-123456.1).unwrap()),
+            (b"123456", Decimal::from(123456)),
+            (b"-123456", Decimal::from(-123456)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, expect) in cases {
+            let got = convert_bytes_to_decimal(&mut ctx, s).unwrap();
+            assert_eq!(got, expect, "from {:?}, expect: {} got: {}", s, expect, got);
+        }
+
+        // OVERFLOWING
+        let big = (0..85).map(|_| '9').collect::<String>();
+        let val = convert_bytes_to_decimal(&mut ctx, big.as_bytes());
+        assert!(
+            val.is_err(),
+            "expected error, but got {:?}",
+            val.unwrap().to_string()
+        );
+        assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
+
+        // OVERFLOW_AS_WARNING
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+        let val = convert_bytes_to_decimal(&mut ctx, big.as_bytes()).unwrap();
+        let max = decimal::max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0);
+        assert_eq!(
+            val,
+            max,
+            "expect: {}, got: {}",
+            val.to_string(),
+            max.to_string()
+        );
+        assert_eq!(ctx.warnings.warning_cnt, 1);
+        assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
     }
 
     #[test]
