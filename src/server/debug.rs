@@ -779,18 +779,18 @@ impl Debugger {
                         opt.push((config_name, config_value));
                         box_try!(rocksdb.set_options_cf(handle, &opt));
                         let cfg_parse_status = config_value.parse::<f64>();
-                        match cfg_parse_status{
+                        match cfg_parse_status {
                             Ok(v) => {
-	                            CONFIG_ROCKSDB_GAUGE
-	                                .with_label_values(&[cf, config_name])
-	                                .set(v);
+                                CONFIG_ROCKSDB_GAUGE
+                                    .with_label_values(&[cf, config_name])
+                                    .set(v);
                             }
                             Err(_e) => {
-		                        if let Ok(vb) = config_value.parse::<bool>() {
-		                            CONFIG_ROCKSDB_GAUGE
-		                                .with_label_values(&[cf, config_name])
-		                                .set((vb as i64) as f64);
-		                        }
+                                if let Ok(vb) = config_value.parse::<bool>() {
+                                    CONFIG_ROCKSDB_GAUGE
+                                        .with_label_values(&[cf, config_name])
+                                        .set((vb as i64) as f64);
+                                }
                             }
                         }
                     }
