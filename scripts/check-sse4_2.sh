@@ -10,7 +10,7 @@ dirs="./target/release"
 errors=0
 
 # These need to check sse4.2.
-targets="tikv-server tikv-importer"
+targets="tikv-server"
 
 if [[ "`uname`" != "Linux" ]]; then
     echo "skipping sse4.2 check - not on Linux"
