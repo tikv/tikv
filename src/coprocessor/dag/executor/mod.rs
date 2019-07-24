@@ -1,5 +1,24 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod aggregate;
+mod aggregation;
+mod index_scan;
+mod limit;
+mod scan;
+mod selection;
+mod table_scan;
+mod topn;
+mod topn_heap;
+
+pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
+pub use self::index_scan::IndexScanExecutor;
+pub use self::limit::LimitExecutor;
+pub use self::metrics::*;
+pub use self::scan::ScanExecutor;
+pub use self::selection::SelectionExecutor;
+pub use self::table_scan::TableScanExecutor;
+pub use self::topn::TopNExecutor;
+
 use std::sync::Arc;
 
 use cop_datatype::prelude::*;
@@ -13,33 +32,11 @@ use tikv_util::collections::HashSet;
 
 use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
 use crate::coprocessor::codec::table::{self, RowColsDict};
-use crate::coprocessor::dag::exec_summary::{
-    ExecSummary, ExecSummaryCollector, WithSummaryCollector,
-};
+use crate::coprocessor::dag::execute_stats::*;
 use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
 use crate::coprocessor::util;
 use crate::coprocessor::*;
-
-mod aggregate;
-mod aggregation;
-mod index_scan;
-mod limit;
-mod scan;
-mod selection;
-mod table_scan;
-mod topn;
-mod topn_heap;
-
-mod metrics;
-
-pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
-pub use self::index_scan::IndexScanExecutor;
-pub use self::limit::LimitExecutor;
-pub use self::metrics::*;
-pub use self::scan::ScanExecutor;
-pub use self::selection::SelectionExecutor;
-pub use self::table_scan::TableScanExecutor;
-pub use self::topn::TopNExecutor;
+use crate::storage::Statistics;
 
 /// An expression tree visitor that extracts all column offsets in the tree.
 pub struct ExprColumnRefVisitor {
@@ -237,18 +234,16 @@ impl OriginCols {
     }
 }
 
-pub trait Executor {
+pub trait Executor: Send {
     fn next(&mut self) -> Result<Option<Row>>;
-    fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]);
+
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats);
+
+    fn collect_storage_stats(&mut self, dest: &mut Statistics);
+
     fn get_len_of_columns(&self) -> usize;
 
-    /// Only executors with eval computation need to implement `take_eval_warnings`
-    /// It returns warnings happened during eval computation.
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        None
-    }
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings>;
 
     /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
     fn start_scan(&mut self) {}
@@ -286,31 +281,32 @@ impl<C: ExecSummaryCollector, T: Executor> Executor for WithSummaryCollector<C, 
         ret
     }
 
-    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        self.inner.collect_output_counts(counts);
+    #[inline]
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.inner.collect_exec_stats(dest);
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.inner.collect_metrics_into(metrics);
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.inner.collect_storage_stats(dest);
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.inner.collect_execution_summaries(target);
-        self.summary_collector.collect_into(target);
-    }
-
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.inner.take_eval_warnings()
     }
 
+    #[inline]
     fn start_scan(&mut self) {
         self.inner.start_scan();
     }
 
+    #[inline]
     fn stop_scan(&mut self) -> Option<KeyRange> {
         self.inner.stop_scan()
     }
@@ -323,18 +319,13 @@ impl<T: Executor + ?Sized> Executor for Box<T> {
     }
 
     #[inline]
-    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        (**self).collect_output_counts(counts)
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        (**self).collect_exec_stats(dest);
     }
 
     #[inline]
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        (**self).collect_metrics_into(metrics)
-    }
-
-    #[inline]
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        (**self).collect_execution_summaries(target)
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        (**self).collect_storage_stats(dest);
     }
 
     #[inline]
@@ -371,7 +362,6 @@ pub mod tests {
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
-    use protobuf::RepeatedField;
     use tikv_util::codec::number::NumberEncoder;
     use tipb::{
         executor::TableScan,
@@ -380,7 +370,7 @@ pub mod tests {
     };
 
     pub fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(tp);
         if tp == ExprType::ColumnRef {
             expr.mut_val().encode_i64(id.unwrap()).unwrap();
@@ -391,7 +381,7 @@ pub mod tests {
     }
 
     pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
-        let mut col_info = ColumnInfo::new();
+        let mut col_info = ColumnInfo::default();
         col_info.as_mut_accessor().set_tp(tp);
         col_info.set_column_id(cid);
         col_info
@@ -426,7 +416,7 @@ pub mod tests {
     impl TestStore {
         pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
             let engine = TestEngineBuilder::new().build().unwrap();
-            let ctx = Context::new();
+            let ctx = Context::default();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
                 snapshot,
@@ -485,7 +475,7 @@ pub mod tests {
 
     #[inline]
     pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(table::encode_row_key(table_id, start));
         key_range.set_end(table::encode_row_key(table_id, end));
         key_range
@@ -496,18 +486,18 @@ pub mod tests {
         cis: Vec<ColumnInfo>,
         raw_data: &[Vec<Datum>],
         key_ranges: Option<Vec<KeyRange>>,
-    ) -> Box<dyn Executor + Send> {
+    ) -> Box<dyn Executor> {
         let table_data = gen_table_data(tid, &cis, raw_data);
         let mut test_store = TestStore::new(&table_data);
 
-        let mut table_scan = TableScan::new();
+        let mut table_scan = TableScan::default();
         table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+        table_scan.set_columns(cis.clone().into());
 
         let key_ranges = key_ranges.unwrap_or_else(|| vec![get_range(tid, 0, i64::max_value())]);
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, store, true).unwrap())
+        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, store).unwrap())
     }
 }

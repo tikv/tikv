@@ -9,12 +9,21 @@ use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::coprocessor::codec::convert::{
-    self, convert_bytes_to_int, convert_float_to_int, convert_float_to_uint,
+    self, convert_bytes_to_int, convert_bytes_to_uint, convert_float_to_int, convert_float_to_uint,
 };
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
 use crate::coprocessor::dag::expr::Flag;
+
+// TODO: remove it after CAST function use `in_union` function
+#[allow(dead_code)]
+
+/// Indicates whether the current expression is evaluated in union statement
+/// See: https://github.com/pingcap/tidb/blob/1e403873d905b2d0ad3be06bd8cd261203d84638/expression/builtin.go#L260
+fn in_union(implicit_args: &[Datum]) -> bool {
+    implicit_args.get(0) == Some(&Datum::I64(1))
+}
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -72,7 +81,7 @@ impl ScalarFunc {
                 v
             })
         } else {
-            convert::bytes_to_uint(ctx, &val).map(|urs| {
+            convert_bytes_to_uint(ctx, &val, FieldTypeTp::LongLong).map(|urs| {
                 if !self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
                     && urs > (i64::MAX as u64)
                 {
@@ -122,7 +131,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let res = val.cast_to_int();
+        let res = val.cast_to_int(ctx)?;
         Ok(Some(res))
     }
 
@@ -738,7 +747,7 @@ mod tests {
 
     pub fn col_expr(col_id: i64, tp: FieldTypeTp) -> Expr {
         let mut expr = base_col_expr(col_id);
-        let mut fp = FieldType::new();
+        let mut fp = FieldType::default();
         fp.as_mut_accessor().set_tp(tp);
         if tp == FieldTypeTp::String {
             fp.set_charset(charset::CHARSET_UTF8.to_owned());
@@ -1971,18 +1980,20 @@ mod tests {
             (
                 vec![Datum::Bytes(b"-9223372036854775810".to_vec())],
                 i64::MIN,
-                ERR_DATA_OUT_OF_RANGE,
+                FieldTypeFlag::empty(),
             ),
             (
                 vec![Datum::Bytes(b"18446744073709551616".to_vec())],
                 u64::MAX as i64,
-                ERR_TRUNCATE_WRONG_VALUE,
+                FieldTypeFlag::UNSIGNED,
             ),
         ];
 
-        for (cols, exp, err_code) in cases {
+        for (cols, exp, flag) in cases {
             let col_expr = col_expr(0, FieldTypeTp::String);
-            let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            ex.mut_field_type().as_mut_accessor().set_flag(flag);
+
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();
             cfg.set_flag(Flag::OVERFLOW_AS_WARNING | Flag::IN_SELECT_STMT);
@@ -1997,7 +2008,7 @@ mod tests {
             );
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
-                err_code,
+                ERR_DATA_OUT_OF_RANGE,
                 "unexpected warning: {:?}",
                 ctx.warnings.warnings
             );
@@ -2032,4 +2043,20 @@ mod tests {
     //     let res = e.eval_duration(&mut ctx, &cols);
     //     assert!(res.is_err());
     // }
+
+    #[test]
+    fn test_in_union() {
+        use super::*;
+
+        // empty implicit arguments
+        assert!(!in_union(&[]));
+
+        // single implicit arguments
+        assert!(!in_union(&[Datum::I64(0)]));
+        assert!(in_union(&[Datum::I64(1)]));
+
+        // multiple implicit arguments
+        assert!(!in_union(&[Datum::I64(0), Datum::I64(1)]));
+        assert!(in_union(&[Datum::I64(1), Datum::I64(0)]));
+    }
 }

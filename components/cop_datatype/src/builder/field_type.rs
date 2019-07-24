@@ -9,7 +9,7 @@ pub struct FieldTypeBuilder(FieldType);
 
 impl FieldTypeBuilder {
     pub fn new() -> Self {
-        Self(FieldType::new())
+        Self(FieldType::default())
     }
 
     pub fn tp(mut self, v: crate::FieldTypeTp) -> Self {

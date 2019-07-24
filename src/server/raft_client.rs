@@ -18,7 +18,6 @@ use grpcio::{
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
-use protobuf::RepeatedField;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
@@ -74,8 +73,8 @@ impl Conn {
         let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
         let batch_send_or_fallback = batch_sink
             .send_all(Reusable(rx1).map(move |v| {
-                let mut batch_msgs = BatchRaftMessage::new();
-                batch_msgs.set_msgs(RepeatedField::from(v));
+                let mut batch_msgs = BatchRaftMessage::default();
+                batch_msgs.set_msgs(v.into());
                 (batch_msgs, WriteFlags::default().buffer_hint(false))
             }))
             .then(move |r| {
@@ -109,13 +108,13 @@ impl Conn {
                             drop(receiver);
                             match r {
                                 Ok(_) => info!("raft RPC finished success"),
-                                Err(ref e) => error!("raft RPC finished fail"; "err" => ?e),
+                                Err(ref e) => warn!("raft RPC finished fail"; "err" => ?e),
                             };
                             r
                         }))
                     }
                     Err(e) => {
-                        error!("batch_raft RPC finished fail"; "err" => ?e);
+                        warn!("batch_raft RPC finished fail"; "err" => ?e);
                         Box::new(future::err(e))
                     }
                 }
@@ -204,7 +203,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
             .stream
             .send(msg)
         {
-            error!("send to {} fail, the gRPC connection could be broken", addr);
+            warn!("send to {} fail, the gRPC connection could be broken", addr);
             let index = msg.region_id as usize % self.cfg.grpc_raft_conn_num;
             self.conns.remove(&(addr.to_owned(), index));
 
@@ -231,7 +230,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
                 let _ = self.stats_pool.spawn(
                     self.timer
                         .delay(Instant::now() + wait)
-                        .map_err(|_| error!("RaftClient delay flush error"))
+                        .map_err(|_| warn!("RaftClient delay flush error"))
                         .inspect(move |_| notifier.notify()),
                 );
             }

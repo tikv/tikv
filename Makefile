@@ -37,6 +37,8 @@ ENABLE_FEATURES ?=
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
+else ifeq ($(MIMALLOC),1)
+ENABLE_FEATURES += mimalloc
 else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
@@ -59,8 +61,8 @@ ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
-ifneq ($(FAIL_POINT),1)
-ENABLE_FEATURES += no-fail
+ifeq ($(FAIL_POINT),1)
+ENABLE_FEATURES += failpoints
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -148,7 +150,7 @@ fail_release:
 dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
-	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
 
 # Build with release flag as if it were for distribution, but without

@@ -185,8 +185,8 @@ mod tests {
     use super::*;
 
     fn new_order_by(col_id: i64, desc: bool) -> ByItem {
-        let mut item = ByItem::new();
-        let mut expr = Expr::new();
+        let mut item = ByItem::default();
+        let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
         expr.mut_val().encode_i64(col_id).unwrap();
         item.set_expr(expr);

@@ -830,11 +830,11 @@ fn test_split_with_epoch_not_match() {
     pd_client.must_remove_peer(1, new_peer(2, 2));
     let region = cluster.get_region(b"");
 
-    let mut admin_req = AdminRequest::new();
+    let mut admin_req = AdminRequest::default();
     admin_req.set_cmd_type(AdminCmdType::BatchSplit);
 
-    let mut batch_split_req = BatchSplitRequest::new();
-    batch_split_req.mut_requests().push(SplitRequest::new());
+    let mut batch_split_req = BatchSplitRequest::default();
+    batch_split_req.mut_requests().push(SplitRequest::default());
     batch_split_req.mut_requests()[0].set_split_key(b"s".to_vec());
     batch_split_req.mut_requests()[0].set_new_region_id(1000);
     batch_split_req.mut_requests()[0].set_new_peer_ids(vec![1001, 1002]);

@@ -4,7 +4,7 @@ WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
-RUN rustup default nightly-2019-04-25
+RUN rustup default nightly-2019-06-14
 
 # Install dependencies at first
 COPY Cargo.toml Cargo.lock ./
@@ -17,6 +17,9 @@ RUN sed -i '/fuzz/d' Cargo.toml && \
 # Use Makefile to build
 COPY Makefile ./
 
+# For cargo
+COPY scripts/run-cargo.sh ./scripts/run-cargo.sh
+COPY etc/cargo.config.dist ./etc/cargo.config.dist
 # Add components Cargo files
 # Notice: every time we add a new component, we must regenerate the dockerfile
 COPY ./components/codec/Cargo.toml ./components/codec/Cargo.toml
@@ -35,7 +38,6 @@ COPY ./components/tipb_helper/Cargo.toml ./components/tipb_helper/Cargo.toml
 RUN mkdir -p ./src/bin && \
     echo 'fn main() {}' > ./src/bin/tikv-ctl.rs && \
     echo 'fn main() {}' > ./src/bin/tikv-server.rs && \
-    echo 'fn main() {}' > ./src/bin/tikv-importer.rs && \
     echo '' > ./src/lib.rs && \
     mkdir ./components/codec/src && echo '' > ./components/codec/src/lib.rs && \
     mkdir ./components/cop_codegen/src && echo '' > ./components/cop_codegen/src/lib.rs && \
@@ -47,7 +49,7 @@ RUN mkdir -p ./src/bin && \
     mkdir ./components/tikv_alloc/src && echo '' > ./components/tikv_alloc/src/lib.rs && \
     mkdir ./components/tikv_util/src && echo '' > ./components/tikv_util/src/lib.rs && \
     mkdir ./components/tipb_helper/src && echo '' > ./components/tipb_helper/src/lib.rs && \
-    make build_release && \
+    make build_dist_release && \
     rm -rf ./target/release/.fingerprint/codec-* && \
     rm -rf ./target/release/.fingerprint/cop_codegen-* && \
     rm -rf ./target/release/.fingerprint/cop_datatype-* && \
@@ -64,7 +66,7 @@ RUN mkdir -p ./src/bin && \
 COPY ./src ./src
 COPY ./components ./components
 
-RUN make build_release
+RUN make build_dist_release
 
 # Strip debug info to reduce the docker size, may strip later?
 # RUN strip --strip-debug /tikv/target/release/tikv-server && \

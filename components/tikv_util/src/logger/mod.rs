@@ -195,10 +195,9 @@ where
             let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
             slog::slog_crit!(
                 fatal_logger,
-                "logger encountered error, TiKV cannot continue working";
+                "logger encountered error";
                 "err" => %e,
             );
-            panic!("logger encountered error");
         }
         Ok(())
     }
