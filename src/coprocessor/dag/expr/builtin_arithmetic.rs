@@ -532,10 +532,7 @@ mod tests {
             ),
         ];
         let mut ctx = EvalContext::default();
-        let mut ind = 0;
         for tt in tests {
-            println!("{}", ind);
-            ind += 1;
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
