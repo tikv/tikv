@@ -127,8 +127,8 @@ mod tests {
 
             let output = RpnFnScalarEvaluator::new()
                 .context(ctx)
-                .push_param(Option::<DateTime>::None)
-                .push_param(Option::<Bytes>::None)
+                .push_param(None::<DateTime>)
+                .push_param(None::<Bytes>)
                 .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig)
                 .unwrap();
             assert_eq!(output, None);
