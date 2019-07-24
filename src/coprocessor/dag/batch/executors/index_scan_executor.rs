@@ -13,15 +13,10 @@ use crate::storage::{FixtureStore, Statistics, Store};
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
 pub struct BatchIndexScanExecutor<S: Store>(
-    super::util::scan_executor::ScanExecutor<
-        S,
-        IndexScanExecutorImpl,
-        super::util::ranges_iter::PointRangeConditional,
-    >,
+    super::util::scan_executor::ScanExecutor<S, IndexScanExecutorImpl>,
 );
 
 impl BatchIndexScanExecutor<FixtureStore> {
@@ -38,7 +33,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
-        desc: bool,
+        is_backward: bool,
         unique: bool,
     ) -> Result<Self> {
         // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
@@ -74,9 +69,10 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         let wrapper = super::util::scan_executor::ScanExecutor::new(
             imp,
             store,
-            desc,
+            is_backward,
             key_ranges,
-            super::util::ranges_iter::PointRangeConditional::new(unique),
+            false,
+            unique,
         )?;
         Ok(Self(wrapper))
     }
@@ -127,16 +123,6 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
-    }
-
-    #[inline]
-    fn build_scanner<S: Store>(
-        &self,
-        store: &S,
-        desc: bool,
-        range: KeyRange,
-    ) -> Result<Scanner<S>> {
-        Scanner::new(store, desc, false, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.

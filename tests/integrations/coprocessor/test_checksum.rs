@@ -9,11 +9,13 @@ use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
-use tikv::coprocessor::dag::Scanner;
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
 
 use test_coprocessor::*;
+use tikv::coprocessor::dag::storage::scanner::RangesScanner;
+use tikv::coprocessor::dag::storage::Range;
+use tikv::coprocessor::dag::storage_impl::TiKVStorage;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::default();
@@ -66,20 +68,22 @@ fn test_checksum() {
 
 fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> u64 {
     let ctx = Context::default();
-    let snap = SnapshotStore::new(
+    let store = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),
         u64::MAX,
         IsolationLevel::SI,
         true,
     );
-    let mut scanner = Scanner::new(
-        &snap, true, // Scan in reversed order.
-        false, range,
-    )
-    .unwrap();
+    let mut scanner = RangesScanner::new(
+        TiKVStorage::from(store),
+        vec![Range::from_pb_range(range, false)],
+        true,
+        false,
+        false,
+    );
 
     let mut checksum = 0;
-    while let Some((k, v)) = scanner.next_row().unwrap() {
+    while let Some((k, v)) = scanner.next().unwrap() {
         let mut digest = Digest::new(crc64::ECMA);
         digest.write(&k);
         digest.write(&v);
