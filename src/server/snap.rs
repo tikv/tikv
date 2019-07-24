@@ -332,7 +332,13 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 if self.recving_count.load(Ordering::SeqCst) >= self.cfg.concurrent_recv_snap_limit
                 {
                     warn!("too many recving snapshot tasks, ignore");
-                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+                    let status = RpcStatus::new(
+                        RpcStatusCode::ResourceExhausted,
+                        Some(
+                            "the number of received snapshot tasks exceeded the limitation"
+                                .to_owned(),
+                        ),
+                    );
                     self.pool.spawn(sink.fail(status)).forget();
                     return;
                 }
