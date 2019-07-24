@@ -383,9 +383,9 @@ impl ArithmeticOp for UintUintMultiply {
 }
 
 #[derive(Debug)]
-pub struct IntIntDivide;
+pub struct IntDivideInt;
 
-impl ArithmeticOp for IntIntDivide {
+impl ArithmeticOp for IntDivideInt {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
@@ -397,9 +397,9 @@ impl ArithmeticOp for IntIntDivide {
 }
 
 #[derive(Debug)]
-pub struct IntUintDivide;
+pub struct IntDivideUint;
 
-impl ArithmeticOp for IntUintDivide {
+impl ArithmeticOp for IntDivideUint {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
@@ -411,9 +411,9 @@ impl ArithmeticOp for IntUintDivide {
 }
 
 #[derive(Debug)]
-pub struct UintUintDivide;
+pub struct UintDivideUint;
 
-impl ArithmeticOp for UintUintDivide {
+impl ArithmeticOp for UintDivideUint {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
@@ -425,9 +425,9 @@ impl ArithmeticOp for UintUintDivide {
 }
 
 #[derive(Debug)]
-pub struct UintIntDivide;
+pub struct UintDivideInt;
 
-impl ArithmeticOp for UintIntDivide {
+impl ArithmeticOp for UintDivideInt {
     type T = Int;
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {

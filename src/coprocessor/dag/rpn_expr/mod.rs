@@ -95,10 +95,10 @@ fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
 
 fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     match (lhs_is_unsigned, rhs_is_unsigned) {
-        (false, false) => arithmetic_fn_meta::<IntIntDivide>(),
-        (false, true) => arithmetic_fn_meta::<IntUintDivide>(),
-        (true, false) => arithmetic_fn_meta::<UintIntDivide>(),
-        (true, true) => arithmetic_fn_meta::<UintUintDivide>(),
+        (false, false) => arithmetic_fn_meta::<IntDivideInt>(),
+        (false, true) => arithmetic_fn_meta::<IntDivideUint>(),
+        (true, false) => arithmetic_fn_meta::<UintDivideInt>(),
+        (true, true) => arithmetic_fn_meta::<UintDivideUint>(),
     }
 }
 
@@ -219,8 +219,8 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::InDuration => compare_in_fn_meta::<Duration>(),
         ScalarFuncSig::InJson => compare_in_fn_meta::<Json>(),
         _ => return Err(box_err!(
-                "ScalarFunction {:?} is not supported in batch mode",
-                value
+            "ScalarFunction {:?} is not supported in batch mode",
+            value
         )),
     })
 }
