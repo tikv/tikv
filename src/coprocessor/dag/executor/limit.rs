@@ -2,32 +2,30 @@
 
 use tipb::executor::Limit;
 
-use super::ExecutorMetrics;
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::executor::{Executor, Row};
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 /// Retrieves rows from the source executor and only produces part of the rows.
-pub struct LimitExecutor {
+pub struct LimitExecutor<Src: Executor> {
     limit: u64,
     cursor: u64,
-    src: Box<dyn Executor + Send>,
-    first_collect: bool,
+    src: Src,
 }
 
-impl LimitExecutor {
-    pub fn new(limit: Limit, src: Box<dyn Executor + Send>) -> Self {
+impl<Src: Executor> LimitExecutor<Src> {
+    pub fn new(limit: Limit, src: Src) -> Self {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
             src,
-            first_collect: true,
         }
     }
 }
 
-impl Executor for LimitExecutor {
+impl<Src: Executor> Executor for LimitExecutor<Src> {
     fn next(&mut self) -> Result<Option<Row>> {
         if self.cursor >= self.limit {
             return Ok(None);
@@ -40,20 +38,12 @@ impl Executor for LimitExecutor {
         }
     }
 
-    fn collect_output_counts(&mut self, _: &mut Vec<i64>) {
-        // We do not know whether `limit` has consumed all of it's source, so just ignore it.
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.src.collect_metrics_into(metrics);
-        if self.first_collect {
-            metrics.executor_count.limit += 1;
-            self.first_collect = false;
-        }
-    }
-
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.src.collect_storage_stats(dest);
     }
 
     fn get_len_of_columns(&self) -> usize {

@@ -9,7 +9,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::Executor as PbExecutor;
 
 use test_coprocessor::*;
-use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
+use tikv::coprocessor::dag::execute_stats::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::expr::EvalConfig;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 
@@ -71,7 +71,6 @@ impl<T: TxnStore + 'static> IntegratedBencher for NormalBencher<T> {
                 black_box(ToTxnStore::<T>::to_store(store)),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
-                false,
             )
             .unwrap()
         })
