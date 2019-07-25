@@ -177,7 +177,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // The current key exists under any of the following conditions:
         // 1.The current write type is `PUT`
         // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
-        if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts)? {
+        if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts - 1)? {
             return Err(Error::AlreadyExist { key: key.to_raw()? });
         }
 
