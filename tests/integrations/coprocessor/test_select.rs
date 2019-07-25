@@ -107,7 +107,8 @@ fn test_stream_batch_row_limit() {
     let req = DAGSelect::from(&product).build();
     assert_eq!(req.get_ranges().len(), 1);
 
-    let ignored_suffix_len = 18; // tXXXXXXXX_rXXXXXXX (only ignore first 7 bytes of the row id)
+    // only ignore first 7 bytes of the row id
+    let ignored_suffix_len = tikv::coprocessor::codec::table::RECORD_ROW_KEY_LEN - 1;
     let mut expected_ranges_last_bytes: Vec<(&[u8], &[u8])> = vec![
         (b"\x00", b"\x02\x00"),
         (b"\x02\x00", b"\x05\x00"),

@@ -7,7 +7,7 @@ use tipb::schema::ColumnInfo;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::storage::scanner::RangesScanner;
+use crate::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
 use crate::coprocessor::dag::storage::Range;
 use crate::coprocessor::dag::storage_impl::TiKVStorage;
 use crate::coprocessor::Result;
@@ -50,14 +50,25 @@ pub struct ScanExecutor<S: Store, I: ScanExecutorImpl> {
     is_ended: bool,
 }
 
+pub struct ScanExecutorOptions<S, I> {
+    pub imp: I,
+    pub store: S,
+    pub key_ranges: Vec<KeyRange>,
+    pub is_backward: bool,
+    pub is_key_only: bool,
+    pub accept_point_range: bool,
+}
+
 impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
     pub fn new(
-        imp: I,
-        store: S,
-        is_backward: bool,
-        mut key_ranges: Vec<KeyRange>,
-        is_key_only: bool,
-        accept_point_range: bool,
+        ScanExecutorOptions {
+            imp,
+            store,
+            mut key_ranges,
+            is_backward,
+            is_key_only,
+            accept_point_range,
+        }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         crate::coprocessor::codec::table::check_table_ranges(&key_ranges)?;
         if is_backward {
@@ -65,16 +76,16 @@ impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
         }
         Ok(Self {
             imp,
-            scanner: RangesScanner::new(
-                TiKVStorage::from(store),
-                key_ranges
+            scanner: RangesScanner::new(RangesScannerOptions {
+                storage: TiKVStorage::from(store),
+                ranges: key_ranges
                     .into_iter()
                     .map(|r| Range::from_pb_range(r, accept_point_range))
                     .collect(),
-                is_backward,
+                scan_backward_in_range: is_backward,
                 is_key_only,
-                false,
-            ),
+                is_scanned_range_aware: false,
+            }),
             is_ended: false,
         })
     }

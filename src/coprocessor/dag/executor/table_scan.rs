@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tikv_util::collections::HashSet;
 
-use super::{scan::InnerExecutor, Row, ScanExecutor};
+use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::coprocessor::codec::table;
 use crate::coprocessor::Result;
 use crate::storage::Store;
@@ -56,16 +56,16 @@ impl<S: Store> TableScanExecutor<S> {
         let inner = TableInnerExecutor::new(&meta);
         let is_key_only = inner.is_key_only();
 
-        Self::new(
+        Self::new(ScanExecutorOptions {
             inner,
-            meta.get_desc(),
-            meta.take_columns().to_vec(),
+            columns: meta.take_columns().to_vec(),
             key_ranges,
             store,
-            true,
+            is_backward: meta.get_desc(),
             is_key_only,
+            accept_point_range: true,
             is_scanned_range_aware,
-        )
+        })
     }
 }
 

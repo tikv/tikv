@@ -28,13 +28,23 @@ pub struct RangesScanner<T> {
     working_range_end_key: Vec<u8>,
 }
 
+pub struct RangesScannerOptions<T> {
+    pub storage: T,
+    pub ranges: Vec<Range>,
+    pub scan_backward_in_range: bool, // TODO: This can be const generics
+    pub is_key_only: bool,            // TODO: This can be const generics
+    pub is_scanned_range_aware: bool, // TODO: This can be const generics
+}
+
 impl<T: Storage> RangesScanner<T> {
     pub fn new(
-        storage: T,
-        ranges: Vec<Range>,
-        scan_backward_in_range: bool, // TODO: This can be const generics
-        is_key_only: bool,            // TODO: This can be const generics
-        is_scanned_range_aware: bool, // TODO: This can be const generics
+        RangesScannerOptions {
+            storage,
+            ranges,
+            scan_backward_in_range,
+            is_key_only,
+            is_scanned_range_aware,
+        }: RangesScannerOptions<T>,
     ) -> RangesScanner<T> {
         let ranges_len = ranges.len();
         let ranges_iter = RangesIterator::new(ranges);
@@ -209,8 +219,9 @@ impl<T: Storage> RangesScanner<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use crate::coprocessor::dag::storage::fixture::FixtureStorage;
-    use crate::coprocessor::dag::storage::scanner::RangesScanner;
     use crate::coprocessor::dag::storage::{IntervalRange, PointRange, Range};
 
     fn create_storage() -> FixtureStorage {
@@ -236,7 +247,13 @@ mod tests {
             PointRange::from("foo_3").into(),
             IntervalRange::from(("a", "c")).into(),
         ];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, false, false, false);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+        });
         assert_eq!(
             scanner.next().unwrap(),
             Some((b"foo".to_vec(), b"1".to_vec()))
@@ -266,7 +283,13 @@ mod tests {
             PointRange::from("foo_3").into(),
             IntervalRange::from(("a", "bar_2")).into(),
         ];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, true, false, false);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: true,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+        });
         assert_eq!(
             scanner.next().unwrap(),
             Some((b"foo_2".to_vec(), b"3".to_vec()))
@@ -291,7 +314,13 @@ mod tests {
             PointRange::from("foo_3").into(),
             PointRange::from("bar_3").into(),
         ];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, false, true, false);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: true,
+            is_scanned_range_aware: false,
+        });
         assert_eq!(scanner.next().unwrap(), Some((b"bar".to_vec(), Vec::new())));
         assert_eq!(
             scanner.next().unwrap(),
@@ -319,7 +348,13 @@ mod tests {
             PointRange::from("foo_3").into(),
             IntervalRange::from(("a", "z")).into(),
         ];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, false, false, false);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+        });
         let mut scanned_rows_per_range = Vec::new();
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo");
@@ -368,7 +403,13 @@ mod tests {
 
         // No range
         let ranges = vec![];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, false, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         let r = scanner.take_scanned_range();
         assert_eq!(&r.lower_inclusive, b"");
@@ -382,7 +423,13 @@ mod tests {
 
         // Empty interval range
         let ranges = vec![IntervalRange::from(("x", "xb")).into()];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, false, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         assert_eq!(scanner.next().unwrap(), None);
 
@@ -392,7 +439,13 @@ mod tests {
 
         // Empty point range
         let ranges = vec![PointRange::from("x").into()];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, false, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         assert_eq!(scanner.next().unwrap(), None);
 
@@ -402,7 +455,13 @@ mod tests {
 
         // Filled interval range
         let ranges = vec![IntervalRange::from(("foo", "foo_8")).into()];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, false, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo");
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo_2");
@@ -434,7 +493,13 @@ mod tests {
             PointRange::from("bar_3").into(),
             IntervalRange::from(("bar_4", "box")).into(),
         ];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, false, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo");
 
@@ -473,7 +538,13 @@ mod tests {
 
         // No range
         let ranges = vec![];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, true, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: true,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         let r = scanner.take_scanned_range();
         assert_eq!(&r.lower_inclusive, b"");
@@ -487,7 +558,13 @@ mod tests {
 
         // Empty interval range
         let ranges = vec![IntervalRange::from(("x", "xb")).into()];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, true, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: true,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         assert_eq!(scanner.next().unwrap(), None);
 
@@ -497,7 +574,13 @@ mod tests {
 
         // Empty point range
         let ranges = vec![PointRange::from("x").into()];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, true, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: true,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         assert_eq!(scanner.next().unwrap(), None);
 
@@ -507,7 +590,13 @@ mod tests {
 
         // Filled interval range
         let ranges = vec![IntervalRange::from(("foo", "foo_8")).into()];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, true, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: true,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo_3");
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo_2");
@@ -537,7 +626,13 @@ mod tests {
             IntervalRange::from(("foo_5", "foo_50")).into(),
             IntervalRange::from(("foo", "foo_3")).into(),
         ];
-        let mut scanner = RangesScanner::new(storage.clone(), ranges, true, false, true);
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
+            storage: storage.clone(),
+            ranges,
+            scan_backward_in_range: true,
+            is_key_only: false,
+            is_scanned_range_aware: true,
+        });
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"bar_2");
 

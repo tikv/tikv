@@ -14,7 +14,7 @@ pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
 pub use self::index_scan::IndexScanExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
-pub use self::scan::ScanExecutor;
+pub use self::scan::{ScanExecutor, ScanExecutorOptions};
 pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;

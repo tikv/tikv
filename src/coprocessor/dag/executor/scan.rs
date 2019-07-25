@@ -9,7 +9,7 @@ use super::{Executor, Row};
 use crate::coprocessor::codec::table;
 use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::expr::EvalWarnings;
-use crate::coprocessor::dag::storage::scanner::RangesScanner;
+use crate::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
 use crate::coprocessor::dag::storage::{IntervalRange, Range};
 use crate::coprocessor::dag::storage_impl::TiKVStorage;
 use crate::coprocessor::Result;
@@ -33,32 +33,45 @@ pub struct ScanExecutor<S: Store, T: InnerExecutor> {
     columns: Arc<Vec<ColumnInfo>>,
 }
 
+pub struct ScanExecutorOptions<S, T> {
+    pub inner: T,
+    pub columns: Vec<ColumnInfo>,
+    pub key_ranges: Vec<KeyRange>,
+    pub store: S,
+    pub is_backward: bool,
+    pub is_key_only: bool,
+    pub accept_point_range: bool,
+    pub is_scanned_range_aware: bool,
+}
+
 impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
     pub fn new(
-        inner: T,
-        is_backward: bool,
-        columns: Vec<ColumnInfo>,
-        mut key_ranges: Vec<KeyRange>,
-        store: S,
-        accept_point_range: bool,
-        is_key_only: bool,
-        is_scanned_range_aware: bool,
+        ScanExecutorOptions {
+            inner,
+            columns,
+            mut key_ranges,
+            store,
+            is_backward,
+            is_key_only,
+            accept_point_range,
+            is_scanned_range_aware,
+        }: ScanExecutorOptions<S, T>,
     ) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
         if is_backward {
             key_ranges.reverse();
         }
 
-        let scanner = RangesScanner::new(
-            TiKVStorage::from(store),
-            key_ranges
+        let scanner = RangesScanner::new(RangesScannerOptions {
+            storage: TiKVStorage::from(store),
+            ranges: key_ranges
                 .into_iter()
                 .map(|r| Range::from_pb_range(r, accept_point_range))
                 .collect(),
-            is_backward,
+            scan_backward_in_range: is_backward,
             is_key_only,
             is_scanned_range_aware,
-        );
+        });
 
         Ok(Self {
             inner,

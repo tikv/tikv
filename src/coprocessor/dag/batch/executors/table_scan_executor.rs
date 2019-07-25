@@ -11,20 +11,19 @@ use tipb::schema::ColumnInfo;
 use crate::storage::{FixtureStore, Statistics, Store};
 use tikv_util::collections::HashMap;
 
+use super::util::scan_executor::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<S: Store>(
-    super::util::scan_executor::ScanExecutor<S, TableScanExecutorImpl>,
-);
+pub struct BatchTableScanExecutor<S: Store>(ScanExecutor<S, TableScanExecutorImpl>);
 
 impl BatchTableScanExecutor<FixtureStore> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
-        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+        check_columns_info_supported(descriptor.get_columns())
     }
 }
 
@@ -46,7 +45,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
-            schema.push(super::util::scan_executor::field_type_from_column_info(&ci));
+            schema.push(field_type_from_column_info(&ci));
 
             // - Prepare column default value (will be used to fill missing column later).
             columns_default_value.push(ci.take_default_val());
@@ -72,14 +71,14 @@ impl<S: Store> BatchTableScanExecutor<S> {
             handle_index,
             is_column_filled,
         };
-        let wrapper = super::util::scan_executor::ScanExecutor::new(
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
             store,
-            is_backward,
             key_ranges,
+            is_backward,
             is_key_only,
-            true,
-        )?;
+            accept_point_range: true,
+        })?;
         Ok(Self(wrapper))
     }
 }
@@ -131,7 +130,7 @@ struct TableScanExecutorImpl {
     is_column_filled: Vec<bool>,
 }
 
-impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
+impl ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema

@@ -7,7 +7,7 @@ use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
-use crate::coprocessor::dag::storage::scanner::RangesScanner;
+use crate::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
 use crate::coprocessor::dag::storage::Range;
 use crate::coprocessor::dag::storage_impl::TiKVStorage;
 use crate::coprocessor::*;
@@ -31,16 +31,16 @@ impl<S: Snapshot> ChecksumContext<S> {
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
         );
-        let scanner = RangesScanner::new(
-            store.into(),
-            ranges
+        let scanner = RangesScanner::new(RangesScannerOptions {
+            storage: store.into(),
+            ranges: ranges
                 .into_iter()
                 .map(|r| Range::from_pb_range(r, false))
                 .collect(),
-            false,
-            false,
-            false,
-        );
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+        });
         Ok(Self { req, scanner })
     }
 }

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::{scan::InnerExecutor, Row, ScanExecutor};
+use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::coprocessor::codec::table;
 use crate::coprocessor::Result;
 use crate::storage::Store;
@@ -71,16 +71,16 @@ impl<S: Store> IndexScanExecutor<S> {
     ) -> Result<Self> {
         let columns = meta.get_columns().to_vec();
         let inner = IndexInnerExecutor::new(&mut meta);
-        Self::new(
+        Self::new(ScanExecutorOptions {
             inner,
-            meta.get_desc(),
             columns,
             key_ranges,
             store,
-            unique,
-            false,
+            is_backward: meta.get_desc(),
+            is_key_only: false,
+            accept_point_range: unique,
             is_scanned_range_aware,
-        )
+        })
     }
 
     pub fn index_scan_with_cols_len(
@@ -93,7 +93,16 @@ impl<S: Store> IndexScanExecutor<S> {
             col_ids,
             pk_col: None,
         };
-        Self::new(inner, false, vec![], key_ranges, store, false, false, false)
+        Self::new(ScanExecutorOptions {
+            inner,
+            columns: vec![],
+            key_ranges,
+            store,
+            is_backward: false,
+            is_key_only: false,
+            accept_point_range: false,
+            is_scanned_range_aware: false,
+        })
     }
 }
 

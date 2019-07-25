@@ -13,7 +13,7 @@ use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
 
 use test_coprocessor::*;
-use tikv::coprocessor::dag::storage::scanner::RangesScanner;
+use tikv::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tikv::coprocessor::dag::storage::Range;
 use tikv::coprocessor::dag::storage_impl::TiKVStorage;
 
@@ -74,13 +74,13 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
         IsolationLevel::SI,
         true,
     );
-    let mut scanner = RangesScanner::new(
-        TiKVStorage::from(store),
-        vec![Range::from_pb_range(range, false)],
-        true,
-        false,
-        false,
-    );
+    let mut scanner = RangesScanner::new(RangesScannerOptions {
+        storage: TiKVStorage::from(store),
+        ranges: vec![Range::from_pb_range(range, false)],
+        scan_backward_in_range: true,
+        is_key_only: false,
+        is_scanned_range_aware: false,
+    });
 
     let mut checksum = 0;
     while let Some((k, v)) = scanner.next().unwrap() {
