@@ -1,5 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Interact with persistent storage.
+//!
+//! The [`Storage`](storage::Storage) structure provides KV APIs on a given [`Engine`](storage::kv::Engine).
+//!
+//! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](storage::kv::raftkv::RaftKv)
+//! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and [`RocksEngine`](storage::RocksEngine) are used for testing only.
+
 pub mod config;
 pub mod gc_worker;
 pub mod kv;
@@ -58,22 +65,45 @@ pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
 }
 
+/// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
+    /// Put `Value` into `Key`, overwriting any existing value.
     Put((Key, Value)),
+    /// Delete `Key`.
     Delete(Key),
+    /// Set a lock on `Key`.
     Lock(Key),
-    Insert((Key, Value)), // has a constraint that key should not exist.
+    /// Put `Value` into `Key` if `Key` does not yet exist.
+    ///
+    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    Insert((Key, Value)),
 }
 
 #[allow(clippy::match_same_arms)]
 impl Mutation {
     pub fn key(&self) -> &Key {
-        match *self {
+        match self {
             Mutation::Put((ref key, _)) => key,
             Mutation::Delete(ref key) => key,
             Mutation::Lock(ref key) => key,
             Mutation::Insert((ref key, _)) => key,
+        }
+    }
+
+    pub fn into_key_value(self) -> (Key, Option<Value>) {
+        match self {
+            Mutation::Put((key, value)) => (key, Some(value)),
+            Mutation::Delete(key) => (key, None),
+            Mutation::Lock(key) => (key, None),
+            Mutation::Insert((key, value)) => (key, Some(value)),
+        }
+    }
+
+    pub fn is_insert(&self) -> bool {
+        match self {
+            Mutation::Insert(_) => true,
+            _ => false,
         }
     }
 }
@@ -86,80 +116,158 @@ pub enum StorageCb {
     Locks(Callback<Vec<LockInfo>>),
 }
 
+/// Store Transaction scheduler commands.
+///
+/// Learn more about our transaction system at
+/// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/deep-dive/distributed-transaction/)
+///
+/// These are typically scheduled and used through the [`Storage`](Storage) with functions like
+/// [`Storage::async_prewrite`](Storage::async_prewrite) trait and are executed asyncronously.
+// Logic related to these can be found in the `src/storage/txn/procecss.rs::process_write_impl` function.
 pub enum Command {
+    /// The prewrite phase of a transaction. The first phase of 2PC.
+    ///
+    /// This prepares the system to commit the transaction. Later a [`Commit`](Command::Commit)
+    /// or a [`Rollback`](Command::Rollback) should follow.
+    ///
+    /// If `options.for_update_ts` is `0`, the transaction is optimistic. Else it is pessimistic.
     Prewrite {
         ctx: Context,
+        /// The set of mutations to apply.
         mutations: Vec<Mutation>,
+        /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
         primary: Vec<u8>,
+        /// The transaction timestamp.
         start_ts: u64,
         options: Options,
     },
+    /// Acquire a Pessimistic lock on the keys.
+    ///
+    /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock {
         ctx: Context,
+        /// The set of keys to lock.
         keys: Vec<(Key, bool)>,
+        /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
         primary: Vec<u8>,
+        /// The transaction timestamp.
         start_ts: u64,
         options: Options,
     },
+    /// Commit the transaction that started at `lock_ts`.
+    ///
+    /// This should be following a [`Prewrite`](Command::Prewrite).
     Commit {
         ctx: Context,
+        /// The keys affected.
         keys: Vec<Key>,
+        /// The lock timestamp.
         lock_ts: u64,
+        /// The commit timestamp.
         commit_ts: u64,
     },
+    /// Rollback mutations on a single key.
+    ///
+    /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Cleanup {
         ctx: Context,
         key: Key,
+        /// The transaction timestamp.
         start_ts: u64,
     },
+    /// Rollback from the transaction that was started at `start_ts`.
+    ///
+    /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Rollback {
         ctx: Context,
         keys: Vec<Key>,
+        /// The transaction timestamp.
         start_ts: u64,
     },
+    /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
+    ///
+    /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
     PessimisticRollback {
         ctx: Context,
+        /// The keys to be rolled back.
         keys: Vec<Key>,
+        /// The transaction timestamp.
         start_ts: u64,
         for_update_ts: u64,
     },
+    /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock {
         ctx: Context,
+        /// The maximum transaction timestamp to scan.
         max_ts: u64,
+        /// The key to start from. (`None` means start from the very beginning.)
         start_key: Option<Key>,
+        /// The result limit.
         limit: usize,
     },
+    /// Resolve locks according to `txn_status`.
+    ///
+    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
+    /// before safe point.
     ResolveLock {
         ctx: Context,
+        /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
+        ///
+        /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
+        /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
+        /// start_ts is 102 was rolled back. If there are these keys in the db:
+        ///
+        /// * "k1", lock_ts = 100
+        /// * "k2", lock_ts = 102
+        /// * "k3", lock_ts = 104
+        /// * "k4", no lock
+        ///
+        /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
+        /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
+        /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
+        /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
+        /// version.
         txn_status: HashMap<u64, u64>,
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
     },
+    /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
     ResolveLockLite {
         ctx: Context,
+        /// The transaction timestamp.
         start_ts: u64,
+        /// The transaction commit timestamp.
         commit_ts: u64,
+        /// The keys to resolve.
         resolve_keys: Vec<Key>,
     },
+    /// Delete all keys in the range [`start_key`, `end_key`).
+    ///
+    /// **This is an unsafe action.**
+    ///
+    /// All keys in the range will be deleted permanently regardless of their timestamps.
+    /// This means that deleted keys will not be retrievable by specifying an older timestamp.
     DeleteRange {
         ctx: Context,
+        /// The inclusive start key.
         start_key: Key,
+        /// The exclusive end key.
         end_key: Key,
     },
-    // only for test, keep the latches of keys for a while
+    /// **Testing functionality:** Latch the given keys for given duration.
+    ///
+    /// This means other write operations that involve these keys will be blocked.
     Pause {
         ctx: Context,
+        /// The keys to hold latches on.
         keys: Vec<Key>,
+        /// The amount of time in milliseconds to latch for.
         duration: u64,
     },
-    MvccByKey {
-        ctx: Context,
-        key: Key,
-    },
-    MvccByStartTs {
-        ctx: Context,
-        start_ts: u64,
-    },
+    /// Retrieve MVCC information for the given key.
+    MvccByKey { ctx: Context, key: Key },
+    /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
+    MvccByStartTs { ctx: Context, start_ts: u64 },
 }
 
 impl Display for Command {
@@ -561,20 +669,21 @@ impl<E: Engine> TestStorageBuilder<E> {
     }
 }
 
-/// `Storage` implements transactional KV APIs and raw KV APIs on a given `Engine`. An `Engine`
-/// provides low level KV functionality. `Engine` has multiple implementations. When a TiKV server
-/// is running, a `RaftKv` will be the underlying `Engine` of `Storage`. The other two types of
+/// [`Storage`] implements transactional KV APIs and raw KV APIs on a given [`Engine`]. An [`Engine`]
+/// provides low level KV functionality. [`Engine`] has multiple implementations. When a TiKV server
+/// is running, a [`RaftKv`] will be the underlying [`Engine`] of [`Storage`]. The other two types of
 /// engines are for test purpose.
 ///
-/// `Storage` is reference counted and cloning `Storage` will just increase the reference counter.
+///[`Storage`] is reference counted and cloning [`Storage`] will just increase the reference counter.
 /// Storage resources (i.e. threads, engine) will be released when all references are dropped.
 ///
 /// Notice that read and write methods may not be performed over full data in most cases, i.e. when
-/// underlying engine is `RaftKv`, which limits data access in the range of a single region
-/// according to specified `ctx` parameter. However, `async_unsafe_destroy_range` is the only
-/// exception. It's always performed on the whole TiKV.
+/// underlying engine is [`RaftKv`], which limits data access in the range of a single region
+/// according to specified `ctx` parameter. However,
+/// [`async_unsafe_destroy_range`](Storage::async_unsafe_destroy_range) is the only exception. It's
+/// always performed on the whole TiKV.
 ///
-/// Operations of `Storage` can be divided into two types: MVCC operations and raw operations.
+/// Operations of [`Storage`] can be divided into two types: MVCC operations and raw operations.
 /// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
 /// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
 /// to it, so that multiple versions can be saved at the same time.
@@ -723,8 +832,9 @@ impl<E: Engine> Storage<E> {
             .map_err(Error::from)
     }
 
-    /// Get value of the given key from a snapshot. Only writes that are committed before `start_ts`
-    /// is visible.
+    /// Get value of the given key from a snapshot.
+    ///
+    /// Only writes that are committed before `start_ts` are visible.
     pub fn async_get(
         &self,
         ctx: Context,
@@ -776,8 +886,9 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Get values of a set of keys in a batch from the snapshot. Only writes that are committed
-    /// before `start_ts` is visible.
+    /// Get values of a set of keys in a batch from the snapshot.
+    ///
+    /// Only writes that are committed before `start_ts` are visible.
     pub fn async_batch_get(
         &self,
         ctx: Context,
@@ -835,9 +946,11 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot. If `end_key` is
-    /// `None`, it means the upper bound is unbounded. Only writes committed before `start_ts` is
-    /// visible.
+    /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot.
+    ///
+    /// If `end_key` is `None`, it means the upper bound is unbounded.
+    ///
+    /// Only writes committed before `start_ts` are visible.
     pub fn async_scan(
         &self,
         ctx: Context,
@@ -908,8 +1021,9 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Latch the given keys for given duration, so other write operations that involve these keys
-    /// will be blocked. Only used for tests purpose.
+    /// **Testing functionality:** Latch the given keys for given duration.
+    ///
+    /// This means other write operations that involve these keys will be blocked.
     pub fn async_pause(
         &self,
         ctx: Context,
@@ -927,8 +1041,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Prewrite some mutations to the storage. It's the first phase of 2PC. The transaction model
-    /// comes from [Google Percolator](https://ai.google/research/pubs/pub36726).
+    /// The prewrite phase of a transaction. The first phase of 2PC.
+    ///
+    /// Schedules a [`Command::Prewrite`].
     pub fn async_prewrite(
         &self,
         ctx: Context,
@@ -957,6 +1072,8 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Acquire a Pessimistic lock on the keys.
+    /// Schedules a [`Command::AcquirePessimisticLock`].
     pub fn async_acquire_pessimistic_lock(
         &self,
         ctx: Context,
@@ -991,6 +1108,8 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Commit the transaction that started at `lock_ts`.
+    ///
+    /// Schedules a [`Command::Commit`].
     pub fn async_commit(
         &self,
         ctx: Context,
@@ -1011,11 +1130,14 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Delete all keys in the range [`start_key`, `end_key`).
+    ///
     /// All keys in the range will be deleted permanently regardless of their timestamps.
-    /// That means, you are even unable to get deleted keys by specifying an older timestamp.
+    /// This means that deleted keys will not be retrievable by specifying an older timestamp.
     /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
     /// still be replicated via Raft. This is used to notify that the data will be deleted by
     /// `unsafe_destroy_range` soon.
+    ///
+    /// Schedules a [`Command::DeleteRange`].
     pub fn async_delete_range(
         &self,
         ctx: Context,
@@ -1043,6 +1165,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Rollback mutations on a single key.
+    ///
+    /// Schedules a [`Command::Cleanup`].
     pub fn async_cleanup(
         &self,
         ctx: Context,
@@ -1056,7 +1181,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Roll back the transaction that was started at `start_ts`.
+    /// Rollback from the transaction that was started at `start_ts`.
+    ///
+    /// Schedules a [`Command::Rollback`].
     pub fn async_rollback(
         &self,
         ctx: Context,
@@ -1074,7 +1201,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Roll back pessimistic locks identified by `start_ts` and `for_update_ts`
+    /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
+    ///
+    /// Schedules a [`Command::PessimisticRollback`].
     pub fn async_pessimistic_rollback(
         &self,
         ctx: Context,
@@ -1100,6 +1229,8 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
+    ///
+    /// Schedules a [`Command::ScanLock`].
     pub fn async_scan_locks(
         &self,
         ctx: Context,
@@ -1123,25 +1254,15 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Resolve locks according to `txn_status`. During the GC operation, this will be called by
-    /// TiDB to clean up stale locks whose timestamp is before safe point.
+    /// Resolve locks according to `txn_status`.
     ///
-    /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
+    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
+    /// before the safe point.
     ///
-    /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
-    /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
-    /// start_ts is 102 was rolled back. If there are these keys in the db:
+    /// `txn_status` maps lock_ts to commit_ts. If a transaction is rolled back, it is mapped to 0.
+    /// For an example, check the [`Command::ResolveLock`] docs.
     ///
-    /// * "k1", lock_ts = 100
-    /// * "k2", lock_ts = 102
-    /// * "k3", lock_ts = 104
-    /// * "k4", no lock
-    ///
-    /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
-    /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
-    /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
-    /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
-    /// version.
+    /// Schedules a [`Command::ResolveLock`].
     pub fn async_resolve_lock(
         &self,
         ctx: Context,
@@ -1159,6 +1280,12 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
+    ///
+    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
+    /// before the safe point.
+    ///
+    /// Schedules a [`Command::ResolveLockLite`].
     pub fn async_resolve_lock_lite(
         &self,
         ctx: Context,
@@ -1178,7 +1305,8 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Does garbage collection, which means cleaning up old MVCC keys.
+    /// Do garbage collection, which means cleaning up old MVCC keys.
+    ///
     /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
     /// during and after the GC operation.
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
@@ -1188,9 +1316,10 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Delete all data in the range.
+    ///
     /// This function is **VERY DANGEROUS**. It's not only running on one single region, but it can
     /// delete a large range that spans over many regions, bypassing the Raft layer. This is
-    /// designed for TiDB to quickly free up disk space while doing GC after
+    /// designed for TiDB to quickly free up the disk space and do GC afterward.
     /// drop/truncate table/index. By invoking this function, it's user's responsibility to make
     /// sure no more operations will be performed in this destroyed range.
     pub fn async_unsafe_destroy_range(
@@ -1956,12 +2085,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .async_get(Context::default(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
@@ -1976,12 +2105,12 @@ mod tests {
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 101)
+                .async_get(Context::default(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"x")],
                 100,
                 101,
@@ -1991,13 +2120,13 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .async_get(Context::default(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 101)
+                .async_get(Context::default(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
     }
@@ -2010,7 +2139,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
@@ -2033,7 +2162,7 @@ mod tests {
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 1)
+                .async_get(Context::default(), Key::from_raw(b"x"), 1)
                 .wait(),
         );
         expect_error(
@@ -2043,7 +2172,7 @@ mod tests {
             },
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"x"),
                     None,
                     1000,
@@ -2056,7 +2185,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_batch_get(
-                    Context::new(),
+                    Context::default(),
                     vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                     1,
                 )
@@ -2070,7 +2199,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
@@ -2088,7 +2217,7 @@ mod tests {
             vec![None, None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
@@ -2102,7 +2231,7 @@ mod tests {
             vec![None, None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
@@ -2116,7 +2245,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
@@ -2130,7 +2259,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
@@ -2144,7 +2273,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     None,
                     2,
@@ -2158,7 +2287,7 @@ mod tests {
             vec![None, None],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     None,
                     2,
@@ -2170,7 +2299,7 @@ mod tests {
 
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![
                     Key::from_raw(b"a"),
                     Key::from_raw(b"b"),
@@ -2191,7 +2320,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
@@ -2209,7 +2338,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
@@ -2226,7 +2355,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
@@ -2243,7 +2372,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
@@ -2261,7 +2390,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\x00"),
                     None,
                     2,
@@ -2278,7 +2407,7 @@ mod tests {
             ],
             storage
                 .async_scan(
-                    Context::new(),
+                    Context::default(),
                     Key::from_raw(b"\xff"),
                     None,
                     2,
@@ -2295,7 +2424,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
@@ -2312,7 +2441,7 @@ mod tests {
             vec![None],
             storage
                 .async_batch_get(
-                    Context::new(),
+                    Context::default(),
                     vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                     2,
                 )
@@ -2320,7 +2449,7 @@ mod tests {
         );
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![
                     Key::from_raw(b"a"),
                     Key::from_raw(b"b"),
@@ -2340,7 +2469,7 @@ mod tests {
             ],
             storage
                 .async_batch_get(
-                    Context::new(),
+                    Context::default(),
                     vec![
                         Key::from_raw(b"c"),
                         Key::from_raw(b"x"),
@@ -2359,7 +2488,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
@@ -2369,7 +2498,7 @@ mod tests {
             .unwrap();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                 b"y".to_vec(),
                 101,
@@ -2381,7 +2510,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"x")],
                 100,
                 110,
@@ -2390,7 +2519,7 @@ mod tests {
             .unwrap();
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"y")],
                 101,
                 111,
@@ -2402,18 +2531,18 @@ mod tests {
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 120)
+                .async_get(Context::default(), Key::from_raw(b"x"), 120)
                 .wait(),
         );
         expect_value(
             b"101".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"y"), 120)
+                .async_get(Context::default(), Key::from_raw(b"y"), 120)
                 .wait(),
         );
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
                 b"x".to_vec(),
                 105,
@@ -2435,12 +2564,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .async_get(Context::default(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_pause(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"x")],
                 1000,
                 expect_ok_callback(tx.clone(), 1),
@@ -2448,7 +2577,7 @@ mod tests {
             .unwrap();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                 b"y".to_vec(),
                 101,
@@ -2460,7 +2589,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
                 b"y".to_vec(),
                 102,
@@ -2477,7 +2606,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
@@ -2488,7 +2617,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_cleanup(
-                Context::new(),
+                Context::default(),
                 Key::from_raw(b"x"),
                 100,
                 expect_ok_callback(tx.clone(), 1),
@@ -2497,7 +2626,7 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 105)
+                .async_get(Context::default(), Key::from_raw(b"x"), 105)
                 .wait(),
         );
     }
@@ -2506,10 +2635,10 @@ mod tests {
     fn test_high_priority_get_put() {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_none(storage.async_get(ctx, Key::from_raw(b"x"), 100).wait());
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
             .async_prewrite(
@@ -2522,7 +2651,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
             .async_commit(
@@ -2534,10 +2663,10 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_none(storage.async_get(ctx, Key::from_raw(b"x"), 100).wait());
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
@@ -2553,12 +2682,12 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .async_get(Context::default(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
@@ -2569,7 +2698,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"x")],
                 100,
                 101,
@@ -2580,13 +2709,13 @@ mod tests {
 
         storage
             .async_pause(
-                Context::new(),
+                Context::default(),
                 vec![Key::from_raw(b"y")],
                 1000,
                 expect_ok_callback(tx.clone(), 3),
             )
             .unwrap();
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
@@ -2603,7 +2732,7 @@ mod tests {
         // Write x and y.
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"x"), b"100".to_vec())),
                     Mutation::Put((Key::from_raw(b"y"), b"100".to_vec())),
@@ -2618,7 +2747,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_commit(
-                Context::new(),
+                Context::default(),
                 vec![
                     Key::from_raw(b"x"),
                     Key::from_raw(b"y"),
@@ -2633,26 +2762,26 @@ mod tests {
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 101)
+                .async_get(Context::default(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"y"), 101)
+                .async_get(Context::default(), Key::from_raw(b"y"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"z"), 101)
+                .async_get(Context::default(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
 
         // Delete range [x, z)
         storage
             .async_delete_range(
-                Context::new(),
+                Context::default(),
                 Key::from_raw(b"x"),
                 Key::from_raw(b"z"),
                 false,
@@ -2662,24 +2791,24 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 101)
+                .async_get(Context::default(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"y"), 101)
+                .async_get(Context::default(), Key::from_raw(b"y"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), Key::from_raw(b"z"), 101)
+                .async_get(Context::default(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
 
         storage
             .async_delete_range(
-                Context::new(),
+                Context::default(),
                 Key::from_raw(b""),
                 Key::from_raw(&[255]),
                 false,
@@ -2689,7 +2818,7 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), Key::from_raw(b"z"), 101)
+                .async_get(Context::default(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
     }
@@ -2711,7 +2840,7 @@ mod tests {
         for kv in &test_data {
             storage
                 .async_raw_put(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     kv.0.to_vec(),
                     kv.1.to_vec(),
@@ -2723,14 +2852,14 @@ mod tests {
         expect_value(
             b"004".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"d".to_vec())
                 .wait(),
         );
 
         // Delete ["d", "e")
         storage
             .async_raw_delete_range(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 b"d".to_vec(),
                 b"e".to_vec(),
@@ -2743,25 +2872,25 @@ mod tests {
         expect_value(
             b"003".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"c".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"c".to_vec())
                 .wait(),
         );
         expect_none(
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"d".to_vec())
                 .wait(),
         );
         expect_value(
             b"005".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"e".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"e".to_vec())
                 .wait(),
         );
 
         // Delete ["aa", "ab")
         storage
             .async_raw_delete_range(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 b"aa".to_vec(),
                 b"ab".to_vec(),
@@ -2774,20 +2903,20 @@ mod tests {
         expect_value(
             b"001".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"a".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"a".to_vec())
                 .wait(),
         );
         expect_value(
             b"002".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"b".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"b".to_vec())
                 .wait(),
         );
 
         // Delete all
         storage
             .async_raw_delete_range(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 b"a".to_vec(),
                 b"z".to_vec(),
@@ -2800,7 +2929,7 @@ mod tests {
         for kv in &test_data {
             expect_none(
                 storage
-                    .async_raw_get(Context::new(), "".to_string(), kv.0.to_vec())
+                    .async_raw_get(Context::default(), "".to_string(), kv.0.to_vec())
                     .wait(),
             );
         }
@@ -2824,7 +2953,7 @@ mod tests {
         // Write key-value pairs in a batch
         storage
             .async_raw_batch_put(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
@@ -2837,7 +2966,7 @@ mod tests {
             expect_value(
                 val,
                 storage
-                    .async_raw_get(Context::new(), "".to_string(), key)
+                    .async_raw_get(Context::default(), "".to_string(), key)
                     .wait(),
             );
         }
@@ -2860,7 +2989,7 @@ mod tests {
         for &(ref key, ref value) in &test_data {
             storage
                 .async_raw_put(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     key.clone(),
                     value.clone(),
@@ -2876,7 +3005,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .async_raw_batch_get(Context::default(), "".to_string(), keys)
                 .wait(),
         );
     }
@@ -2897,7 +3026,7 @@ mod tests {
         // Write key-value pairs in batch
         storage
             .async_raw_batch_put(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
@@ -2914,14 +3043,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .async_raw_batch_get(Context::default(), "".to_string(), keys)
                 .wait(),
         );
 
         // Delete ["b", "d"]
         storage
             .async_raw_batch_delete(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 vec![b"b".to_vec(), b"d".to_vec()],
                 expect_ok_callback(tx.clone(), 1),
@@ -2933,36 +3062,36 @@ mod tests {
         expect_value(
             b"aa".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"a".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"a".to_vec())
                 .wait(),
         );
         expect_none(
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"b".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"b".to_vec())
                 .wait(),
         );
         expect_value(
             b"cc".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"c".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"c".to_vec())
                 .wait(),
         );
         expect_none(
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"d".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"d".to_vec())
                 .wait(),
         );
         expect_value(
             b"ee".to_vec(),
             storage
-                .async_raw_get(Context::new(), "".to_string(), b"e".to_vec())
+                .async_raw_get(Context::default(), "".to_string(), b"e".to_vec())
                 .wait(),
         );
 
         // Delete ["a", "c", "e"]
         storage
             .async_raw_batch_delete(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
                 expect_ok_callback(tx.clone(), 2),
@@ -2974,7 +3103,7 @@ mod tests {
         for (k, _) in test_data {
             expect_none(
                 storage
-                    .async_raw_get(Context::new(), "".to_string(), k)
+                    .async_raw_get(Context::default(), "".to_string(), k)
                     .wait(),
             );
         }
@@ -3011,7 +3140,7 @@ mod tests {
         // Write key-value pairs in batch
         storage
             .async_raw_batch_put(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
@@ -3028,7 +3157,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     vec![],
                     None,
@@ -3043,7 +3172,7 @@ mod tests {
             results,
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"c2".to_vec(),
                     None,
@@ -3062,7 +3191,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     vec![],
                     None,
@@ -3077,7 +3206,7 @@ mod tests {
             results,
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"c2".to_vec(),
                     None,
@@ -3097,7 +3226,7 @@ mod tests {
             results,
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"z".to_vec(),
                     None,
@@ -3118,7 +3247,7 @@ mod tests {
             results,
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"z".to_vec(),
                     None,
@@ -3141,7 +3270,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"b2".to_vec(),
                     Some(b"c2".to_vec()),
@@ -3162,7 +3291,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"b2".to_vec(),
                     Some(b"b2\x00".to_vec()),
@@ -3186,7 +3315,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"c2".to_vec(),
                     Some(b"b2".to_vec()),
@@ -3207,7 +3336,7 @@ mod tests {
             results.clone(),
             storage
                 .async_raw_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     b"b2\x00".to_vec(),
                     Some(b"b2".to_vec()),
@@ -3219,7 +3348,7 @@ mod tests {
         );
 
         // End key tests. Confirm that lower/upper bound works correctly.
-        let ctx = Context::new();
+        let ctx = Context::default();
         let results = vec![
             (b"c1".to_vec(), b"cc11".to_vec()),
             (b"c2".to_vec(), b"cc22".to_vec()),
@@ -3271,7 +3400,7 @@ mod tests {
             ranges
                 .into_iter()
                 .map(|(s, e)| {
-                    let mut range = KeyRange::new();
+                    let mut range = KeyRange::default();
                     range.set_start_key(s);
                     if !e.is_empty() {
                         range.set_end_key(e);
@@ -3394,7 +3523,7 @@ mod tests {
         // Write key-value pairs in batch
         storage
             .async_raw_batch_put(
-                Context::new(),
+                Context::default(),
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
@@ -3408,7 +3537,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_get(Context::new(), "".to_string(), keys)
+                .async_raw_batch_get(Context::default(), "".to_string(), keys)
                 .wait(),
         );
 
@@ -3430,7 +3559,7 @@ mod tests {
         let ranges: Vec<KeyRange> = vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
             .into_iter()
             .map(|k| {
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 range.set_start_key(k);
                 range
             })
@@ -3439,7 +3568,7 @@ mod tests {
             results,
             storage
                 .async_raw_batch_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     ranges.clone(),
                     5,
@@ -3468,7 +3597,7 @@ mod tests {
             results,
             storage
                 .async_raw_batch_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     ranges.clone(),
                     5,
@@ -3493,7 +3622,7 @@ mod tests {
             results,
             storage
                 .async_raw_batch_scan(
-                    Context::new(),
+                    Context::default(),
                     "".to_string(),
                     ranges.clone(),
                     3,
@@ -3517,7 +3646,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 3, true, false)
+                .async_raw_batch_scan(Context::default(), "".to_string(), ranges, 3, true, false)
                 .wait(),
         );
 
@@ -3539,7 +3668,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(s, e)| {
-            let mut range = KeyRange::new();
+            let mut range = KeyRange::default();
             range.set_start_key(s);
             range.set_end_key(e);
             range
@@ -3548,7 +3677,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, false, true)
+                .async_raw_batch_scan(Context::default(), "".to_string(), ranges, 5, false, true)
                 .wait(),
         );
 
@@ -3563,7 +3692,7 @@ mod tests {
         let ranges: Vec<KeyRange> = vec![b"c3".to_vec(), b"b3".to_vec(), b"a3".to_vec()]
             .into_iter()
             .map(|s| {
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 range.set_start_key(s);
                 range
             })
@@ -3571,7 +3700,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 2, false, true)
+                .async_raw_batch_scan(Context::default(), "".to_string(), ranges, 2, false, true)
                 .wait(),
         );
 
@@ -3593,7 +3722,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(s, e)| {
-            let mut range = KeyRange::new();
+            let mut range = KeyRange::default();
             range.set_start_key(s);
             range.set_end_key(e);
             range
@@ -3602,7 +3731,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true, true)
+                .async_raw_batch_scan(Context::default(), "".to_string(), ranges, 5, true, true)
                 .wait(),
         );
     }
@@ -3613,7 +3742,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"y"), b"foo".to_vec())),
@@ -3628,7 +3757,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
@@ -3643,42 +3772,42 @@ mod tests {
         rx.recv().unwrap();
         let (lock_a, lock_b, lock_c, lock_x, lock_y, lock_z) = (
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"a".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"b".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"c".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"x".to_vec());
                 lock.set_lock_version(100);
                 lock.set_key(b"x".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"x".to_vec());
                 lock.set_lock_version(100);
                 lock.set_key(b"y".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"x".to_vec());
                 lock.set_lock_version(100);
                 lock.set_key(b"z".to_vec());
@@ -3687,7 +3816,7 @@ mod tests {
         );
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 99,
                 vec![],
                 10,
@@ -3697,7 +3826,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 100,
                 vec![],
                 10,
@@ -3711,7 +3840,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 100,
                 b"a".to_vec(),
                 10,
@@ -3725,7 +3854,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 100,
                 b"y".to_vec(),
                 10,
@@ -3735,7 +3864,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 vec![],
                 10,
@@ -3756,7 +3885,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 vec![],
                 4,
@@ -3775,7 +3904,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 b"b".to_vec(),
                 4,
@@ -3794,7 +3923,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 b"b".to_vec(),
                 0,
@@ -3824,7 +3953,7 @@ mod tests {
         // These locks (transaction ts=99) are not going to be resolved.
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
@@ -3840,21 +3969,21 @@ mod tests {
 
         let (lock_a, lock_b, lock_c) = (
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(99);
                 lock.set_key(b"a".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(99);
                 lock.set_key(b"b".to_vec());
                 lock
             },
             {
-                let mut lock = LockInfo::new();
+                let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(99);
                 lock.set_key(b"c".to_vec());
@@ -3892,7 +4021,7 @@ mod tests {
 
                 storage
                     .async_prewrite(
-                        Context::new(),
+                        Context::default(),
                         mutations,
                         b"x".to_vec(),
                         ts,
@@ -3913,7 +4042,7 @@ mod tests {
                 );
                 storage
                     .async_resolve_lock(
-                        Context::new(),
+                        Context::default(),
                         txn_status,
                         expect_ok_callback(tx.clone(), 0),
                     )
@@ -3923,7 +4052,7 @@ mod tests {
                 // All locks should be resolved except for a, b and c.
                 storage
                     .async_scan_locks(
-                        Context::new(),
+                        Context::default(),
                         ts,
                         vec![],
                         0,
@@ -3948,7 +4077,7 @@ mod tests {
 
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
@@ -3966,7 +4095,7 @@ mod tests {
         let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
         storage
             .async_resolve_lock_lite(
-                Context::new(),
+                Context::default(),
                 99,
                 0,
                 resolve_keys,
@@ -3977,7 +4106,7 @@ mod tests {
 
         // Check lock for key 'a'.
         let lock_a = {
-            let mut lock = LockInfo::new();
+            let mut lock = LockInfo::default();
             lock.set_primary_lock(b"c".to_vec());
             lock.set_lock_version(99);
             lock.set_key(b"a".to_vec());
@@ -3985,7 +4114,7 @@ mod tests {
         };
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 99,
                 vec![],
                 0,
@@ -3997,7 +4126,7 @@ mod tests {
         // Resolve lock for key 'a'.
         storage
             .async_resolve_lock_lite(
-                Context::new(),
+                Context::default(),
                 99,
                 0,
                 vec![Key::from_raw(b"a")],
@@ -4008,7 +4137,7 @@ mod tests {
 
         storage
             .async_prewrite(
-                Context::new(),
+                Context::default(),
                 vec![
                     Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
                     Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
@@ -4026,7 +4155,7 @@ mod tests {
         let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
         storage
             .async_resolve_lock_lite(
-                Context::new(),
+                Context::default(),
                 101,
                 102,
                 resolve_keys,
@@ -4037,7 +4166,7 @@ mod tests {
 
         // Check lock for key 'a'.
         let lock_a = {
-            let mut lock = LockInfo::new();
+            let mut lock = LockInfo::default();
             lock.set_primary_lock(b"c".to_vec());
             lock.set_lock_version(101);
             lock.set_key(b"a".to_vec());
@@ -4045,7 +4174,7 @@ mod tests {
         };
         storage
             .async_scan_locks(
-                Context::new(),
+                Context::default(),
                 101,
                 vec![],
                 0,

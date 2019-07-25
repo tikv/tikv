@@ -12,7 +12,7 @@ use tikv::coprocessor::codec::datum::Datum;
 use tikv::coprocessor::codec::mysql::*;
 
 fn field_type(tp: FieldTypeTp) -> FieldType {
-    let mut fp = FieldType::new();
+    let mut fp = FieldType::default();
     fp.as_mut_accessor().set_tp(tp);
     fp
 }

@@ -8,7 +8,7 @@ use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Store};
+use crate::storage::{FixtureStore, Statistics, Store};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
@@ -94,8 +94,13 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
@@ -131,13 +136,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Scanner::new(
-            store,
-            crate::coprocessor::dag::ScanOn::Index,
-            desc,
-            false,
-            range,
-        )
+        Scanner::new(store, desc, false, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -264,17 +263,17 @@ mod tests {
         // The column info for each column in `data`. Used to build the executor.
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci
@@ -311,7 +310,7 @@ mod tests {
             // Case 1.1. Normal index, without PK, scan total index in reverse order.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::Min]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -361,7 +360,7 @@ mod tests {
             // Case 1.2. Normal index, with PK, scan index prefix.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(2)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -438,7 +437,7 @@ mod tests {
             // Case 2.1. Unique index, prefix range scan.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(5)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -492,7 +491,7 @@ mod tests {
             // Case 2.2. Unique index, point scan.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(5), Datum::F64(5.1)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);

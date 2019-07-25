@@ -19,7 +19,7 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Ben
                 .generate(DEFAULT_ITERATIONS);
             let data: Vec<(Context, Vec<u8>)> = kvs
                 .iter()
-                .map(|(k, _)| (Context::new(), k.clone()))
+                .map(|(k, _)| (Context::default(), k.clone()))
                 .collect();
             (data, &store)
         },
@@ -44,7 +44,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
                 .iter()
                 .map(|(k, v)| {
                     (
-                        Context::new(),
+                        Context::default(),
                         vec![Mutation::Put((Key::from_raw(&k), v.clone()))],
                         k.clone(),
                     )
@@ -72,7 +72,7 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Benc
             for (k, v) in &kvs {
                 store
                     .prewrite(
-                        Context::new(),
+                        Context::default(),
                         vec![Mutation::Put((Key::from_raw(&k), v.clone()))],
                         k.clone(),
                         1,
@@ -84,7 +84,7 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Benc
         },
         |(kvs, store)| {
             for (k, _) in &kvs {
-                black_box(store.commit(Context::new(), vec![Key::from_raw(k)], 1, 2)).unwrap();
+                black_box(store.commit(Context::default(), vec![Key::from_raw(k)], 1, 2)).unwrap();
             }
         },
         BatchSize::SmallInput,

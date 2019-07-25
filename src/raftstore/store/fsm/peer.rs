@@ -25,7 +25,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
@@ -107,10 +107,10 @@ impl Drop for PeerFsm {
                 _ => continue,
             };
 
-            let mut err = errorpb::Error::new();
+            let mut err = errorpb::Error::default();
             err.set_message("region is not found".to_owned());
             err.mut_region_not_found().set_region_id(self.region_id());
-            let mut resp = RaftCmdResponse::new();
+            let mut resp = RaftCmdResponse::default();
             resp.mut_header().set_error(err);
             callback.invoke_with_response(resp);
         }
@@ -178,7 +178,7 @@ impl PeerFsm {
             "peer_id" => peer.get_id(),
         );
 
-        let mut region = metapb::Region::new();
+        let mut region = metapb::Region::default();
         region.set_id(region_id);
 
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
@@ -605,7 +605,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_role_changed(&mut self, ready: &Ready) {
         // Update leader lease when the Raft state changes.
-        if let Some(ref ss) = ready.ss {
+        if let Some(ss) = ready.ss() {
             if StateRole::Leader == ss.raft_state {
                 self.fsm.missing_ticks = 0;
                 self.register_split_region_check_tick();
@@ -629,7 +629,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(r) = res {
             self.on_role_changed(&r.0);
-            if !r.0.entries.is_empty() {
+            if !r.0.entries().is_empty() {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
             }
@@ -1189,7 +1189,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
         let key = SnapKey::from_region_snap(region_id, snap);
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
@@ -1432,7 +1432,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
         let change_type = cp.conf_change.get_change_type();
-        self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change);
+        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
+            panic!(
+                "{} apply conf change {:?} fails: {:?}",
+                self.fsm.peer.tag, cp, e
+            );
+        }
         if cp.conf_change.get_node_id() == raft::INVALID_ID {
             // Apply failed, skip.
             return;
@@ -1471,6 +1476,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
                 self.fsm.peer.recent_conf_change_time = now;
+            }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
             }
         }
 
@@ -1785,15 +1793,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             request
                 .mut_header()
                 .set_region_epoch(sibling_region.get_region_epoch().clone());
-            let mut admin = AdminRequest::new();
+            let mut admin = AdminRequest::default();
             admin.set_cmd_type(AdminCmdType::CommitMerge);
             admin
                 .mut_commit_merge()
                 .set_source(self.fsm.peer.region().clone());
             admin.mut_commit_merge().set_commit(state.get_commit());
-            admin
-                .mut_commit_merge()
-                .set_entries(RepeatedField::from_vec(entries));
+            admin.mut_commit_merge().set_entries(entries.into());
             request.set_admin_request(admin);
             (request, target_id)
         };
@@ -1817,7 +1823,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             request
                 .mut_header()
                 .set_region_epoch(self.fsm.peer.region().get_region_epoch().clone());
-            let mut admin = AdminRequest::new();
+            let mut admin = AdminRequest::default();
             admin.set_cmd_type(AdminCmdType::RollbackMerge);
             admin.mut_rollback_merge().set_commit(state.get_commit());
             request.set_admin_request(admin);
@@ -2301,7 +2307,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // ReadIndex can be processed on the replicas.
         let is_read_index_request =
             request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex;
-        if !(self.fsm.peer.is_leader() || is_read_index_request) {
+        let mut read_only = true;
+        for r in msg.get_requests() {
+            match r.get_cmd_type() {
+                CmdType::Get | CmdType::Snap | CmdType::ReadIndex => (),
+                _ => read_only = false,
+            }
+        }
+        let allow_replica_read = read_only && msg.get_header().get_replica_read();
+        if !(self.fsm.peer.is_leader() || is_read_index_request || allow_replica_read) {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             self.fsm.group_state = GroupState::Chaos;
@@ -2379,7 +2393,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // doesn't matter whether the peer is a leader or not. If it's not a leader, the proposing
         // command log entry can't be committed.
 
-        let mut resp = RaftCmdResponse::new();
+        let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
         if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
@@ -2995,7 +3009,7 @@ pub fn maybe_destroy_source(
 }
 
 pub fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
-    let mut request = RaftCmdRequest::new();
+    let mut request = RaftCmdRequest::default();
     request.mut_header().set_region_id(region_id);
     request.mut_header().set_peer(peer);
     request
@@ -3008,7 +3022,7 @@ fn new_verify_hash_request(
 ) -> RaftCmdRequest {
     let mut request = new_admin_request(region_id, peer);
 
-    let mut admin = AdminRequest::new();
+    let mut admin = AdminRequest::default();
     admin.set_cmd_type(AdminCmdType::VerifyHash);
     admin.mut_verify_hash().set_index(state.index);
     admin.mut_verify_hash().set_hash(state.hash.clone());
@@ -3024,7 +3038,7 @@ fn new_compact_log_request(
 ) -> RaftCmdRequest {
     let mut request = new_admin_request(region_id, peer);
 
-    let mut admin = AdminRequest::new();
+    let mut admin = AdminRequest::default();
     admin.set_cmd_type(AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
     admin.mut_compact_log().set_compact_term(compact_term);
@@ -3047,7 +3061,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }?;
         response.set_cmd_type(cmd_type);
 
-        let mut resp = RaftCmdResponse::new();
+        let mut resp = RaftCmdResponse::default();
         resp.set_status_response(response);
         // Bind peer current term here.
         bind_term(&mut resp, self.fsm.peer.term());
@@ -3055,7 +3069,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn execute_region_leader(&mut self) -> Result<StatusResponse> {
-        let mut resp = StatusResponse::new();
+        let mut resp = StatusResponse::default();
         if let Some(leader) = self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()) {
             resp.mut_region_leader().set_leader(leader);
         }
@@ -3068,7 +3082,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let region_id = request.get_header().get_region_id();
             return Err(Error::RegionNotInitialized(region_id));
         }
-        let mut resp = StatusResponse::new();
+        let mut resp = StatusResponse::default();
         resp.mut_region_detail()
             .set_region(self.fsm.peer.region().clone());
         if let Some(leader) = self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()) {

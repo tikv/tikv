@@ -89,7 +89,7 @@ impl RpnFnScalarEvaluator {
             .as_ref()
             .iter()
             .map(|expr_node| {
-                let mut ed = Expr::new();
+                let mut ed = Expr::default();
                 ed.set_field_type(expr_node.field_type().clone());
                 ed
             })

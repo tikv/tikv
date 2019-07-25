@@ -2,8 +2,6 @@
 
 use std::sync::Mutex;
 
-use protobuf::RepeatedField;
-
 use kvproto::pdpb::{GetMembersRequest, GetMembersResponse, Member, ResponseHeader};
 
 use super::*;
@@ -42,21 +40,21 @@ impl PdMocker for Split {
     fn set_endpoints(&self, eps: Vec<String>) {
         let mut members = Vec::with_capacity(eps.len());
         for (i, ep) in (&eps).iter().enumerate() {
-            let mut m = Member::new();
+            let mut m = Member::default();
             m.set_name(format!("pd{}", i));
             m.set_member_id(100 + i as u64);
-            m.set_client_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
-            m.set_peer_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
+            m.set_client_urls(vec![ep.to_owned()].into());
+            m.set_peer_urls(vec![ep.to_owned()].into());
             members.push(m);
         }
 
         let mut resps = Vec::with_capacity(eps.len());
         for i in 0..eps.len() {
-            let mut resp = GetMembersResponse::new();
-            let mut header = ResponseHeader::new();
+            let mut resp = GetMembersResponse::default();
+            let mut header = ResponseHeader::default();
             header.set_cluster_id(i as u64 + 1); // start from 1.
             resp.set_header(header.clone());
-            resp.set_members(RepeatedField::from_vec(members.clone()));
+            resp.set_members(members.clone().into());
             resp.set_leader(members[0].clone());
             resps.push(resp);
         }

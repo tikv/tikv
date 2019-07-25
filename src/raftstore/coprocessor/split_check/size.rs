@@ -408,11 +408,11 @@ pub mod tests {
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(1);
         region.set_start_key(vec![]);
         region.set_end_key(vec![]);
-        region.mut_peers().push(Peer::new());
+        region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
@@ -520,10 +520,10 @@ pub mod tests {
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_id(id);
         peer.set_store_id(id);
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(id);
         region.set_start_key(start_key);
         region.set_end_key(end_key);
