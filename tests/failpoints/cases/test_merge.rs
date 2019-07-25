@@ -254,7 +254,7 @@ fn test_node_merge_catch_up_logs_leader_election() {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 25;
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(1000);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
@@ -268,15 +268,23 @@ fn test_node_merge_catch_up_logs_leader_election() {
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
 
+    let state1 = cluster.truncated_state(1000, 1);
     // let the entries committed but not applied
     fail::cfg("on_handle_apply_1000_1003", "pause").unwrap();
     for i in 2..20 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v");
     }
-    // wait a while to trigger compact raft log
-    thread::sleep(Duration::from_millis(1000));
 
-    // after source peer is applied but before set it to tombstone
+    // wait to trigger compact raft log
+    thread::sleep(Duration::from_millis(100));
+    for _ in 0..50 {
+        let state2 = cluster.truncated_state(1000, 1);
+        if state1.get_index() != state2.get_index() {
+            break;
+        }
+        sleep_ms(10);
+    }
+
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
             .direction(Direction::Recv)
