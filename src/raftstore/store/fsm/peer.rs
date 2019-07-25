@@ -605,7 +605,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_role_changed(&mut self, ready: &Ready) {
         // Update leader lease when the Raft state changes.
-        if let Some(ref ss) = ready.ss {
+        if let Some(ss) = ready.ss() {
             if StateRole::Leader == ss.raft_state {
                 self.fsm.missing_ticks = 0;
                 self.register_split_region_check_tick();
@@ -629,7 +629,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(r) = res {
             self.on_role_changed(&r.0);
-            if !r.0.entries.is_empty() {
+            if !r.0.entries().is_empty() {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
             }
@@ -1434,7 +1434,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
         let change_type = cp.conf_change.get_change_type();
-        self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change);
+        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
+            panic!(
+                "{} apply conf change {:?} fails: {:?}",
+                self.fsm.peer.tag, cp, e
+            );
+        }
         if cp.conf_change.get_node_id() == raft::INVALID_ID {
             // Apply failed, skip.
             return;
@@ -1473,6 +1478,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
                 self.fsm.peer.recent_conf_change_time = now;
+            }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
             }
         }
 
