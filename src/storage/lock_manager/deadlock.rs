@@ -83,9 +83,10 @@ impl DetectTable {
         let now = self.now;
         let ttl = self.ttl;
 
-        // Memorize the searched vertexes.
-        let mut visited: HashSet<u64> = HashSet::default();
         let mut stack = vec![wait_for_ts];
+        // Memorize the pushed vertexes to avoid duplicate search.
+        let mut pushed: HashSet<u64> = HashSet::default();
+        pushed.insert(wait_for_ts);
         while let Some(wait_for_ts) = stack.pop() {
             if let Some(wait_for) = self.wait_for_map.get_mut(&wait_for_ts) {
                 // Remove expired edges.
@@ -97,11 +98,11 @@ impl DetectTable {
                         if *lock_ts == txn_ts {
                             return Some(lock_hashes[0]);
                         }
-                        if !visited.contains(lock_ts) {
+                        if !pushed.contains(lock_ts) {
                             stack.push(*lock_ts);
+                            pushed.insert(*lock_ts);
                         }
                     }
-                    visited.insert(wait_for_ts);
                 }
             }
         }
