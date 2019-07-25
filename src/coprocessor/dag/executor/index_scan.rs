@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
-use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
@@ -69,11 +68,6 @@ impl InnerExecutor for IndexInnerExecutor {
         self.unique && util::is_point(range)
     }
 
-    #[inline]
-    fn collect_executor_metrics(&self, m: &mut ExecutorMetrics) {
-        m.executor_count.index_scan += 1;
-    }
-
     // Since the unique index wouldn't always come with
     // self.unique = true. so the key-only would always be false.
     #[inline]
@@ -90,11 +84,10 @@ impl<S: Store> IndexScanExecutor<S> {
         key_ranges: Vec<KeyRange>,
         store: S,
         unique: bool,
-        collect: bool,
     ) -> Result<Self> {
         let columns = meta.get_columns().to_vec();
         let inner = IndexInnerExecutor::new(&mut meta, unique);
-        Self::new(inner, meta.get_desc(), columns, key_ranges, store, collect)
+        Self::new(inner, meta.get_desc(), columns, key_ranges, store)
     }
 
     pub fn index_scan_with_cols_len(
@@ -108,7 +101,7 @@ impl<S: Store> IndexScanExecutor<S> {
             pk_col: None,
             unique: false,
         };
-        Self::new(inner, false, vec![], key_ranges, store, false)
+        Self::new(inner, false, vec![], key_ranges, store)
     }
 }
 
@@ -127,6 +120,7 @@ pub mod tests {
 
     use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::execute_stats::ExecuteStats;
     use crate::coprocessor::dag::executor::Executor;
     use crate::coprocessor::dag::scanner::tests::Data;
 
@@ -291,8 +285,7 @@ pub mod tests {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false, false)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false).unwrap();
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
@@ -346,8 +339,7 @@ pub mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
             assert_eq!(row.handle, handle as i64);
@@ -361,9 +353,9 @@ pub mod tests {
         }
         assert!(scanner.next().unwrap().is_none());
         let expected_counts = vec![1, 3, 1, 5, 0];
-        let mut counts = Vec::with_capacity(5);
-        scanner.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let mut exec_stats = ExecuteStats::new(0);
+        scanner.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
     }
 
     #[test]
@@ -399,8 +391,7 @@ pub mod tests {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, false)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique).unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -424,8 +415,7 @@ pub mod tests {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false, false)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false).unwrap();
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
