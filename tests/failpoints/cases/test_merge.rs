@@ -276,7 +276,6 @@ fn test_node_merge_catch_up_logs_leader_election() {
     }
 
     // wait to trigger compact raft log
-    thread::sleep(Duration::from_millis(100));
     for _ in 0..50 {
         let state2 = cluster.truncated_state(1000, 1);
         if state1.get_index() != state2.get_index() {
