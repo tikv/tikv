@@ -534,6 +534,7 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
     }
 }
 
+/// the `s` must be a valid int_str
 fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
     if num_next_dot < '5' {
         return Cow::Borrowed(s);
@@ -543,6 +544,7 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
     match s.rfind(|c| c != '9' && c != '+' && c != '-') {
         Some(idx) => {
             int_str.push_str(&s[..idx]);
+            // because the `s` must be valid int_str, so it is ok to do this.
             let next_char = (s.as_bytes()[idx] + 1) as char;
             int_str.push(next_char);
             let zero_count = s.len() - (idx + 1);
