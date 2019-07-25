@@ -578,7 +578,10 @@ impl deadlock_grpc::Deadlock for Service {
     ) {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
-            let status = RpcStatus::new(GRPC_STATUS_RESOURCE_EXHAUSTED, None);
+            let status = RpcStatus::new(
+                GRPC_STATUS_RESOURCE_EXHAUSTED,
+                Some("waiter manager has stopped".to_owned()),
+            );
             ctx.spawn(sink.fail(status).map_err(|_| ()))
         } else {
             ctx.spawn(
@@ -605,7 +608,10 @@ impl deadlock_grpc::Deadlock for Service {
         let task = Task::DetectRpc { stream, sink };
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {
-            let status = RpcStatus::new(GRPC_STATUS_RESOURCE_EXHAUSTED, None);
+            let status = RpcStatus::new(
+                GRPC_STATUS_RESOURCE_EXHAUSTED,
+                Some("deadlock detector has stopped".to_owned()),
+            );
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }

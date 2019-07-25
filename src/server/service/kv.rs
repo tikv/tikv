@@ -712,11 +712,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
+            let err_msg = format!("{}", e);
             let sink = match e.into_inner() {
                 SnapTask::Recv { sink, .. } => sink,
                 _ => unreachable!(),
             };
-            let status = RpcStatus::new(GRPC_STATUS_RESOURCE_EXHAUSTED, None);
+            let status = RpcStatus::new(GRPC_STATUS_RESOURCE_EXHAUSTED, Some(err_msg));
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
