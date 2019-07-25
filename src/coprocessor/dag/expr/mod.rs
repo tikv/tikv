@@ -476,7 +476,7 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let got = eval_func(ScalarFuncSig::TruncateInt, &[Datum::I64(1028), Datum::I64(-2)]).unwrap();
     /// assert_eq!(got, Datum::I64(1000));
     /// ```
@@ -489,7 +489,7 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let x = Datum::U64(18446744073709551615);
     /// let d = Datum::I64(-2);
     /// let exp = Datum::U64(18446744073709551600);

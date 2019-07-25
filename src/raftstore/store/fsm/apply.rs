@@ -1532,6 +1532,9 @@ impl ApplyDelegate {
                     "region" => ?&self.region,
                 );
             }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
+            }
         }
 
         let state = if self.pending_remove {
@@ -2637,7 +2640,7 @@ impl ApplyFsm {
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_sync_apply_index != applied_index;
-        fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
+        (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(SlowTimer::new());
