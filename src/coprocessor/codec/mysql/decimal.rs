@@ -1519,10 +1519,8 @@ impl Decimal {
     ///
     /// Please note that this conversion may lose precision.
     pub fn as_f64(&self) -> Result<f64> {
-        let s = format!("{}", self);
-        // Can this line really return error?
-        let f = box_try!(s.parse::<f64>());
-        Ok(f)
+        let val = self.to_string().parse()?;
+        Ok(val)
     }
 
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
@@ -1796,7 +1794,6 @@ impl Display for Decimal {
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> crate::coprocessor::Result<bool> {
-        // Note: as_f64() may be never fail?
         Ok(self.as_f64()?.round() != 0f64)
     }
 }
@@ -2223,17 +2220,8 @@ mod tests {
     use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN};
 
     use std::cmp::Ordering;
-    use std::f64;
+    use std::f64::EPSILON;
     use std::iter::repeat;
-
-    macro_rules! assert_f64_eq {
-        ($l:expr, $r:expr) => {
-            assert!(($l - $r).abs() < f64::EPSILON)
-        };
-        ($tag:expr, $l:expr, $r:expr) => {
-            assert!(($l - $r).abs() < f64::EPSILON, $tag)
-        };
-    }
 
     #[test]
     fn test_from_i64() {
@@ -2315,7 +2303,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::approx_constant, clippy::excessive_precision)]
-    fn test_f64() {
+    fn test_to_f64() {
         let cases = vec![
             ("12345", 12345f64),
             ("123.45", 123.45),
@@ -2350,7 +2338,7 @@ mod tests {
             assert_eq!(res, dec_str);
 
             let f = dec.as_f64().unwrap();
-            assert_f64_eq!(f, exp);
+            assert!((exp - f).abs() < EPSILON, "expect: {}, got: {}", exp, f);
         }
     }
 
