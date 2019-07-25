@@ -107,13 +107,18 @@ fn test_stream_batch_row_limit() {
     let req = DAGSelect::from(&product).build();
     assert_eq!(req.get_ranges().len(), 1);
 
-    let mut expected_ranges_last_byte = vec![(0, 3), (3, 6), (6, 9)];
+    let ignored_suffix_len = 18; // tXXXXXXXX_rXXXXXXX (only ignore first 7 bytes of the row id)
+    let mut expected_ranges_last_bytes: Vec<(&[u8], &[u8])> = vec![
+        (b"\x00", b"\x02\x00"),
+        (b"\x02\x00", b"\x05\x00"),
+        (b"\x05\x00", b"\xFF"),
+    ];
     let check_range = move |resp: &Response| {
-        let (start_last_byte, end_last_byte) = expected_ranges_last_byte.remove(0);
+        let (start_last_bytes, end_last_bytes) = expected_ranges_last_bytes.remove(0);
         let start = resp.get_range().get_start();
         let end = resp.get_range().get_end();
-        assert_eq!(start[start.len() - 1], start_last_byte);
-        assert_eq!(end[end.len() - 1], end_last_byte);
+        assert_eq!(&start[ignored_suffix_len..], start_last_bytes);
+        assert_eq!(&end[ignored_suffix_len..], end_last_bytes);
     };
 
     let resps = handle_streaming_select(&endpoint, req, check_range);
