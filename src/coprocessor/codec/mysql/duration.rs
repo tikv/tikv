@@ -95,7 +95,7 @@ mod parser {
 
     /// Extracts a `u32` from a buffer which matches pattern: `\d+.*`
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(read_int(b"123abc"), Ok((b"abc", 123)));
     /// assert_eq!(read_int(b"12:34"), Ok((b":34", 12)));
     /// assert!(read_int(b"12345678:1").is_err());
@@ -117,7 +117,7 @@ mod parser {
     /// Extracts a `u32` with length `fsp` from a buffer which matches pattern: `\d+.*`
     /// This function assumes that `fsp` is valid
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(read_int_with_fsp(b"1234567", 3), Ok(b"", 123400000));
     /// assert_eq!(read_int_with_fsp(b"1234", 6), Ok(b"", 123400000));
     /// ```
@@ -142,7 +142,7 @@ mod parser {
 
     /// Parse the sign of `Duration`, return true if it's negative otherwise false
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(neg(b"- .123"),  Ok(b".123", true));
     /// assert_eq!(neg(b"-.123"),   Ok(b".123", true));
     /// assert_eq!(neg(b"- 11:21"), Ok(b"11:21", true));
@@ -164,7 +164,7 @@ mod parser {
     /// Parse the day/block(format like `HHMMSS`) value of the `Duration`,
     /// further paring will determine the value we got is a `day` value or `block` value.
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(day(b"1 1:1"), Ok(b"1:1", Some(1)));
     /// assert_eq!(day(b"1234"), Ok(b"", Some(1234)));
     /// assert_eq!(day(b"1234.123"), Ok(b".123", Some(1234)));
@@ -190,7 +190,7 @@ mod parser {
 
     /// Parse a separator ':'
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(separator(b" : "), Ok(b"", true));
     /// assert_eq!(separator(b":"), Ok(b"", true));
     /// assert_eq!(separator(b";"), Ok(b";", false));
@@ -207,7 +207,7 @@ mod parser {
 
     /// Parse format like: `hh:mm` `hh:mm:ss`
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(hhmmss(b"12:34:56"), Ok(b"", [12, 34, 56]));
     /// assert_eq!(hhmmss(b"12:34"), Ok(b"", [12, 34, None]));
     /// assert_eq!(hhmmss(b"1234"), Ok(b"", [None, None, None]));
@@ -226,7 +226,7 @@ mod parser {
 
     /// Parse fractional part.
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(fraction(" .123", 3), Ok(b"", Some(123)));
     /// assert_eq!(fraction("123", 3), Ok(b"", None));
     /// ```
