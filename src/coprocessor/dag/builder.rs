@@ -285,13 +285,15 @@ impl DAGBuilder {
         store: S,
         ranges: Vec<KeyRange>,
         ctx: Arc<EvalConfig>,
+        is_streaming: bool,
     ) -> Result<Box<dyn Executor>> {
         let mut exec_descriptors = exec_descriptors.into_iter();
         let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
 
-        let mut src = Self::build_normal_first_executor::<_, C>(first, store, ranges)?;
+        let mut src =
+            Self::build_normal_first_executor::<_, C>(first, store, ranges, is_streaming)?;
         let mut summary_slot_index = 0;
 
         for mut exec in exec_descriptors {
@@ -360,13 +362,14 @@ impl DAGBuilder {
         mut first: executor::Executor,
         store: S,
         ranges: Vec<KeyRange>,
+        is_streaming: bool,
     ) -> Result<Box<dyn Executor>> {
         match first.get_tp() {
             ExecType::TypeTableScan => {
                 COPR_EXECUTOR_COUNT.with_label_values(&["table_scan"]).inc();
 
                 let ex = Box::new(
-                    ScanExecutor::table_scan(first.take_tbl_scan(), ranges, store)?
+                    ScanExecutor::table_scan(first.take_tbl_scan(), ranges, store, is_streaming)?
                         .with_summary_collector(C::new(0)),
                 );
                 Ok(ex)
@@ -376,8 +379,14 @@ impl DAGBuilder {
 
                 let unique = first.get_idx_scan().get_unique();
                 let ex = Box::new(
-                    ScanExecutor::index_scan(first.take_idx_scan(), ranges, store, unique)?
-                        .with_summary_collector(C::new(0)),
+                    ScanExecutor::index_scan(
+                        first.take_idx_scan(),
+                        ranges,
+                        store,
+                        unique,
+                        is_streaming,
+                    )?
+                    .with_summary_collector(C::new(0)),
                 );
                 Ok(ex)
             }
@@ -395,6 +404,7 @@ impl DAGBuilder {
         store: S,
         deadline: Deadline,
         batch_row_limit: usize,
+        is_streaming: bool,
     ) -> Result<super::DAGRequestHandler> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -405,6 +415,7 @@ impl DAGBuilder {
                 store,
                 ranges,
                 Arc::new(eval_cfg),
+                is_streaming,
             )?
         } else {
             Self::build_normal::<_, ExecSummaryCollectorEnabled>(
@@ -412,6 +423,7 @@ impl DAGBuilder {
                 store,
                 ranges,
                 Arc::new(eval_cfg),
+                is_streaming,
             )?
         };
         Ok(super::DAGRequestHandler::new(
@@ -524,10 +536,16 @@ impl DAGBuilder {
             Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())
         } else {
             COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
-            Ok(
-                Self::build_dag(eval_cfg, req, ranges, store, deadline, batch_row_limit)?
-                    .into_boxed(),
-            )
+            Ok(Self::build_dag(
+                eval_cfg,
+                req,
+                ranges,
+                store,
+                deadline,
+                batch_row_limit,
+                is_streaming,
+            )?
+            .into_boxed())
         }
     }
 }

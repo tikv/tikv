@@ -71,6 +71,7 @@ impl<T: TxnStore + 'static> IntegratedBencher for NormalBencher<T> {
                 black_box(ToTxnStore::<T>::to_store(store)),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
+                black_box(false),
             )
             .unwrap()
         })

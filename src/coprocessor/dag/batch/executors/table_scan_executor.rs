@@ -11,25 +11,19 @@ use tipb::schema::ColumnInfo;
 use crate::storage::{FixtureStore, Statistics, Store};
 use tikv_util::collections::HashMap;
 
+use super::util::scan_executor::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<S: Store>(
-    super::util::scan_executor::ScanExecutor<
-        S,
-        TableScanExecutorImpl,
-        super::util::ranges_iter::PointRangeEnable,
-    >,
-);
+pub struct BatchTableScanExecutor<S: Store>(ScanExecutor<S, TableScanExecutorImpl>);
 
 impl BatchTableScanExecutor<FixtureStore> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
-        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+        check_columns_info_supported(descriptor.get_columns())
     }
 }
 
@@ -39,10 +33,10 @@ impl<S: Store> BatchTableScanExecutor<S> {
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
-        desc: bool,
+        is_backward: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
-        let mut key_only = true;
+        let mut is_key_only = true;
         let mut handle_index = None;
         let mut schema = Vec::with_capacity(columns_info.len());
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
@@ -51,7 +45,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
-            schema.push(super::util::scan_executor::field_type_from_column_info(&ci));
+            schema.push(field_type_from_column_info(&ci));
 
             // - Prepare column default value (will be used to fill missing column later).
             columns_default_value.push(ci.take_default_val());
@@ -61,7 +55,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             if ci.get_pk_handle() {
                 handle_index = Some(index);
             } else {
-                key_only = false;
+                is_key_only = false;
                 column_id_index.insert(ci.get_column_id(), index);
             }
 
@@ -74,17 +68,17 @@ impl<S: Store> BatchTableScanExecutor<S> {
             schema,
             columns_default_value,
             column_id_index,
-            key_only,
             handle_index,
             is_column_filled,
         };
-        let wrapper = super::util::scan_executor::ScanExecutor::new(
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
             store,
-            desc,
             key_ranges,
-            super::util::ranges_iter::PointRangeEnable,
-        )?;
+            is_backward,
+            is_key_only,
+            accept_point_range: true,
+        })?;
         Ok(Self(wrapper))
     }
 }
@@ -127,11 +121,6 @@ struct TableScanExecutorImpl {
     /// The output position in the schema giving the column id.
     column_id_index: HashMap<i64, usize>,
 
-    /// Whether or not KV value can be omitted.
-    ///
-    /// It will be set to `true` if only PK handle column exists in `schema`.
-    key_only: bool,
-
     /// The index in output row to put the handle.
     handle_index: Option<usize>,
 
@@ -141,7 +130,7 @@ struct TableScanExecutorImpl {
     is_column_filled: Vec<bool>,
 }
 
-impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
+impl ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -150,16 +139,6 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
-    }
-
-    #[inline]
-    fn build_scanner<S: Store>(
-        &self,
-        store: &S,
-        desc: bool,
-        range: KeyRange,
-    ) -> Result<Scanner<S>> {
-        Scanner::new(store, desc, self.key_only, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.

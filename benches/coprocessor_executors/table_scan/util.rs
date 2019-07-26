@@ -47,6 +47,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
             black_box(req),
             black_box(ranges.to_vec()),
             black_box(ToTxnStore::<Self::T>::to_store(store)),
+            black_box(false),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
