@@ -33,8 +33,9 @@ pub mod expr_util;
 pub mod handler;
 pub mod rpn_expr;
 pub mod storage;
+// TODO: This should stay in Coprocessor instead of DAG
 pub mod storage_impl;
 
 pub use self::batch_handler::BatchDAGHandler;
 pub use self::builder::DAGBuilder;
-pub use self::handler::DAGRequestHandler;
+pub use self::handler::DAGHandler;
