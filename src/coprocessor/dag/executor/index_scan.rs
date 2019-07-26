@@ -2,10 +2,9 @@
 
 use std::sync::Arc;
 
-use super::{scan::InnerExecutor, Row, ScanExecutor};
+use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::coprocessor::codec::table;
-use crate::coprocessor::dag::executor::ExecutorMetrics;
-use crate::coprocessor::{util, Result};
+use crate::coprocessor::Result;
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
@@ -14,22 +13,17 @@ use tipb::schema::ColumnInfo;
 pub struct IndexInnerExecutor {
     pk_col: Option<ColumnInfo>,
     col_ids: Vec<i64>,
-    unique: bool,
 }
 
 impl IndexInnerExecutor {
-    fn new(meta: &mut IndexScan, unique: bool) -> Self {
+    fn new(meta: &mut IndexScan) -> Self {
         let mut pk_col = None;
         let cols = meta.mut_columns();
         if cols.last().map_or(false, ColumnInfo::get_pk_handle) {
             pk_col = Some(cols.pop().unwrap());
         }
         let col_ids = cols.iter().map(ColumnInfo::get_column_id).collect();
-        Self {
-            pk_col,
-            col_ids,
-            unique,
-        }
+        Self { pk_col, col_ids }
     }
 }
 
@@ -63,23 +57,6 @@ impl InnerExecutor for IndexInnerExecutor {
         }
         Ok(Some(Row::origin(handle, values, columns)))
     }
-
-    #[inline]
-    fn is_point(&self, range: &KeyRange) -> bool {
-        self.unique && util::is_point(range)
-    }
-
-    #[inline]
-    fn collect_executor_metrics(&self, m: &mut ExecutorMetrics) {
-        m.executor_count.index_scan += 1;
-    }
-
-    // Since the unique index wouldn't always come with
-    // self.unique = true. so the key-only would always be false.
-    #[inline]
-    fn key_only(&self) -> bool {
-        false
-    }
 }
 
 pub type IndexScanExecutor<S> = ScanExecutor<S, IndexInnerExecutor>;
@@ -90,11 +67,20 @@ impl<S: Store> IndexScanExecutor<S> {
         key_ranges: Vec<KeyRange>,
         store: S,
         unique: bool,
-        collect: bool,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         let columns = meta.get_columns().to_vec();
-        let inner = IndexInnerExecutor::new(&mut meta, unique);
-        Self::new(inner, meta.get_desc(), columns, key_ranges, store, collect)
+        let inner = IndexInnerExecutor::new(&mut meta);
+        Self::new(ScanExecutorOptions {
+            inner,
+            columns,
+            key_ranges,
+            store,
+            is_backward: meta.get_desc(),
+            is_key_only: false,
+            accept_point_range: unique,
+            is_scanned_range_aware,
+        })
     }
 
     pub fn index_scan_with_cols_len(
@@ -106,9 +92,17 @@ impl<S: Store> IndexScanExecutor<S> {
         let inner = IndexInnerExecutor {
             col_ids,
             pk_col: None,
-            unique: false,
         };
-        Self::new(inner, false, vec![], key_ranges, store, false)
+        Self::new(ScanExecutorOptions {
+            inner,
+            columns: vec![],
+            key_ranges,
+            store,
+            is_backward: false,
+            is_key_only: false,
+            accept_point_range: false,
+            is_scanned_range_aware: false,
+        })
     }
 }
 
@@ -119,7 +113,6 @@ pub mod tests {
 
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
-    use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::datum::{self, Datum};
@@ -128,8 +121,8 @@ pub mod tests {
 
     use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::execute_stats::ExecuteStats;
     use crate::coprocessor::dag::executor::Executor;
-    use crate::coprocessor::dag::scanner::tests::Data;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;
@@ -182,7 +175,7 @@ pub mod tests {
         table_id: i64,
         index_id: i64,
         unique: bool,
-    ) -> Data {
+    ) -> TableData {
         let cols = vec![
             new_col_info(2, FieldTypeTp::VarChar),
             new_col_info(3, FieldTypeTp::NewDecimal),
@@ -205,7 +198,7 @@ pub mod tests {
             };
             kv_data.push((idx_key, value));
         }
-        Data {
+        TableData {
             kv_data,
             expect_rows,
             cols,
@@ -213,7 +206,7 @@ pub mod tests {
     }
 
     pub struct IndexTestWrapper {
-        data: Data,
+        data: TableData,
         pub store: TestStore,
         pub scan: IndexScan,
         pub ranges: Vec<KeyRange>,
@@ -227,19 +220,17 @@ pub mod tests {
             let mut wrapper = IndexTestWrapper::new(unique, test_data);
             let mut cols = wrapper.data.cols.clone();
             cols.push(wrapper.data.get_col_pk());
-            wrapper
-                .scan
-                .set_columns(RepeatedField::from_vec(cols.clone()));
+            wrapper.scan.set_columns(cols.clone().into());
             wrapper.cols = cols;
             wrapper
         }
 
-        pub fn new(unique: bool, test_data: Data) -> IndexTestWrapper {
+        pub fn new(unique: bool, test_data: TableData) -> IndexTestWrapper {
             let test_store = TestStore::new(&test_data.kv_data);
-            let mut scan = IndexScan::new();
+            let mut scan = IndexScan::default();
             // prepare cols
             let cols = test_data.cols.clone();
-            let col_req = RepeatedField::from_vec(cols.clone());
+            let col_req = cols.clone().into();
             scan.set_columns(col_req);
             // prepare range
             let val_start = Datum::Bytes(b"a".to_vec());
@@ -349,7 +340,7 @@ pub mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, false)
                 .unwrap();
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
@@ -364,9 +355,9 @@ pub mod tests {
         }
         assert!(scanner.next().unwrap().is_none());
         let expected_counts = vec![1, 3, 1, 5, 0];
-        let mut counts = Vec::with_capacity(5);
-        scanner.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let mut exec_stats = ExecuteStats::new(0);
+        scanner.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
     }
 
     #[test]

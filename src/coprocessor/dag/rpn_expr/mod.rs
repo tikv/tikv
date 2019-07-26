@@ -9,6 +9,7 @@ pub mod impl_control;
 pub mod impl_like;
 pub mod impl_math;
 pub mod impl_op;
+pub mod impl_time;
 
 pub use self::types::*;
 
@@ -24,6 +25,7 @@ use self::impl_control::*;
 use self::impl_like::*;
 use self::impl_math::*;
 use self::impl_op::*;
+use self::impl_time::*;
 
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
@@ -188,6 +190,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),

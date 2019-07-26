@@ -50,7 +50,7 @@ impl Json {
             }
             Json::None => Ok(JSON_LITERAL_NIL),
             _ => Err(invalid_type!(
-                "{:?} from {} to literal",
+                "{} from {} to literal",
                 ERR_CONVERT_FAILED,
                 self.to_string()
             )),

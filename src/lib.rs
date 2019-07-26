@@ -24,6 +24,7 @@
 #![feature(duration_float)]
 #![feature(specialization)]
 #![feature(const_fn)]
+#![feature(mem_take)]
 
 #[macro_use]
 extern crate bitflags;
@@ -37,20 +38,7 @@ extern crate prometheus;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(
-    kv,
-    slog_kv,
-    slog_trace,
-    slog_error,
-    slog_warn,
-    slog_info,
-    slog_debug,
-    slog_crit,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
+#[macro_use(slog_trace, slog_error, slog_warn, slog_info, slog_debug, slog_crit)]
 extern crate slog;
 #[macro_use]
 extern crate slog_derive;

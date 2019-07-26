@@ -10,7 +10,6 @@ use futures::{future, Future, Sink, Stream};
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use protobuf::RepeatedField;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
@@ -300,8 +299,8 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
         req.set_leader(leader);
-        req.set_down_peers(RepeatedField::from_vec(region_stat.down_peers));
-        req.set_pending_peers(RepeatedField::from_vec(region_stat.pending_peers));
+        req.set_down_peers(region_stat.down_peers.into());
+        req.set_pending_peers(region_stat.pending_peers.into());
         req.set_bytes_written(region_stat.written_bytes);
         req.set_keys_written(region_stat.written_keys);
         req.set_bytes_read(region_stat.read_bytes);
@@ -452,7 +451,7 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::ReportBatchSplitRequest::default();
         req.set_header(self.header());
-        req.set_regions(RepeatedField::from_vec(regions));
+        req.set_regions(regions.into());
 
         let executor = move |client: &RwLock<Inner>, req: pdpb::ReportBatchSplitRequest| {
             let handler = client

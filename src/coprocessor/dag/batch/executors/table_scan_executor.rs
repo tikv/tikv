@@ -8,28 +8,22 @@ use tipb::executor::TableScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Store};
+use crate::storage::{FixtureStore, Statistics, Store};
 use tikv_util::collections::HashMap;
 
+use super::util::scan_executor::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<S: Store>(
-    super::util::scan_executor::ScanExecutor<
-        S,
-        TableScanExecutorImpl,
-        super::util::ranges_iter::PointRangeEnable,
-    >,
-);
+pub struct BatchTableScanExecutor<S: Store>(ScanExecutor<S, TableScanExecutorImpl>);
 
 impl BatchTableScanExecutor<FixtureStore> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
-        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+        check_columns_info_supported(descriptor.get_columns())
     }
 }
 
@@ -39,10 +33,10 @@ impl<S: Store> BatchTableScanExecutor<S> {
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
-        desc: bool,
+        is_backward: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
-        let mut key_only = true;
+        let mut is_key_only = true;
         let mut handle_index = None;
         let mut schema = Vec::with_capacity(columns_info.len());
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
@@ -51,7 +45,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
-            schema.push(super::util::scan_executor::field_type_from_column_info(&ci));
+            schema.push(field_type_from_column_info(&ci));
 
             // - Prepare column default value (will be used to fill missing column later).
             columns_default_value.push(ci.take_default_val());
@@ -61,7 +55,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             if ci.get_pk_handle() {
                 handle_index = Some(index);
             } else {
-                key_only = false;
+                is_key_only = false;
                 column_id_index.insert(ci.get_column_id(), index);
             }
 
@@ -74,17 +68,17 @@ impl<S: Store> BatchTableScanExecutor<S> {
             schema,
             columns_default_value,
             column_id_index,
-            key_only,
             handle_index,
             is_column_filled,
         };
-        let wrapper = super::util::scan_executor::ScanExecutor::new(
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
             store,
-            desc,
             key_ranges,
-            super::util::ranges_iter::PointRangeEnable,
-        )?;
+            is_backward,
+            is_key_only,
+            accept_point_range: true,
+        })?;
         Ok(Self(wrapper))
     }
 }
@@ -101,8 +95,13 @@ impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
@@ -122,11 +121,6 @@ struct TableScanExecutorImpl {
     /// The output position in the schema giving the column id.
     column_id_index: HashMap<i64, usize>,
 
-    /// Whether or not KV value can be omitted.
-    ///
-    /// It will be set to `true` if only PK handle column exists in `schema`.
-    key_only: bool,
-
     /// The index in output row to put the handle.
     handle_index: Option<usize>,
 
@@ -136,7 +130,7 @@ struct TableScanExecutorImpl {
     is_column_filled: Vec<bool>,
 }
 
-impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
+impl ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -145,16 +139,6 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
-    }
-
-    #[inline]
-    fn build_scanner<S: Store>(
-        &self,
-        store: &S,
-        desc: bool,
-        range: KeyRange,
-    ) -> Result<Scanner<S>> {
-        Scanner::new(store, desc, self.key_only, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -305,7 +289,7 @@ mod tests {
     use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::exec_summary::*;
+    use crate::coprocessor::dag::execute_stats::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -385,20 +369,20 @@ mod tests {
             // The column info for each column in `data`.
             let columns_info = vec![
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                     ci.set_pk_handle(true);
                     ci.set_column_id(1);
                     ci
                 },
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                     ci.set_column_id(2);
                     ci
                 },
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                     ci.set_column_id(4);
                     ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)]).unwrap());
@@ -646,9 +630,10 @@ mod tests {
         executor.next_batch(1);
         executor.next_batch(2);
 
-        let mut s = BatchExecuteStatistics::new(2, 1);
-        executor.collect_statistics(&mut s);
+        let mut s = ExecuteStats::new(2);
+        executor.collect_exec_stats(&mut s);
 
+        assert_eq!(s.scanned_rows_per_range.len(), 1);
         assert_eq!(s.scanned_rows_per_range[0], 3);
         // 0 remains Default because our output index is 1
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
@@ -656,10 +641,12 @@ mod tests {
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
-        executor.collect_statistics(&mut s);
+        executor.collect_exec_stats(&mut s);
 
         // Collected statistics remain unchanged because of no newly generated delta statistics.
+        assert_eq!(s.scanned_rows_per_range.len(), 2);
         assert_eq!(s.scanned_rows_per_range[0], 3);
+        assert_eq!(s.scanned_rows_per_range[1], 0);
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
         let exec_summary = s.summary_per_executor[1];
         assert_eq!(3, exec_summary.num_produced_rows);
@@ -668,8 +655,9 @@ mod tests {
         // Reset collected statistics so that now we will only collect statistics in this round.
         s.clear();
         executor.next_batch(10);
-        executor.collect_statistics(&mut s);
+        executor.collect_exec_stats(&mut s);
 
+        assert_eq!(s.scanned_rows_per_range.len(), 1);
         assert_eq!(s.scanned_rows_per_range[0], 2);
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
         let exec_summary = s.summary_per_executor[1];
@@ -683,20 +671,20 @@ mod tests {
 
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci.set_column_id(1);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(2);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(3);
                 ci
@@ -806,14 +794,14 @@ mod tests {
 
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci.set_column_id(1);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(2);
                 ci

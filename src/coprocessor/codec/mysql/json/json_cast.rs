@@ -3,10 +3,8 @@
 use cop_datatype::FieldTypeTp;
 
 use super::{Json, Result};
-use crate::coprocessor::codec::convert::{
-    self, convert_bytes_to_int, convert_bytes_to_uint, convert_float_to_int, convert_float_to_uint,
-    convert_int_to_uint, convert_uint_to_int,
-};
+use crate::coprocessor::codec::convert::*;
+use crate::coprocessor::codec::data_type::Decimal;
 use crate::coprocessor::dag::expr::EvalContext;
 
 impl Json {
@@ -45,9 +43,16 @@ impl Json {
             Json::I64(d) => d as f64,
             Json::U64(d) => d as f64,
             Json::Double(d) => d,
-            Json::String(ref s) => convert::bytes_to_f64(ctx, s.as_bytes())?,
+            Json::String(ref s) => convert_bytes_to_f64(ctx, s.as_bytes())?,
         };
         Ok(d)
+    }
+
+    /// Converts a `Json` to a `Decimal`
+    #[inline]
+    pub fn cast_to_decimal(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        let f = self.cast_to_real(ctx)?;
+        Decimal::from_f64(f)
     }
 }
 

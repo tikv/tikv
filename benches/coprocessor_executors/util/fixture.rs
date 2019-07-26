@@ -18,10 +18,10 @@ use tikv::coprocessor::codec::data_type::Decimal;
 use tikv::coprocessor::codec::datum::{Datum, DatumEncoder};
 use tikv::coprocessor::codec::table::RowColsDict;
 use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::exec_summary::ExecSummary;
-use tikv::coprocessor::dag::executor::{Executor, ExecutorMetrics, Row};
+use tikv::coprocessor::dag::executor::{Executor, Row};
 use tikv::coprocessor::dag::expr::EvalWarnings;
-use tikv::storage::RocksEngine;
+use tikv::coprocessor::dag::storage::IntervalRange;
+use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;
 
@@ -276,7 +276,7 @@ impl FixtureBuilder {
             .into_iter()
             .enumerate()
             .map(|(index, ft)| {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.set_column_id(index as i64);
                 ci.as_mut_accessor()
                     .set_tp(ft.tp())
@@ -349,8 +349,11 @@ impl BatchExecutor for BatchFixtureExecutor {
         }
     }
 
-    #[inline]
-    fn collect_statistics(&mut self, _destination: &mut BatchExecuteStatistics) {
+    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
+        // DO NOTHING
+    }
+
+    fn collect_storage_stats(&mut self, _dest: &mut Statistics) {
         // DO NOTHING
     }
 }
@@ -367,23 +370,28 @@ impl Executor for NormalFixtureExecutor {
     }
 
     #[inline]
-    fn collect_output_counts(&mut self, _counts: &mut Vec<i64>) {
+    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
         // DO NOTHING
     }
 
     #[inline]
-    fn collect_metrics_into(&mut self, _metrics: &mut ExecutorMetrics) {
-        // DO NOTHING
-    }
-
-    #[inline]
-    fn collect_execution_summaries(&mut self, _target: &mut [ExecSummary]) {
+    fn collect_storage_stats(&mut self, _dest: &mut Statistics) {
         // DO NOTHING
     }
 
     #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.columns
+    }
+
+    #[inline]
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        None
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        unreachable!()
     }
 }
 

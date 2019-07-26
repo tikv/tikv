@@ -34,7 +34,7 @@ impl FMSketch {
     }
 
     pub fn into_proto(self) -> analyze::FMSketch {
-        let mut proto = analyze::FMSketch::new();
+        let mut proto = analyze::FMSketch::default();
         proto.set_mask(self.mask);
         let hash = self.hash_set.into_iter().collect();
         proto.set_hashset(hash);

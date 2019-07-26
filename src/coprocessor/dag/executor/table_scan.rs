@@ -3,10 +3,9 @@
 use std::sync::Arc;
 use tikv_util::collections::HashSet;
 
-use super::{scan::InnerExecutor, Row, ScanExecutor};
+use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::coprocessor::codec::table;
-use crate::coprocessor::dag::executor::ExecutorMetrics;
-use crate::coprocessor::{util, Result};
+use crate::coprocessor::Result;
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
@@ -26,6 +25,10 @@ impl TableInnerExecutor {
             .collect();
         Self { col_ids }
     }
+
+    fn is_key_only(&self) -> bool {
+        self.col_ids.is_empty()
+    }
 }
 
 impl InnerExecutor for TableInnerExecutor {
@@ -39,20 +42,6 @@ impl InnerExecutor for TableInnerExecutor {
         let h = box_try!(table::decode_handle(&key));
         Ok(Some(Row::origin(h, row_data, columns)))
     }
-
-    #[inline]
-    fn is_point(&self, range: &KeyRange) -> bool {
-        util::is_point(&range)
-    }
-
-    fn collect_executor_metrics(&self, m: &mut ExecutorMetrics) {
-        m.executor_count.table_scan += 1;
-    }
-
-    #[inline]
-    fn key_only(&self) -> bool {
-        self.col_ids.is_empty()
-    }
 }
 
 pub type TableScanExecutor<S> = ScanExecutor<S, TableInnerExecutor>;
@@ -62,17 +51,21 @@ impl<S: Store> TableScanExecutor<S> {
         mut meta: TableScan,
         key_ranges: Vec<KeyRange>,
         store: S,
-        collect: bool,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         let inner = TableInnerExecutor::new(&meta);
-        Self::new(
+        let is_key_only = inner.is_key_only();
+
+        Self::new(ScanExecutorOptions {
             inner,
-            meta.get_desc(),
-            meta.take_columns().to_vec(),
+            columns: meta.take_columns().to_vec(),
             key_ranges,
             store,
-            collect,
-        )
+            is_backward: meta.get_desc(),
+            is_key_only,
+            accept_point_range: true,
+            is_scanned_range_aware,
+        })
     }
 }
 
@@ -81,22 +74,19 @@ mod tests {
     use std::i64;
 
     use kvproto::{coprocessor::KeyRange, kvrpcpb::IsolationLevel};
-    use protobuf::RepeatedField;
     use tipb::{executor::TableScan, schema::ColumnInfo};
 
     use crate::storage::SnapshotStore;
 
-    use super::super::{
-        super::scanner::tests::{get_point_range, prepare_table_data, Data},
-        tests::{get_range, TestStore},
-        Executor,
-    };
+    use super::super::tests::*;
+    use super::super::Executor;
+    use crate::coprocessor::dag::execute_stats::ExecuteStats;
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
 
     struct TableScanTestWrapper {
-        data: Data,
+        data: TableData,
         store: TestStore,
         table_scan: TableScan,
         ranges: Vec<KeyRange>,
@@ -113,10 +103,10 @@ mod tests {
         fn default() -> TableScanTestWrapper {
             let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
             let test_store = TestStore::new(&test_data.kv_data);
-            let mut table_scan = TableScan::new();
+            let mut table_scan = TableScan::default();
             // prepare cols
             let cols = test_data.get_prev_2_cols();
-            let col_req = RepeatedField::from_vec(cols.clone());
+            let col_req = cols.clone().into();
             table_scan.set_columns(col_req);
             // prepare range
             let range = get_range(TABLE_ID, i64::MIN, i64::MAX);
@@ -144,7 +134,7 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, false)
                 .unwrap();
 
         let row = table_scanner
@@ -164,9 +154,9 @@ mod tests {
         }
         assert!(table_scanner.next().unwrap().is_none());
         let expected_counts = vec![0, 1];
-        let mut counts = Vec::with_capacity(2);
-        table_scanner.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let mut exec_stats = ExecuteStats::new(0);
+        table_scanner.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
     }
 
     #[test]
@@ -186,7 +176,7 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, false)
                 .unwrap();
 
         for handle in 0..KEY_NUMBER {
@@ -227,7 +217,7 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, false)
                 .unwrap();
 
         for tid in 0..KEY_NUMBER {
