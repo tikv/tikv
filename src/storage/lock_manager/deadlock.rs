@@ -70,7 +70,7 @@ impl Locks {
 }
 
 /// Used to detect the deadlock of wait-for-lock in the cluster.
-struct DetectTable {
+pub struct DetectTable {
     /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts` has a survival time -- `ttl`.
     /// When checking the deadlock, if the ttl has elpased, the corresponding edge will be removed.
     /// `last_detect_time` is the start time of the edge. `Detect` requests will refresh it.
@@ -705,7 +705,9 @@ impl deadlock_grpc::Deadlock for Service {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::prelude::*;
     use std::time::Duration;
+    use test::Bencher;
 
     #[test]
     fn test_detect_table() {
@@ -846,5 +848,87 @@ mod tests {
         assert_eq!(detect_table.wait_for_map.len(), 2);
         assert!(detect_table.detect(3, 1, 3).is_none());
         assert_eq!(detect_table.wait_for_map.len(), 1);
+    }
+
+    struct DetectGenerator {
+        rng: ThreadRng,
+        range: u64,
+        timestamp: u64,
+    }
+
+    impl DetectGenerator {
+        pub fn new(range: u64) -> Self {
+            Self {
+                rng: ThreadRng::default(),
+                range,
+                timestamp: 0,
+            }
+        }
+
+        /// Generates n detect requests with the same timestamp
+        pub fn generate(&mut self, n: u64) -> Vec<WaitForEntry> {
+            let mut entries = Vec::with_capacity(n as usize);
+            (0..n).for_each(|_| {
+                let mut entry = WaitForEntry::new();
+                entry.set_txn(self.timestamp);
+                let mut wait_for_txn = self.timestamp;
+                while wait_for_txn == self.timestamp {
+                    wait_for_txn = self.rng.gen_range(
+                        if self.timestamp < self.range {
+                            0
+                        } else {
+                            self.timestamp - self.range
+                        },
+                        self.timestamp + self.range,
+                    );
+                }
+                entry.set_wait_for_txn(wait_for_txn);
+                entry.set_key_hash(self.rng.gen());
+                entries.push(entry);
+            });
+            entries
+        }
+    }
+
+    #[derive(Debug)]
+    struct Config {
+        n: u64,
+        range: u64,
+        ttl: time::Duration,
+    }
+
+    fn bench_detect(b: &mut Bencher, cfg: Config) {
+        let mut detect_table = DetectTable::new(cfg.ttl);
+        let mut generator = DetectGenerator::new(cfg.range);
+        b.iter(|| {
+            for entry in generator.generate(cfg.n) {
+                detect_table.detect(
+                    entry.get_txn(),
+                    entry.get_wait_for_txn(),
+                    entry.get_key_hash(),
+                );
+            }
+        });
+    }
+
+    #[bench]
+    fn bench_sparse_detect(b: &mut Bencher) {
+        bench_detect(
+            b,
+            Config {
+                n: 10,
+                range: 100000000,
+                ttl: time::Duration::from_secs(100000000),
+            },
+        );
+    }
+
+    #[bench]
+    fn bench_dense_detect_without_cleanup(b: &mut Bencher) {
+        bench_detect(b, Config {
+            n: 10,
+            range: 1000,
+            ttl: time::Duration::from_secs(100000000),
+        });
     }
 }
