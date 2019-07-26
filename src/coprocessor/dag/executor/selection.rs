@@ -9,6 +9,7 @@ use crate::coprocessor::Result;
 
 use super::{Executor, ExprColumnRefVisitor, Row};
 use crate::coprocessor::dag::execute_stats::ExecuteStats;
+use crate::coprocessor::dag::storage::IntervalRange;
 use crate::storage::Statistics;
 
 /// Retrieves rows from the source executor and filter rows by expressions.
@@ -72,6 +73,11 @@ impl<Src: Executor> Executor for SelectionExecutor<Src> {
         } else {
             Some(self.ctx.take_warnings())
         }
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.src.take_scanned_range()
     }
 }
 
