@@ -1,3 +1,5 @@
+// Make TiKV Great Again!
+
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::lock::{Lock, LockType};
