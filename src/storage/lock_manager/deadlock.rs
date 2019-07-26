@@ -30,13 +30,52 @@ use tokio_timer::Interval;
 // 2 mins
 const TXN_DETECT_INFO_TTL: u64 = 120000;
 
+/// `Locks` is a set of locks belonging to one transaction.
+struct Locks {
+    ts: u64,
+    hashes: Vec<u64>,
+    last_detect_time: time::Instant,
+}
+
+impl Locks {
+    /// Creates a new `Locks`.
+    fn new(ts: u64, hash: u64, last_detect_time: time::Instant) -> Self {
+        Self {
+            ts,
+            hashes: vec![hash],
+            last_detect_time,
+        }
+    }
+
+    /// Pushes the `hash` if not exist and updates `last_detect_time`.
+    fn push(&mut self, lock_hash: u64, now: time::Instant) {
+        if !self.hashes.contains(&lock_hash) {
+            self.hashes.push(lock_hash)
+        }
+        self.last_detect_time = now
+    }
+
+    /// Removes the `lock_hash` and returns true if the `Locks` is empty.
+    fn remove(&mut self, lock_hash: u64) -> bool {
+        if let Some(idx) = self.hashes.iter().position(|hash| *hash == lock_hash) {
+            self.hashes.remove(idx);
+        }
+        self.hashes.is_empty()
+    }
+
+    /// Returns true if the `Locks` is expired.
+    fn is_expired(&self, now: time::Instant, ttl: Duration) -> bool {
+        now.duration_since(self.last_detect_time) >= ttl
+    }
+}
+
 /// Used to detect the deadlock of wait-for-lock in the cluster.
 struct DetectTable {
     /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts` has a survival time -- `ttl`.
     /// When checking the deadlock, if the ttl has elpased, the corresponding edge will be removed.
     /// `last_detect_time` is the start time of the edge. `Detect` requests will refresh it.
-    // txn_ts => (lock_ts => (Vec<lock_hash>, last_detect_time))
-    wait_for_map: HashMap<u64, HashMap<u64, (Vec<u64>, time::Instant)>>,
+    // txn_ts => (lock_ts => Locks)
+    wait_for_map: HashMap<u64, HashMap<u64, Locks>>,
 
     /// The ttl of every edge.
     ttl: time::Duration,
@@ -90,13 +129,13 @@ impl DetectTable {
         while let Some(wait_for_ts) = stack.pop() {
             if let Some(wait_for) = self.wait_for_map.get_mut(&wait_for_ts) {
                 // Remove expired edges.
-                wait_for.retain(|_, (_, time)| now.duration_since(*time) < ttl);
+                wait_for.retain(|_, locks| !locks.is_expired(now, ttl));
                 if wait_for.is_empty() {
                     self.wait_for_map.remove(&wait_for_ts);
                 } else {
-                    for (lock_ts, (lock_hashes, _)) in wait_for {
+                    for (lock_ts, locks) in wait_for {
                         if *lock_ts == txn_ts {
-                            return Some(lock_hashes[0]);
+                            return Some(locks.hashes[0]);
                         }
                         if !pushed.contains(lock_ts) {
                             stack.push(*lock_ts);
@@ -112,11 +151,8 @@ impl DetectTable {
     /// Returns true and adds to the detect table if `txn_ts` is waiting for `lock_ts`.
     fn register_if_existed(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
-            if let Some((lock_hashes, time)) = wait_for.get_mut(&lock_ts) {
-                if !lock_hashes.contains(&lock_hash) {
-                    lock_hashes.push(lock_hash);
-                }
-                *time = self.now;
+            if let Some(locks) = wait_for.get_mut(&lock_ts) {
+                locks.push(lock_hash, self.now);
                 return true;
             }
         }
@@ -127,21 +163,18 @@ impl DetectTable {
     fn register(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
         let wait_for = self.wait_for_map.entry(txn_ts).or_default();
         assert!(!wait_for.contains_key(&lock_ts));
-        wait_for.insert(lock_ts, (vec![lock_hash], self.now));
+        let locks = Locks::new(lock_ts, lock_hash, self.now);
+        wait_for.insert(locks.ts, locks);
     }
 
     /// Removes the corresponding wait_for_entry.
     pub fn clean_up_wait_for(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
-            if let Some((lock_hashes, _)) = wait_for.get_mut(&lock_ts) {
-                let idx = lock_hashes.iter().position(|hash| *hash == lock_hash);
-                if let Some(idx) = idx {
-                    lock_hashes.remove(idx);
-                    if lock_hashes.is_empty() {
-                        wait_for.remove(&lock_ts);
-                        if wait_for.is_empty() {
-                            self.wait_for_map.remove(&txn_ts);
-                        }
+            if let Some(locks) = wait_for.get_mut(&lock_ts) {
+                if locks.remove(lock_hash) {
+                    wait_for.remove(&lock_ts);
+                    if wait_for.is_empty() {
+                        self.wait_for_map.remove(&txn_ts);
                     }
                 }
             }
@@ -182,7 +215,7 @@ impl DetectTable {
             let now = self.now;
             let ttl = self.ttl;
             for (_, wait_for) in self.wait_for_map.iter_mut() {
-                wait_for.retain(|_, (_, time)| now.duration_since(*time) < ttl);
+                wait_for.retain(|_, locks| !locks.is_expired(now, ttl));
             }
             self.wait_for_map.retain(|_, wait_for| !wait_for.is_empty());
             self.last_active_expire = self.now;
@@ -697,7 +730,7 @@ mod tests {
                 .unwrap()
                 .get(&1)
                 .unwrap()
-                .0
+                .hashes
                 .len(),
             1
         );
@@ -711,7 +744,7 @@ mod tests {
                 .unwrap()
                 .get(&1)
                 .unwrap()
-                .0
+                .hashes
                 .len(),
             2
         );
@@ -725,7 +758,7 @@ mod tests {
                 .unwrap()
                 .get(&1)
                 .unwrap()
-                .0
+                .hashes
                 .len(),
             2
         );
@@ -740,7 +773,7 @@ mod tests {
                 .unwrap()
                 .get(&2)
                 .unwrap()
-                .0
+                .hashes
                 .len(),
             1
         );
@@ -754,7 +787,7 @@ mod tests {
                 .unwrap()
                 .get(&1)
                 .unwrap()
-                .0
+                .hashes
                 .len(),
             1
         );
@@ -804,7 +837,7 @@ mod tests {
                 .unwrap()
                 .get(&3)
                 .unwrap()
-                .0
+                .hashes
                 .len(),
             2
         );
