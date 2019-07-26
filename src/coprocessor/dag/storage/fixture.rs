@@ -30,10 +30,10 @@ impl FixtureStorage {
     }
 }
 
-impl<'a> From<Vec<(&'a [u8], &'a [u8])>> for FixtureStorage {
-    fn from(v: Vec<(&'a [u8], &'a [u8])>) -> FixtureStorage {
+impl<'a, 'b> From<&'b [(&'a [u8], &'a [u8])]> for FixtureStorage {
+    fn from(v: &'b [(&'a [u8], &'a [u8])]) -> FixtureStorage {
         let tree: BTreeMap<_, _> = v
-            .into_iter()
+            .iter()
             .map(|(k, v)| (k.to_vec(), Ok(v.to_vec())))
             .collect();
         Self::new(tree)

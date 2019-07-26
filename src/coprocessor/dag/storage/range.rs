@@ -72,6 +72,7 @@ impl From<(String, String)> for IntervalRange {
     }
 }
 
+// FIXME: Maybe abuse.
 impl<'a, 'b> From<(&'a str, &'b str)> for IntervalRange {
     fn from((lower, upper): (&'a str, &'b str)) -> Self {
         IntervalRange::from((lower.to_owned(), upper.to_owned()))
@@ -93,6 +94,7 @@ impl From<String> for PointRange {
     }
 }
 
+// FIXME: Maybe abuse.
 impl<'a> From<&'a str> for PointRange {
     fn from(v: &'a str) -> Self {
         PointRange::from(v.to_owned())
