@@ -36,7 +36,7 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         (EvalType::Int, EvalType::Int) => {
             match (from_field_type.is_unsigned(), to_field_type.is_unsigned()) {
-                (false, false) => cast_int_as_int_fn_meta(),
+                (false, false) => cast_any_to_int_fn_meta::<Int>(),
                 (false, true) => cast_int_as_uint_fn_meta(),
                 (true, false) => cast_uint_as_int_fn_meta(),
                 (true, true) => cast_uint_as_uint_fn_meta(),
@@ -44,42 +44,42 @@ pub fn get_cast_fn_rpn_node(
         }
         (EvalType::Real, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_float_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Real>()
             } else {
                 cast_float_as_uint_fn_meta()
             }
         }
         (EvalType::Bytes, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_bytes_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Bytes>()
             } else {
                 cast_bytes_as_uint_fn_meta()
             }
         }
         (EvalType::Decimal, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_decimal_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Decimal>()
             } else {
                 cast_decimal_as_uint_fn_meta()
             }
         }
         (EvalType::DateTime, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_datetime_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<DateTime>()
             } else {
                 cast_datetime_as_uint_fn_meta()
             }
         }
         (EvalType::Duration, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_duration_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Duration>()
             } else {
                 cast_duration_as_uint_fn_meta()
             }
         }
         (EvalType::Json, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_json_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Json>()
             } else {
                 cast_json_as_uint_fn_meta()
             }
@@ -163,33 +163,32 @@ pub fn cast_int_as_decimal(
     }
 }
 
-macro_rules! cast_as_integer {
-    ($ty:ty, $as_int_fn:ident) => {
-        cast_as_integer!($ty, $as_int_fn, val);
-    };
-    ($ty:ty, $as_int_fn:ident, $expr:expr) => {
-        #[rpn_fn(capture = [ctx])]
-        #[inline]
-        pub fn $as_int_fn(ctx: &mut EvalContext, val: &Option<$ty>) -> Result<Option<i64>> {
-            match val {
-                None => Ok(None),
-                Some(val) => {
-                    let val = $expr.to_int(ctx, FieldTypeTp::LongLong)?;
-                    Ok(Some(val))
-                }
-            }
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_any_to_int<T: ToInt + Evaluable>(
+    ctx: &mut EvalContext,
+    val: &Option<T>,
+) -> Result<Option<i64>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.to_int(ctx, FieldTypeTp::LongLong)?;
+            Ok(Some(val))
         }
-    };
+    }
 }
 
-cast_as_integer!(Int, cast_int_as_int, *val);
-cast_as_integer!(Int, cast_uint_as_int, *val as u64);
-cast_as_integer!(Real, cast_float_as_int, val.into_inner());
-cast_as_integer!(Bytes, cast_bytes_as_int);
-cast_as_integer!(Decimal, cast_decimal_as_int);
-cast_as_integer!(DateTime, cast_datetime_as_int);
-cast_as_integer!(Duration, cast_duration_as_int, *val);
-cast_as_integer!(Json, cast_json_as_int);
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn cast_uint_as_int(ctx: &mut EvalContext, val: &Option<Int>) -> Result<Option<i64>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = (*val as u64).to_int(ctx, FieldTypeTp::LongLong)?;
+            Ok(Some(val))
+        }
+    }
+}
 
 macro_rules! cast_as_unsigned_integer {
     ($ty:ty, $as_uint_fn:ident) => {

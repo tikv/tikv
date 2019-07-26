@@ -8,7 +8,7 @@ use cop_datatype::{self, FieldTypeTp};
 
 use super::mysql::{Res, RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
-use crate::coprocessor::codec::data_type::{Bytes, DateTime, Decimal, Duration, Json};
+use crate::coprocessor::codec::data_type::{Bytes, DateTime, Decimal, Duration, Json, Real};
 use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::coprocessor::dag::expr::EvalContext;
 
@@ -18,30 +18,6 @@ pub trait ToInt {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64>;
     /// Converts the given value to an `u64`
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64>;
-}
-
-/// A trait for converting a value to a `Real`.
-pub trait ToReal {
-    /// Converts the given value to a `f64`
-    fn to_real(&self, ctx: &mut EvalContext) -> Result<f64>;
-}
-
-/// A trait for converting a value to a `Decimal`.
-pub trait ToDecimal {
-    /// Converts the given value to a `Decimal`
-    fn to_decimal(&self, ctx: &mut EvalContext) -> Result<Decimal>;
-}
-
-/// A trait for converting a value to a `DateTime`.
-pub trait ToDateTime {
-    /// Converts the given value to a `DateTime`
-    fn to_datetime(&self, ctx: &mut EvalContext) -> Result<DateTime>;
-}
-
-/// A trait for converting a value to a `Duration`.
-pub trait ToDuration {
-    /// Converts the given value to a `Duration`
-    fn to_duration(&self, ctx: &mut EvalContext) -> Result<Duration>;
 }
 
 /// Returns the max u64 values of different mysql types
@@ -228,6 +204,18 @@ impl ToInt for f64 {
             return Ok(upper_bound);
         }
         Ok(val as u64)
+    }
+}
+
+impl ToInt for Real {
+    #[inline]
+    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
+        self.into_inner().to_int(ctx, tp)
+    }
+
+    #[inline]
+    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
+        self.into_inner().to_uint(ctx, tp)
     }
 }
 
