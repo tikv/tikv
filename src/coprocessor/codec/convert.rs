@@ -8,7 +8,7 @@ use cop_datatype::{self, FieldTypeTp};
 
 use super::mysql::{Res, RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
-use crate::coprocessor::codec::data_type::{Bytes, DateTime, Decimal, Duration, Json, Real};
+use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::coprocessor::dag::expr::EvalContext;
 
