@@ -30,6 +30,16 @@ impl FixtureStorage {
     }
 }
 
+impl<'a> From<Vec<(&'a [u8], &'a [u8])>> for FixtureStorage {
+    fn from(v: Vec<(&'a [u8], &'a [u8])>) -> FixtureStorage {
+        let tree: BTreeMap<_, _> = v
+            .into_iter()
+            .map(|(k, v)| (k.to_vec(), Ok(v.to_vec())))
+            .collect();
+        Self::new(tree)
+    }
+}
+
 impl From<Vec<(Vec<u8>, Vec<u8>)>> for FixtureStorage {
     fn from(v: Vec<(Vec<u8>, Vec<u8>)>) -> FixtureStorage {
         let tree: BTreeMap<_, _> = v.into_iter().map(|(k, v)| (k, Ok(v))).collect();
@@ -109,8 +119,7 @@ mod tests {
             (b"bar_2", b"4"),
             (b"foo_3", b"5"),
         ];
-        let vec: Vec<_> = data.iter().map(|(k, v)| (k.to_vec(), v.to_vec())).collect();
-        let mut storage = FixtureStorage::from(vec);
+        let mut storage = FixtureStorage::from(data);
 
         // Get Key only = false
         assert_eq!(storage.get(false, PointRange::from("a")).unwrap(), None);

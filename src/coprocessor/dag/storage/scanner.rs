@@ -22,8 +22,7 @@ pub struct RangesScanner<T> {
     // useful in streaming mode, where the client need to know the underlying physical data range
     // of each response slice, so that partial retry can be non-overlapping.
     is_scanned_range_aware: bool,
-    current_range_lower_key: Vec<u8>,
-    current_range_upper_key: Vec<u8>,
+    current_range: IntervalRange,
     working_range_begin_key: Vec<u8>,
     working_range_end_key: Vec<u8>,
 }
@@ -55,8 +54,10 @@ impl<T: Storage> RangesScanner<T> {
             is_key_only,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
             is_scanned_range_aware,
-            current_range_lower_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
-            current_range_upper_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
+            current_range: IntervalRange {
+                lower_inclusive: Vec::with_capacity(KEY_BUFFER_CAPACITY),
+                upper_exclusive: Vec::with_capacity(KEY_BUFFER_CAPACITY),
+            },
             working_range_begin_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
             working_range_end_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
         }
@@ -156,11 +157,15 @@ impl<T: Storage> RangesScanner<T> {
         assert!(self.is_scanned_range_aware);
 
         self.update_working_range_end_key();
-        self.current_range_lower_key.clear();
-        self.current_range_upper_key.clear();
-        self.current_range_lower_key.extend_from_slice(&point.0);
-        self.current_range_upper_key.extend_from_slice(&point.0);
-        self.current_range_upper_key.push(0);
+        self.current_range.lower_inclusive.clear();
+        self.current_range.upper_exclusive.clear();
+        self.current_range
+            .lower_inclusive
+            .extend_from_slice(&point.0);
+        self.current_range
+            .upper_exclusive
+            .extend_from_slice(&point.0);
+        self.current_range.upper_exclusive.push(0);
         self.update_working_range_begin_key();
     }
 
@@ -168,11 +173,13 @@ impl<T: Storage> RangesScanner<T> {
         assert!(self.is_scanned_range_aware);
 
         self.update_working_range_end_key();
-        self.current_range_lower_key.clear();
-        self.current_range_upper_key.clear();
-        self.current_range_lower_key
+        self.current_range.lower_inclusive.clear();
+        self.current_range.upper_exclusive.clear();
+        self.current_range
+            .lower_inclusive
             .extend_from_slice(&range.lower_inclusive);
-        self.current_range_upper_key
+        self.current_range
+            .upper_exclusive
             .extend_from_slice(&range.upper_exclusive);
         self.update_working_range_begin_key();
     }
@@ -183,10 +190,10 @@ impl<T: Storage> RangesScanner<T> {
         if self.working_range_begin_key.is_empty() {
             if !self.scan_backward_in_range {
                 self.working_range_begin_key
-                    .extend(&self.current_range_lower_key);
+                    .extend(&self.current_range.lower_inclusive);
             } else {
                 self.working_range_begin_key
-                    .extend(&self.current_range_upper_key);
+                    .extend(&self.current_range.upper_exclusive);
             }
         }
     }
@@ -197,10 +204,10 @@ impl<T: Storage> RangesScanner<T> {
         self.working_range_end_key.clear();
         if !self.scan_backward_in_range {
             self.working_range_end_key
-                .extend(&self.current_range_upper_key);
+                .extend(&self.current_range.upper_exclusive);
         } else {
             self.working_range_end_key
-                .extend(&self.current_range_lower_key);
+                .extend(&self.current_range.lower_inclusive);
         }
     }
 
@@ -232,8 +239,7 @@ mod tests {
             (b"foo_2", b"3"),
             (b"foo_3", b"5"),
         ];
-        let vec: Vec<_> = data.iter().map(|(k, v)| (k.to_vec(), v.to_vec())).collect();
-        FixtureStorage::from(vec)
+        FixtureStorage::from(data)
     }
 
     #[test]
