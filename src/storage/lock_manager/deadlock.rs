@@ -705,9 +705,7 @@ impl deadlock_grpc::Deadlock for Service {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::prelude::*;
     use std::time::Duration;
-    use test::Bencher;
 
     #[test]
     fn test_detect_table() {
