@@ -15,7 +15,8 @@ use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 use tikv_util::escape;
 
-use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
+use crate::coprocessor::codec::convert::{self, Convert};
+use crate::coprocessor::codec::{Error, Result, TEN_POW};
 use crate::coprocessor::dag::expr::EvalContext;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1515,14 +1516,6 @@ impl Decimal {
         s.parse()
     }
 
-    /// Convert the decimal to float value.
-    ///
-    /// Please note that this conversion may lose precision.
-    pub fn as_f64(&self) -> Result<f64> {
-        let val = self.to_string().parse()?;
-        Ok(val)
-    }
-
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
@@ -1685,6 +1678,13 @@ enable_conv_for_int!(i8, i64);
 enable_conv_for_int!(usize, u64);
 enable_conv_for_int!(isize, i64);
 
+impl Convert<f64> for Decimal {
+    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+        let val = self.to_string().parse()?;
+        Ok(val)
+    }
+}
+
 impl From<i64> for Decimal {
     fn from(i: i64) -> Decimal {
         let (neg, mut d) = if i < 0 {
@@ -1793,8 +1793,8 @@ impl Display for Decimal {
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
-    fn as_mysql_bool(&self, _context: &mut EvalContext) -> crate::coprocessor::Result<bool> {
-        Ok(self.as_f64()?.round() != 0f64)
+    fn as_mysql_bool(&self, ctx: &mut EvalContext) -> crate::coprocessor::Result<bool> {
+        Ok(Convert::<f64>::convert(self, ctx)?.round() != 0f64)
     }
 }
 
@@ -2332,12 +2332,13 @@ mod tests {
             ("0.1000000000000008", 0.1000000000000008),
         ];
 
+        let mut ctx = EvalContext::default();
         for (dec_str, exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
             let res = format!("{}", dec);
             assert_eq!(res, dec_str);
 
-            let f = dec.as_f64().unwrap();
+            let f: f64 = dec.convert(&mut ctx).unwrap();
             assert!((exp - f).abs() < EPSILON, "expect: {}, got: {}", exp, f);
         }
     }
