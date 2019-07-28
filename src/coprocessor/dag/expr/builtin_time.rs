@@ -353,6 +353,15 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn null_time_diff(
+        &self,
+        _ctx: &mut EvalContext,
+        _row: &[Datum],
+    ) -> Result<Option<MyDuration>> {
+        Ok(None)
+    }
+
+    #[inline]
     pub fn add_datetime_and_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -1746,6 +1755,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::AddTimeDurationNull, Datum::Null);
         test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::SubTimeDurationNull, Datum::Null);
+        test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::NullTimeDiff, Datum::Null);
     }
 
     #[test]

@@ -374,6 +374,7 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
+            | ScalarFuncSig::NullTimeDiff
             | ScalarFuncSig::PI => (0, 0),
 
             // unimplemented signature
@@ -427,7 +428,6 @@ impl ScalarFunc {
             | ScalarFuncSig::MakeTime
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
-            | ScalarFuncSig::NullTimeDiff
             | ScalarFuncSig::OctInt
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
@@ -1041,6 +1041,7 @@ dispatch_call! {
         AddDurationAndDuration => add_duration_and_duration,
         AddDurationAndString => add_duration_and_string,
         AddTimeDurationNull => add_time_duration_null,
+        NullTimeDiff => null_time_diff,
 
         SubDurationAndDuration => sub_duration_and_duration,
         SubDurationAndString => sub_duration_and_string,
@@ -1462,6 +1463,7 @@ mod tests {
                     ScalarFuncSig::SubTimeDateTimeNull,
                     ScalarFuncSig::SubTimeDurationNull,
                     ScalarFuncSig::PI,
+                    ScalarFuncSig::NullTimeDiff,
                 ],
                 0,
                 0,
@@ -1536,7 +1538,6 @@ mod tests {
             ScalarFuncSig::MakeTime,
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
-            ScalarFuncSig::NullTimeDiff,
             ScalarFuncSig::OctInt,
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
