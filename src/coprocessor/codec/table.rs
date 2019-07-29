@@ -234,7 +234,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
                     FieldTypeTp::JSON
                 ]
                 .contains(&t),
-                "unknown type {} {:?}",
+                "unknown type {} {}",
                 t,
                 datum
             );
@@ -442,7 +442,7 @@ mod tests {
     }
 
     fn new_col_info(tp: FieldTypeTp) -> ColumnInfo {
-        let mut col_info = ColumnInfo::new();
+        let mut col_info = ColumnInfo::default();
         col_info.as_mut_accessor().set_tp(tp);
         col_info
     }
@@ -620,18 +620,18 @@ mod tests {
     fn test_check_table_range() {
         let small_key = b"t\x80\x00\x00\x00\x00\x00\x00\x01a".to_vec();
         let large_key = b"t\x80\x00\x00\x00\x00\x00\x00\x01b".to_vec();
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_start(small_key.clone());
         range.set_end(large_key.clone());
         assert!(check_table_ranges(&[range]).is_ok());
         //test range.start > range.end
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_end(small_key.clone());
         range.set_start(large_key);
         assert!(check_table_ranges(&[range]).is_err());
 
         // test invalid end
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
         assert!(check_table_ranges(&[range]).is_err());

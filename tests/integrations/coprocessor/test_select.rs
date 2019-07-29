@@ -68,7 +68,7 @@ fn test_batch_row_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
-        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
+        init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
 
     // for dag selection
@@ -101,26 +101,32 @@ fn test_stream_batch_row_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
-        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
+        init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
 
     let req = DAGSelect::from(&product).build();
     assert_eq!(req.get_ranges().len(), 1);
 
-    let mut expected_ranges_last_byte = vec![(0, 3), (3, 6), (6, 255)];
+    // only ignore first 7 bytes of the row id
+    let ignored_suffix_len = tikv::coprocessor::codec::table::RECORD_ROW_KEY_LEN - 1;
+    let mut expected_ranges_last_bytes: Vec<(&[u8], &[u8])> = vec![
+        (b"\x00", b"\x02\x00"),
+        (b"\x02\x00", b"\x05\x00"),
+        (b"\x05\x00", b"\xFF"),
+    ];
     let check_range = move |resp: &Response| {
-        let (start_last_byte, end_last_byte) = expected_ranges_last_byte.remove(0);
+        let (start_last_bytes, end_last_bytes) = expected_ranges_last_bytes.remove(0);
         let start = resp.get_range().get_start();
         let end = resp.get_range().get_end();
-        assert_eq!(start[start.len() - 1], start_last_byte);
-        assert_eq!(end[end.len() - 1], end_last_byte);
+        assert_eq!(&start[ignored_suffix_len..], start_last_bytes);
+        assert_eq!(&end[ignored_suffix_len..], end_last_bytes);
     };
 
     let resps = handle_streaming_select(&endpoint, req, check_range);
     assert_eq!(resps.len(), 3);
     let expected_output_counts = vec![vec![2 as i64], vec![2 as i64], vec![1 as i64]];
     for (i, resp) in resps.into_iter().enumerate() {
-        let mut chunk = Chunk::new();
+        let mut chunk = Chunk::default();
         chunk.merge_from_bytes(resp.get_data()).unwrap();
         assert_eq!(
             resp.get_output_counts(),
@@ -186,7 +192,7 @@ fn test_scan_detail() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
-        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
+        init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
 
     let reqs = vec![
@@ -1172,7 +1178,7 @@ fn test_where() {
     let (_, endpoint) = init_with_data(&product, &data);
     let cols = product.columns_info();
     let cond = {
-        let mut col = Expr::new();
+        let mut col = Expr::default();
         col.set_tp(ExprType::ColumnRef);
         let count_offset = offset_for_column(&cols, product["count"].id);
         col.mut_val().encode_i64(count_offset).unwrap();
@@ -1180,7 +1186,7 @@ fn test_where() {
             .as_mut_accessor()
             .set_tp(FieldTypeTp::LongLong);
 
-        let mut value = Expr::new();
+        let mut value = Expr::default();
         value.set_tp(ExprType::String);
         value.set_val(String::from("2").into_bytes());
         value
@@ -1188,7 +1194,7 @@ fn test_where() {
             .as_mut_accessor()
             .set_tp(FieldTypeTp::VarString);
 
-        let mut right = Expr::new();
+        let mut right = Expr::default();
         right.set_tp(ExprType::ScalarFunc);
         right.set_sig(ScalarFuncSig::CastStringAsInt);
         right
@@ -1197,7 +1203,7 @@ fn test_where() {
             .set_tp(FieldTypeTp::LongLong);
         right.mut_children().push(value);
 
-        let mut cond = Expr::new();
+        let mut cond = Expr::default();
         cond.set_tp(ExprType::ScalarFunc);
         cond.set_sig(ScalarFuncSig::LTInt);
         cond.mut_field_type()
@@ -1235,22 +1241,22 @@ fn test_handle_truncate() {
     let cases = vec![
         {
             // count > "2x"
-            let mut col = Expr::new();
+            let mut col = Expr::default();
             col.set_tp(ExprType::ColumnRef);
             let count_offset = offset_for_column(&cols, product["count"].id);
             col.mut_val().encode_i64(count_offset).unwrap();
 
             // "2x" will be truncated.
-            let mut value = Expr::new();
+            let mut value = Expr::default();
             value.set_tp(ExprType::String);
             value.set_val(String::from("2x").into_bytes());
 
-            let mut right = Expr::new();
+            let mut right = Expr::default();
             right.set_tp(ExprType::ScalarFunc);
             right.set_sig(ScalarFuncSig::CastStringAsInt);
             right.mut_children().push(value);
 
-            let mut cond = Expr::new();
+            let mut cond = Expr::default();
             cond.set_tp(ExprType::ScalarFunc);
             cond.set_sig(ScalarFuncSig::LTInt);
             cond.mut_children().push(col);
@@ -1259,36 +1265,36 @@ fn test_handle_truncate() {
         },
         {
             // id
-            let mut col_id = Expr::new();
+            let mut col_id = Expr::default();
             col_id.set_tp(ExprType::ColumnRef);
             let id_offset = offset_for_column(&cols, product["id"].id);
             col_id.mut_val().encode_i64(id_offset).unwrap();
 
             // "3x" will be truncated.
-            let mut value = Expr::new();
+            let mut value = Expr::default();
             value.set_tp(ExprType::String);
             value.set_val(String::from("3x").into_bytes());
 
-            let mut int_3 = Expr::new();
+            let mut int_3 = Expr::default();
             int_3.set_tp(ExprType::ScalarFunc);
             int_3.set_sig(ScalarFuncSig::CastStringAsInt);
             int_3.mut_children().push(value);
 
             // count
-            let mut col_count = Expr::new();
+            let mut col_count = Expr::default();
             col_count.set_tp(ExprType::ColumnRef);
             let count_offset = offset_for_column(&cols, product["count"].id);
             col_count.mut_val().encode_i64(count_offset).unwrap();
 
             // "3x" + count
-            let mut plus = Expr::new();
+            let mut plus = Expr::default();
             plus.set_tp(ExprType::ScalarFunc);
             plus.set_sig(ScalarFuncSig::PlusInt);
             plus.mut_children().push(int_3);
             plus.mut_children().push(col_count);
 
             // id = "3x" + count
-            let mut cond = Expr::new();
+            let mut cond = Expr::default();
             cond.set_tp(ExprType::ScalarFunc);
             cond.set_sig(ScalarFuncSig::EQInt);
             cond.mut_children().push(col_id);
@@ -1301,7 +1307,7 @@ fn test_handle_truncate() {
         // Ignore truncate error.
         let req = DAGSelect::from(&product)
             .where_expr(cond.clone())
-            .build_with(Context::new(), &[FLAG_IGNORE_TRUNCATE]);
+            .build_with(Context::default(), &[FLAG_IGNORE_TRUNCATE]);
         let resp = handle_select(&endpoint, req);
         assert!(!resp.has_error());
         assert!(resp.get_warnings().is_empty());
@@ -1309,7 +1315,7 @@ fn test_handle_truncate() {
         // truncate as warning
         let req = DAGSelect::from(&product)
             .where_expr(cond.clone())
-            .build_with(Context::new(), &[FLAG_TRUNCATE_AS_WARNING]);
+            .build_with(Context::default(), &[FLAG_TRUNCATE_AS_WARNING]);
         let mut resp = handle_select(&endpoint, req);
         assert!(!resp.has_error());
         assert!(!resp.get_warnings().is_empty());
@@ -1474,7 +1480,7 @@ fn test_exec_details() {
     let flags = &[0];
 
     // get handle_time
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_handle_time(true);
     let req = DAGSelect::from(&product).build_with(ctx, flags);
     let resp = handle_request(&endpoint, req);
@@ -1484,7 +1490,7 @@ fn test_exec_details() {
     assert!(!exec_details.has_scan_detail());
 
     // get scan detail
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_scan_detail(true);
     let req = DAGSelect::from(&product).build_with(ctx, flags);
     let resp = handle_request(&endpoint, req);
@@ -1494,7 +1500,7 @@ fn test_exec_details() {
     assert!(exec_details.has_scan_detail());
 
     // get both
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_scan_detail(true);
     ctx.set_handle_time(true);
     let req = DAGSelect::from(&product).build_with(ctx, flags);

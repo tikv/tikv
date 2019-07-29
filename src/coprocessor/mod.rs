@@ -39,6 +39,7 @@ pub use self::error::{Error, Result};
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
+use crate::storage::Statistics;
 use tikv_util::time::{Duration, Instant};
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -61,8 +62,8 @@ pub trait RequestHandler: Send {
         panic!("streaming request is not supported for this handler");
     }
 
-    /// Collects metrics generated in this request handler so far.
-    fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
+    /// Collects scan statistics generated in this request handler so far.
+    fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {
         // Do nothing by default
     }
 
@@ -172,7 +173,7 @@ impl ReqContext {
     pub fn default_for_test() -> Self {
         Self::new(
             "test",
-            kvrpcpb::Context::new(),
+            kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),
             None,

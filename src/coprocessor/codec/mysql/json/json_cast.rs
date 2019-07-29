@@ -1,21 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{Json, Result};
-use crate::coprocessor::codec::convert;
+use crate::coprocessor::codec::convert::*;
+use crate::coprocessor::codec::data_type::Decimal;
 use crate::coprocessor::dag::expr::EvalContext;
 
 impl Json {
-    pub fn cast_to_int(&self) -> i64 {
-        match *self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0,
-            Json::Boolean(true) => 1,
-            Json::I64(d) => d,
-            Json::U64(d) => d as i64,
-            Json::Double(d) => d as i64,
-            Json::String(ref s) => s.parse::<i64>().unwrap_or(0),
-        }
-    }
-
     ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
     pub fn cast_to_real(&self, ctx: &mut EvalContext) -> Result<f64> {
         let d = match *self {
@@ -24,9 +14,16 @@ impl Json {
             Json::I64(d) => d as f64,
             Json::U64(d) => d as f64,
             Json::Double(d) => d,
-            Json::String(ref s) => convert::bytes_to_f64(ctx, s.as_bytes())?,
+            Json::String(ref s) => convert_bytes_to_f64(ctx, s.as_bytes())?,
         };
         Ok(d)
+    }
+
+    /// Converts a `Json` to a `Decimal`
+    #[inline]
+    pub fn cast_to_decimal(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        let f = self.cast_to_real(ctx)?;
+        Decimal::from_f64(f)
     }
 }
 
@@ -38,29 +35,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_cast_to_int() {
-        let test_cases = vec![
-            ("{}", 0),
-            ("[]", 0),
-            ("3", 3),
-            ("-3", -3),
-            ("4.5", 4),
-            ("true", 1),
-            ("false", 0),
-            ("null", 0),
-            (r#""hello""#, 0),
-            (r#""1234""#, 1234),
-        ];
-
-        for (jstr, exp) in test_cases {
-            let json: Json = jstr.parse().unwrap();
-            let get = json.cast_to_int();
-            assert_eq!(get, exp, "cast_to_int get: {}, exp: {}", get, exp);
-        }
-    }
-
-    #[test]
-    fn test_cast_to_f64() {
+    fn test_cast_to_real() {
         let test_cases = vec![
             ("{}", 0f64),
             ("[]", 0f64),
@@ -79,7 +54,7 @@ mod tests {
             let get = json.cast_to_real(&mut ctx).unwrap();
             assert!(
                 (get - exp).abs() < f64::EPSILON,
-                "cast_to_int get: {}, exp: {}",
+                "json.as_f64 get: {}, exp: {}",
                 get,
                 exp
             );

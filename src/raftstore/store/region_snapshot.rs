@@ -394,8 +394,8 @@ mod tests {
     }
 
     fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_id(10);
         r.set_start_key(b"a2".to_vec());
         r.set_end_key(b"a7".to_vec());
@@ -416,8 +416,8 @@ mod tests {
     }
 
     fn load_multiple_levels_dataset(engines: Engines) -> (PeerStorage, DataSet) {
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_id(10);
         r.set_start_key(b"a04".to_vec());
         r.set_end_key(b"a15".to_vec());
@@ -463,7 +463,7 @@ mod tests {
     fn test_peekable() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let mut r = Region::new();
+        let mut r = Region::default();
         r.set_id(10);
         r.set_start_key(b"key0".to_vec());
         r.set_end_key(b"key4".to_vec());
@@ -633,8 +633,8 @@ mod tests {
         assert_eq!(res, base_data[1..3].to_vec());
 
         // test last region
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         data.clear();
@@ -734,8 +734,8 @@ mod tests {
         assert_eq!(res, expect);
 
         // test last region
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
         let it = snap.iter(IterOption::default());
@@ -1037,8 +1037,8 @@ mod tests {
         .unwrap();
 
         // Do scan on other DB.
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_start_key(b"a".to_vec());
         r.set_end_key(b"z".to_vec());
         let snapshot = RegionSnapshot::from_raw(Arc::clone(&engines1.kv), r);

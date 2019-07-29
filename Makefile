@@ -37,6 +37,8 @@ ENABLE_FEATURES ?=
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
+else ifeq ($(MIMALLOC),1)
+ENABLE_FEATURES += mimalloc
 else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
@@ -59,8 +61,8 @@ ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
-ifneq ($(FAIL_POINT),1)
-ENABLE_FEATURES += no-fail
+ifeq ($(FAIL_POINT),1)
+ENABLE_FEATURES += failpoints
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -148,7 +150,7 @@ fail_release:
 dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
-	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
 
 # Build with release flag as if it were for distribution, but without
@@ -211,8 +213,8 @@ clippy: pre-clippy
 		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
 		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
 		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
-		-A clippy::needless_range_loop -D rust-2018-idioms -A clippy::redundant_closure \
-		-A clippy::match_wild_err_arm -A clippy::blacklisted_name
+		-A clippy::needless_range_loop -A clippy::redundant_closure \
+		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
