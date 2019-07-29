@@ -7,7 +7,7 @@ use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
 use crate::pd::{RpcClient, INVALID_ID};
 use crate::server::resolve::StoreAddrResolver;
-use crate::tikv_util::collections::HashMap;
+use crate::tikv_util::collections::{HashMap, HashSet};
 use crate::tikv_util::future::paired_future_callback;
 use crate::tikv_util::security::SecurityManager;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
@@ -17,7 +17,6 @@ use grpcio::{
 };
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
-use protobuf::RepeatedField;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
@@ -31,29 +30,42 @@ const TXN_DETECT_INFO_TTL: u64 = 120000;
 
 #[derive(Default)]
 struct DetectTable {
-    wait_for_map: HashMap<u64, Vec<Lock>>,
+    // txn_ts => (lock_ts, Vec<lock_hash>)
+    wait_for_map: HashMap<u64, HashMap<u64, Vec<u64>>>,
 }
 
 impl DetectTable {
-    /// Return deadlock key hash if deadlocked
+    /// Returns the deadlock key hash which causes deadlock.
     pub fn detect(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> Option<u64> {
         let _timer = DETECTOR_HISTOGRAM_VEC.detect.start_coarse_timer();
         TASK_COUNTER_VEC.detect.inc();
 
-        if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
+        // If txn_ts is waiting for lock_ts, it won't cause deadlock.
+        if self.register_if_existed(txn_ts, lock_ts, lock_hash) {
+            return None;
+        }
+
+        // Memorize the searching path.
+        let mut visited: HashSet<u64> = HashSet::default();
+        if let Some(deadlock_key_hash) = self.do_detect(&mut visited, txn_ts, lock_ts) {
             return Some(deadlock_key_hash);
         }
         self.register(txn_ts, lock_ts, lock_hash);
         None
     }
 
-    fn do_detect(&self, txn_ts: u64, wait_for_ts: u64) -> Option<u64> {
-        if let Some(locks) = self.wait_for_map.get(&wait_for_ts) {
-            for lock in locks {
-                if lock.ts == txn_ts {
-                    return Some(lock.hash);
+    /// Checks if there is a path from `wait_for_ts` to `txn_ts`.
+    fn do_detect(&self, visited: &mut HashSet<u64>, txn_ts: u64, wait_for_ts: u64) -> Option<u64> {
+        visited.insert(wait_for_ts);
+        if let Some(wait_for) = self.wait_for_map.get(&wait_for_ts) {
+            for (lock_ts, lock_hashes) in wait_for {
+                if *lock_ts == txn_ts {
+                    return Some(lock_hashes[0]);
                 }
-                if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock.ts) {
+                if visited.contains(lock_ts) {
+                    continue;
+                }
+                if let Some(deadlock_key_hash) = self.do_detect(visited, txn_ts, *lock_ts) {
                     return Some(deadlock_key_hash);
                 }
             }
@@ -61,41 +73,59 @@ impl DetectTable {
         None
     }
 
-    pub fn register(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
-        let locks = self.wait_for_map.entry(txn_ts).or_default();
-        let lock = Lock {
-            ts: lock_ts,
-            hash: lock_hash,
-        };
-        if !locks.contains(&lock) {
-            locks.push(lock);
+    /// Returns true and adds to the detect table if txn_ts is waiting for lock_ts.
+    fn register_if_existed(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> bool {
+        if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
+            if let Some(lock_hashes) = wait_for.get_mut(&lock_ts) {
+                if !lock_hashes.contains(&lock_hash) {
+                    lock_hashes.push(lock_hash);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Adds to the detect table.
+    fn register(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
+        let wait_for = self.wait_for_map.entry(txn_ts).or_default();
+        let lock_hashes = wait_for.entry(lock_ts).or_default();
+        if !lock_hashes.contains(&lock_hash) {
+            lock_hashes.push(lock_hash);
         }
     }
 
+    /// Removes the corresponding wait_for_entry.
     pub fn clean_up_wait_for(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
-        if let Some(locks) = self.wait_for_map.get_mut(&txn_ts) {
-            let idx = locks
-                .iter()
-                .position(|lock| lock.ts == lock_ts && lock.hash == lock_hash);
-            if let Some(idx) = idx {
-                locks.remove(idx);
-                if locks.is_empty() {
-                    self.wait_for_map.remove(&txn_ts);
+        if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
+            if let Some(lock_hashes) = wait_for.get_mut(&lock_ts) {
+                let idx = lock_hashes.iter().position(|hash| *hash == lock_hash);
+                if let Some(idx) = idx {
+                    lock_hashes.remove(idx);
+                    if lock_hashes.is_empty() {
+                        wait_for.remove(&lock_ts);
+                        if wait_for.is_empty() {
+                            self.wait_for_map.remove(&txn_ts);
+                        }
+                    }
                 }
             }
         }
         TASK_COUNTER_VEC.clean_up_wait_for.inc();
     }
 
+    /// Removes the entries of the transaction.
     pub fn clean_up(&mut self, txn_ts: u64) {
         self.wait_for_map.remove(&txn_ts);
         TASK_COUNTER_VEC.clean_up.inc();
     }
 
+    /// Clears the whole detect table.
     pub fn clear(&mut self) {
         self.wait_for_map.clear();
     }
 
+    /// Removes expired entries.
     pub fn expire<F>(&mut self, is_expired: F)
     where
         F: Fn(u64) -> bool,
@@ -128,7 +158,7 @@ impl Display for Task {
         match self {
             Task::Detect { tp, txn_ts, lock } => write!(
                 f,
-                "Detect {{ tp: {:?}, txn_ts: {:?}, lock: {:?} }}",
+                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
                 tp, txn_ts, lock
             ),
             Task::DetectRpc { .. } => write!(f, "detect rpc"),
@@ -416,11 +446,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                         DetectType::CleanUpWaitFor => DeadlockRequestType::CleanUpWaitFor,
                         DetectType::CleanUp => DeadlockRequestType::CleanUp,
                     };
-                    let mut entry = WaitForEntry::new();
+                    let mut entry = WaitForEntry::default();
                     entry.set_txn(txn_ts);
                     entry.set_wait_for_txn(lock.ts);
                     entry.set_key_hash(lock.hash);
-                    let mut req = DeadlockRequest::new();
+                    let mut req = DeadlockRequest::default();
                     req.set_tp(tp);
                     req.set_entry(entry);
                     if leader_client.detect(req).is_ok() {
@@ -475,7 +505,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                         if let Some(deadlock_key_hash) =
                             detect_table.detect(*txn, *wait_for_txn, *key_hash)
                         {
-                            let mut resp = DeadlockResponse::new();
+                            let mut resp = DeadlockResponse::default();
                             resp.set_entry(req.take_entry());
                             resp.set_deadlock_key_hash(deadlock_key_hash);
                             Some((resp, WriteFlags::default()))
@@ -554,8 +584,8 @@ impl deadlock_grpc::Deadlock for Service {
             ctx.spawn(
                 f.map_err(Error::from)
                     .map(|v| {
-                        let mut resp = WaitForEntriesResponse::new();
-                        resp.set_entries(RepeatedField::from_vec(v));
+                        let mut resp = WaitForEntriesResponse::default();
+                        resp.set_entries(v.into());
                         resp
                     })
                     .and_then(|resp| sink.success(resp).map_err(Error::Grpc))
@@ -604,18 +634,72 @@ mod tests {
         // After cycle is broken, no deadlock.
         assert_eq!(detect_table.detect(3, 1, 1), None);
         assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 1);
+        assert_eq!(
+            detect_table
+                .wait_for_map
+                .get(&3)
+                .unwrap()
+                .get(&1)
+                .unwrap()
+                .len(),
+            1
+        );
 
         // Different key_hash grows the list.
         assert_eq!(detect_table.detect(3, 1, 2), None);
-        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 2);
+        assert_eq!(
+            detect_table
+                .wait_for_map
+                .get(&3)
+                .unwrap()
+                .get(&1)
+                .unwrap()
+                .len(),
+            2
+        );
 
         // Same key_hash doesn't grow the list.
         assert_eq!(detect_table.detect(3, 1, 2), None);
-        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 2);
+        assert_eq!(
+            detect_table
+                .wait_for_map
+                .get(&3)
+                .unwrap()
+                .get(&1)
+                .unwrap()
+                .len(),
+            2
+        );
 
+        // Different lock_ts grows the map.
+        assert_eq!(detect_table.detect(3, 2, 2), None);
+        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 2);
+        assert_eq!(
+            detect_table
+                .wait_for_map
+                .get(&3)
+                .unwrap()
+                .get(&2)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Clean up entries shrinking the map.
         detect_table.clean_up_wait_for(3, 1, 1);
-        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 1);
+        assert_eq!(
+            detect_table
+                .wait_for_map
+                .get(&3)
+                .unwrap()
+                .get(&1)
+                .unwrap()
+                .len(),
+            1
+        );
         detect_table.clean_up_wait_for(3, 1, 2);
+        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 1);
+        detect_table.clean_up_wait_for(3, 2, 2);
         assert_eq!(detect_table.wait_for_map.contains_key(&3), false);
 
         // clean up non-exist entry

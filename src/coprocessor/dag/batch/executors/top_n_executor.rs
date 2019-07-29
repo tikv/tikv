@@ -18,6 +18,7 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
@@ -60,7 +61,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
 /// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
 /// `BatchTopNExecutor` doesn't leak the pointers to other threads. Therefore, with those `NonNull`
 /// pointers, BatchTopNExecutor still remains `Send`.
-unsafe impl<Src: BatchExecutor + Send> Send for BatchTopNExecutor<Src> {}
+unsafe impl<Src: BatchExecutor> Send for BatchTopNExecutor<Src> {}
 
 impl BatchTopNExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
@@ -313,8 +314,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.src.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.src.collect_storage_stats(dest);
     }
 }
 

@@ -31,6 +31,7 @@ impl Json {
         }
     }
 
+    /// TODO: remove this method after implementing convert_json_to_f64
     fn as_f64(&self) -> Result<f64> {
         match *self {
             Json::Double(d) => Ok(d),
@@ -41,7 +42,7 @@ impl Json {
                 Ok(v.into())
             }
             _ => Err(invalid_type!(
-                "{:?} from {} to f64",
+                "{} from {} to f64",
                 ERR_CONVERT_FAILED,
                 self.to_string()
             )),

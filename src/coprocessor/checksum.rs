@@ -5,12 +5,11 @@ use std::vec::IntoIter;
 use crc::crc64::{self, Digest, Hasher64};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
+use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
-use crate::storage::{Snapshot, SnapshotStore};
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
-use crate::coprocessor::dag::executor::ExecutorMetrics;
-use crate::coprocessor::dag::{ScanOn, Scanner};
+use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
@@ -19,7 +18,7 @@ pub struct ChecksumContext<S: Snapshot> {
     store: SnapshotStore<S>,
     ranges: IntoIter<KeyRange>,
     scanner: Option<Scanner<SnapshotStore<S>>>,
-    metrics: ExecutorMetrics,
+    metrics: Statistics,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -40,17 +39,16 @@ impl<S: Snapshot> ChecksumContext<S> {
             store,
             ranges: ranges.into_iter(),
             scanner: None,
-            metrics: ExecutorMetrics::default(),
+            metrics: Default::default(),
         })
     }
 
     fn next_row(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         loop {
             if let Some(scanner) = self.scanner.as_mut() {
-                self.metrics.scan_counter.inc_range();
                 match scanner.next_row()? {
                     Some(row) => return Ok(Some(row)),
-                    None => scanner.collect_statistics_into(&mut self.metrics.cf_stats),
+                    None => scanner.collect_statistics_into(&mut self.metrics),
                 }
             }
 
@@ -70,11 +68,7 @@ impl<S: Snapshot> ChecksumContext<S> {
     }
 
     fn new_scanner(&self, range: KeyRange) -> Result<Scanner<SnapshotStore<S>>> {
-        let scan_on = match self.req.get_scan_on() {
-            ChecksumScanOn::Table => ScanOn::Table,
-            ChecksumScanOn::Index => ScanOn::Index,
-        };
-        Scanner::new(&self.store, scan_on, false, false, range).map_err(Error::from)
+        Scanner::new(&self.store, false, false, range).map_err(Error::from)
     }
 }
 
@@ -94,19 +88,20 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
             total_bytes += k.len() + v.len();
         }
 
-        let mut resp = ChecksumResponse::new();
+        let mut resp = ChecksumResponse::default();
         resp.set_checksum(checksum);
         resp.set_total_kvs(total_kvs);
         resp.set_total_bytes(total_bytes as u64);
         let data = box_try!(resp.write_to_bytes());
 
-        let mut resp = Response::new();
+        let mut resp = Response::default();
         resp.set_data(data);
         Ok(resp)
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        metrics.merge(&mut self.metrics);
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        dest.add(&self.metrics);
+        self.metrics = Default::default();
     }
 }
 

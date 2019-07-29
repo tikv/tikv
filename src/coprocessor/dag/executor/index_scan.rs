@@ -68,11 +68,6 @@ impl InnerExecutor for IndexInnerExecutor {
         self.unique && util::is_point(range)
     }
 
-    #[inline]
-    fn scan_on(&self) -> super::super::scanner::ScanOn {
-        super::super::scanner::ScanOn::Index
-    }
-
     // Since the unique index wouldn't always come with
     // self.unique = true. so the key-only would always be false.
     #[inline]
@@ -89,11 +84,10 @@ impl<S: Store> IndexScanExecutor<S> {
         key_ranges: Vec<KeyRange>,
         store: S,
         unique: bool,
-        collect: bool,
     ) -> Result<Self> {
         let columns = meta.get_columns().to_vec();
         let inner = IndexInnerExecutor::new(&mut meta, unique);
-        Self::new(inner, meta.get_desc(), columns, key_ranges, store, collect)
+        Self::new(inner, meta.get_desc(), columns, key_ranges, store)
     }
 
     pub fn index_scan_with_cols_len(
@@ -107,7 +101,7 @@ impl<S: Store> IndexScanExecutor<S> {
             pk_col: None,
             unique: false,
         };
-        Self::new(inner, false, vec![], key_ranges, store, false)
+        Self::new(inner, false, vec![], key_ranges, store)
     }
 }
 
@@ -118,7 +112,6 @@ pub mod tests {
 
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
-    use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::datum::{self, Datum};
@@ -127,6 +120,7 @@ pub mod tests {
 
     use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::execute_stats::ExecuteStats;
     use crate::coprocessor::dag::executor::Executor;
     use crate::coprocessor::dag::scanner::tests::Data;
 
@@ -146,7 +140,7 @@ pub mod tests {
     ) -> KeyRange {
         let (_, start_key) = generate_index_data(table_id, idx_id, start, val_start, unique);
         let (_, end_key) = generate_index_data(table_id, idx_id, end, val_end, unique);
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end_key);
         key_range
@@ -226,19 +220,17 @@ pub mod tests {
             let mut wrapper = IndexTestWrapper::new(unique, test_data);
             let mut cols = wrapper.data.cols.clone();
             cols.push(wrapper.data.get_col_pk());
-            wrapper
-                .scan
-                .set_columns(RepeatedField::from_vec(cols.clone()));
+            wrapper.scan.set_columns(cols.clone().into());
             wrapper.cols = cols;
             wrapper
         }
 
         pub fn new(unique: bool, test_data: Data) -> IndexTestWrapper {
             let test_store = TestStore::new(&test_data.kv_data);
-            let mut scan = IndexScan::new();
+            let mut scan = IndexScan::default();
             // prepare cols
             let cols = test_data.cols.clone();
-            let col_req = RepeatedField::from_vec(cols.clone());
+            let col_req = cols.clone().into();
             scan.set_columns(col_req);
             // prepare range
             let val_start = Datum::Bytes(b"a".to_vec());
@@ -293,8 +285,7 @@ pub mod tests {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false, false)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false).unwrap();
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
@@ -348,8 +339,7 @@ pub mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique).unwrap();
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
             assert_eq!(row.handle, handle as i64);
@@ -363,9 +353,9 @@ pub mod tests {
         }
         assert!(scanner.next().unwrap().is_none());
         let expected_counts = vec![1, 3, 1, 5, 0];
-        let mut counts = Vec::with_capacity(5);
-        scanner.collect_output_counts(&mut counts);
-        assert_eq!(expected_counts, counts);
+        let mut exec_stats = ExecuteStats::new(0);
+        scanner.collect_exec_stats(&mut exec_stats);
+        assert_eq!(expected_counts, exec_stats.scanned_rows_per_range);
     }
 
     #[test]
@@ -401,8 +391,7 @@ pub mod tests {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, false)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique).unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -426,8 +415,7 @@ pub mod tests {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false, false)
-                .unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false).unwrap();
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap().take_origin().unwrap();

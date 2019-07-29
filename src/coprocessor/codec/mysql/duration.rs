@@ -4,13 +4,14 @@ use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
-use std::{i64, str, u64};
+use std::{i64, u64};
+
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use super::super::{Result, TEN_POW};
-use super::MAX_FSP;
 use super::{check_fsp, Decimal};
+use crate::coprocessor::codec::mysql::MAX_FSP;
+use crate::coprocessor::codec::{Result, TEN_POW};
 
 use bitfield::bitfield;
 
@@ -323,6 +324,11 @@ impl Duration {
     }
 
     #[inline]
+    pub fn neg(self) -> bool {
+        self.get_neg()
+    }
+
+    #[inline]
     pub fn hours(self) -> u32 {
         self.get_hours()
     }
@@ -465,11 +471,11 @@ impl Duration {
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
-        if input.is_empty() {
-            return Err(invalid_type!("invalid time format"));
-        }
-
         let fsp = check_fsp(fsp)?;
+
+        if input.is_empty() {
+            return Ok(Duration::zero());
+        }
 
         let (mut neg, [mut day, mut hour, mut minute, mut second, micros]) =
             self::parser::parse(input, fsp)
@@ -647,12 +653,37 @@ impl Duration {
 
         string
     }
+
+    /// Converts a `Duration` to printable numeric string representation
+    #[inline]
+    pub fn to_numeric_string(self) -> String {
+        use std::fmt::Write;
+        let mut buf = String::with_capacity(13);
+        if self.neg() {
+            buf.push('-');
+        }
+        write!(
+            buf,
+            "{:02}{:02}{:02}",
+            self.hours(),
+            self.minutes(),
+            self.secs(),
+        )
+        .unwrap();
+        let fsp = self.get_fsp();
+        if fsp > 0 {
+            let nanos = self.subsec_micros() / (TEN_POW[MICRO_WIDTH - usize::from(fsp)]) as u32;
+            write!(buf, ".{:01$}", nanos, fsp as usize).unwrap();
+        }
+        buf
+    }
 }
 
+// TODO: define a convert::Convert trait for all conversion
 impl TryFrom<Duration> for Decimal {
     type Error = crate::coprocessor::codec::Error;
     fn try_from(duration: Duration) -> Result<Decimal> {
-        duration.format("").parse()
+        duration.to_numeric_string().parse()
     }
 }
 
@@ -734,6 +765,9 @@ impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coprocessor::codec::convert::convert_bytes_to_decimal;
+    use crate::coprocessor::codec::data_type::DateTime;
+    use crate::coprocessor::dag::expr::EvalContext;
 
     #[test]
     fn test_hours() {
@@ -857,7 +891,8 @@ mod tests {
             (b" - 1 : 2 :  3 .123 ", 3, Some("-01:02:03.123")),
             (b" - 1 .123 ", 3, Some("-00:00:01.123")),
             (b"-", 0, None),
-            (b"", 0, None),
+            (b"", 0, Some("00:00:00")),
+            (b"", 7, None),
             (b"18446744073709551615:59:59", 0, None),
             (b"1::2:3", 0, None),
             (b"1.23 3", 0, None),
@@ -871,7 +906,9 @@ mod tests {
                     expect,
                     &format!(
                         "{}",
-                        got.unwrap_or_else(|_| panic!(str::from_utf8(input).unwrap().to_string()))
+                        got.unwrap_or_else(|_| panic!(std::str::from_utf8(input)
+                            .unwrap()
+                            .to_string()))
                     )
                 );
             } else {
@@ -879,11 +916,30 @@ mod tests {
                     got.is_err(),
                     format!(
                         "{} should not be passed, got {:?}",
-                        str::from_utf8(input).unwrap(),
+                        std::str::from_utf8(input).unwrap(),
                         got
                     )
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_to_numeric_string() {
+        let cases: Vec<(&[u8], i8, &str)> = vec![
+            (b"11:30:45.123456", 4, "113045.1235"),
+            (b"11:30:45.123456", 6, "113045.123456"),
+            (b"11:30:45.123456", 0, "113045"),
+            (b"11:30:45.999999", 0, "113046"),
+            (b"08:40:59.575601", 0, "084100"),
+            (b"23:59:59.575601", 0, "240000"),
+            (b"00:00:00", 0, "000000"),
+            (b"00:00:00", 6, "000000.000000"),
+        ];
+        for (s, fsp, expect) in cases {
+            let du = Duration::parse(s, fsp).unwrap();
+            let get = du.to_numeric_string();
+            assert_eq!(get, expect.to_string());
         }
     }
 
@@ -910,6 +966,27 @@ mod tests {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let res = format!("{}", Decimal::try_from(t).unwrap());
             assert_eq!(exp, res);
+        }
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "113045"),
+            ("2012-12-31 11:30:45.999999", 0, "113046"),
+            ("2017-01-05 08:40:59.575601", 0, "084100"),
+            ("2017-01-05 23:59:59.575601", 0, "000000"),
+            ("0000-00-00 00:00:00", 6, "000000"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let du = t.to_duration().unwrap();
+            let get = Decimal::try_from(du).unwrap();
+            assert_eq!(
+                get,
+                convert_bytes_to_decimal(&mut ctx, expect.as_bytes()).unwrap(),
+                "convert duration {} to decimal",
+                s
+            );
         }
     }
 

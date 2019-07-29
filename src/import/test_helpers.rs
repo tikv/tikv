@@ -42,7 +42,7 @@ pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<
     let data = fs::read(path).unwrap();
     let crc32 = calc_data_crc32(&data);
 
-    let mut meta = SSTMeta::new();
+    let mut meta = SSTMeta::default();
     meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
     meta.mut_range().set_start(vec![range.0]);
     meta.mut_range().set_end(vec![range.1]);

@@ -14,12 +14,13 @@ publish = false
 [features]
 default = ["tikv_alloc/default"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
-jemalloc = ["tikv_alloc/jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc"]
+mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 profiling = ["profiler/profiling"]
-no-fail = ["fail/no_fail"]
+failpoints = ["fail/failpoints"]
 
 [lib]
 name = "tikv"
@@ -33,6 +34,7 @@ name = "tikv-ctl"
 [[test]]
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
 
 [[test]]
 name = "integrations"
@@ -99,7 +101,7 @@ serde_json = "1.0"
 serde_derive = "1.0"
 zipf = "5.0.1"
 bitflags = "1.0.1"
-fail = "0.2"
+fail = "0.3"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.4", features = [ "secure" ] }
 raft = "0.4.3"

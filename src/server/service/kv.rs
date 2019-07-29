@@ -28,7 +28,6 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
-use protobuf::RepeatedField;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
@@ -575,7 +574,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
-                let mut resp = UnsafeDestroyRangeResponse::new();
+                let mut resp = UnsafeDestroyRangeResponse::default();
                 // Region error is impossible here.
                 if let Err(e) = v {
                     resp.set_error(format!("{}", e));
@@ -744,7 +743,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
-                let mut resp = MvccGetByKeyResponse::new();
+                let mut resp = MvccGetByKeyResponse::default();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
@@ -786,7 +785,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
-                let mut resp = MvccGetByStartTsResponse::new();
+                let mut resp = MvccGetByStartTsResponse::default();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
@@ -838,7 +837,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let future = future
             .map_err(Error::from)
             .map(move |mut v| {
-                let mut resp = SplitRegionResponse::new();
+                let mut resp = SplitRegionResponse::default();
                 if v.response.get_header().has_error() {
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
@@ -884,9 +883,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
 
         let region_id = req.get_context().get_region_id();
-        let mut cmd = RaftCmdRequest::new();
-        let mut header = RaftRequestHeader::new();
-        let mut inner_req = RaftRequest::new();
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        let mut inner_req = RaftRequest::default();
         inner_req.set_cmd_type(CmdType::ReadIndex);
         header.set_region_id(req.get_context().get_region_id());
         header.set_peer(req.get_context().get_peer().clone());
@@ -897,7 +896,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         header.set_sync_log(req.get_context().get_sync_log());
         header.set_read_quorum(true);
         cmd.set_header(header);
-        cmd.set_requests(RepeatedField::from_vec(vec![inner_req]));
+        cmd.set_requests(vec![inner_req].into());
 
         let (cb, future) = paired_future_callback();
 
@@ -909,7 +908,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let future = future
             .map_err(Error::from)
             .map(move |mut v| {
-                let mut resp = ReadIndexResponse::new();
+                let mut resp = ReadIndexResponse::default();
                 if v.response.get_header().has_error() {
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
@@ -1059,7 +1058,7 @@ fn handle_batch_commands_request<E: Engine>(
     macro_rules! oneof {
         ($p:path) => {
             |resp| {
-                let mut res = BatchCommandsResponse_Response::new();
+                let mut res = BatchCommandsResponse_Response::default();
                 res.cmd = Some($p(resp));
                 res
             }
@@ -1279,7 +1278,7 @@ fn future_handle_empty(
     tikv_util::timer::GLOBAL_TIMER_HANDLE
         .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
         .map(move |_| {
-            let mut res = BatchCommandsEmptyResponse::new();
+            let mut res = BatchCommandsEmptyResponse::default();
             res.set_test_id(req.get_test_id());
             res
         })
@@ -1297,7 +1296,7 @@ fn future_get<E: Engine>(
             req.get_version(),
         )
         .then(|v| {
-            let mut resp = GetResponse::new();
+            let mut resp = GetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
@@ -1335,11 +1334,11 @@ fn future_scan<E: Engine>(
             options,
         )
         .then(|v| {
-            let mut resp = ScanResponse::new();
+            let mut resp = ScanResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1378,11 +1377,11 @@ fn future_prewrite<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = PrewriteResponse::new();
+        let mut resp = PrewriteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1419,11 +1418,11 @@ fn future_acquire_pessimistic_lock<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = PessimisticLockResponse::new();
+        let mut resp = PessimisticLockResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1444,11 +1443,11 @@ fn future_pessimistic_rollback<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = PessimisticRollbackResponse::new();
+        let mut resp = PessimisticRollbackResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1469,7 +1468,7 @@ fn future_commit<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = CommitResponse::new();
+        let mut resp = CommitResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1492,7 +1491,7 @@ fn future_cleanup<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = CleanupResponse::new();
+        let mut resp = CleanupResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1514,11 +1513,11 @@ fn future_batch_get<E: Engine>(
     storage
         .async_batch_get(req.take_context(), keys, req.get_version())
         .then(|v| {
-            let mut resp = BatchGetResponse::new();
+            let mut resp = BatchGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1534,7 +1533,7 @@ fn future_batch_rollback<E: Engine>(
     let res = storage.async_rollback(req.take_context(), keys, req.get_start_version(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = BatchRollbackResponse::new();
+        let mut resp = BatchRollbackResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1558,12 +1557,12 @@ fn future_scan_lock<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = ScanLockResponse::new();
+        let mut resp = ScanLockResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
+                Ok(locks) => resp.set_locks(locks.into()),
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1604,7 +1603,7 @@ fn future_resolve_lock<E: Engine>(
     };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = ResolveLockResponse::new();
+        let mut resp = ResolveLockResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1622,7 +1621,7 @@ fn future_gc<E: Engine>(
     let res = storage.async_gc(req.take_context(), req.get_safe_point(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = GCResponse::new();
+        let mut resp = GCResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1646,7 +1645,7 @@ fn future_delete_range<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = DeleteRangeResponse::new();
+        let mut resp = DeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1663,7 +1662,7 @@ fn future_raw_get<E: Engine>(
     storage
         .async_raw_get(req.take_context(), req.take_cf(), req.take_key())
         .then(|v| {
-            let mut resp = RawGetResponse::new();
+            let mut resp = RawGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
@@ -1685,11 +1684,11 @@ fn future_raw_batch_get<E: Engine>(
     storage
         .async_raw_batch_get(req.take_context(), req.take_cf(), keys)
         .then(|v| {
-            let mut resp = RawBatchGetResponse::new();
+            let mut resp = RawBatchGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1709,7 +1708,7 @@ fn future_raw_put<E: Engine>(
     );
 
     AndThenWith::new(res, future.map_err(Error::from)).map(|v| {
-        let mut resp = RawPutResponse::new();
+        let mut resp = RawPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1734,7 +1733,7 @@ fn future_raw_batch_put<E: Engine>(
     let res = storage.async_raw_batch_put(req.take_context(), cf, pairs, cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = RawBatchPutResponse::new();
+        let mut resp = RawBatchPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1752,7 +1751,7 @@ fn future_raw_delete<E: Engine>(
     let res = storage.async_raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = RawDeleteResponse::new();
+        let mut resp = RawDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1772,7 +1771,7 @@ fn future_raw_batch_delete<E: Engine>(
     let res = storage.async_raw_batch_delete(req.take_context(), cf, keys, cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = RawBatchDeleteResponse::new();
+        let mut resp = RawBatchDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1802,11 +1801,11 @@ fn future_raw_scan<E: Engine>(
             req.get_reverse(),
         )
         .then(|v| {
-            let mut resp = RawScanResponse::new();
+            let mut resp = RawScanResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_kvs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1826,11 +1825,11 @@ fn future_raw_batch_scan<E: Engine>(
             req.get_reverse(),
         )
         .then(|v| {
-            let mut resp = RawBatchScanResponse::new();
+            let mut resp = RawBatchScanResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_kvs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1850,7 +1849,7 @@ fn future_raw_delete_range<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = RawDeleteRangeResponse::new();
+        let mut resp = RawDeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1879,17 +1878,24 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
             Some(e.to_owned())
         }
         Err(Error::SchedTooBusy) => {
-            let mut err = RegionError::new();
-            let mut server_is_busy_err = ServerIsBusy::new();
+            let mut err = RegionError::default();
+            let mut server_is_busy_err = ServerIsBusy::default();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
         Err(Error::GCWorkerTooBusy) => {
-            let mut err = RegionError::new();
-            let mut server_is_busy_err = ServerIsBusy::new();
+            let mut err = RegionError::default();
+            let mut server_is_busy_err = ServerIsBusy::default();
             server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
+            Some(err)
+        }
+        Err(Error::Closed) => {
+            // TiKV is closing, return an RegionError to tell the client that this region is unavailable
+            // temporarily, the client should retry the request in other TiKVs.
+            let mut err = RegionError::default();
+            err.set_message("TiKV is Closing".to_string());
             Some(err)
         }
         _ => None,
@@ -1904,7 +1910,7 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 }
 
 fn extract_key_error(err: &storage::Error) -> KeyError {
-    let mut key_error = KeyError::new();
+    let mut key_error = KeyError::default();
     match *err {
         storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
             ref key,
@@ -1913,7 +1919,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ttl,
             txn_size,
         })) => {
-            let mut lock_info = LockInfo::new();
+            let mut lock_info = LockInfo::default();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
             lock_info.set_lock_version(ts);
@@ -1930,7 +1936,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ref primary,
             ..
         })) => {
-            let mut write_conflict = WriteConflict::new();
+            let mut write_conflict = WriteConflict::default();
             write_conflict.set_start_ts(start_ts);
             write_conflict.set_conflict_ts(conflict_start_ts);
             write_conflict.set_conflict_commit_ts(conflict_commit_ts);
@@ -1941,7 +1947,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             key_error.set_retryable(format!("{:?}", err));
         }
         storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { ref key })) => {
-            let mut exist = AlreadyExist::new();
+            let mut exist = AlreadyExist::default();
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
         }
@@ -1957,7 +1963,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ..
         })) => {
             warn!("txn deadlocks"; "err" => ?err);
-            let mut deadlock = Deadlock::new();
+            let mut deadlock = Deadlock::default();
             deadlock.set_lock_ts(lock_ts);
             deadlock.set_lock_key(lock_key.to_owned());
             deadlock.set_deadlock_key_hash(deadlock_key_hash);
@@ -1977,20 +1983,20 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
             .into_iter()
             .map(|r| match r {
                 Ok((key, value)) => {
-                    let mut pair = KvPair::new();
+                    let mut pair = KvPair::default();
                     pair.set_key(key);
                     pair.set_value(value);
                     pair
                 }
                 Err(e) => {
-                    let mut pair = KvPair::new();
+                    let mut pair = KvPair::default();
                     pair.set_error(extract_key_error(&e));
                     pair
                 }
             })
             .collect(),
         Err(e) => {
-            let mut pair = KvPair::new();
+            let mut pair = KvPair::default();
             pair.set_error(extract_key_error(&e));
             vec![pair]
         }
@@ -1998,9 +2004,9 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
 }
 
 fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
-    let mut mvcc_info = MvccInfo::new();
+    let mut mvcc_info = MvccInfo::default();
     if let Some(lock) = mvcc.lock {
-        let mut lock_info = MvccLock::new();
+        let mut lock_info = MvccLock::default();
         let op = match lock.lock_type {
             LockType::Put => Op::Put,
             LockType::Delete => Op::Del,
@@ -2015,15 +2021,15 @@ fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
     }
     let vv = extract_2pc_values(mvcc.values);
     let vw = extract_2pc_writes(mvcc.writes);
-    mvcc_info.set_writes(RepeatedField::from_vec(vw));
-    mvcc_info.set_values(RepeatedField::from_vec(vv));
+    mvcc_info.set_writes(vw.into());
+    mvcc_info.set_values(vv.into());
     mvcc_info
 }
 
 fn extract_2pc_values(res: Vec<(u64, Value)>) -> Vec<MvccValue> {
     res.into_iter()
         .map(|(start_ts, value)| {
-            let mut value_info = MvccValue::new();
+            let mut value_info = MvccValue::default();
             value_info.set_start_ts(start_ts);
             value_info.set_value(value);
             value_info
@@ -2034,7 +2040,7 @@ fn extract_2pc_values(res: Vec<(u64, Value)>) -> Vec<MvccValue> {
 fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
     res.into_iter()
         .map(|(commit_ts, write)| {
-            let mut write_info = kvrpcpb::MvccWrite::new();
+            let mut write_info = kvrpcpb::MvccWrite::default();
             let op = match write.write_type {
                 WriteType::Put => Op::Put,
                 WriteType::Delete => Op::Del,
@@ -2088,8 +2094,8 @@ mod tests {
             key: key.clone(),
             primary: primary.clone(),
         }));
-        let mut expect = KeyError::new();
-        let mut write_conflict = WriteConflict::new();
+        let mut expect = KeyError::default();
+        let mut write_conflict = WriteConflict::default();
         write_conflict.set_start_ts(start_ts);
         write_conflict.set_conflict_ts(conflict_start_ts);
         write_conflict.set_conflict_commit_ts(conflict_commit_ts);

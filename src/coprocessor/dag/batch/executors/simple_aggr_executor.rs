@@ -16,6 +16,7 @@ use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SimpleAggregationImpl>,
@@ -33,8 +34,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination)
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
@@ -330,7 +336,7 @@ mod tests {
 
         let aggr_definitions: Vec<_> = (0..6)
             .map(|index| {
-                let mut exp = Expr::new();
+                let mut exp = Expr::default();
                 exp.mut_val().push(index as u8);
                 exp
             })
@@ -607,7 +613,7 @@ mod tests {
         }
 
         let mut exec =
-            BatchSimpleAggregationExecutor::new_for_test(src_exec, vec![Expr::new()], MyParser);
+            BatchSimpleAggregationExecutor::new_for_test(src_exec, vec![Expr::default()], MyParser);
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());

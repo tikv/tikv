@@ -4,14 +4,13 @@ use kvproto::coprocessor::KeyRange;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{Key, Store};
-
 use super::ranges_iter::{PointRangePolicy, RangesIterator};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
+use crate::storage::{Key, Statistics, Store};
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -176,7 +175,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
 /// Extracts `FieldType` from `ColumnInfo`.
 // TODO: Embed FieldType in ColumnInfo directly in Cop DAG v2 to remove this function.
 pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
-    let mut field_type = FieldType::new();
+    let mut field_type = FieldType::default();
     field_type.set_tp(ci.get_tp());
     field_type.set_flag(ci.get_flag() as u32); // FIXME: This `as u32` is really awful.
     field_type.set_flen(ci.get_columnLen());
@@ -236,13 +235,17 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         }
     }
 
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        for (index, num) in self.scanned_rows_per_range.iter_mut().enumerate() {
-            destination.scanned_rows_per_range[index] += *num;
-            *num = 0;
-        }
+    #[inline]
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        dest.scanned_rows_per_range
+            .append(&mut self.scanned_rows_per_range);
+        self.scanned_rows_per_range.push(0);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         if let Some(scanner) = &mut self.scanner {
-            scanner.collect_statistics_into(&mut destination.cf_stats);
+            scanner.collect_statistics_into(dest);
         }
     }
 }
