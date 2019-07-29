@@ -1754,6 +1754,17 @@ impl ApplyDelegate {
         ))
     }
 
+    // The target peer should send missing log entries to source peer.
+    //
+    // So, the merge process order would be:
+    // 1. `exec_commit_merge` in target apply worker
+    // 2. `catch_up_logs_for_merge` in source apply worker (check whether need to catch up logs)
+    // 3. `on_ready_catch_up_logs` in source raftstore
+    // 4. ... (raft append and apply logs)
+    // 5. `on_ready_prepare_merge` in source raftstore (means source region has finished applying all logs)
+    // 6. `catch_up_logs_for_merge` in source apply worker (destroy itself and send LogsUpToDate)
+    // 7. resume `exec_commit_merge` in target apply worker
+    // 8. `on_ready_commit_merge` in target raftstore
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext,
