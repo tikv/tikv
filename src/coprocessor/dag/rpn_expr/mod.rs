@@ -178,7 +178,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::MinusDecimal => arithmetic_fn_meta::<DecimalMinus>(),
         ScalarFuncSig::MultiplyDecimal => arithmetic_fn_meta::<DecimalMultiply>(),
         ScalarFuncSig::MultiplyInt => map_int_sig(value, children, multiply_mapper)?,
-        ScalarFuncSig::MultiplyIntUnsigned => arithmetic_fn_meta::<IntUintMultiply>(),
+        ScalarFuncSig::MultiplyIntUnsigned => arithmetic_fn_meta::<UintUintMultiply>(),
         ScalarFuncSig::MultiplyReal => arithmetic_fn_meta::<RealMultiply>(),
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_fn_meta::<DecimalMod>(),

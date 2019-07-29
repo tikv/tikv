@@ -967,12 +967,12 @@ mod tests {
     #[test]
     fn test_real_multiply() {
         let should_pass = vec![(
-            Real::new(-0.0101001).ok(),
             Real::new(1.01001).unwrap(),
             Real::new(-0.01).unwrap(),
+            Real::new(-0.0101001).ok(),
         )];
 
-        for (expected, lhs, rhs) in should_pass {
+        for (lhs, rhs, expected) in should_pass {
             assert_eq!(
                 expected,
                 RpnFnScalarEvaluator::new()
@@ -1010,8 +1010,12 @@ mod tests {
 
     #[test]
     fn test_int_multiply() {
-        let should_pass = vec![(Some(187), 11, 17), (Some(3), -1, -3)];
-        for (expected, lhs, rhs) in should_pass {
+        let should_pass = vec![
+            (11, 17, Some(187)),
+            (-1, -3, Some(3)),
+            (1, std::i64::MIN, Some(std::i64::MIN)),
+        ];
+        for (lhs, rhs, expected) in should_pass {
             assert_eq!(
                 expected,
                 RpnFnScalarEvaluator::new()
@@ -1039,13 +1043,62 @@ mod tests {
 
     #[test]
     fn test_int_uint_multiply() {
-        let should_pass = vec![(Some(std::i64::MAX), std::i64::MAX, 1), (Some(21), 3, 7)];
+        let should_pass = vec![(std::i64::MAX, 1, Some(std::i64::MAX)), (3, 7, Some(21))];
 
-        for (expected, lhs, rhs) in should_pass {
+        for (lhs, rhs, expected) in should_pass {
             assert_eq!(
                 expected,
                 RpnFnScalarEvaluator::new()
                     .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(
+                        rhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
+                    .evaluate(ScalarFuncSig::MultiplyInt)
+                    .unwrap()
+            );
+        }
+
+        let should_fail = vec![(-2, 1), (std::i64::MIN, 2)];
+        for (lhs, rhs) in should_fail {
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(
+                        rhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
+                    .evaluate::<Int>(ScalarFuncSig::MultiplyInt)
+                    .is_err(),
+                "{} * {} should fail",
+                lhs,
+                rhs
+            );
+        }
+    }
+
+    #[test]
+    fn test_uint_uint_multiply() {
+        let should_pass = vec![
+            (7, 11, Some(77)),
+            (1, 2, Some(2)),
+            (std::u64::MAX as i64, 1, Some(std::u64::MAX as i64)),
+        ];
+
+        for (lhs, rhs, expected) in should_pass {
+            assert_eq!(
+                expected,
+                RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(
+                        lhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
                     .push_param_with_field_type(
                         rhs,
                         FieldTypeBuilder::new()
@@ -1057,11 +1110,16 @@ mod tests {
             );
         }
 
-        let should_fail = vec![(-2, 1), (std::i64::MIN, 2)];
+        let should_fail = vec![(std::u64::MAX as i64, 2)];
         for (lhs, rhs) in should_fail {
             assert!(
                 RpnFnScalarEvaluator::new()
-                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(
+                        lhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
                     .push_param_with_field_type(
                         rhs,
                         FieldTypeBuilder::new()
