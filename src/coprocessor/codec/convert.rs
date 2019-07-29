@@ -20,6 +20,67 @@ pub trait ToInt {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64>;
 }
 
+/// A trait for converting a value to `T`
+pub trait ConvertTo<T> {
+    /// Converts the given value ToInt `T` value
+    fn convert(&self, ctx: &mut EvalContext) -> Result<T>;
+}
+
+impl<T> ConvertTo<i64> for T
+where
+    T: ToInt,
+{
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
+        self.to_int(ctx, FieldTypeTp::LongLong)
+    }
+}
+
+impl<T> ConvertTo<u64> for T
+where
+    T: ToInt,
+{
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
+        self.to_uint(ctx, FieldTypeTp::LongLong)
+    }
+}
+
+impl<T> ConvertTo<Real> for T
+where
+    T: ConvertTo<f64> + Evaluable,
+{
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
+        let val = self.convert(ctx)?;
+        // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
+        let val = box_try!(Real::new(val));
+        Ok(val)
+    }
+}
+
+impl<T> ConvertTo<String> for T
+where
+    T: ToString + Evaluable,
+{
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<String> {
+        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
+        Ok(self.to_string())
+    }
+}
+
+impl<T> ConvertTo<Bytes> for T
+where
+    T: ToString + Evaluable,
+{
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
+        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
+        Ok(self.to_string().into_bytes())
+    }
+}
+
 /// Returns the max u64 values of different mysql types
 ///
 /// # Panics
@@ -341,7 +402,11 @@ impl ToInt for Json {
             Json::Double(d) => d.to_int(ctx, FieldTypeTp::LongLong),
             Json::String(ref s) => s.as_bytes().to_int(ctx, FieldTypeTp::LongLong),
         }?;
-        val.to_int(ctx, tp)
+        if tp == FieldTypeTp::LongLong {
+            Ok(val)
+        } else {
+            val.to_int(ctx, tp)
+        }
     }
 
     #[inline]
@@ -482,24 +547,48 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     r.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", ""))
 }
 
-/// Converts a byte array to a float64 in best effort.
-#[inline]
-pub fn convert_bytes_to_f64(ctx: &mut EvalContext, bytes: &[u8]) -> Result<f64> {
-    let s = str::from_utf8(bytes)?.trim();
-    let vs = get_valid_float_prefix(ctx, s)?;
-    match vs.parse::<f64>() {
-        Ok(val) => {
-            if val.is_infinite() {
-                ctx.handle_overflow(Error::overflow("DOUBLE", &vs))?;
-                if val.is_sign_negative() {
-                    return Ok(std::f64::MIN);
-                } else {
-                    return Ok(std::f64::MAX);
+impl ConvertTo<f64> for i64 {
+    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+        Ok(*self as f64)
+    }
+}
+
+impl ConvertTo<f64> for u64 {
+    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+        Ok(*self as f64)
+    }
+}
+
+impl ConvertTo<f64> for &[u8] {
+    fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
+        let s = str::from_utf8(self)?.trim();
+        let vs = get_valid_float_prefix(ctx, s)?;
+        match vs.parse::<f64>() {
+            Ok(val) => {
+                if val.is_infinite() {
+                    ctx.handle_overflow(Error::overflow("DOUBLE", &vs))?;
+                    if val.is_sign_negative() {
+                        return Ok(std::f64::MIN);
+                    } else {
+                        return Ok(std::f64::MAX);
+                    }
                 }
+                Ok(val)
             }
-            Ok(val)
+            Err(err) => Err(box_err!("parse float err: {}", err)),
         }
-        Err(err) => Err(box_err!("parse float err: {}", err)),
+    }
+}
+
+impl ConvertTo<f64> for std::borrow::Cow<'_, [u8]> {
+    fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
+        self.as_ref().convert(ctx)
+    }
+}
+
+impl ConvertTo<f64> for Bytes {
+    fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
+        self.as_slice().convert(ctx)
     }
 }
 
@@ -1431,7 +1520,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_bytes_to_f64() {
+    fn test_bytes_to_f64() {
         let tests: Vec<(&'static [u8], Option<f64>)> = vec![
             (b"", None),
             (b" 23", Some(23.0)),
@@ -1446,7 +1535,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (i, (v, expect)) in tests.iter().enumerate() {
-            let ff = convert_bytes_to_f64(&mut ctx, v);
+            let ff: Result<f64> = v.convert(&mut ctx);
             match expect {
                 Some(val) => {
                     assert_eq!(ff.unwrap(), *val);
@@ -1465,53 +1554,52 @@ mod tests {
 
         // test overflow
         let mut ctx = EvalContext::default();
-        let val = convert_bytes_to_f64(&mut ctx, f64::INFINITY.to_string().as_bytes());
+        let val: Result<f64> = f64::INFINITY.to_string().as_bytes().convert(&mut ctx);
         assert!(val.is_err());
 
         let mut ctx = EvalContext::default();
-        let val = convert_bytes_to_f64(&mut ctx, f64::NEG_INFINITY.to_string().as_bytes());
+        let val: Result<f64> = f64::NEG_INFINITY.to_string().as_bytes().convert(&mut ctx);
         assert!(val.is_err());
 
         // OVERFLOW_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-        let val = convert_bytes_to_f64(
-            &mut ctx,
-            (0..309).map(|_| '9').collect::<String>().as_bytes(),
-        )
-        .unwrap();
+        let val: f64 = (0..309)
+            .map(|_| '9')
+            .collect::<String>()
+            .as_bytes()
+            .convert(&mut ctx)
+            .unwrap();
         assert_eq!(val, f64::MAX);
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-        let val = convert_bytes_to_f64(
-            &mut ctx,
-            (0..310)
-                .map(|i| if i == 0 { '-' } else { '9' })
-                .collect::<String>()
-                .as_bytes(),
-        )
-        .unwrap();
+        let val: f64 = (0..310)
+            .map(|i| if i == 0 { '-' } else { '9' })
+            .collect::<String>()
+            .as_bytes()
+            .convert(&mut ctx)
+            .unwrap();
         assert_eq!(val, f64::MIN);
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
 
         // TRUNCATE_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
-        let val = convert_bytes_to_f64(&mut ctx, b"");
+        let val: Result<f64> = b"".to_vec().convert(&mut ctx);
         assert!(val.is_ok());
         assert_eq!(val.unwrap(), 0.0);
         assert_eq!(ctx.warnings.warnings.len(), 1);
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
-        let val = convert_bytes_to_f64(&mut ctx, b"1.1a");
+        let val: Result<f64> = b"1.1a".to_vec().convert(&mut ctx);
         assert!(val.is_ok());
         assert_eq!(val.unwrap(), 1.1);
         assert_eq!(ctx.warnings.warnings.len(), 1);
 
         // IGNORE_TRUNCATE
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IGNORE_TRUNCATE)));
-        let val = convert_bytes_to_f64(&mut ctx, b"1.2a");
+        let val: Result<f64> = b"1.2a".to_vec().convert(&mut ctx);
         assert!(val.is_ok());
         assert_eq!(val.unwrap(), 1.2);
         assert_eq!(ctx.warnings.warnings.len(), 0);
