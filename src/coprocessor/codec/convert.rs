@@ -30,6 +30,7 @@ impl<T> Convert<i64> for T
 where
     T: ToInt,
 {
+    #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
         self.to_int(ctx, FieldTypeTp::LongLong)
     }
@@ -39,6 +40,7 @@ impl<T> Convert<u64> for T
 where
     T: ToInt,
 {
+    #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
         self.to_uint(ctx, FieldTypeTp::LongLong)
     }
@@ -48,11 +50,34 @@ impl<T> Convert<Real> for T
 where
     T: Convert<f64> + Evaluable,
 {
+    #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
         let val = self.convert(ctx)?;
         // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
         let val = box_try!(Real::new(val));
         Ok(val)
+    }
+}
+
+impl<T> Convert<String> for T
+where
+    T: ToString + Evaluable,
+{
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<String> {
+        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
+        Ok(self.to_string())
+    }
+}
+
+impl<T> Convert<Bytes> for T
+where
+    T: ToString + Evaluable,
+{
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
+        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
+        Ok(self.to_string().into_bytes())
     }
 }
 

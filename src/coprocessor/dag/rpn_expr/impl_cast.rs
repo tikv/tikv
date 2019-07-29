@@ -92,6 +92,18 @@ pub fn get_cast_fn_rpn_node(
                 cast_json_as_uint_fn_meta()
             }
         }
+        (EvalType::Int, EvalType::Bytes) => {
+            if !from_field_type.is_unsigned() {
+                cast_any_as_any_fn_meta::<Int, Bytes>()
+            } else {
+                cast_uint_as_string_fn_meta()
+            }
+        }
+        (EvalType::Real, EvalType::Bytes) => cast_any_as_any_fn_meta::<Real, Bytes>(),
+        (EvalType::Decimal, EvalType::Bytes) => cast_any_as_any_fn_meta::<Decimal, Bytes>(),
+        (EvalType::DateTime, EvalType::Bytes) => cast_any_as_any_fn_meta::<DateTime, Bytes>(),
+        (EvalType::Duration, EvalType::Bytes) => cast_any_as_any_fn_meta::<Duration, Bytes>(),
+        (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
         _ => return Err(box_err!("Unsupported cast from {} to {}", from, to)),
     };
     // This cast function is inserted by `Coprocessor` automatically,
@@ -269,6 +281,19 @@ pub fn cast_uint_as_real(ctx: &mut EvalContext, val: &Option<Int>) -> Result<Opt
             let val = (*val as u64).convert(ctx)?;
             // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
             Ok(Real::new(val).ok())
+        }
+    }
+}
+
+/// The implementation for push down signature `CastIntAsString` from unsigned integer.
+#[rpn_fn]
+#[inline]
+pub fn cast_uint_as_string(val: &Option<Int>) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
+            Ok(Some((*val as u64).to_string().into_bytes()))
         }
     }
 }
