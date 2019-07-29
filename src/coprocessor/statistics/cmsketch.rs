@@ -2,7 +2,6 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
-use protobuf::RepeatedField;
 use tipb::analyze;
 
 /// `CMSketch` is used to estimate point queries.
@@ -52,12 +51,12 @@ impl CMSketch {
     }
 
     pub fn into_proto(self) -> analyze::CMSketch {
-        let mut proto = analyze::CMSketch::new();
+        let mut proto = analyze::CMSketch::default();
         let mut rows = vec![analyze::CMSketchRow::default(); self.depth];
         for (i, row) in self.table.iter().enumerate() {
             rows[i].set_counters(row.to_vec());
         }
-        proto.set_rows(RepeatedField::from_vec(rows));
+        proto.set_rows(rows.into());
         proto
     }
 }

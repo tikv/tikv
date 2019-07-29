@@ -4,7 +4,6 @@ use engine::rocks::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
-use protobuf::RepeatedField;
 use raft::StateRole;
 
 pub mod config;
@@ -72,11 +71,7 @@ pub trait QueryObserver: Coprocessor {
     /// Hook to call before proposing write request.
     ///
     /// We don't propose read request, hence there is no hook for it yet.
-    fn pre_propose_query(
-        &self,
-        _: &mut ObserverContext<'_>,
-        _: &mut RepeatedField<Request>,
-    ) -> Result<()> {
+    fn pre_propose_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Request>) -> Result<()> {
         Ok(())
     }
 
@@ -84,7 +79,7 @@ pub trait QueryObserver: Coprocessor {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
 
     /// Hook to call after applying write request.
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut RepeatedField<Response>) {}
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {}
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use

@@ -24,6 +24,8 @@ impl MockExecutor {
 }
 
 impl BatchExecutor for MockExecutor {
+    type StorageStats = ();
+
     fn schema(&self) -> &[FieldType] {
         &self.schema
     }
@@ -32,7 +34,11 @@ impl BatchExecutor for MockExecutor {
         self.results.next().unwrap()
     }
 
-    fn collect_statistics(&mut self, _destination: &mut BatchExecuteStatistics) {
+    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
+        // Do nothing
+    }
+
+    fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
         // Do nothing
     }
 }

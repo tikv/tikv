@@ -269,6 +269,8 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
 impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     for AggregationExecutor<Src, I>
 {
+    type StorageStats = Src::StorageStats;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.entities.schema.as_slice()
@@ -306,8 +308,13 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.entities.src.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.entities.src.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.entities.src.collect_storage_stats(dest);
     }
 }
 

@@ -1,25 +1,21 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::vec::IntoIter;
-
 use crc::crc64::{self, Digest, Hasher64};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
-use crate::storage::{Snapshot, SnapshotStore};
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
-use crate::coprocessor::dag::executor::ExecutorMetrics;
-use crate::coprocessor::dag::Scanner;
+use crate::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
+use crate::coprocessor::dag::storage::Range;
+use crate::coprocessor::dag::storage_impl::TiKVStorage;
 use crate::coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
-    store: SnapshotStore<S>,
-    ranges: IntoIter<KeyRange>,
-    scanner: Option<Scanner<SnapshotStore<S>>>,
-    metrics: ExecutorMetrics,
+    scanner: RangesScanner<TiKVStorage<SnapshotStore<S>>>,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -35,42 +31,17 @@ impl<S: Snapshot> ChecksumContext<S> {
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
         );
-        Ok(Self {
-            req,
-            store,
-            ranges: ranges.into_iter(),
-            scanner: None,
-            metrics: ExecutorMetrics::default(),
-        })
-    }
-
-    fn next_row(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        loop {
-            if let Some(scanner) = self.scanner.as_mut() {
-                self.metrics.scan_counter.inc_range();
-                match scanner.next_row()? {
-                    Some(row) => return Ok(Some(row)),
-                    None => scanner.collect_statistics_into(&mut self.metrics.cf_stats),
-                }
-            }
-
-            if let Some(range) = self.ranges.next() {
-                self.scanner = match self.scanner.take() {
-                    Some(mut scanner) => {
-                        box_try!(scanner.reset_range(range, &self.store));
-                        Some(scanner)
-                    }
-                    None => Some(self.new_scanner(range)?),
-                };
-                continue;
-            }
-
-            return Ok(None);
-        }
-    }
-
-    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<SnapshotStore<S>>> {
-        Scanner::new(&self.store, false, false, range).map_err(Error::from)
+        let scanner = RangesScanner::new(RangesScannerOptions {
+            storage: store.into(),
+            ranges: ranges
+                .into_iter()
+                .map(|r| Range::from_pb_range(r, false))
+                .collect(),
+            scan_backward_in_range: false,
+            is_key_only: false,
+            is_scanned_range_aware: false,
+        });
+        Ok(Self { req, scanner })
     }
 }
 
@@ -84,7 +55,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
-        while let Some((k, v)) = self.next_row()? {
+        while let Some((k, v)) = self.scanner.next()? {
             checksum = checksum_crc64_xor(checksum, &k, &v);
             total_kvs += 1;
             total_bytes += k.len() + v.len();
@@ -101,8 +72,8 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         Ok(resp)
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        metrics.merge(&mut self.metrics);
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        self.scanner.collect_storage_stats(dest)
     }
 }
 

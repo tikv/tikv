@@ -30,6 +30,8 @@ pub struct BatchSlowHashAggregationExecutor<Src: BatchExecutor>(
 );
 
 impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -41,31 +43,17 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination)
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
-impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
-    #[cfg(test)]
-    pub fn new_for_test(
-        src: Src,
-        group_by_exps: Vec<RpnExpression>,
-        aggr_defs: Vec<Expr>,
-        aggr_def_parser: impl AggrDefinitionParser,
-    ) -> Self {
-        Self::new_impl(
-            Arc::new(EvalConfig::default()),
-            src,
-            group_by_exps,
-            aggr_defs,
-            aggr_def_parser,
-        )
-        .unwrap()
-    }
-}
-
-impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
+impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -87,6 +75,23 @@ impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
 }
 
 impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
+    #[cfg(test)]
+    pub fn new_for_test(
+        src: Src,
+        group_by_exps: Vec<RpnExpression>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(
+            Arc::new(EvalConfig::default()),
+            src,
+            group_by_exps,
+            aggr_defs,
+            aggr_def_parser,
+        )
+        .unwrap()
+    }
+
     pub fn new(
         config: Arc<EvalConfig>,
         src: Src,

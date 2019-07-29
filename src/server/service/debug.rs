@@ -7,14 +7,13 @@ use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{Error as GrpcError, WriteFlags};
-use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
+use grpcio::{RpcContext, RpcStatus, RpcStatusCode::*, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::*;
 use kvproto::debugpb_grpc;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
     StatusCmdType, StatusRequest,
 };
-use protobuf::text_format::print_to_string;
 
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
@@ -25,9 +24,9 @@ use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
-        Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
-        Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
-        Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
+        Error::NotFound(msg) => (GRPC_STATUS_NOT_FOUND, Some(msg)),
+        Error::InvalidArgument(msg) => (GRPC_STATUS_INVALID_ARGUMENT, Some(msg)),
+        Error::Other(e) => (GRPC_STATUS_UNKNOWN, Some(format!("{:?}", e))),
     };
     RpcStatus::new(code, msg)
 }
@@ -437,8 +436,7 @@ fn region_detail<T: RaftStoreRouter>(
                     if r.response.get_header().has_error() {
                         let e = r.response.get_header().get_error();
                         warn!("region_detail got error"; "err" => ?e);
-                        let msg = print_to_string(e);
-                        return Err(Error::Other(msg.into()));
+                        return Err(Error::Other(e.message.clone().into()));
                     }
                     let detail = r.response.take_status_response().take_region_detail();
                     debug!("region_detail got region detail"; "detail" => ?detail);
@@ -475,8 +473,7 @@ fn consistency_check<T: RaftStoreRouter>(
                     if r.response.get_header().has_error() {
                         let e = r.response.get_header().get_error();
                         warn!("consistency-check got error"; "err" => ?e);
-                        let msg = print_to_string(e);
-                        return Err(Error::Other(msg.into()));
+                        return Err(Error::Other(e.message.clone().into()));
                     }
                     Ok(())
                 })

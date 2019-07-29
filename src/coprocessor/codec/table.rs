@@ -234,7 +234,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
                     FieldTypeTp::JSON
                 ]
                 .contains(&t),
-                "unknown type {} {:?}",
+                "unknown type {} {}",
                 t,
                 datum
             );
@@ -442,7 +442,7 @@ mod tests {
     }
 
     fn new_col_info(tp: FieldTypeTp) -> ColumnInfo {
-        let mut col_info = ColumnInfo::new();
+        let mut col_info = ColumnInfo::default();
         col_info.as_mut_accessor().set_tp(tp);
         col_info
     }

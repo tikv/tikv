@@ -303,6 +303,7 @@ impl Time {
     }
 
     /// Returns the `Decimal` representation of the `DateTime/Date`
+    #[inline]
     pub fn to_decimal(&self) -> Result<Decimal> {
         if self.is_zero() {
             return Ok(0.into());
@@ -501,7 +502,7 @@ impl Time {
         let t = t.unwrap();
         if t.year() < 1000 || t.year() > 9999 {
             return Err(box_err!(
-                "datetime :{:?} out of range ('1000-01-01' to '9999-12-31')",
+                "datetime :{} out of range ('1000-01-01' to '9999-12-31')",
                 t
             ));
         }
@@ -972,10 +973,13 @@ mod tests {
     use super::*;
 
     use std::cmp::Ordering;
+    use std::f64::EPSILON;
 
     use chrono::{Duration, Local};
 
+    use crate::coprocessor::codec::convert::convert_bytes_to_decimal;
     use crate::coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
+    use crate::coprocessor::dag::expr::EvalContext;
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -1291,6 +1295,30 @@ mod tests {
     }
 
     #[test]
+    fn test_to_decimal() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "0"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get = t.to_decimal().unwrap();
+            assert_eq!(
+                get,
+                convert_bytes_to_decimal(&mut ctx, expect.as_bytes()).unwrap(),
+                "convert datetime {} to decimal",
+                s
+            );
+        }
+    }
+
+    #[test]
     fn test_to_dec() {
         let cases = vec![
             ("12-12-31 11:30:45", 0, "20121231113045", "20121231"),
@@ -1340,6 +1368,29 @@ mod tests {
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
             });
+        }
+    }
+
+    #[test]
+    fn test_to_f64() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),
+            ("2012-12-31 11:30:45.123456", 6, 20121231113045.123456f64),
+            ("2012-12-31 11:30:45.123456", 0, 20121231113045f64),
+            ("2012-12-31 11:30:45.999999", 0, 20121231113046f64),
+            ("2017-01-05 08:40:59.575601", 0, 20170105084100f64),
+            ("2017-01-05 23:59:59.575601", 0, 20170106000000f64),
+            ("0000-00-00 00:00:00", 6, 0f64),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get = t.to_f64().unwrap();
+            assert!(
+                (expect - get).abs() < EPSILON,
+                "expect: {}, got: {}",
+                expect,
+                get
+            );
         }
     }
 

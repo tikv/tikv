@@ -13,12 +13,11 @@ use crate::server::transport::RaftStoreRouter;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
-    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
+    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode::*, WriteFlags,
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
-use protobuf::RepeatedField;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
@@ -75,7 +74,7 @@ impl Conn {
         let batch_send_or_fallback = batch_sink
             .send_all(Reusable(rx1).map(move |v| {
                 let mut batch_msgs = BatchRaftMessage::default();
-                batch_msgs.set_msgs(RepeatedField::from(v));
+                batch_msgs.set_msgs(v.into());
                 (batch_msgs, WriteFlags::default().buffer_hint(false))
             }))
             .then(move |r| {
@@ -87,7 +86,7 @@ impl Conn {
                             as Box<dyn Future<Item = (), Error = GrpcError> + Send>
                     }
                     Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
-                        if status == RpcStatusCode::Unimplemented =>
+                        if status == GRPC_STATUS_UNIMPLEMENTED =>
                     {
                         // Fallback to raft RPC.
                         warn!("batch_raft fail, fallback to raft");

@@ -13,11 +13,10 @@ use crate::tikv_util::security::SecurityManager;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::{Future, Sink, Stream};
 use grpcio::{
-    self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink, WriteFlags,
+    self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*, UnarySink, WriteFlags,
 };
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
-use protobuf::RepeatedField;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
@@ -159,7 +158,7 @@ impl Display for Task {
         match self {
             Task::Detect { tp, txn_ts, lock } => write!(
                 f,
-                "Detect {{ tp: {:?}, txn_ts: {:?}, lock: {:?} }}",
+                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
                 tp, txn_ts, lock
             ),
             Task::DetectRpc { .. } => write!(f, "detect rpc"),
@@ -473,7 +472,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     ) {
         if !self.inner.borrow().is_leader() {
             let status = RpcStatus::new(
-                RpcStatusCode::FailedPrecondition,
+                GRPC_STATUS_FAILED_PRECONDITION,
                 Some("i'm not the leader of deadlock detector".to_string()),
             );
             handle.spawn(sink.fail(status).map_err(|_| ()));
@@ -579,14 +578,17 @@ impl deadlock_grpc::Deadlock for Service {
     ) {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
-            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+            let status = RpcStatus::new(
+                GRPC_STATUS_RESOURCE_EXHAUSTED,
+                Some("waiter manager has stopped".to_owned()),
+            );
             ctx.spawn(sink.fail(status).map_err(|_| ()))
         } else {
             ctx.spawn(
                 f.map_err(Error::from)
                     .map(|v| {
                         let mut resp = WaitForEntriesResponse::default();
-                        resp.set_entries(RepeatedField::from_vec(v));
+                        resp.set_entries(v.into());
                         resp
                     })
                     .and_then(|resp| sink.success(resp).map_err(Error::Grpc))
@@ -606,7 +608,10 @@ impl deadlock_grpc::Deadlock for Service {
         let task = Task::DetectRpc { stream, sink };
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {
-            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+            let status = RpcStatus::new(
+                GRPC_STATUS_RESOURCE_EXHAUSTED,
+                Some("deadlock detector has stopped".to_owned()),
+            );
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }

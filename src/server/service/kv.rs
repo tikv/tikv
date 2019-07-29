@@ -18,7 +18,7 @@ use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
+    RpcStatusCode::*, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -28,7 +28,6 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
-use protobuf::RepeatedField;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
@@ -73,13 +72,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         }
     }
 
-    fn send_fail_status<M>(
-        &self,
-        ctx: RpcContext<'_>,
-        sink: UnarySink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
+    fn send_fail_status<M>(&self, ctx: RpcContext<'_>, sink: UnarySink<M>, err: Error, code: i32) {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
         ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
@@ -625,7 +618,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
-                let code = RpcStatusCode::Unknown;
+                let code = GRPC_STATUS_UNKNOWN;
                 let msg = Some(format!("{:?}", e));
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
@@ -663,9 +656,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                            RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                        Ok(_) => RpcStatus::new(GRPC_STATUS_UNKNOWN, None),
                     };
                     sink.fail(status)
                         .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
@@ -700,9 +693,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                            RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                        Ok(_) => RpcStatus::new(GRPC_STATUS_UNKNOWN, None),
                     };
                     sink.fail(status).map_err(
                         |e| error!("KvService::batch_raft send response fail"; "err" => ?e),
@@ -719,11 +712,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
+            let err_msg = format!("{}", e);
             let sink = match e.into_inner() {
                 SnapTask::Recv { sink, .. } => sink,
                 _ => unreachable!(),
             };
-            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+            let status = RpcStatus::new(GRPC_STATUS_RESOURCE_EXHAUSTED, Some(err_msg));
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -831,7 +825,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         };
 
         if let Err(e) = self.ch.casual_send(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), GRPC_STATUS_RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -897,12 +891,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         header.set_sync_log(req.get_context().get_sync_log());
         header.set_read_quorum(true);
         cmd.set_header(header);
-        cmd.set_requests(RepeatedField::from_vec(vec![inner_req]));
+        cmd.set_requests(vec![inner_req].into());
 
         let (cb, future) = paired_future_callback();
 
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), GRPC_STATUS_RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -987,9 +981,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 (r, WriteFlags::default().buffer_hint(false))
             })
             .map_err(|e| {
-                let code = RpcStatusCode::Unknown;
                 let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(code, msg))
+                GrpcError::RpcFailure(RpcStatus::new(GRPC_STATUS_UNKNOWN, msg))
             });
 
         ctx.spawn(sink.send_all(response_retriever).map(|_| ()).map_err(|e| {
@@ -1339,7 +1332,7 @@ fn future_scan<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1382,7 +1375,7 @@ fn future_prewrite<E: Engine>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1423,7 +1416,7 @@ fn future_acquire_pessimistic_lock<E: Engine>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1448,7 +1441,7 @@ fn future_pessimistic_rollback<E: Engine>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v).into());
         }
         resp
     })
@@ -1518,7 +1511,7 @@ fn future_batch_get<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1563,7 +1556,7 @@ fn future_scan_lock<E: Engine>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
+                Ok(locks) => resp.set_locks(locks.into()),
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1689,7 +1682,7 @@ fn future_raw_batch_get<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1806,7 +1799,7 @@ fn future_raw_scan<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_kvs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1830,7 +1823,7 @@ fn future_raw_batch_scan<E: Engine>(
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_kvs(extract_kv_pairs(v).into());
             }
             Ok(resp)
         })
@@ -1895,7 +1888,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         Err(Error::Closed) => {
             // TiKV is closing, return an RegionError to tell the client that this region is unavailable
             // temporarily, the client should retry the request in other TiKVs.
-            let mut err = RegionError::new();
+            let mut err = RegionError::default();
             err.set_message("TiKV is Closing".to_string());
             Some(err)
         }
@@ -2022,8 +2015,8 @@ fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
     }
     let vv = extract_2pc_values(mvcc.values);
     let vw = extract_2pc_writes(mvcc.writes);
-    mvcc_info.set_writes(RepeatedField::from_vec(vw));
-    mvcc_info.set_values(RepeatedField::from_vec(vv));
+    mvcc_info.set_writes(vw.into());
+    mvcc_info.set_values(vv.into());
     mvcc_info
 }
 
