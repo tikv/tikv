@@ -8,27 +8,24 @@ use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Statistics, Store};
-
 use super::util::scan_executor::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+use crate::coprocessor::dag::storage::Storage;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<S: Store>(ScanExecutor<S, IndexScanExecutorImpl>);
+pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
-impl BatchIndexScanExecutor<FixtureStore> {
+impl<S: Storage> BatchIndexScanExecutor<S> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
         check_columns_info_supported(descriptor.get_columns())
     }
-}
 
-impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
-        store: S,
+        storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
@@ -67,7 +64,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
-            store,
+            storage,
             key_ranges,
             is_backward,
             is_key_only: false,
@@ -77,7 +74,9 @@ impl<S: Store> BatchIndexScanExecutor<S> {
     }
 }
 
-impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
+impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
+    type StorageStats = S::Statistics;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -94,7 +93,7 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.0.collect_storage_stats(dest);
     }
 }
@@ -228,8 +227,8 @@ mod tests {
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::expr::EvalConfig;
+    use crate::coprocessor::dag::storage::fixture::FixtureStorage;
     use crate::coprocessor::util::convert_to_prefix_next;
-    use crate::storage::{FixtureStore, Key};
 
     #[test]
     fn test_basic() {
@@ -278,17 +277,16 @@ mod tests {
         // in the value. So let's build corresponding KV data.
 
         let store = {
-            let kv = data
+            let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
                     let index_data = datum::encode_key(datums).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
-                    let key = Key::from_raw(key.as_slice());
                     let value = vec![];
-                    (key, Ok(value))
+                    (key, value)
                 })
                 .collect();
-            FixtureStore::new(kv)
+            FixtureStorage::from(kv)
         };
 
         {
@@ -401,21 +399,20 @@ mod tests {
         // For a unique index, the PK handle is stored in the value.
 
         let store = {
-            let kv = data
+            let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
                     let index_data = datum::encode_key(&datums[0..2]).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
-                    let key = Key::from_raw(key.as_slice());
                     // PK handle in the value
                     let mut value = vec![];
                     value
                         .write_i64::<BigEndian>(datums[2].as_int().unwrap().unwrap())
                         .unwrap();
-                    (key, Ok(value))
+                    (key, value)
                 })
                 .collect();
-            FixtureStore::new(kv)
+            FixtureStorage::from(kv)
         };
 
         {
