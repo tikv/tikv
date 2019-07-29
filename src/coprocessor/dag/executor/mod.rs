@@ -389,7 +389,7 @@ pub mod tests {
         let start_key = table::encode_row_key(table_id, handle);
         let mut end = start_key.clone();
         crate::coprocessor::util::convert_to_prefix_next(&mut end);
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end);
         key_range

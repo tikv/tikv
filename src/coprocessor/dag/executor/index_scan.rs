@@ -226,7 +226,7 @@ pub mod tests {
 
         pub fn new(unique: bool, test_data: TableData) -> IndexTestWrapper {
             let store = FixtureStorage::from(test_data.kv_data.clone());
-            let mut scan = IndexScan::new();
+            let mut scan = IndexScan::default();
             // prepare cols
             let cols = test_data.cols.clone();
             let col_req = cols.clone().into();
