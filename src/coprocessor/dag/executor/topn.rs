@@ -15,7 +15,6 @@ use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::dag::storage::IntervalRange;
 use crate::coprocessor::Result;
-use crate::storage::Statistics;
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
@@ -106,6 +105,8 @@ impl<Src: Executor> TopNExecutor<Src> {
 }
 
 impl<Src: Executor> Executor for TopNExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     fn next(&mut self) -> Result<Option<Row>> {
         if self.iter.is_none() {
             self.fetch_all()?;
@@ -120,7 +121,7 @@ impl<Src: Executor> Executor for TopNExecutor<Src> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.src.collect_storage_stats(dest);
     }
 
