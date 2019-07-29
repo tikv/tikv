@@ -329,7 +329,7 @@ impl ToInt for Json {
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // Casts json to int has different behavior in TiDB/MySQL when the json
-        // value is a `Json::Double` and we will keep compitable with TiDB
+        // value is a `Json::Double` and we will keep compatible with TiDB
         // **Note**: select cast(cast('4.5' as json) as signed)
         // TiDB:  5
         // MySQL: 4
@@ -354,7 +354,11 @@ impl ToInt for Json {
             Json::Double(d) => d.to_uint(ctx, FieldTypeTp::LongLong),
             Json::String(ref s) => s.as_bytes().to_uint(ctx, FieldTypeTp::LongLong),
         }?;
-        val.to_uint(ctx, tp)
+        if tp == FieldTypeTp::LongLong {
+            Ok(val)
+        } else {
+            val.to_uint(ctx, tp)
+        }
     }
 }
 
