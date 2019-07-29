@@ -31,10 +31,10 @@ impl ScalarFunc {
     pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
-            let uval = convert_float_to_uint(ctx, val, FieldTypeTp::LongLong)?;
+            let uval = val.to_uint(ctx, FieldTypeTp::LongLong)?;
             Ok(Some(uval as i64))
         } else {
-            let res = convert_float_to_int(ctx, val, FieldTypeTp::LongLong)?;
+            let res = val.to_int(ctx, FieldTypeTp::LongLong)?;
             Ok(Some(res))
         }
     }
@@ -70,7 +70,7 @@ impl ScalarFunc {
             _ => false,
         };
         let res = if is_negative {
-            convert_bytes_to_int(ctx, &val, FieldTypeTp::LongLong).map(|v| {
+            val.to_int(ctx, FieldTypeTp::LongLong).map(|v| {
                 // TODO: handle inUion flag
                 if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                     ctx.warnings
@@ -79,7 +79,7 @@ impl ScalarFunc {
                 v
             })
         } else {
-            convert_bytes_to_uint(ctx, &val, FieldTypeTp::LongLong).map(|urs| {
+            val.to_uint(ctx, FieldTypeTp::LongLong).map(|urs| {
                 if !self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
                     && urs > (i64::MAX as u64)
                 {
@@ -129,7 +129,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let res = val.cast_to_int(ctx)?;
+        let res = val.to_int(ctx, FieldTypeTp::LongLong)?;
         Ok(Some(res))
     }
 

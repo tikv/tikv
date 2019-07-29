@@ -13,6 +13,7 @@ use super::{Executor, ExprColumnRefVisitor, Row};
 use crate::coprocessor::codec::datum::Datum;
 use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::dag::storage::IntervalRange;
 use crate::coprocessor::Result;
 use crate::storage::Statistics;
 
@@ -137,6 +138,11 @@ impl<Src: Executor> Executor for TopNExecutor<Src> {
         } else {
             self.eval_warnings.take()
         }
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.src.take_scanned_range()
     }
 }
 
