@@ -21,12 +21,12 @@ pub trait ToInt {
 }
 
 /// A trait for converting a value to `T`
-pub trait Convert<T> {
+pub trait ConvertTo<T> {
     /// Converts the given value ToInt `T` value
     fn convert(&self, ctx: &mut EvalContext) -> Result<T>;
 }
 
-impl<T> Convert<i64> for T
+impl<T> ConvertTo<i64> for T
 where
     T: ToInt,
 {
@@ -36,7 +36,7 @@ where
     }
 }
 
-impl<T> Convert<u64> for T
+impl<T> ConvertTo<u64> for T
 where
     T: ToInt,
 {
@@ -46,9 +46,9 @@ where
     }
 }
 
-impl<T> Convert<Real> for T
+impl<T> ConvertTo<Real> for T
 where
-    T: Convert<f64> + Evaluable,
+    T: ConvertTo<f64> + Evaluable,
 {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
@@ -59,7 +59,7 @@ where
     }
 }
 
-impl<T> Convert<String> for T
+impl<T> ConvertTo<String> for T
 where
     T: ToString + Evaluable,
 {
@@ -70,7 +70,7 @@ where
     }
 }
 
-impl<T> Convert<Bytes> for T
+impl<T> ConvertTo<Bytes> for T
 where
     T: ToString + Evaluable,
 {
@@ -547,19 +547,19 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     r.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", ""))
 }
 
-impl Convert<f64> for i64 {
+impl ConvertTo<f64> for i64 {
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         Ok(*self as f64)
     }
 }
 
-impl Convert<f64> for u64 {
+impl ConvertTo<f64> for u64 {
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         Ok(*self as f64)
     }
 }
 
-impl Convert<f64> for &[u8] {
+impl ConvertTo<f64> for &[u8] {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let s = str::from_utf8(self)?.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
@@ -580,13 +580,13 @@ impl Convert<f64> for &[u8] {
     }
 }
 
-impl Convert<f64> for std::borrow::Cow<'_, [u8]> {
+impl ConvertTo<f64> for std::borrow::Cow<'_, [u8]> {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         self.as_ref().convert(ctx)
     }
 }
 
-impl Convert<f64> for Bytes {
+impl ConvertTo<f64> for Bytes {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         self.as_slice().convert(ctx)
     }

@@ -19,7 +19,7 @@ use super::mysql::{
     PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{Error, Result};
-use crate::coprocessor::codec::convert::{Convert, ToInt};
+use crate::coprocessor::codec::convert::{ConvertTo, ToInt};
 use crate::coprocessor::dag::expr::EvalContext;
 
 pub const NIL_FLAG: u8 = 0;
@@ -275,7 +275,7 @@ impl Datum {
             }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
-            Datum::Dec(d) => Some(Convert::<f64>::convert(&d, ctx)?.round() != 0f64),
+            Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
@@ -378,7 +378,7 @@ impl Datum {
     pub fn into_arith(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => Convert::<f64>::convert(&bs, ctx).map(From::from),
+            Datum::Bytes(bs) => ConvertTo::<f64>::convert(&bs, ctx).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec = t.to_decimal()?;

@@ -24,7 +24,7 @@ use tikv_util::is_even;
 
 use super::super::datum::Datum;
 use super::super::{Error, Result};
-use crate::coprocessor::codec::convert::Convert;
+use crate::coprocessor::codec::convert::ConvertTo;
 use crate::coprocessor::codec::data_type::Decimal;
 use crate::coprocessor::dag::expr::EvalContext;
 
@@ -87,7 +87,7 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     Ok(Json::Object(map))
 }
 
-impl Convert<f64> for Json {
+impl ConvertTo<f64> for Json {
     ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
@@ -103,7 +103,7 @@ impl Convert<f64> for Json {
     }
 }
 
-impl Convert<Decimal> for Json {
+impl ConvertTo<Decimal> for Json {
     /// Converts a `Json` to a `Decimal`
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {

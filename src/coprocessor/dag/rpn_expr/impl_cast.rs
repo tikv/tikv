@@ -185,7 +185,7 @@ pub fn cast_int_as_decimal(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_any_as_any<From: Convert<To> + Evaluable, To: Evaluable>(
+fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     ctx: &mut EvalContext,
     val: &Option<From>,
 ) -> Result<Option<To>> {

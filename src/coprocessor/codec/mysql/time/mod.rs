@@ -16,7 +16,7 @@ use cop_datatype::FieldTypeTp;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use crate::coprocessor::codec::convert::Convert;
+use crate::coprocessor::codec::convert::ConvertTo;
 use crate::coprocessor::codec::mysql::duration::{
     Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
 };
@@ -814,7 +814,7 @@ impl Time {
     }
 }
 
-impl Convert<f64> for Time {
+impl ConvertTo<f64> for Time {
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         if self.is_zero() {
             return Ok(0f64);

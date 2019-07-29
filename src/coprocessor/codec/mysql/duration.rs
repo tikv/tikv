@@ -10,7 +10,7 @@ use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
 use super::{check_fsp, Decimal};
-use crate::coprocessor::codec::convert::Convert;
+use crate::coprocessor::codec::convert::ConvertTo;
 use crate::coprocessor::codec::mysql::MAX_FSP;
 use crate::coprocessor::codec::{Result, TEN_POW};
 use crate::coprocessor::dag::expr::EvalContext;
@@ -681,7 +681,7 @@ impl Duration {
     }
 }
 
-impl Convert<f64> for Duration {
+impl ConvertTo<f64> for Duration {
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         let val = self.to_numeric_string().parse()?;
         Ok(val)
