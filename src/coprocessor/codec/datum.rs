@@ -14,13 +14,12 @@ use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::{number, BytesSlice};
 use tikv_util::escape;
 
-use super::convert::convert_bytes_to_f64;
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
     PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{Error, Result};
-use crate::coprocessor::codec::convert::ToInt;
+use crate::coprocessor::codec::convert::{ConvertTo, ToInt};
 use crate::coprocessor::dag::expr::EvalContext;
 
 pub const NIL_FLAG: u8 = 0;
@@ -128,7 +127,7 @@ impl Datum {
             Datum::Dur(d) => self.cmp_dur(ctx, d),
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(ref t) => self.cmp_time(ctx, t),
-            Datum::Json(ref j) => self.cmp_json(j),
+            Datum::Json(ref j) => self.cmp_json(ctx, j),
         }
     }
 
@@ -167,23 +166,11 @@ impl Datum {
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
-            Datum::Bytes(ref bs) => {
-                let ff = convert_bytes_to_f64(ctx, bs)?;
-                cmp_f64(ff, f)
-            }
-            Datum::Dec(ref d) => {
-                let ff = d.as_f64()?;
-                cmp_f64(ff, f)
-            }
-            Datum::Dur(ref d) => {
-                let ff = d.to_secs_f64();
-                cmp_f64(ff, f)
-            }
-            Datum::Time(ref t) => {
-                let ff = t.to_f64()?;
-                cmp_f64(ff, f)
-            }
-            Datum::Json(ref json) => Datum::F64(f).cmp_json(json),
+            Datum::Bytes(ref bs) => cmp_f64(bs.convert(ctx)?, f),
+            Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
+            Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
+            Datum::Time(ref t) => cmp_f64(t.convert(ctx)?, f),
+            Datum::Json(ref json) => Datum::F64(f).cmp_json(ctx, json),
         }
     }
 
@@ -207,7 +194,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = convert_bytes_to_f64(ctx, bs)?;
+                let f = bs.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -222,7 +209,7 @@ impl Datum {
                 Ok(d.cmp(dec))
             }
             _ => {
-                let f = dec.as_f64()?;
+                let f = dec.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -248,20 +235,20 @@ impl Datum {
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
             _ => {
-                let f = time.to_f64()?;
+                let f = time.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
     }
 
-    fn cmp_json(&self, json: &Json) -> Result<Ordering> {
+    fn cmp_json(&self, ctx: &mut EvalContext, json: &Json) -> Result<Ordering> {
         let order = match *self {
             Datum::Json(ref j) => j.cmp(json),
             Datum::I64(d) => Json::I64(d).cmp(json),
             Datum::U64(d) => Json::U64(d).cmp(json),
             Datum::F64(d) => Json::Double(d).cmp(json),
             Datum::Dec(ref d) => {
-                let ff = d.as_f64()?;
+                let ff = d.convert(ctx)?;
                 Json::Double(ff).cmp(json)
             }
             Datum::Bytes(ref d) => {
@@ -288,7 +275,7 @@ impl Datum {
             }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
-            Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
+            Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
@@ -329,11 +316,11 @@ impl Datum {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
             Datum::F64(f) => Ok(f),
-            Datum::Bytes(bs) => convert_bytes_to_f64(ctx, &bs),
-            Datum::Time(t) => t.to_f64(),
-            Datum::Dur(d) => d.to_f64(),
-            Datum::Dec(d) => d.as_f64(),
-            Datum::Json(j) => j.cast_to_real(ctx),
+            Datum::Bytes(bs) => bs.convert(ctx),
+            Datum::Time(t) => t.convert(ctx),
+            Datum::Dur(d) => d.convert(ctx),
+            Datum::Dec(d) => d.convert(ctx),
+            Datum::Json(j) => j.convert(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
         }
     }
@@ -391,7 +378,7 @@ impl Datum {
     pub fn into_arith(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => convert_bytes_to_f64(ctx, &bs).map(From::from),
+            Datum::Bytes(bs) => ConvertTo::<f64>::convert(&bs, ctx).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec = t.to_decimal()?;
@@ -443,7 +430,8 @@ impl Datum {
             Datum::U64(d) => Ok(Json::U64(d)),
             Datum::F64(d) => Ok(Json::Double(d)),
             Datum::Dec(d) => {
-                let ff = d.as_f64()?;
+                // TODO: remove the `cast_as_json` method
+                let ff = d.convert(&mut EvalContext::default())?;
                 Ok(Json::Double(ff))
             }
             Datum::Json(d) => Ok(d),
@@ -500,7 +488,8 @@ impl Datum {
             Datum::I64(i) => Ok(Datum::F64(i as f64)),
             Datum::U64(u) => Ok(Datum::F64(u as f64)),
             Datum::Dec(d) => {
-                let f = d.as_f64()?;
+                // TODO: remove this function `coerce_to_f64`
+                let f = d.convert(&mut EvalContext::default())?;
                 Ok(Datum::F64(f))
             }
             a => Ok(a),
