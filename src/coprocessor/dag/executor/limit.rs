@@ -7,7 +7,6 @@ use crate::coprocessor::dag::executor::{Executor, Row};
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::dag::storage::IntervalRange;
 use crate::coprocessor::Result;
-use crate::storage::Statistics;
 
 /// Retrieves rows from the source executor and only produces part of the rows.
 pub struct LimitExecutor<Src: Executor> {
@@ -27,6 +26,8 @@ impl<Src: Executor> LimitExecutor<Src> {
 }
 
 impl<Src: Executor> Executor for LimitExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     fn next(&mut self) -> Result<Option<Row>> {
         if self.cursor >= self.limit {
             return Ok(None);
@@ -45,7 +46,7 @@ impl<Src: Executor> Executor for LimitExecutor<Src> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.src.collect_storage_stats(dest);
     }
 

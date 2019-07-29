@@ -3,7 +3,6 @@
 use tipb::expression::FieldType;
 
 use crate::coprocessor::dag::batch::interface::*;
-use crate::storage::Statistics;
 
 /// A simple mock executor that will return batch data according to a fixture without any
 /// modification.
@@ -25,6 +24,8 @@ impl MockExecutor {
 }
 
 impl BatchExecutor for MockExecutor {
+    type StorageStats = ();
+
     fn schema(&self) -> &[FieldType] {
         &self.schema
     }
@@ -37,7 +38,7 @@ impl BatchExecutor for MockExecutor {
         // Do nothing
     }
 
-    fn collect_storage_stats(&mut self, _dest: &mut Statistics) {
+    fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
         // Do nothing
     }
 }
