@@ -6,7 +6,7 @@ use cop_codegen::rpn_fn;
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
 use tipb::expression::FieldType;
 
-use crate::coprocessor::codec::convert::*;
+use crate::coprocessor::codec::convert::ToInt;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
@@ -36,7 +36,7 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::Json, EvalType::Real) => cast_json_as_real_fn_meta(),
         (EvalType::Int, EvalType::Int) => {
             match (from_field_type.is_unsigned(), to_field_type.is_unsigned()) {
-                (false, false) => cast_int_as_int_fn_meta(),
+                (false, false) => cast_any_to_int_fn_meta::<Int>(),
                 (false, true) => cast_int_as_uint_fn_meta(),
                 (true, false) => cast_uint_as_int_fn_meta(),
                 (true, true) => cast_uint_as_uint_fn_meta(),
@@ -44,42 +44,42 @@ pub fn get_cast_fn_rpn_node(
         }
         (EvalType::Real, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_float_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Real>()
             } else {
                 cast_float_as_uint_fn_meta()
             }
         }
         (EvalType::Bytes, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_bytes_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Bytes>()
             } else {
                 cast_bytes_as_uint_fn_meta()
             }
         }
         (EvalType::Decimal, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_decimal_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Decimal>()
             } else {
                 cast_decimal_as_uint_fn_meta()
             }
         }
         (EvalType::DateTime, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_datetime_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<DateTime>()
             } else {
                 cast_datetime_as_uint_fn_meta()
             }
         }
         (EvalType::Duration, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_duration_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Duration>()
             } else {
                 cast_duration_as_uint_fn_meta()
             }
         }
         (EvalType::Json, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_json_as_int_fn_meta()
+                cast_any_to_int_fn_meta::<Json>()
             } else {
                 cast_json_as_uint_fn_meta()
             }
@@ -163,55 +163,44 @@ pub fn cast_int_as_decimal(
     }
 }
 
-macro_rules! cast_as_integer {
-    ($ty:ty, $as_int_fn:ident, $as_int_conv:ident) => {
-        cast_as_integer!($ty, $as_int_fn, $as_int_conv, val);
-    };
-    ($ty:ty, $as_int_fn:ident, $as_int_conv:ident, $expr:expr) => {
-        #[rpn_fn(capture = [ctx])]
-        #[inline]
-        pub fn $as_int_fn(ctx: &mut EvalContext, val: &Option<$ty>) -> Result<Option<i64>> {
-            match val {
-                None => Ok(None),
-                Some(val) => {
-                    let val = $as_int_conv(ctx, $expr, FieldTypeTp::LongLong)?;
-                    Ok(Some(val))
-                }
-            }
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn cast_any_to_int<T: ToInt + Evaluable>(
+    ctx: &mut EvalContext,
+    val: &Option<T>,
+) -> Result<Option<i64>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.to_int(ctx, FieldTypeTp::LongLong)?;
+            Ok(Some(val))
         }
-    };
+    }
 }
 
-cast_as_integer!(Int, cast_int_as_int, convert_int_to_int, *val);
-cast_as_integer!(Int, cast_uint_as_int, convert_uint_to_int, *val as u64);
-cast_as_integer!(
-    Real,
-    cast_float_as_int,
-    convert_float_to_int,
-    val.into_inner()
-);
-cast_as_integer!(Bytes, cast_bytes_as_int, convert_bytes_to_int);
-cast_as_integer!(Decimal, cast_decimal_as_int, convert_decimal_to_int);
-cast_as_integer!(DateTime, cast_datetime_as_int, convert_datetime_to_int);
-cast_as_integer!(
-    Duration,
-    cast_duration_as_int,
-    convert_duration_to_int,
-    *val
-);
-cast_as_integer!(Json, cast_json_as_int, convert_json_to_int);
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn cast_uint_as_int(ctx: &mut EvalContext, val: &Option<Int>) -> Result<Option<i64>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = (*val as u64).to_int(ctx, FieldTypeTp::LongLong)?;
+            Ok(Some(val))
+        }
+    }
+}
 
 macro_rules! cast_as_unsigned_integer {
-    ($ty:ty, $as_uint_fn:ident, $as_uint_conv:ident) => {
-        cast_as_unsigned_integer!(_inner, $ty, $as_uint_fn, $as_uint_conv, val,);
+    ($ty:ty, $as_uint_fn:ident) => {
+        cast_as_unsigned_integer!(_inner, $ty, $as_uint_fn, val,);
     };
-    ($ty:ty, $as_uint_fn:ident, $as_uint_conv:ident, $extra:expr) => {
-        cast_as_unsigned_integer!(_inner, $ty, $as_uint_fn, $as_uint_conv, $extra,);
+    ($ty:ty, $as_uint_fn:ident, $extra:expr) => {
+        cast_as_unsigned_integer!(_inner, $ty, $as_uint_fn, $extra,);
     };
-    ($ty:ty, $as_uint_fn:ident, $as_uint_conv:ident, $extra:expr, $($hook:tt)*) => {
-        cast_as_unsigned_integer!(_inner, $ty, $as_uint_fn, $as_uint_conv, $extra, $($hook)*);
+    ($ty:ty, $as_uint_fn:ident, $extra:expr, $($hook:tt)*) => {
+        cast_as_unsigned_integer!(_inner, $ty, $as_uint_fn, $extra, $($hook)*);
     };
-    (_inner, $ty:ty, $as_uint_fn:ident, $as_uint_conv:ident, $extra:expr, $($hook:tt)*) => {
+    (_inner, $ty:ty, $as_uint_fn:ident, $extra:expr, $($hook:tt)*) => {
         #[rpn_fn(capture = [ctx, extra])]
         #[inline]
         #[allow(unused)]
@@ -224,7 +213,7 @@ macro_rules! cast_as_unsigned_integer {
                 None => Ok(None),
                 Some(val) => {
                     $($hook)*;
-                    let val = $as_uint_conv(ctx, $extra, FieldTypeTp::LongLong)?;
+                    let val = ($extra).to_uint(ctx, FieldTypeTp::LongLong)?;
                     Ok(Some(val as i64))
                 }
             }
@@ -235,51 +224,43 @@ macro_rules! cast_as_unsigned_integer {
 cast_as_unsigned_integer!(
     Int,
     cast_int_as_uint,
-    convert_int_to_uint,
     *val,
     if *val < 0 && in_union(extra.implicit_args) {
         return Ok(Some(0));
     }
 );
-cast_as_unsigned_integer!(Int, cast_uint_as_uint, convert_uint_to_uint, *val as u64);
+cast_as_unsigned_integer!(Int, cast_uint_as_uint, *val as u64);
 cast_as_unsigned_integer!(
     Real,
     cast_float_as_uint,
-    convert_float_to_uint,
     val.into_inner(),
     if val.into_inner() < 0f64 && in_union(extra.implicit_args) {
         return Ok(Some(0));
     }
 );
-cast_as_unsigned_integer!(Bytes, cast_bytes_as_uint, convert_bytes_to_uint);
+cast_as_unsigned_integer!(Bytes, cast_bytes_as_uint);
 cast_as_unsigned_integer!(
     Decimal,
     cast_decimal_as_uint,
-    convert_decimal_to_uint,
     val,
     if val.is_negative() && in_union(extra.implicit_args) {
         return Ok(Some(0));
     }
 );
-cast_as_unsigned_integer!(DateTime, cast_datetime_as_uint, convert_datetime_to_uint);
-cast_as_unsigned_integer!(
-    Duration,
-    cast_duration_as_uint,
-    convert_duration_to_uint,
-    *val
-);
-cast_as_unsigned_integer!(Json, cast_json_as_uint, convert_json_to_uint);
+cast_as_unsigned_integer!(DateTime, cast_datetime_as_uint);
+cast_as_unsigned_integer!(Duration, cast_duration_as_uint);
+cast_as_unsigned_integer!(Json, cast_json_as_uint);
 
 /// The implementation for push down signature `CastStringAsReal`.
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn cast_string_as_real(ctx: &mut EvalContext, val: &Option<Bytes>) -> Result<Option<Real>> {
-    use crate::coprocessor::codec::convert::bytes_to_f64;
+    use crate::coprocessor::codec::convert::convert_bytes_to_f64;
 
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = bytes_to_f64(ctx, val.as_slice())?;
+            let val = convert_bytes_to_f64(ctx, val.as_slice())?;
             // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
             Ok(Real::new(val).ok())
         }
@@ -293,7 +274,7 @@ pub fn cast_time_as_real(val: &Option<DateTime>) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = val.to_decimal()?.as_f64()?;
+            let val = val.to_f64()?;
             Ok(Real::new(val).ok())
         }
     }
@@ -306,7 +287,7 @@ fn cast_duration_as_real(val: &Option<Duration>) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = Decimal::try_from(*val)?.as_f64()?;
+            let val = val.to_f64()?;
             Ok(Real::new(val).ok())
         }
     }

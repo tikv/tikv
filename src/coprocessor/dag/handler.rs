@@ -1,29 +1,29 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::coprocessor::{KeyRange, Response};
+use kvproto::coprocessor::Response;
 use protobuf::Message;
 use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse, StreamResponse};
 
 use super::executor::Executor;
 use crate::coprocessor::dag::execute_stats::ExecuteStats;
+use crate::coprocessor::dag::storage::IntervalRange;
 use crate::coprocessor::*;
-use crate::storage::Statistics;
 
 /// Handles Coprocessor DAG requests.
-pub struct DAGRequestHandler {
+pub struct DAGHandler<SS> {
     deadline: Deadline,
-    executor: Box<dyn Executor>,
+    executor: Box<dyn Executor<StorageStats = SS> + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
     collect_exec_summary: bool,
     exec_stats: ExecuteStats,
 }
 
-impl DAGRequestHandler {
+impl<SS> DAGHandler<SS> {
     pub fn new(
         deadline: Deadline,
-        executor: Box<dyn Executor>,
+        executor: Box<dyn Executor<StorageStats = SS> + Send>,
         output_offsets: Vec<u32>,
         batch_row_limit: usize,
         collect_exec_summary: bool,
@@ -39,7 +39,7 @@ impl DAGRequestHandler {
         }
     }
 
-    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
+    fn make_stream_response(&mut self, chunk: Chunk, range: IntervalRange) -> Result<Response> {
         self.executor.collect_exec_stats(&mut self.exec_stats);
 
         let mut s_resp = StreamResponse::default();
@@ -48,7 +48,6 @@ impl DAGRequestHandler {
             s_resp.set_warnings(eval_warnings.warnings.into());
             s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
         }
-
         s_resp.set_output_counts(
             self.exec_stats
                 .scanned_rows_per_range
@@ -59,18 +58,15 @@ impl DAGRequestHandler {
 
         let mut resp = Response::default();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
-        if let Some(range) = range {
-            resp.set_range(range);
-        }
+        resp.mut_range().set_start(range.lower_inclusive);
+        resp.mut_range().set_end(range.upper_exclusive);
 
         self.exec_stats.clear();
 
         Ok(resp)
     }
-}
 
-impl RequestHandler for DAGRequestHandler {
-    fn handle_request(&mut self) -> Result<Response> {
+    pub fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
@@ -98,7 +94,7 @@ impl RequestHandler for DAGRequestHandler {
                         sel_resp.set_warnings(eval_warnings.warnings.into());
                         sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
                     }
-
+                    // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                     sel_resp.set_output_counts(
                         self.exec_stats
                             .scanned_rows_per_range
@@ -143,10 +139,9 @@ impl RequestHandler for DAGRequestHandler {
         }
     }
 
-    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
+    pub fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::default();
-        self.executor.start_scan();
         while record_cnt < self.batch_row_limit {
             match self.executor.next() {
                 Ok(Some(row)) => {
@@ -171,7 +166,7 @@ impl RequestHandler for DAGRequestHandler {
             }
         }
         if record_cnt > 0 {
-            let range = self.executor.stop_scan();
+            let range = self.executor.take_scanned_range();
             return self
                 .make_stream_response(chunk, range)
                 .map(|r| (Some(r), finished));
@@ -179,9 +174,26 @@ impl RequestHandler for DAGRequestHandler {
         Ok((None, true))
     }
 
-    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+    pub fn collect_storage_stats(&mut self, dest: &mut SS) {
         // TODO: A better way is to fill storage stats in `handle_request`, or
         // return SelectResponse in `handle_request`.
         self.executor.collect_storage_stats(dest);
+    }
+}
+
+// TODO: This should stay in Coprocessor instead of DAG
+use crate::storage::Statistics;
+
+impl RequestHandler for DAGHandler<Statistics> {
+    fn handle_request(&mut self) -> Result<Response> {
+        DAGHandler::handle_request(self)
+    }
+
+    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
+        DAGHandler::handle_streaming_request(self)
+    }
+
+    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
+        DAGHandler::collect_storage_stats(self, dest);
     }
 }

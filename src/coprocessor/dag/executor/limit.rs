@@ -5,8 +5,8 @@ use tipb::executor::Limit;
 use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::executor::{Executor, Row};
 use crate::coprocessor::dag::expr::EvalWarnings;
+use crate::coprocessor::dag::storage::IntervalRange;
 use crate::coprocessor::Result;
-use crate::storage::Statistics;
 
 /// Retrieves rows from the source executor and only produces part of the rows.
 pub struct LimitExecutor<Src: Executor> {
@@ -26,6 +26,8 @@ impl<Src: Executor> LimitExecutor<Src> {
 }
 
 impl<Src: Executor> Executor for LimitExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     fn next(&mut self) -> Result<Option<Row>> {
         if self.cursor >= self.limit {
             return Ok(None);
@@ -38,20 +40,29 @@ impl<Src: Executor> Executor for LimitExecutor<Src> {
         }
     }
 
+    #[inline]
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
         self.src.collect_exec_stats(dest);
     }
 
-    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.src.collect_storage_stats(dest);
     }
 
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.src.take_eval_warnings()
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.src.take_scanned_range()
     }
 }
 
