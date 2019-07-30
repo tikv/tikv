@@ -1754,7 +1754,7 @@ impl ApplyDelegate {
         ))
     }
 
-    // The target peer should send missing log entries to source peer.
+    // The target peer should send missing log entries to the source peer.
     //
     // So, the merge process order would be:
     // 1. `exec_commit_merge` in target apply worker
@@ -1806,6 +1806,7 @@ impl ApplyDelegate {
                 "source_region_id" => source_region_id
             );
 
+            // Sends message to the source apply worker and pause `exec_commit_merge` process
             if let Some(mailbox) = ctx.router.mailbox(self.region_id()) {
                 let logs_up_to_date = Arc::new(AtomicU64::new(0));
                 let msg = Msg::CatchUpLogs(CatchUpLogs {
