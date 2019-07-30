@@ -14,11 +14,13 @@ use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::{number, BytesSlice};
 use tikv_util::escape;
 
+use super::convert::convert_bytes_to_f64;
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
-    PathExpression, RoundMode, Time, DEFAULT_FSP, MAX_FSP,
+    PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
-use super::{convert, Error, Result};
+use super::{Error, Result};
+use crate::coprocessor::codec::convert::ToInt;
 use crate::coprocessor::dag::expr::EvalContext;
 
 pub const NIL_FLAG: u8 = 0;
@@ -166,7 +168,7 @@ impl Datum {
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
             Datum::Bytes(ref bs) => {
-                let ff = convert::bytes_to_f64(ctx, bs)?;
+                let ff = convert_bytes_to_f64(ctx, bs)?;
                 cmp_f64(ff, f)
             }
             Datum::Dec(ref d) => {
@@ -205,7 +207,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = convert::bytes_to_f64(ctx, bs)?;
+                let f = convert_bytes_to_f64(ctx, bs)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -281,10 +283,9 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => Some(
-                !bs.is_empty()
-                    && convert::convert_bytes_to_int(ctx, bs, FieldTypeTp::LongLong)? != 0,
-            ),
+            Datum::Bytes(ref bs) => {
+                Some(!bs.is_empty() && bs.to_int(ctx, FieldTypeTp::LongLong)? != 0)
+            }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
@@ -328,17 +329,9 @@ impl Datum {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
             Datum::F64(f) => Ok(f),
-            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs),
-            Datum::Time(t) => {
-                // TODO: replace with `convert_datetime_to_f64` after implementing
-                let d = t.to_decimal()?;
-                d.as_f64()
-            }
-            Datum::Dur(d) => {
-                // TODO: replace with `convert_duration_to_f64` after implementing
-                let d = Decimal::try_from(d)?;
-                d.as_f64()
-            }
+            Datum::Bytes(bs) => convert_bytes_to_f64(ctx, &bs),
+            Datum::Time(t) => t.to_f64(),
+            Datum::Dur(d) => d.to_f64(),
             Datum::Dec(d) => d.as_f64(),
             Datum::Json(j) => j.cast_to_real(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
@@ -351,23 +344,13 @@ impl Datum {
         let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => convert::convert_uint_to_int(ctx, u, tp),
-            Datum::F64(f) => convert::convert_float_to_int(ctx, f, tp),
-            Datum::Bytes(bs) => convert::convert_bytes_to_int(ctx, &bs, FieldTypeTp::LongLong),
-            Datum::Time(mut t) => {
-                t.round_frac(mysql::DEFAULT_FSP)?;
-                let d = t.to_decimal()?;
-                d.as_i64().into()
-            }
-            Datum::Dur(d) => {
-                let d = Decimal::try_from(d.round_frac(mysql::DEFAULT_FSP)?)?;
-                d.as_i64().into()
-            }
-            Datum::Dec(d) => {
-                let res: Result<Decimal> = d.round(mysql::DEFAULT_FSP, RoundMode::HalfEven).into();
-                res?.as_i64().into()
-            }
-            Datum::Json(j) => j.cast_to_int(ctx),
+            Datum::U64(u) => u.to_int(ctx, tp),
+            Datum::F64(f) => f.to_int(ctx, tp),
+            Datum::Bytes(bs) => bs.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Time(t) => t.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Dur(d) => d.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Dec(d) => d.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Json(j) => j.to_int(ctx, FieldTypeTp::LongLong),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
@@ -408,7 +391,7 @@ impl Datum {
     pub fn into_arith(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs).map(From::from),
+            Datum::Bytes(bs) => convert_bytes_to_f64(ctx, &bs).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec = t.to_decimal()?;
@@ -1847,11 +1830,7 @@ mod tests {
             (Datum::Bytes(b"123".to_vec()), f64::from(123)),
             (
                 Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap()),
-                Decimal::from_bytes(b"20121231113045")
-                    .unwrap()
-                    .unwrap()
-                    .as_f64()
-                    .unwrap(),
+                20121231113045f64,
             ),
             (
                 Datum::Dur(Duration::parse(b"11:30:45", 0).unwrap()),

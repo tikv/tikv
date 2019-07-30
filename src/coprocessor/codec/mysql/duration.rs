@@ -95,7 +95,7 @@ mod parser {
 
     /// Extracts a `u32` from a buffer which matches pattern: `\d+.*`
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(read_int(b"123abc"), Ok((b"abc", 123)));
     /// assert_eq!(read_int(b"12:34"), Ok((b":34", 12)));
     /// assert!(read_int(b"12345678:1").is_err());
@@ -117,7 +117,7 @@ mod parser {
     /// Extracts a `u32` with length `fsp` from a buffer which matches pattern: `\d+.*`
     /// This function assumes that `fsp` is valid
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(read_int_with_fsp(b"1234567", 3), Ok(b"", 123400000));
     /// assert_eq!(read_int_with_fsp(b"1234", 6), Ok(b"", 123400000));
     /// ```
@@ -142,7 +142,7 @@ mod parser {
 
     /// Parse the sign of `Duration`, return true if it's negative otherwise false
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(neg(b"- .123"),  Ok(b".123", true));
     /// assert_eq!(neg(b"-.123"),   Ok(b".123", true));
     /// assert_eq!(neg(b"- 11:21"), Ok(b"11:21", true));
@@ -164,7 +164,7 @@ mod parser {
     /// Parse the day/block(format like `HHMMSS`) value of the `Duration`,
     /// further paring will determine the value we got is a `day` value or `block` value.
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(day(b"1 1:1"), Ok(b"1:1", Some(1)));
     /// assert_eq!(day(b"1234"), Ok(b"", Some(1234)));
     /// assert_eq!(day(b"1234.123"), Ok(b".123", Some(1234)));
@@ -190,7 +190,7 @@ mod parser {
 
     /// Parse a separator ':'
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(separator(b" : "), Ok(b"", true));
     /// assert_eq!(separator(b":"), Ok(b"", true));
     /// assert_eq!(separator(b";"), Ok(b";", false));
@@ -207,7 +207,7 @@ mod parser {
 
     /// Parse format like: `hh:mm` `hh:mm:ss`
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(hhmmss(b"12:34:56"), Ok(b"", [12, 34, 56]));
     /// assert_eq!(hhmmss(b"12:34"), Ok(b"", [12, 34, None]));
     /// assert_eq!(hhmmss(b"1234"), Ok(b"", [None, None, None]));
@@ -226,7 +226,7 @@ mod parser {
 
     /// Parse fractional part.
     ///
-    /// ```compile_fail
+    /// ```ignore
     /// assert_eq!(fraction(" .123", 3), Ok(b"", Some(123)));
     /// assert_eq!(fraction("123", 3), Ok(b"", None));
     /// ```
@@ -677,6 +677,11 @@ impl Duration {
         }
         buf
     }
+
+    pub fn to_f64(self) -> Result<f64> {
+        let val = self.to_numeric_string().parse()?;
+        Ok(val)
+    }
 }
 
 // TODO: define a convert::Convert trait for all conversion
@@ -764,6 +769,8 @@ impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::f64::EPSILON;
+
     use super::*;
     use crate::coprocessor::codec::convert::convert_bytes_to_decimal;
     use crate::coprocessor::codec::data_type::DateTime;
@@ -986,6 +993,30 @@ mod tests {
                 convert_bytes_to_decimal(&mut ctx, expect.as_bytes()).unwrap(),
                 "convert duration {} to decimal",
                 s
+            );
+        }
+    }
+
+    #[test]
+    fn test_to_f64() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, 113045.1235f64),
+            ("2012-12-31 11:30:45.123456", 6, 113045.123456f64),
+            ("2012-12-31 11:30:45.123456", 0, 113045f64),
+            ("2012-12-31 11:30:45.999999", 0, 113046f64),
+            ("2017-01-05 08:40:59.575601", 0, 084100f64),
+            ("2017-01-05 23:59:59.575601", 0, 0f64),
+            ("0000-00-00 00:00:00", 6, 0f64),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let du = t.to_duration().unwrap();
+            let get = du.to_f64().unwrap();
+            assert!(
+                (expect - get).abs() < EPSILON,
+                "expect: {}, got: {}",
+                expect,
+                get
             );
         }
     }

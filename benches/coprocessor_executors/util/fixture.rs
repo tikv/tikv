@@ -20,6 +20,7 @@ use tikv::coprocessor::codec::table::RowColsDict;
 use tikv::coprocessor::dag::batch::interface::*;
 use tikv::coprocessor::dag::executor::{Executor, Row};
 use tikv::coprocessor::dag::expr::EvalWarnings;
+use tikv::coprocessor::dag::storage::IntervalRange;
 use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;
@@ -318,6 +319,8 @@ pub struct BatchFixtureExecutor {
 }
 
 impl BatchExecutor for BatchFixtureExecutor {
+    type StorageStats = Statistics;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -348,12 +351,14 @@ impl BatchExecutor for BatchFixtureExecutor {
         }
     }
 
+    #[inline]
     fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
-        // DO NOTHING
+        // Do nothing
     }
 
-    fn collect_storage_stats(&mut self, _dest: &mut Statistics) {
-        // DO NOTHING
+    #[inline]
+    fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
+        // Do nothing
     }
 }
 
@@ -363,6 +368,8 @@ pub struct NormalFixtureExecutor {
 }
 
 impl Executor for NormalFixtureExecutor {
+    type StorageStats = Statistics;
+
     #[inline]
     fn next(&mut self) -> tikv::coprocessor::Result<Option<Row>> {
         Ok(self.rows.next())
@@ -370,12 +377,12 @@ impl Executor for NormalFixtureExecutor {
 
     #[inline]
     fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
-        // DO NOTHING
+        // Do nothing
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, _dest: &mut Statistics) {
-        // DO NOTHING
+    fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
+        // Do nothing
     }
 
     #[inline]
@@ -383,8 +390,15 @@ impl Executor for NormalFixtureExecutor {
         self.columns
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        // Do nothing
         None
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        unreachable!()
     }
 }
 

@@ -416,13 +416,31 @@ pub mod tests {
         must_prewrite_delete_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
-    pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+    fn must_prewrite_lock_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
-            .unwrap();
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        let mutation = Mutation::Lock(Key::from_raw(key));
+        if for_update_ts == 0 {
+            txn.prewrite(mutation, pk, &options).unwrap();
+        } else {
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+                .unwrap();
+        }
         engine.write(&ctx, txn.into_modifies()).unwrap();
+    }
+
+    pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+        must_prewrite_lock_impl(engine, key, pk, ts, 0, false);
     }
 
     pub fn must_prewrite_lock_err<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
@@ -432,6 +450,17 @@ pub mod tests {
         assert!(txn
             .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
             .is_err());
+    }
+
+    pub fn must_pessimistic_prewrite_lock<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
+        must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
     pub fn must_acquire_pessimistic_lock<E: Engine>(

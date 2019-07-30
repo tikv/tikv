@@ -103,8 +103,8 @@ zipf = "5.0.1"
 bitflags = "1.0.1"
 fail = "0.3"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.4", features = [ "secure" ] }
-raft = "0.4.3"
+grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+raft = "0.6.0-alpha"
 crossbeam = "0.5"
 derive_more = "0.11.0"
 num = { version = "0.2", default-features = false }
@@ -134,8 +134,7 @@ cop_codegen = { path = "components/cop_codegen" }
 codec = { path = "components/codec" }
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-# TODO: use master branch after the next version is released.
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
@@ -154,11 +153,12 @@ features = ["nightly", "push", "process"]
 version = "0.1.4"
 default-features = false
 
-# TODO: remove this when slog is compatible with the log 0.4
 [replace]
+# Replace openssl with libressl
+"openssl-src:111.3.0" = { git = "https://github.com/BusyJay/libressl-src.git" }
+# TODO: remove this when slog is compatible with the log 0.4
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
-"raft:0.4.3" = { git = "https://github.com/pingcap/raft-rs/", branch = "0.4.x" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }

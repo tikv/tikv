@@ -366,7 +366,6 @@ impl Peer {
 
         let raft_cfg = raft::Config {
             id: peer.get_id(),
-            peers: vec![],
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
             min_election_tick: cfg.raft_min_election_timeout_ticks,
@@ -381,7 +380,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
+        let raft_group = RawNode::new(&raft_cfg, ps)?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -697,9 +696,9 @@ impl Peer {
             .committed_entries
             .as_ref()
             .map_or(0, |v| v.len() as u64);
-        metrics.append += ready.entries.len() as u64;
+        metrics.append += ready.entries().len() as u64;
 
-        if !raft::is_empty_snap(&ready.snapshot) {
+        if !raft::is_empty_snap(ready.snapshot()) {
             metrics.snapshot += 1;
         }
     }
@@ -935,7 +934,7 @@ impl Peer {
 
     fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
-        if let Some(ref ss) = ready.ss {
+        if let Some(ss) = ready.ss() {
             match ss.raft_state {
                 StateRole::Leader => {
                     // The local read can only be performed after a new leader has applied
@@ -1390,16 +1389,16 @@ impl Peer {
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
         // `ready`.
-        if !self.is_leader() && !ready.read_states.is_empty() {
+        if !self.is_leader() && !ready.read_states().is_empty() {
             // NOTE: there could still be some read requests following, which will be cleared in
             // `clear_uncommitted` later.
-            for state in &ready.read_states {
+            for state in ready.read_states() {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
                 self.post_pending_read_index_on_replica(ctx);
             }
         } else if self.ready_to_handle_read() {
-            for state in &ready.read_states {
+            for state in ready.read_states() {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
@@ -1409,7 +1408,7 @@ impl Peer {
                 propose_time = Some(read.renew_lease_time);
             }
         } else {
-            for state in &ready.read_states {
+            for state in ready.read_states() {
                 let read = &mut self.pending_reads.reads[self.pending_reads.ready_cnt];
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 self.pending_reads.ready_cnt += 1;
@@ -1420,7 +1419,7 @@ impl Peer {
 
         // Note that only after handle read_states can we identify what requests are
         // actually stale.
-        if ready.ss.is_some() {
+        if ready.ss().is_some() {
             let term = self.term();
             // all uncommitted reads will be dropped silently in raft.
             self.pending_reads.clear_uncommitted(term);
@@ -1679,10 +1678,10 @@ impl Peer {
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
     fn count_healthy_node<'a, I>(&self, progress: I) -> usize
     where
-        I: Iterator<Item = &'a Progress>,
+        I: Iterator<Item = (&'a u64, &'a Progress)>,
     {
         let mut healthy = 0;
-        for pr in progress {
+        for (_, pr) in progress {
             if pr.matched >= self.get_store().truncated_index() {
                 healthy += 1;
             }
@@ -1739,7 +1738,7 @@ impl Peer {
         }
 
         let status = self.raft_group.status_ref();
-        let total = status.progress.unwrap().voters().len();
+        let total = status.progress.unwrap().voter_ids().len();
         if total == 1 {
             // It's always safe if there is only one node in the cluster.
             return Ok(());
@@ -1749,18 +1748,21 @@ impl Peer {
         match change_type {
             ConfChangeType::AddNode => {
                 if let Err(raft::Error::NotExists(_, _)) = progress.promote_learner(peer.get_id()) {
-                    let _ = progress.insert_voter(peer.get_id(), Progress::default());
+                    let _ = progress.insert_voter(peer.get_id(), Progress::new(0, 0));
                 }
             }
             ConfChangeType::RemoveNode => {
-                progress.remove(peer.get_id());
+                progress.remove(peer.get_id())?;
             }
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
+            }
         }
-        let healthy = self.count_healthy_node(progress.voters().values());
-        let quorum_after_change = raft::quorum(progress.voters().len());
+        let healthy = self.count_healthy_node(progress.voters());
+        let quorum_after_change = raft::majority(progress.voter_ids().len());
         if healthy >= quorum_after_change {
             return Ok(());
         }
@@ -1808,11 +1810,11 @@ impl Peer {
         let status = self.raft_group.status_ref();
         let progress = status.progress.unwrap();
 
-        if !progress.voters().contains_key(&peer_id) {
+        if !progress.voter_ids().contains(&peer_id) {
             return false;
         }
 
-        for progress in progress.voters().values() {
+        for (_, progress) in progress.voters() {
             if progress.state == ProgressState::Snapshot {
                 return false;
             }
@@ -1835,7 +1837,7 @@ impl Peer {
         }
 
         let last_index = self.get_store().last_index();
-        last_index <= progress.voters()[&peer_id].matched + ctx.cfg.leader_transfer_max_log_lag
+        last_index <= progress.get(peer_id).unwrap().matched + ctx.cfg.leader_transfer_max_log_lag
     }
 
     fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {

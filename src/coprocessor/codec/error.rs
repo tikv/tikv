@@ -4,6 +4,7 @@ use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
 use std::error::Error as StdError;
 use std::io;
+use std::num::ParseFloatError;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
@@ -151,6 +152,12 @@ impl From<FromUtf8Error> for Error {
 impl From<SerdeError> for Error {
     fn from(err: SerdeError) -> Error {
         box_err!("serde:{:?}", err)
+    }
+}
+
+impl From<ParseFloatError> for Error {
+    fn from(err: ParseFloatError) -> Error {
+        box_err!("parse float: {:?}", err)
     }
 }
 
