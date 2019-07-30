@@ -129,9 +129,12 @@ mod tests {
 
     #[test]
     fn test_if() {
-        let cases = vec![
-            ((0, 3.14, 2.71828), Real::new(2.71828).ok()),
-            ((1, 137.1, 6.235), Real::new(137.1).ok()),
+        use std::f64::consts::{E, PI};
+
+        let cases: Vec<((ScalarValue, _, _), Option<Real>)> = vec![
+            ((0.into(), E, PI), Real::new(PI).ok()),
+            ((1.into(), E, PI), Real::new(E).ok()),
+            ((ScalarValue::Int(None), E, PI), Real::new(PI).ok()),
         ];
 
         for ((condition, value1, value2), expected) in cases {
