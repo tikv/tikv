@@ -4,7 +4,7 @@
 //!
 //! The [`Storage`](storage::Storage) structure provides KV APIs on a given [`Engine`](storage::kv::Engine).
 //!
-//! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](storage::kv::raftkv::RaftKv)
+//! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](server::raftkv::RaftKv)
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
 pub mod config;
