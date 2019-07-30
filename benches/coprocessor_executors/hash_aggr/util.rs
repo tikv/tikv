@@ -7,11 +7,11 @@ use criterion::black_box;
 use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchFastHashAggregationExecutor;
-use tikv::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
-use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::executor::{Executor, HashAggExecutor};
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_qe::batch::executors::BatchFastHashAggregationExecutor;
+use tidb_qe::batch::executors::BatchSlowHashAggregationExecutor;
+use tidb_qe::batch::interface::*;
+use tidb_qe::executor::{Executor, HashAggExecutor};
+use tidb_qe::expr::EvalConfig;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

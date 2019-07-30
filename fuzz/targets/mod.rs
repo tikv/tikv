@@ -89,11 +89,11 @@ pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
 trait ReadAsDecimalRoundMode: ReadLiteralExt {
     fn read_as_decimal_round_mode(
         &mut self,
-    ) -> Result<::tikv::coprocessor::codec::mysql::decimal::RoundMode, Error> {
+    ) -> Result<::tidb_qe::codec::mysql::decimal::RoundMode, Error> {
         Ok(match self.read_as_u8()? % 3 {
-            0 => tikv::coprocessor::codec::mysql::decimal::RoundMode::HalfEven,
-            1 => tikv::coprocessor::codec::mysql::decimal::RoundMode::Truncate,
-            _ => tikv::coprocessor::codec::mysql::decimal::RoundMode::Ceiling,
+            0 => tidb_qe::codec::mysql::decimal::RoundMode::HalfEven,
+            1 => tidb_qe::codec::mysql::decimal::RoundMode::Truncate,
+            _ => tidb_qe::codec::mysql::decimal::RoundMode::Ceiling,
         })
     }
 }
@@ -102,7 +102,7 @@ impl<T: ReadLiteralExt> ReadAsDecimalRoundMode for T {}
 
 #[inline(always)]
 pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
-    use tikv::coprocessor::codec::mysql::decimal::Decimal;
+    use tidb_qe::codec::mysql::decimal::Decimal;
 
     fn fuzz(lhs: &Decimal, rhs: &Decimal, cursor: &mut Cursor<&[u8]>) -> Result<(), Error> {
         let _ = lhs.clone().abs();
@@ -143,22 +143,19 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
 }
 
 trait ReadAsTimeType: ReadLiteralExt {
-    fn read_as_time_type(&mut self) -> Result<::tikv::coprocessor::codec::mysql::TimeType, Error> {
+    fn read_as_time_type(&mut self) -> Result<::tidb_qe::codec::mysql::TimeType, Error> {
         Ok(match self.read_as_u8()? % 3 {
-            0 => tikv::coprocessor::codec::mysql::TimeType::Date,
-            1 => tikv::coprocessor::codec::mysql::TimeType::DateTime,
-            _ => tikv::coprocessor::codec::mysql::TimeType::Timestamp,
+            0 => tidb_qe::codec::mysql::TimeType::Date,
+            1 => tidb_qe::codec::mysql::TimeType::DateTime,
+            _ => tidb_qe::codec::mysql::TimeType::Timestamp,
         })
     }
 }
 
 impl<T: ReadLiteralExt> ReadAsTimeType for T {}
 
-fn fuzz_time(
-    t: tikv::coprocessor::codec::mysql::Time,
-    mut cursor: Cursor<&[u8]>,
-) -> Result<(), Error> {
-    use tikv::coprocessor::codec::mysql::TimeEncoder;
+fn fuzz_time(t: tidb_qe::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Result<(), Error> {
+    use tidb_qe::codec::mysql::TimeEncoder;
     let _ = t.clone().set_time_type(cursor.read_as_time_type()?);
     let _ = t.is_zero();
     let _ = t.invalid_zero();
@@ -177,7 +174,7 @@ fn fuzz_time(
 
 pub fn fuzz_coprocessor_codec_time_from_parse(data: &[u8]) -> Result<(), Error> {
     use std::io::Read;
-    use tikv::coprocessor::codec::mysql::{Time, Tz};
+    use tidb_qe::codec::mysql::{Time, Tz};
     let mut cursor = Cursor::new(data);
     let tz = Tz::from_offset(cursor.read_as_i64()?).unwrap_or_else(Tz::utc);
     let fsp = cursor.read_as_i8()?;
@@ -188,7 +185,7 @@ pub fn fuzz_coprocessor_codec_time_from_parse(data: &[u8]) -> Result<(), Error> 
 }
 
 pub fn fuzz_coprocessor_codec_time_from_u64(data: &[u8]) -> Result<(), Error> {
-    use tikv::coprocessor::codec::mysql::{Time, Tz};
+    use tidb_qe::codec::mysql::{Time, Tz};
     let mut cursor = Cursor::new(data);
     let u = cursor.read_as_u64()?;
     let time_type = cursor.read_as_time_type()?;
@@ -200,12 +197,12 @@ pub fn fuzz_coprocessor_codec_time_from_u64(data: &[u8]) -> Result<(), Error> {
 
 // Duration
 fn fuzz_duration(
-    t: tikv::coprocessor::codec::mysql::Duration,
+    t: tidb_qe::codec::mysql::Duration,
     mut cursor: Cursor<&[u8]>,
 ) -> Result<(), Error> {
     use std::convert::TryFrom;
-    use tikv::coprocessor::codec::mysql::decimal::Decimal;
-    use tikv::coprocessor::codec::mysql::DurationEncoder;
+    use tidb_qe::codec::mysql::decimal::Decimal;
+    use tidb_qe::codec::mysql::DurationEncoder;
 
     let _ = t.fsp();
     let u = t;
@@ -226,7 +223,7 @@ fn fuzz_duration(
 }
 
 pub fn fuzz_coprocessor_codec_duration_from_nanos(data: &[u8]) -> Result<(), Error> {
-    use tikv::coprocessor::codec::mysql::Duration;
+    use tidb_qe::codec::mysql::Duration;
     let mut cursor = Cursor::new(data);
     let nanos = cursor.read_as_i64()?;
     let fsp = cursor.read_as_i8()?;
@@ -235,7 +232,7 @@ pub fn fuzz_coprocessor_codec_duration_from_nanos(data: &[u8]) -> Result<(), Err
 
 pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<(), Error> {
     use std::io::Read;
-    use tikv::coprocessor::codec::mysql::Duration;
+    use tidb_qe::codec::mysql::Duration;
     let mut cursor = Cursor::new(data);
     let fsp = cursor.read_as_i8()?;
     let mut buf: [u8; 32] = [b' '; 32];

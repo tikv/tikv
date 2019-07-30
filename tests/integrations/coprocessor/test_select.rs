@@ -13,7 +13,7 @@ use tipb::select::Chunk;
 
 use test_coprocessor::*;
 use test_storage::*;
-use tikv::coprocessor::codec::{datum, Datum};
+use tidb_qe::codec::{datum, Datum};
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
 use tikv_util::codec::number::*;
@@ -108,7 +108,7 @@ fn test_stream_batch_row_limit() {
     assert_eq!(req.get_ranges().len(), 1);
 
     // only ignore first 7 bytes of the row id
-    let ignored_suffix_len = tikv::coprocessor::codec::table::RECORD_ROW_KEY_LEN - 1;
+    let ignored_suffix_len = tidb_qe::codec::table::RECORD_ROW_KEY_LEN - 1;
     let mut expected_ranges_last_bytes: Vec<(&[u8], &[u8])> = vec![
         (b"\x00", b"\x02\x00"),
         (b"\x02\x00", b"\x05\x00"),
@@ -1165,7 +1165,7 @@ fn test_index_aggr_extre() {
 
 #[test]
 fn test_where() {
-    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_qe_datatype::{FieldTypeAccessor, FieldTypeTp};
 
     let data = vec![
         (1, Some("name:0"), 2),

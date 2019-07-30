@@ -49,7 +49,6 @@ impl CopFlowStatistics {
 /// `BasicLocalMetrics` is for the basic metrics for coprocessor requests.
 pub struct BasicLocalMetrics {
     pub req_time: LocalHistogramVec,
-    pub outdate_time: LocalHistogramVec,
     pub handle_time: LocalHistogramVec,
     pub wait_time: LocalHistogramVec,
     pub error_cnt: LocalIntCounterVec,
@@ -61,7 +60,6 @@ impl Default for BasicLocalMetrics {
     fn default() -> BasicLocalMetrics {
         BasicLocalMetrics {
             req_time: COPR_REQ_HISTOGRAM_VEC.local(),
-            outdate_time: OUTDATED_REQ_WAIT_TIME.local(),
             handle_time: COPR_REQ_HANDLE_TIME.local(),
             wait_time: COPR_REQ_WAIT_TIME.local(),
             error_cnt: COPR_REQ_ERROR.local(),
@@ -74,7 +72,6 @@ impl Default for BasicLocalMetrics {
 impl BasicLocalMetrics {
     pub fn flush(&mut self) {
         self.req_time.flush();
-        self.outdate_time.flush();
         self.handle_time.flush();
         self.wait_time.flush();
         self.scan_keys.flush();

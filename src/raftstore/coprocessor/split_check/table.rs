@@ -8,9 +8,9 @@ use engine::{IterOption, Iterable};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
+use tidb_qe::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
 
 use super::super::{
@@ -226,12 +226,12 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::types::Key;
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
     use engine::ALL_CFS;
+    use tidb_qe::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;

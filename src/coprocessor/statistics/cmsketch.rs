@@ -64,12 +64,12 @@ impl CMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::datum;
-    use crate::coprocessor::codec::datum::Datum;
     use rand::distributions::Distribution;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
     use std::cmp::min;
+    use tidb_qe::codec::datum;
+    use tidb_qe::codec::datum::Datum;
     use tikv_util::as_slice;
     use tikv_util::collections::HashMap;
     use zipf::ZipfDistribution;

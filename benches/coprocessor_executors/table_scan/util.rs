@@ -10,12 +10,12 @@ use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
 
 use test_coprocessor::*;
-use tikv::coprocessor::dag::batch::executors::BatchTableScanExecutor;
-use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::executor::Executor;
-use tikv::coprocessor::dag::executor::TableScanExecutor;
-use tikv::coprocessor::dag::expr::EvalConfig;
-use tikv::coprocessor::dag::storage_impl::TiKVStorage;
+use tidb_qe::batch::executors::BatchTableScanExecutor;
+use tidb_qe::batch::interface::*;
+use tidb_qe::executor::Executor;
+use tidb_qe::executor::TableScanExecutor;
+use tidb_qe::expr::EvalConfig;
+use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
 

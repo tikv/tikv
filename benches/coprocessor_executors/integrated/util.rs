@@ -9,9 +9,9 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::Executor as PbExecutor;
 
 use test_coprocessor::*;
-use tikv::coprocessor::dag::execute_stats::ExecSummaryCollectorDisabled;
-use tikv::coprocessor::dag::expr::EvalConfig;
-use tikv::coprocessor::dag::storage_impl::TiKVStorage;
+use tidb_qe::execute_stats::ExecSummaryCollectorDisabled;
+use tidb_qe::expr::EvalConfig;
+use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 
 use crate::util::bencher::Bencher;
@@ -64,10 +64,7 @@ impl<T: TxnStore + 'static> IntegratedBencher for NormalBencher<T> {
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
-            tikv::coprocessor::dag::builder::DAGBuilder::build_normal::<
-                _,
-                ExecSummaryCollectorDisabled,
-            >(
+            tidb_qe::executor::run::build_executors::<_, ExecSummaryCollectorDisabled>(
                 black_box(executors.to_vec()),
                 black_box(TiKVStorage::from(ToTxnStore::<T>::to_store(store))),
                 black_box(ranges.to_vec()),
@@ -110,10 +107,7 @@ impl<T: TxnStore + 'static> IntegratedBencher for BatchBencher<T> {
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
-            tikv::coprocessor::dag::builder::DAGBuilder::build_batch::<
-                _,
-                ExecSummaryCollectorDisabled,
-            >(
+            tidb_qe::batch::run::build_executors::<_, ExecSummaryCollectorDisabled>(
                 black_box(executors.to_vec()),
                 black_box(TiKVStorage::from(ToTxnStore::<T>::to_store(store))),
                 black_box(ranges.to_vec()),

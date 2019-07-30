@@ -15,7 +15,6 @@ use prometheus::local::*;
 
 pub struct CopLocalMetrics {
     pub local_copr_req_histogram_vec: LocalHistogramVec,
-    pub local_outdated_req_wait_time: LocalHistogramVec,
     pub local_copr_req_handle_time: LocalHistogramVec,
     pub local_copr_req_wait_time: LocalHistogramVec,
     pub local_copr_req_error: LocalIntCounterVec,
@@ -30,8 +29,6 @@ thread_local! {
         CopLocalMetrics {
             local_copr_req_histogram_vec:
                 COPR_REQ_HISTOGRAM_VEC.local(),
-            local_outdated_req_wait_time:
-                OUTDATED_REQ_WAIT_TIME.local(),
             local_copr_req_handle_time:
                 COPR_REQ_HANDLE_TIME.local(),
             local_copr_req_wait_time:

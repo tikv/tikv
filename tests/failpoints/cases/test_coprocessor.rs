@@ -10,7 +10,7 @@ fn test_outdated() {
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
 
-    fail::cfg("coprocessor_deadline_check_exceeded", "return()").unwrap();
+    fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
 
     assert!(resp.get_other_error().contains("request outdated"));
@@ -27,7 +27,7 @@ fn test_outdated_2() {
     let req = DAGSelect::from(&product).build();
 
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
-    fail::cfg("coprocessor_deadline_check_exceeded", "return()").unwrap();
+    fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
 
     assert!(resp.get_other_error().contains("request outdated"));

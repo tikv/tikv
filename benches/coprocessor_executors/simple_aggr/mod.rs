@@ -2,7 +2,7 @@
 
 mod util;
 
-use cop_datatype::FieldTypeTp;
+use tidb_qe_datatype::FieldTypeTp;
 use tipb::expression::ExprType;
 use tipb_helper::ExprDefBuilder;
 

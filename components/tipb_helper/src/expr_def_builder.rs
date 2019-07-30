@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use codec::prelude::NumberEncoder;
-use cop_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use tidb_qe_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 /// A helper utility to build `tipb::expression::Expr` (a.k.a. expression definition) easily.
