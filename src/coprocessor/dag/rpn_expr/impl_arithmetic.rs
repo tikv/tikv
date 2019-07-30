@@ -336,7 +336,7 @@ impl ArithmeticOp for IntIntMultiply {
     type T = Int;
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_mul(*rhs)
-            .ok_or_else(|| Error::overflow("INT", &format!("({} * {})", lhs, rhs)).into())
+            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} * {})", lhs, rhs)).into())
             .map(Some)
     }
 }
