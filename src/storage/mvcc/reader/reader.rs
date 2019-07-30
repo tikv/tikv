@@ -185,13 +185,13 @@ impl<S: Snapshot> MvccReader<S> {
         }
 
         // There is a pending lock. Client should wait or clean it.
-        Err(Error::KeyIsLocked {
-            key: key.to_raw()?,
-            primary: lock.primary,
-            ts: lock.ts,
-            ttl: lock.ttl,
-            txn_size: lock.txn_size,
-        })
+        let mut info = kvproto::kvrpcpb::LockInfo::default();
+        info.set_primary_lock(lock.primary);
+        info.set_lock_version(lock.ts);
+        info.set_key(key.to_raw()?);
+        info.set_lock_ttl(lock.ttl);
+        info.set_txn_size(lock.txn_size);
+        Err(Error::KeyIsLocked(info))
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
