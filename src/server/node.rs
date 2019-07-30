@@ -5,6 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::transport::RaftStoreRouter;
+use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
 use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
@@ -18,7 +19,7 @@ use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
 use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
-use crate::storage::{Config as StorageConfig, RaftKv, Storage};
+use crate::storage::{Config as StorageConfig, Storage};
 use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;

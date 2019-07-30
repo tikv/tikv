@@ -24,11 +24,11 @@ use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
 use tikv::server::Result as ServerResult;
 use tikv::server::{
-    create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
+    create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
     ServerTransport,
 };
 
-use tikv::storage::{self, RaftKv};
+use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
