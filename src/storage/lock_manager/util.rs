@@ -58,7 +58,11 @@ mod tests {
         let raw_key = b"key".to_vec();
         let key = Key::from_raw(&raw_key);
         let ts = 100;
-        let case = StorageError::from(TxnError::from(MvccError::KeyIsLocked(LockInfo::default())));
+        let mut info = LockInfo::default();
+        info.set_key(raw_key);
+        info.set_lock_version(ts);
+        info.set_lock_ttl(100);
+        let case = StorageError::from(TxnError::from(MvccError::KeyIsLocked(info)));
         let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts);
         assert_eq!(lock.hash, gen_key_hash(&key));
