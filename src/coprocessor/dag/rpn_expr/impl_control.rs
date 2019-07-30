@@ -32,6 +32,21 @@ pub fn case_when<T: Evaluable>(args: &[ScalarValueRef<'_>]) -> Result<Option<T>>
     Ok(None)
 }
 
+#[rpn_fn]
+#[inline]
+fn if_condition<T: Evaluable>(
+    condition: &Option<Int>,
+    value_if_true: &Option<T>,
+    value_if_false: &Option<T>,
+) -> Result<Option<T>> {
+    Ok(if condition.unwrap_or(0) != 0 {
+        value_if_true
+    } else {
+        value_if_false
+    }
+    .clone())
+}
+
 fn case_when_validator<T: Evaluable>(expr: &tipb::expression::Expr) -> Result<()> {
     for chunk in expr.get_children().chunks(2) {
         if chunk.len() == 1 {
@@ -109,6 +124,26 @@ mod tests {
             }
             let output = evaluator.evaluate(ScalarFuncSig::CaseWhenReal).unwrap();
             assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_if() {
+        let cases = vec![
+            ((0, 3.14, 2.71828), Real::new(2.71828).ok()),
+            ((1, 137.1, 6.235), Real::new(137.1).ok()),
+        ];
+
+        for ((condition, value1, value2), expected) in cases {
+            assert_eq!(
+                expected,
+                RpnFnScalarEvaluator::new()
+                    .push_param(condition)
+                    .push_param(value1)
+                    .push_param(value2)
+                    .evaluate(ScalarFuncSig::IfReal)
+                    .unwrap()
+            );
         }
     }
 }
