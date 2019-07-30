@@ -353,6 +353,10 @@ impl<I: Iterator> Cursor<I> {
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        fail_point!("kv_cursor_seek", |_| {
+            return Err(box_err!("kv cursor seek error"));
+        });
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self
             .max_key

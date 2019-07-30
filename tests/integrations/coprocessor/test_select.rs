@@ -1530,3 +1530,18 @@ fn test_invalid_range() {
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_other_error().is_empty());
 }
+
+#[test]
+fn test_snapshot_failed() {
+    let product = ProductTable::new();
+    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
+
+    let (_, endpoint) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+
+    // Use an invalid context to make errors.
+    let req = DAGSelect::from(&product).build_with(Context::default(), &[0]);
+    let resp = handle_request(&endpoint, req);
+
+    assert!(resp.get_region_error().has_store_not_match());
+}

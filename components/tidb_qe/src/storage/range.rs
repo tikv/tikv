@@ -22,19 +22,9 @@ impl Range {
 
 impl std::fmt::Debug for Range {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use hex::ToHex;
         match self {
-            Range::Point(PointRange(v)) => v.as_slice().write_hex_upper(f),
-            Range::Interval(IntervalRange {
-                lower_inclusive,
-                upper_exclusive,
-            }) => {
-                write!(f, "[")?;
-                lower_inclusive.as_slice().write_hex_upper(f)?;
-                write!(f, ", ")?;
-                upper_exclusive.as_slice().write_hex_upper(f)?;
-                write!(f, ")")
-            }
+            Range::Point(r) => std::fmt::Debug::fmt(r, f),
+            Range::Interval(r) => std::fmt::Debug::fmt(r, f),
         }
     }
 }
@@ -55,6 +45,17 @@ impl From<PointRange> for Range {
 pub struct IntervalRange {
     pub lower_inclusive: Vec<u8>,
     pub upper_exclusive: Vec<u8>,
+}
+
+impl std::fmt::Debug for IntervalRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use hex::ToHex;
+        write!(f, "[")?;
+        self.lower_inclusive.as_slice().write_hex_upper(f)?;
+        write!(f, ", ")?;
+        self.upper_exclusive.as_slice().write_hex_upper(f)?;
+        write!(f, ")")
+    }
 }
 
 impl From<(Vec<u8>, Vec<u8>)> for IntervalRange {
@@ -81,6 +82,13 @@ impl<'a, 'b> From<(&'a str, &'b str)> for IntervalRange {
 
 #[derive(Default, PartialEq, Eq, Clone)]
 pub struct PointRange(pub Vec<u8>);
+
+impl std::fmt::Debug for PointRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use hex::ToHex;
+        self.0.as_slice().write_hex_upper(f)
+    }
+}
 
 impl From<Vec<u8>> for PointRange {
     fn from(v: Vec<u8>) -> Self {
