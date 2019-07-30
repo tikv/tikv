@@ -263,7 +263,6 @@ impl WaiterManager {
         }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
-            let detector_scheduler = self.detector_scheduler.clone();
             let when = Instant::now() + Duration::from_millis(self.wait_for_lock_timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
@@ -273,8 +272,8 @@ impl WaiterManager {
                         .borrow_mut()
                         .remove_waiter(start_ts, lock.clone())
                         .and_then(|waiter| {
-                            // TODO: remove it
-                            detector_scheduler.clean_up_wait_for(start_ts, lock);
+                            // The corresponding `WaitForEntry` in deadlock detector
+                            // will be removed by expiration.
                             execute_callback(waiter.cb, waiter.pr);
                             Some(())
                         });

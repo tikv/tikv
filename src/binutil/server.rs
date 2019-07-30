@@ -322,6 +322,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             pd_client,
             resolver,
             cfg.pessimistic_txn.monitor_membership_interval,
+            cfg.pessimistic_txn.wait_for_lock_timeout,
         );
         waiter_mgr_worker
             .as_mut()
