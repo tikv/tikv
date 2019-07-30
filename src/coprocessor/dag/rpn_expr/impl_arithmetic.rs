@@ -966,11 +966,7 @@ mod tests {
 
     #[test]
     fn test_real_multiply() {
-        let should_pass = vec![(
-            Real::new(1.01001).unwrap(),
-            Real::new(-0.01).unwrap(),
-            Real::new(-0.0101001).ok(),
-        )];
+        let should_pass = vec![(1.01001, -0.01, Real::new(-0.0101001).ok())];
 
         for (lhs, rhs, expected) in should_pass {
             assert_eq!(
@@ -984,14 +980,8 @@ mod tests {
         }
 
         let should_fail = vec![
-            (
-                Real::new(std::f64::MAX).unwrap(),
-                Real::new(std::f64::MAX).unwrap(),
-            ),
-            (
-                Real::new(std::f64::MAX).unwrap(),
-                Real::new(std::f64::MIN).unwrap(),
-            ),
+            (std::f64::MAX, std::f64::MAX),
+            (std::f64::MAX, std::f64::MIN),
         ];
 
         for (lhs, rhs) in should_fail {
