@@ -241,7 +241,7 @@ ctl:
 # A special target for testing only "coprocessor::dag::expr"
 # per https://github.com/tikv/tikv/pull/3280
 expression: format clippy
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" --no-default-features -- --nocapture
+	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_qe -- --nocapture
 
 
 ## The driver for script/run-cargo.sh
