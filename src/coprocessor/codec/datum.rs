@@ -3,22 +3,24 @@
 use byteorder::WriteBytesExt;
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
 use std::str::FromStr;
 use std::{i64, str};
 
 use cop_datatype::FieldTypeTp;
-
-use super::mysql::{
-    self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
-    PathExpression, RoundMode, Time, DEFAULT_FSP, MAX_FSP,
-};
-use super::{convert, Error, Result};
-use crate::coprocessor::dag::expr::EvalContext;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::{number, BytesSlice};
 use tikv_util::escape;
+
+use super::mysql::{
+    self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
+    PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+};
+use super::{Error, Result};
+use crate::coprocessor::codec::convert::{ConvertTo, ToInt};
+use crate::coprocessor::dag::expr::EvalContext;
 
 pub const NIL_FLAG: u8 = 0;
 pub const BYTES_FLAG: u8 = 1;
@@ -122,10 +124,10 @@ impl Datum {
             Datum::U64(u) => self.cmp_u64(ctx, u),
             Datum::F64(f) => self.cmp_f64(ctx, f),
             Datum::Bytes(ref bs) => self.cmp_bytes(ctx, bs),
-            Datum::Dur(ref d) => self.cmp_dur(ctx, d),
+            Datum::Dur(d) => self.cmp_dur(ctx, d),
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(ref t) => self.cmp_time(ctx, t),
-            Datum::Json(ref j) => self.cmp_json(j),
+            Datum::Json(ref j) => self.cmp_json(ctx, j),
         }
     }
 
@@ -164,23 +166,11 @@ impl Datum {
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
-            Datum::Bytes(ref bs) => {
-                let ff = convert::bytes_to_f64(ctx, bs)?;
-                cmp_f64(ff, f)
-            }
-            Datum::Dec(ref d) => {
-                let ff = d.as_f64()?;
-                cmp_f64(ff, f)
-            }
-            Datum::Dur(ref d) => {
-                let ff = d.to_secs();
-                cmp_f64(ff, f)
-            }
-            Datum::Time(ref t) => {
-                let ff = t.to_f64()?;
-                cmp_f64(ff, f)
-            }
-            Datum::Json(ref json) => Datum::F64(f).cmp_json(json),
+            Datum::Bytes(ref bs) => cmp_f64(bs.convert(ctx)?, f),
+            Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
+            Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
+            Datum::Time(ref t) => cmp_f64(t.convert(ctx)?, f),
+            Datum::Json(ref json) => Datum::F64(f).cmp_json(ctx, json),
         }
     }
 
@@ -204,7 +194,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = convert::bytes_to_f64(ctx, bs)?;
+                let f = bs.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -219,20 +209,20 @@ impl Datum {
                 Ok(d.cmp(dec))
             }
             _ => {
-                let f = dec.as_f64()?;
+                let f = dec.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
     }
 
-    fn cmp_dur(&self, ctx: &mut EvalContext, d: &Duration) -> Result<Ordering> {
+    fn cmp_dur(&self, ctx: &mut EvalContext, d: Duration) -> Result<Ordering> {
         match *self {
-            Datum::Dur(ref d2) => Ok(d2.cmp(d)),
+            Datum::Dur(ref d2) => Ok(d2.cmp(&d)),
             Datum::Bytes(ref bs) => {
                 let d2 = Duration::parse(bs, MAX_FSP)?;
-                Ok(d2.cmp(d))
+                Ok(d2.cmp(&d))
             }
-            _ => self.cmp_f64(ctx, d.to_secs()),
+            _ => self.cmp_f64(ctx, d.to_secs_f64()),
         }
     }
 
@@ -245,20 +235,20 @@ impl Datum {
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
             _ => {
-                let f = time.to_f64()?;
+                let f = time.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
     }
 
-    fn cmp_json(&self, json: &Json) -> Result<Ordering> {
+    fn cmp_json(&self, ctx: &mut EvalContext, json: &Json) -> Result<Ordering> {
         let order = match *self {
             Datum::Json(ref j) => j.cmp(json),
             Datum::I64(d) => Json::I64(d).cmp(json),
             Datum::U64(d) => Json::U64(d).cmp(json),
             Datum::F64(d) => Json::Double(d).cmp(json),
             Datum::Dec(ref d) => {
-                let ff = d.as_f64()?;
+                let ff = d.convert(ctx)?;
                 Json::Double(ff).cmp(json)
             }
             Datum::Bytes(ref d) => {
@@ -280,12 +270,14 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => Some(!bs.is_empty() && convert::bytes_to_int(ctx, bs)? != 0),
+            Datum::Bytes(ref bs) => {
+                Some(!bs.is_empty() && bs.to_int(ctx, FieldTypeTp::LongLong)? != 0)
+            }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
-            Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
+            Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
             Datum::Null => None,
-            _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
+            _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
         Ok(b)
     }
@@ -301,7 +293,7 @@ impl Datum {
             Datum::Dur(ref d) => format!("{}", d),
             Datum::Dec(ref d) => format!("{}", d),
             Datum::Json(ref d) => d.to_string(),
-            ref d => return Err(invalid_type!("can't convert {:?} to string", d)),
+            ref d => return Err(invalid_type!("can't convert {} to string", d)),
         };
         Ok(s)
     }
@@ -324,17 +316,11 @@ impl Datum {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
             Datum::F64(f) => Ok(f),
-            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs),
-            Datum::Time(t) => {
-                let d = t.to_decimal()?;
-                d.as_f64()
-            }
-            Datum::Dur(d) => {
-                let d = d.to_decimal()?;
-                d.as_f64()
-            }
-            Datum::Dec(d) => d.as_f64(),
-            Datum::Json(j) => j.cast_to_real(ctx),
+            Datum::Bytes(bs) => bs.convert(ctx),
+            Datum::Time(t) => t.convert(ctx),
+            Datum::Dur(d) => d.convert(ctx),
+            Datum::Dec(d) => d.convert(ctx),
+            Datum::Json(j) => j.convert(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
         }
     }
@@ -342,32 +328,16 @@ impl Datum {
     /// `into_i64` converts self into i64.
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
-        let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
         let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => convert::convert_uint_to_int(u, upper_bound, tp),
-
-            Datum::F64(f) => convert::convert_float_to_int(f, lower_bound, upper_bound, tp),
-            Datum::Bytes(bs) => convert::bytes_to_int(ctx, &bs),
-            Datum::Time(mut t) => {
-                t.round_frac(mysql::DEFAULT_FSP)?;
-                let d = t.to_decimal()?;
-                d.as_i64().into()
-            }
-            Datum::Dur(d) => {
-                let d = d.round_frac(mysql::DEFAULT_FSP)?.to_decimal()?;
-                d.as_i64().into()
-            }
-            Datum::Dec(d) => {
-                let res: Result<Decimal> = d.round(mysql::DEFAULT_FSP, RoundMode::HalfEven).into();
-                if let Err(e) = res {
-                    Err(e)
-                } else {
-                    res.unwrap().as_i64().into()
-                }
-            }
-            Datum::Json(j) => Ok(j.cast_to_int()),
+            Datum::U64(u) => u.to_int(ctx, tp),
+            Datum::F64(f) => f.to_int(ctx, tp),
+            Datum::Bytes(bs) => bs.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Time(t) => t.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Dur(d) => d.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Dec(d) => d.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Json(j) => j.to_int(ctx, FieldTypeTp::LongLong),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
@@ -408,7 +378,7 @@ impl Datum {
     pub fn into_arith(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs).map(From::from),
+            Datum::Bytes(bs) => ConvertTo::<f64>::convert(&bs, ctx).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec = t.to_decimal()?;
@@ -418,7 +388,7 @@ impl Datum {
                 Ok(Datum::Dec(dec))
             }
             Datum::Dur(d) => {
-                let dec = d.to_decimal()?;
+                let dec = Decimal::try_from(d)?;
                 if d.fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
@@ -431,8 +401,8 @@ impl Datum {
     /// Keep compatible with TiDB's `ToDecimal` function.
     pub fn into_dec(self) -> Result<Decimal> {
         match self {
-            Datum::Time(t) => t.to_decimal().map_err(From::from),
-            Datum::Dur(d) => d.to_decimal().map_err(From::from),
+            Datum::Time(t) => t.to_decimal(),
+            Datum::Dur(d) => Decimal::try_from(d).map_err(From::from),
             d => match d.coerce_to_dec()? {
                 Datum::Dec(d) => Ok(d),
                 d => Err(box_err!("failed to conver {} to decimal", d)),
@@ -460,7 +430,8 @@ impl Datum {
             Datum::U64(d) => Ok(Json::U64(d)),
             Datum::F64(d) => Ok(Json::Double(d)),
             Datum::Dec(d) => {
-                let ff = d.as_f64()?;
+                // TODO: remove the `cast_as_json` method
+                let ff = d.convert(&mut EvalContext::default())?;
                 Ok(Json::Double(ff))
             }
             Datum::Json(d) => Ok(d),
@@ -517,7 +488,8 @@ impl Datum {
             Datum::I64(i) => Ok(Datum::F64(i as f64)),
             Datum::U64(u) => Ok(Datum::F64(u as f64)),
             Datum::Dec(d) => {
-                let f = d.as_f64()?;
+                // TODO: remove this function `coerce_to_f64`
+                let f = d.convert(&mut EvalContext::default())?;
                 Ok(Datum::F64(f))
             }
             a => Ok(a),
@@ -553,7 +525,7 @@ impl Datum {
             (a, b) => {
                 let a = a.into_dec()?;
                 let b = b.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let d: Result<Decimal> = res.into();
@@ -584,10 +556,10 @@ impl Datum {
                 let dec: Result<Decimal> = (l + r).into();
                 return dec.map(Datum::Dec);
             }
-            (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
+            (l, r) => return Err(invalid_type!("{} and {} can't be add together.", l, r)),
         };
         if let Datum::Null = res {
-            return Err(box_err!("{:?} + {:?} overflow", self, d));
+            return Err(box_err!("{} + {} overflow", self, d));
         }
         Ok(res)
     }
@@ -616,10 +588,10 @@ impl Datum {
                 let dec: Result<Decimal> = (l - r).into();
                 return dec.map(Datum::Dec);
             }
-            (l, r) => return Err(invalid_type!("{:?} can't minus {:?}", l, r)),
+            (l, r) => return Err(invalid_type!("{} can't minus {}", l, r)),
         };
         if let Datum::Null = res {
-            return Err(box_err!("{:?} - {:?} overflow", self, d));
+            return Err(box_err!("{} - {} overflow", self, d));
         }
         Ok(res)
     }
@@ -637,7 +609,7 @@ impl Datum {
             (&Datum::U64(l), &Datum::U64(r)) => l.checked_mul(r).into(),
             (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l * r)),
             (&Datum::Dec(ref l), &Datum::Dec(ref r)) => return Ok(Datum::Dec((l * r).unwrap())),
-            (l, r) => return Err(invalid_type!("{:?} can't multiply {:?}", l, r)),
+            (l, r) => return Err(invalid_type!("{} can't multiply {}", l, r)),
         };
 
         if let Datum::Null = res {
@@ -672,7 +644,7 @@ impl Datum {
                     d.map(Datum::Dec)
                 }
             },
-            (l, r) => Err(invalid_type!("{:?} can't mod {:?}", l, r)),
+            (l, r) => Err(invalid_type!("{} can't mod {}", l, r)),
         }
     }
 
@@ -713,7 +685,7 @@ impl Datum {
             (left, right) => {
                 let a = left.into_dec()?;
                 let b = right.into_dec()?;
-                match a / b {
+                match &a / &b {
                     None => Ok(Datum::Null),
                     Some(res) => {
                         let i = res.unwrap().as_i64().unwrap();
@@ -1040,7 +1012,6 @@ mod tests {
 
     use std::cmp::Ordering;
     use std::sync::Arc;
-    use std::time::Duration as StdDuration;
     use std::{i16, i32, i64, i8, u16, u32, u64, u8};
 
     fn same_type(l: &Datum, r: &Datum) -> bool {
@@ -1073,12 +1044,8 @@ mod tests {
             ],
             vec![Datum::Null],
             vec![
-                Duration::new(StdDuration::from_millis(23), false, MAX_FSP)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(23), true, MAX_FSP)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(23, MAX_FSP).unwrap().into(),
+                Duration::from_millis(-23, MAX_FSP).unwrap().into(),
             ],
             vec![
                 Datum::U64(1),
@@ -1209,84 +1176,52 @@ mod tests {
             ),
             (b"".as_ref().into(), b"".as_ref().into(), Ordering::Equal),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Datum::Null,
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(29034), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(29034, 2).unwrap().into(),
                 Ordering::Less,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Equal,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(-34, 2).unwrap().into(),
                 Datum::Null,
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(0), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(0, 2).unwrap().into(),
                 Datum::I64(0),
                 Ordering::Equal,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(29034), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(3340, 2).unwrap().into(),
+                Duration::from_millis(-29034, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(3340), true, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(-3340, 2).unwrap().into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 Ordering::Less,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), false, 2)
-                    .unwrap()
-                    .into(),
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
+                Duration::from_millis(-34, 2).unwrap().into(),
                 Ordering::Greater,
             ),
             (
-                Duration::new(StdDuration::from_millis(34), true, 2)
-                    .unwrap()
-                    .into(),
+                Duration::from_millis(34, 2).unwrap().into(),
                 b"-00.34".as_ref().into(),
                 Ordering::Greater,
             ),
@@ -1704,7 +1639,7 @@ mod tests {
             (Datum::F64(-0.4), Some(false)),
             (Datum::Null, None),
             (b"".as_ref().into(), Some(false)),
-            (b"0.5".as_ref().into(), Some(false)),
+            (b"0.5".as_ref().into(), Some(true)),
             (b"0".as_ref().into(), Some(false)),
             (b"2".as_ref().into(), Some(true)),
             (b"abc".as_ref().into(), Some(false)),
@@ -1884,11 +1819,7 @@ mod tests {
             (Datum::Bytes(b"123".to_vec()), f64::from(123)),
             (
                 Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap()),
-                Decimal::from_bytes(b"20121231113045")
-                    .unwrap()
-                    .unwrap()
-                    .as_f64()
-                    .unwrap(),
+                20121231113045f64,
             ),
             (
                 Datum::Dur(Duration::parse(b"11:30:45", 0).unwrap()),

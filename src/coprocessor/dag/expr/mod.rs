@@ -11,7 +11,7 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::coprocessor::codec::mysql::charset;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use crate::coprocessor::codec::{self, Datum};
+use crate::coprocessor::codec::{self, datum, Datum};
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
 use tikv_util::codec::number;
@@ -62,6 +62,7 @@ pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     field_type: FieldType,
+    implicit_args: Vec<Datum>,
     cus_rng: CusRng,
 }
 
@@ -179,7 +180,7 @@ impl Expression {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
@@ -269,6 +270,7 @@ impl Expression {
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
                 ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
+                let implicit_args = datum::decode(&mut expr.get_val())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
@@ -278,6 +280,7 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             field_type,
+                            implicit_args,
                             cus_rng: CusRng {
                                 rng: RefCell::new(None),
                             },
@@ -356,10 +359,10 @@ mod tests {
     }
 
     pub fn scalar_func_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
-        expr.set_field_type(FieldType::new());
+        expr.set_field_type(FieldType::default());
         for child in children {
             expr.mut_children().push(child.clone());
         }
@@ -367,7 +370,7 @@ mod tests {
     }
 
     pub fn col_expr(col_id: i64) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(col_id).unwrap();
@@ -383,7 +386,7 @@ mod tests {
         charset: String,
         collate: Collation,
     ) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         match datum {
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
@@ -397,13 +400,13 @@ mod tests {
                 expr.mut_field_type().set_charset(charset);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
-            d => panic!("unsupport datum: {:?}", d),
+            d => panic!("unsupport datum: {}", d),
         }
         expr
     }
 
     pub fn datum_expr(datum: Datum) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         match datum {
             Datum::I64(i) => {
                 expr.set_tp(ExprType::Int64);
@@ -447,7 +450,7 @@ mod tests {
             }
             Datum::Time(t) => {
                 expr.set_tp(ExprType::MysqlTime);
-                let mut ft = FieldType::new();
+                let mut ft = FieldType::default();
                 ft.as_mut_accessor()
                     .set_tp(t.get_time_type().into())
                     .set_decimal(isize::from(t.get_fsp()));
@@ -464,7 +467,7 @@ mod tests {
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
-            d => panic!("unsupport datum: {:?}", d),
+            d => panic!("unsupport datum: {}", d),
         };
         expr
     }
@@ -473,7 +476,7 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let got = eval_func(ScalarFuncSig::TruncateInt, &[Datum::I64(1028), Datum::I64(-2)]).unwrap();
     /// assert_eq!(got, Datum::I64(1000));
     /// ```
@@ -486,7 +489,7 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let x = Datum::U64(18446744073709551615);
     /// let d = Datum::I64(-2);
     /// let exp = Datum::U64(18446744073709551600);

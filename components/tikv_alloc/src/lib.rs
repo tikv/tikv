@@ -82,6 +82,8 @@
 #[macro_use]
 extern crate log;
 
+pub mod error;
+
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
 mod default;
 
@@ -94,7 +96,14 @@ mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
 #[path = "tcmalloc.rs"]
 mod imp;
-#[cfg(not(all(unix, not(fuzzing), any(feature = "jemalloc", feature = "tcmalloc"))))]
+#[cfg(all(unix, not(fuzzing), feature = "mimalloc"))]
+#[path = "mimalloc.rs"]
+mod imp;
+#[cfg(not(all(
+    unix,
+    not(fuzzing),
+    any(feature = "jemalloc", feature = "tcmalloc", feature = "mimalloc")
+)))]
 #[path = "system.rs"]
 mod imp;
 

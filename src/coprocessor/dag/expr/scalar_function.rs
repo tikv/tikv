@@ -371,6 +371,7 @@ impl ScalarFunc {
 
             ScalarFuncSig::AddTimeDateTimeNull
             | ScalarFuncSig::AddTimeDurationNull
+            | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
             | ScalarFuncSig::PI => (0, 0),
@@ -387,7 +388,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
-            | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
@@ -596,7 +596,7 @@ macro_rules! dispatch_call {
                 &'b self,
                 ctx: &mut EvalContext,
                 row: &'a [Datum]
-            ) -> Result<Option<Cow<'a, Duration>>> {
+            ) -> Result<Option<Duration>> {
                 match self.sig {
                     $(ScalarFuncSig::$u_sig => self.$u_func(ctx, row, $($u_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
@@ -993,6 +993,7 @@ dispatch_call! {
         RpadBinary => rpad_binary,
 
         StringAnyValue => string_any_value,
+        AddTimeStringNull => add_time_string_null,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1457,6 +1458,7 @@ mod tests {
                 vec![
                     ScalarFuncSig::AddTimeDateTimeNull,
                     ScalarFuncSig::AddTimeDurationNull,
+                    ScalarFuncSig::AddTimeStringNull,
                     ScalarFuncSig::SubTimeDateTimeNull,
                     ScalarFuncSig::SubTimeDurationNull,
                     ScalarFuncSig::PI,
@@ -1495,7 +1497,6 @@ mod tests {
             ScalarFuncSig::AddDateStringString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
-            ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,

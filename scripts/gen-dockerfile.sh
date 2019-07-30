@@ -23,6 +23,12 @@ RUN sed -i '/fuzz/d' Cargo.toml && \\
     sed -i '/test\_/d' Cargo.toml && \\
     sed -i '/profiler/d' Cargo.toml
 
+# Use Makefile to build
+COPY Makefile ./
+
+# For cargo
+COPY scripts/run-cargo.sh ./scripts/run-cargo.sh
+COPY etc/cargo.config.dist ./etc/cargo.config.dist
 EOT
 
 # Get components, remove test and profiler components
@@ -44,7 +50,6 @@ cat <<EOT >> ${output}
 RUN mkdir -p ./src/bin && \\
     echo 'fn main() {}' > ./src/bin/tikv-ctl.rs && \\
     echo 'fn main() {}' > ./src/bin/tikv-server.rs && \\
-    echo 'fn main() {}' > ./src/bin/tikv-importer.rs && \\
     echo '' > ./src/lib.rs && \\
 EOT
 
@@ -52,7 +57,7 @@ for i in ${components}; do
     echo "    mkdir ./components/${i}/src && echo '' > ./components/${i}/src/lib.rs && \\" >> ${output}
 done
 
-echo '    cargo build --no-default-features --release --features "jemalloc portable sse no-fail" && \' >> ${output}
+echo '    make build_dist_release && \' >> ${output}
 
 for i in ${components}; do 
     echo "    rm -rf ./target/release/.fingerprint/${i}-* && \\" >> ${output}
@@ -66,7 +71,7 @@ cat <<EOT >> ${output}
 COPY ${dir}/src ./src
 COPY ${dir}/components ./components
 
-RUN cargo build --no-default-features --release --features "jemalloc portable sse no-fail" 
+RUN make build_dist_release
 
 # Strip debug info to reduce the docker size, may strip later?
 # RUN strip --strip-debug /tikv/target/release/tikv-server && \\

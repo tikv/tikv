@@ -6,28 +6,30 @@ pub mod weekmode;
 
 use std::cmp::{min, Ordering};
 use std::convert::{TryFrom, TryInto};
+use std::fmt::Write;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::{mem, str};
 
 use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
-
 use cop_datatype::FieldTypeTp;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
 
+use crate::coprocessor::codec::convert::ConvertTo;
 use crate::coprocessor::codec::mysql::duration::{
     Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
 };
 use crate::coprocessor::codec::mysql::{self, Decimal};
 use crate::coprocessor::codec::{Error, Result, TEN_POW};
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::BytesSlice;
+use crate::coprocessor::dag::expr::EvalContext;
 
 pub use self::extension::*;
+pub use self::tz::Tz;
 pub use self::weekmode::WeekMode;
 
-pub use self::tz::Tz;
-
+const ZERO_DATETIME_NUMERIC_STR: &str = "00000000000000";
+const ZERO_DATE_NUMERIC_STR: &str = "00000000";
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -90,16 +92,10 @@ fn ymd_hms_nanos<T: TimeZone>(
         .and_then(|t| t.checked_add_signed(Duration::nanoseconds(i64::from(nanos))))
         .and_then(|datetime| tz.from_local_datetime(&datetime).earliest())
         .ok_or_else(|| {
-            box_err!(
-                "'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime in specified time zone",
-                year,
-                month,
-                day,
-                hour,
-                min,
-                secs,
-                nanos
-            )
+            Error::incorrect_datetime_value(&format!(
+                "{}-{}-{} {}:{}:{}.{:09}",
+                year, month, day, hour, min, secs, nanos
+            ))
         })
 }
 
@@ -189,9 +185,9 @@ pub enum TimeType {
     Timestamp,
 }
 
-impl Into<FieldTypeTp> for TimeType {
-    fn into(self) -> FieldTypeTp {
-        match self {
+impl From<TimeType> for FieldTypeTp {
+    fn from(time_type: TimeType) -> FieldTypeTp {
+        match time_type {
             TimeType::Date => FieldTypeTp::Date,
             TimeType::DateTime => FieldTypeTp::DateTime,
             TimeType::Timestamp => FieldTypeTp::Timestamp,
@@ -271,36 +267,51 @@ impl Time {
         self.time = time
     }
 
-    fn to_numeric_str(&self) -> String {
+    /// Converts a `DateTime` to printable string representation
+    #[inline]
+    pub fn to_numeric_string(&self) -> String {
         if self.time_type == TimeType::Date {
-            // TODO: pure calculation should be enough.
-            format!("{}", self.time.format("%Y%m%d"))
-        } else {
-            let s = self.time.format("%Y%m%d%H%M%S");
-            if self.fsp > 0 {
-                // Do we need to round the result?
-                let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
-                format!("{}.{1:02$}", s, nanos, self.fsp as usize)
+            if self.is_zero() {
+                String::from(ZERO_DATE_NUMERIC_STR)
             } else {
-                format!("{}", s)
+                format!("{}", self.time.format("%Y%m%d"))
+            }
+        } else {
+            if self.is_zero() {
+                if self.fsp > 0 {
+                    // Do we need to round the result?
+                    let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
+                    format!(
+                        "{}.{1:02$}",
+                        ZERO_DATETIME_NUMERIC_STR, nanos, self.fsp as usize
+                    )
+                } else {
+                    String::from(ZERO_DATETIME_NUMERIC_STR)
+                }
+            } else {
+                if self.fsp > 0 {
+                    let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
+                    format!(
+                        "{}.{1:02$}",
+                        self.time.format("%Y%m%d%H%M%S"),
+                        nanos,
+                        self.fsp as usize
+                    )
+                } else {
+                    format!("{}", self.time.format("%Y%m%d%H%M%S"))
+                }
             }
         }
     }
 
+    /// Returns the `Decimal` representation of the `DateTime/Date`
+    #[inline]
     pub fn to_decimal(&self) -> Result<Decimal> {
         if self.is_zero() {
             return Ok(0.into());
         }
-        let dec: Decimal = box_try!(self.to_numeric_str().parse());
-        Ok(dec)
-    }
 
-    pub fn to_f64(&self) -> Result<f64> {
-        if self.is_zero() {
-            return Ok(0f64);
-        }
-        let f: f64 = box_try!(self.to_numeric_str().parse());
-        Ok(f)
+        self.to_numeric_string().parse()
     }
 
     fn parse_datetime_format(s: &str) -> Vec<&str> {
@@ -400,7 +411,7 @@ impl Time {
                     box_try!(sec.parse()),
                 )
             }
-            _ => return Err(box_err!("invalid datetime: {}", s)),
+            _ => return Err(Error::incorrect_datetime_value(s)),
         };
 
         if need_adjust || parts[0].len() == 2 {
@@ -470,7 +481,7 @@ impl Time {
         Time::new(t, time_type, fsp as i8)
     }
 
-    pub fn from_duration(tz: &Tz, time_type: TimeType, d: &MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: &Tz, time_type: TimeType, d: MyDuration) -> Result<Time> {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
             .with_timezone(tz)
@@ -484,7 +495,7 @@ impl Time {
         let t = t.unwrap();
         if t.year() < 1000 || t.year() > 9999 {
             return Err(box_err!(
-                "datetime :{:?} out of range ('1000-01-01' to '9999-12-31')",
+                "datetime :{} out of range ('1000-01-01' to '9999-12-31')",
                 t
             ));
         }
@@ -535,7 +546,7 @@ impl Time {
         }
         // TODO:support case month or day is 0(2012-00-00 12:12:12)
         let nanos = self.time.nanosecond();
-        let base = 10u32.pow(NANO_WIDTH - u32::from(fsp));
+        let base = TEN_POW[NANO_WIDTH - usize::from(fsp)];
         let expect_nanos = ((f64::from(nanos) / f64::from(base)).round() as u32) * base;
         let diff = i64::from(nanos) - i64::from(expect_nanos);
         let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));
@@ -549,151 +560,195 @@ impl Time {
         }
     }
 
-    fn convert_date_format(&self, b: char) -> Result<String> {
+    fn write_date_format_segment(&self, b: char, output: &mut String) -> Result<()> {
         match b {
             'b' => {
                 let m = self.time.month();
                 if m == 0 || m > 12 {
-                    Err(box_err!("invalid time format"))
+                    return Err(box_err!("invalid time format"));
                 } else {
-                    Ok(MONTH_NAMES_ABBR[(m - 1) as usize].to_string())
+                    output.push_str(MONTH_NAMES_ABBR[(m - 1) as usize]);
                 }
             }
             'M' => {
                 let m = self.time.month();
                 if m == 0 || m > 12 {
-                    Err(box_err!("invalid time format"))
+                    return Err(box_err!("invalid time format"));
                 } else {
-                    Ok(MONTH_NAMES[(m - 1) as usize].to_string())
+                    output.push_str(MONTH_NAMES[(m - 1) as usize]);
                 }
             }
-            'm' => Ok(format!("{:02}", self.time.month())),
-            'c' => Ok(format!("{}", self.time.month())),
-            'D' => Ok(format!(
-                "{}{}",
-                self.time.day(),
-                self.time.abbr_day_of_month()
-            )),
-            'd' => Ok(format!("{:02}", self.time.day())),
-            'e' => Ok(format!("{}", self.time.day())),
-            'j' => Ok(format!("{:03}", self.time.days())),
-            'H' => Ok(format!("{:02}", self.time.hour())),
-            'k' => Ok(format!("{}", self.time.hour())),
+            'm' => {
+                write!(output, "{:02}", self.time.month()).unwrap();
+            }
+            'c' => {
+                write!(output, "{}", self.time.month()).unwrap();
+            }
+            'D' => {
+                write!(
+                    output,
+                    "{}{}",
+                    self.time.day(),
+                    self.time.abbr_day_of_month()
+                )
+                .unwrap();
+            }
+            'd' => {
+                write!(output, "{:02}", self.time.day()).unwrap();
+            }
+            'e' => {
+                write!(output, "{}", self.time.day()).unwrap();
+            }
+            'j' => {
+                write!(output, "{:03}", self.time.days()).unwrap();
+            }
+            'H' => {
+                write!(output, "{:02}", self.time.hour()).unwrap();
+            }
+            'k' => {
+                write!(output, "{}", self.time.hour()).unwrap();
+            }
             'h' | 'I' => {
                 let t = self.time.hour();
                 if t == 0 || t == 12 {
-                    Ok("12".to_string())
+                    output.push_str("12");
                 } else {
-                    Ok(format!("{:02}", t % 12))
+                    write!(output, "{:02}", t % 12).unwrap();
                 }
             }
             'l' => {
                 let t = self.time.hour();
                 if t == 0 || t == 12 {
-                    Ok("12".to_string())
+                    output.push_str("12");
                 } else {
-                    Ok(format!("{}", t % 12))
+                    write!(output, "{}", t % 12).unwrap();
                 }
             }
-            'i' => Ok(format!("{:02}", self.time.minute())),
+            'i' => {
+                write!(output, "{:02}", self.time.minute()).unwrap();
+            }
             'p' => {
                 let hour = self.time.hour();
                 if (hour / 12) % 2 == 0 {
-                    Ok("AM".to_string())
+                    output.push_str("AM")
                 } else {
-                    Ok("PM".to_string())
+                    output.push_str("PM")
                 }
             }
             'r' => {
                 let h = self.time.hour();
                 if h == 0 {
-                    Ok(format!(
+                    write!(
+                        output,
                         "{:02}:{:02}:{:02} AM",
                         12,
                         self.time.minute(),
                         self.time.second()
-                    ))
+                    )
+                    .unwrap();
                 } else if h == 12 {
-                    Ok(format!(
+                    write!(
+                        output,
                         "{:02}:{:02}:{:02} PM",
                         12,
                         self.time.minute(),
                         self.time.second()
-                    ))
+                    )
+                    .unwrap();
                 } else if h < 12 {
-                    Ok(format!(
+                    write!(
+                        output,
                         "{:02}:{:02}:{:02} AM",
                         h,
                         self.time.minute(),
                         self.time.second()
-                    ))
+                    )
+                    .unwrap();
                 } else {
-                    Ok(format!(
+                    write!(
+                        output,
                         "{:02}:{:02}:{:02} PM",
                         h - 12,
                         self.time.minute(),
                         self.time.second()
-                    ))
+                    )
+                    .unwrap();
                 }
             }
-            'T' => Ok(format!(
-                "{:02}:{:02}:{:02}",
-                self.time.hour(),
-                self.time.minute(),
-                self.time.second()
-            )),
-            'S' | 's' => Ok(format!("{:02}", self.time.second())),
-            'f' => Ok(format!("{:06}", self.time.nanosecond() / 1000)),
+            'T' => {
+                write!(
+                    output,
+                    "{:02}:{:02}:{:02}",
+                    self.time.hour(),
+                    self.time.minute(),
+                    self.time.second()
+                )
+                .unwrap();
+            }
+            'S' | 's' => {
+                write!(output, "{:02}", self.time.second()).unwrap();
+            }
+            'f' => {
+                write!(output, "{:06}", self.time.nanosecond() / 1000).unwrap();
+            }
             'U' => {
                 let w = self.time.week(WeekMode::from_bits_truncate(0));
-                Ok(format!("{:02}", w))
+                write!(output, "{:02}", w).unwrap();
             }
             'u' => {
                 let w = self.time.week(WeekMode::from_bits_truncate(1));
-                Ok(format!("{:02}", w))
+                write!(output, "{:02}", w).unwrap();
             }
             'V' => {
                 let w = self.time.week(WeekMode::from_bits_truncate(2));
-                Ok(format!("{:02}", w))
+                write!(output, "{:02}", w).unwrap();
             }
             'v' => {
                 let (_, w) = self.time.year_week(WeekMode::from_bits_truncate(3));
-                Ok(format!("{:02}", w))
+                write!(output, "{:02}", w).unwrap();
             }
-            'a' => Ok(self.time.weekday().name_abbr().to_string()),
-            'W' => Ok(self.time.weekday().name().to_string()),
-            'w' => Ok(format!("{}", self.time.weekday().num_days_from_sunday())),
+            'a' => {
+                output.push_str(self.time.weekday().name_abbr());
+            }
+            'W' => {
+                output.push_str(self.time.weekday().name());
+            }
+            'w' => {
+                write!(output, "{}", self.time.weekday().num_days_from_sunday()).unwrap();
+            }
             'X' => {
                 let (year, _) = self.time.year_week(WeekMode::from_bits_truncate(2));
                 if year < 0 {
-                    Ok(u32::max_value().to_string())
+                    write!(output, "{}", u32::max_value()).unwrap();
                 } else {
-                    Ok(format!("{:04}", year))
+                    write!(output, "{:04}", year).unwrap();
                 }
             }
             'x' => {
                 let (year, _) = self.time.year_week(WeekMode::from_bits_truncate(3));
                 if year < 0 {
-                    Ok(u32::max_value().to_string())
+                    write!(output, "{}", u32::max_value()).unwrap();
                 } else {
-                    Ok(format!("{:04}", year))
+                    write!(output, "{:04}", year).unwrap();
                 }
             }
-            'Y' => Ok(format!("{:04}", self.time.year())),
-            'y' => {
-                let year_str = format!("{:04}", self.time.year());
-                Ok(year_str[2..].to_string())
+            'Y' => {
+                write!(output, "{:04}", self.time.year()).unwrap();
             }
-            _ => Ok(b.to_string()),
+            'y' => {
+                write!(output, "{:02}", self.time.year() % 100).unwrap();
+            }
+            _ => output.push(b),
         }
+        Ok(())
     }
 
-    pub fn date_format(&self, layout: String) -> Result<String> {
+    pub fn date_format(&self, layout: &str) -> Result<String> {
         let mut ret = String::new();
         let mut pattern_match = false;
         for b in layout.chars() {
             if pattern_match {
-                ret.push_str(&self.convert_date_format(b)?);
+                self.write_date_format_segment(b, &mut ret)?;
                 pattern_match = false;
                 continue;
             }
@@ -725,7 +780,7 @@ impl Time {
     }
 
     /// Checked time addition. Computes self + rhs, returning None if overflow occurred.
-    pub fn checked_add(self, rhs: &MyDuration) -> Option<Time> {
+    pub fn checked_add(self, rhs: MyDuration) -> Option<Time> {
         if let Some(add) = self
             .time
             .checked_add_signed(Duration::nanoseconds(rhs.to_nanos()))
@@ -742,7 +797,7 @@ impl Time {
     }
 
     /// Checked time subtraction. Computes self - rhs, returning None if overflow occurred.
-    pub fn checked_sub(self, rhs: &MyDuration) -> Option<Time> {
+    pub fn checked_sub(self, rhs: MyDuration) -> Option<Time> {
         if let Some(sub) = self
             .time
             .checked_sub_signed(Duration::nanoseconds(rhs.to_nanos()))
@@ -756,6 +811,16 @@ impl Time {
         } else {
             None
         }
+    }
+}
+
+impl ConvertTo<f64> for Time {
+    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+        if self.is_zero() {
+            return Ok(0f64);
+        }
+        let f: f64 = box_try!(self.to_numeric_string().parse());
+        Ok(f)
     }
 }
 
@@ -811,7 +876,7 @@ impl Display for Time {
     }
 }
 
-impl<T: Write> TimeEncoder for T {}
+impl<T: std::io::Write> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
@@ -911,10 +976,13 @@ mod tests {
     use super::*;
 
     use std::cmp::Ordering;
+    use std::f64::EPSILON;
 
     use chrono::{Duration, Local};
 
+    use crate::coprocessor::codec::convert::convert_bytes_to_decimal;
     use crate::coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
+    use crate::coprocessor::dag::expr::EvalContext;
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -1212,6 +1280,48 @@ mod tests {
     }
 
     #[test]
+    fn test_to_numeric_string() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "00000000000000"),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get = t.to_numeric_string();
+            assert_eq!(get, expect);
+        }
+    }
+
+    #[test]
+    fn test_to_decimal() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "0"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get = t.to_decimal().unwrap();
+            assert_eq!(
+                get,
+                convert_bytes_to_decimal(&mut ctx, expect.as_bytes()).unwrap(),
+                "convert datetime {} to decimal",
+                s
+            );
+        }
+    }
+
+    #[test]
     fn test_to_dec() {
         let cases = vec![
             ("12-12-31 11:30:45", 0, "20121231113045", "20121231"),
@@ -1261,6 +1371,30 @@ mod tests {
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
             });
+        }
+    }
+
+    #[test]
+    fn test_convert_to_f64() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),
+            ("2012-12-31 11:30:45.123456", 6, 20121231113045.123456f64),
+            ("2012-12-31 11:30:45.123456", 0, 20121231113045f64),
+            ("2012-12-31 11:30:45.999999", 0, 20121231113046f64),
+            ("2017-01-05 08:40:59.575601", 0, 20170105084100f64),
+            ("2017-01-05 23:59:59.575601", 0, 20170106000000f64),
+            ("0000-00-00 00:00:00", 6, 0f64),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get: f64 = t.convert(&mut ctx).unwrap();
+            assert!(
+                (expect - get).abs() < EPSILON,
+                "expect: {}, got: {}",
+                expect,
+                get
+            );
         }
     }
 
@@ -1440,7 +1574,7 @@ mod tests {
         let tz = Tz::utc();
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
-            let get = Time::from_duration(&tz, TimeType::DateTime, &d).unwrap();
+            let get = Time::from_duration(&tz, TimeType::DateTime, d).unwrap();
             let get_today = get
                 .time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
@@ -1517,7 +1651,7 @@ mod tests {
         ];
         for (s, layout, expect) in cases {
             let t = Time::parse_utc_datetime(s, 6).unwrap();
-            let get = t.date_format(layout.to_string()).unwrap();
+            let get = t.date_format(layout).unwrap();
             assert_eq!(get, expect);
         }
     }
@@ -1586,23 +1720,23 @@ mod tests {
         for (lhs, rhs, exp) in cases.clone() {
             let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
             let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
-            let res = lhs.checked_add(&rhs).unwrap();
+            let res = lhs.checked_add(rhs).unwrap();
             let exp = Time::parse_utc_datetime(exp, 6).unwrap();
             assert_eq!(res, exp);
         }
         for (exp, rhs, lhs) in cases {
             let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
             let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
-            let res = lhs.checked_sub(&rhs).unwrap();
+            let res = lhs.checked_sub(rhs).unwrap();
             let exp = Time::parse_utc_datetime(exp, 6).unwrap();
             assert_eq!(res, exp);
         }
 
         let lhs = Time::parse_utc_datetime("9999-12-31 23:59:59", 6).unwrap();
         let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
-        assert_eq!(lhs.checked_add(&rhs), None);
+        assert_eq!(lhs.checked_add(rhs), None);
         let lhs = Time::parse_utc_datetime("0000-01-01 00:00:01", 6).unwrap();
         let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
-        assert_eq!(lhs.checked_sub(&rhs), None);
+        assert_eq!(lhs.checked_sub(rhs), None);
     }
 }

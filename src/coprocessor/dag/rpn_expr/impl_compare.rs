@@ -2,59 +2,21 @@
 
 use std::cmp::Ordering;
 
-use cop_codegen::RpnFunction;
+use cop_codegen::rpn_fn;
 
-use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
-#[derive(RpnFunction)]
-#[rpn_function(args = 2)]
-pub struct RpnFnCompare<C: Comparer> {
-    _phantom: std::marker::PhantomData<C>,
+#[rpn_fn]
+#[inline]
+pub fn compare<C: Comparer>(lhs: &Option<C::T>, rhs: &Option<C::T>) -> Result<Option<i64>>
+where
+    C: Comparer,
+{
+    C::compare(lhs, rhs)
 }
 
-impl<C: Comparer> RpnFnCompare<C> {
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        lhs: &Option<C::T>,
-        rhs: &Option<C::T>,
-    ) -> Result<Option<i64>> {
-        C::compare(lhs, rhs)
-    }
-}
-
-impl<C: Comparer> std::fmt::Debug for RpnFnCompare<C> {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RpnFnCompare")
-    }
-}
-
-// See rust-lang/rust#26925 for why the followings are implemented manually. =====
-
-impl<C: Comparer> Copy for RpnFnCompare<C> {}
-
-impl<C: Comparer> Clone for RpnFnCompare<C> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self::new()
-    }
-}
-
-// ======
-
-pub trait Comparer: 'static + Send + Sync {
+pub trait Comparer {
     type T: Evaluable;
 
     fn compare(lhs: &Option<Self::T>, rhs: &Option<Self::T>) -> Result<Option<i64>>;
@@ -147,7 +109,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
     }
 }
 
-pub trait CmpOp: 'static + Send + Sync {
+pub trait CmpOp {
     #[inline]
     fn compare_null() -> Option<i64> {
         None
@@ -234,6 +196,43 @@ impl CmpOp for CmpOpNullEQ {
     }
 }
 
+#[rpn_fn(varg)]
+#[inline]
+pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
+    for arg in args {
+        if arg.is_some() {
+            return Ok((*arg).clone());
+        }
+    }
+    Ok(None)
+}
+
+#[rpn_fn(varg, min_args = 1)]
+#[inline]
+pub fn compare_in<T: Evaluable + Eq>(args: &[&Option<T>]) -> Result<Option<Int>> {
+    assert!(!args.is_empty());
+    let base_val = args[0];
+    match base_val {
+        None => Ok(None),
+        Some(base_val) => {
+            let mut default_ret = Some(0);
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        default_ret = None;
+                    }
+                    Some(v) => {
+                        if v == base_val {
+                            return Ok(Some(1));
+                        }
+                    }
+                }
+            }
+            Ok(default_ret)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +241,7 @@ mod tests {
     use cop_datatype::{FieldTypeFlag, FieldTypeTp};
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use crate::coprocessor::dag::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum TestCaseCmpOp {
@@ -489,9 +488,7 @@ mod tests {
     #[test]
     fn test_compare_duration() {
         fn map_double_to_duration(v: Real) -> Duration {
-            let d = std::time::Duration::from_millis((v.abs() * 1000.0) as u64);
-            let is_neg = v.into_inner() < 0.0;
-            Duration::new(d, is_neg, 4).unwrap()
+            Duration::from_millis((v.into_inner() * 1000.0) as i64, 4).unwrap()
         }
 
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
@@ -642,6 +639,43 @@ mod tests {
                     assert_eq!(output, Some(0));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_coalesce() {
+        let cases = vec![
+            (vec![], None),
+            (vec![None], None),
+            (vec![None, None], None),
+            (vec![None, None, None], None),
+            (vec![None, Some(0), None], Some(0)),
+        ];
+        for (args, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::CoalesceInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_in() {
+        let cases = vec![
+            (vec![Some(1)], Some(0)),
+            (vec![Some(1), Some(2)], Some(0)),
+            (vec![Some(1), Some(2), Some(1)], Some(1)),
+            (vec![Some(1), Some(2), None], None),
+            (vec![Some(1), Some(2), None, Some(1)], Some(1)),
+            (vec![None, Some(2), Some(1)], None),
+        ];
+        for (args, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::InInt)
+                .unwrap();
+            assert_eq!(output, expected);
         }
     }
 }

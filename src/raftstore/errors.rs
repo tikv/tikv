@@ -6,7 +6,7 @@ use std::net;
 use std::result;
 
 use crossbeam::TrySendError;
-use protobuf::{ProtobufError, RepeatedField};
+use protobuf::ProtobufError;
 
 use crate::pd;
 use kvproto::{errorpb, metapb};
@@ -15,7 +15,6 @@ use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
-use tikv_util::escape;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
@@ -56,9 +55,9 @@ quick_error! {
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             description("key is not in region")
             display("key {} is not in region key range [{}, {}) for region {}",
-                    escape(key),
-                    escape(region.get_start_key()),
-                    escape(region.get_end_key()),
+                    hex::encode_upper(key),
+                    hex::encode_upper(region.get_start_key()),
+                    hex::encode_upper(region.get_end_key()),
                     region.get_id())
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
@@ -142,12 +141,12 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl Into<errorpb::Error> for Error {
-    fn into(self) -> errorpb::Error {
-        let mut errorpb = errorpb::Error::new();
-        errorpb.set_message(error::Error::description(&self).to_owned());
+impl From<Error> for errorpb::Error {
+    fn from(err: Error) -> errorpb::Error {
+        let mut errorpb = errorpb::Error::default();
+        errorpb.set_message(format!("{}", err));
 
-        match self {
+        match err {
             Error::RegionNotFound(region_id) => {
                 errorpb.mut_region_not_found().set_region_id(region_id);
             }
@@ -184,15 +183,15 @@ impl Into<errorpb::Error> for Error {
                     .set_end_key(region.get_end_key().to_vec());
             }
             Error::EpochNotMatch(_, new_regions) => {
-                let mut e = errorpb::EpochNotMatch::new();
-                e.set_current_regions(RepeatedField::from_vec(new_regions));
+                let mut e = errorpb::EpochNotMatch::default();
+                e.set_current_regions(new_regions.into());
                 errorpb.set_epoch_not_match(e);
             }
             Error::StaleCommand => {
-                errorpb.set_stale_command(errorpb::StaleCommand::new());
+                errorpb.set_stale_command(errorpb::StaleCommand::default());
             }
             Error::Transport(reason) if reason == DiscardReason::Full => {
-                let mut server_is_busy_err = errorpb::ServerIsBusy::new();
+                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
             }

@@ -70,7 +70,7 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_duration<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Duration>>> {
+    pub fn eval_duration<'a>(&self, row: &'a [Datum]) -> Result<Option<Duration>> {
         row[self.offset].as_duration()
     }
 
@@ -112,7 +112,7 @@ mod tests {
         let mut pad_char_ctx = EvalContext::new(Arc::new(cfg));
 
         let mut c = col_expr(0);
-        let mut field_tp = FieldType::new();
+        let mut field_tp = FieldType::default();
         let flen = 16;
         field_tp
             .as_mut_accessor()
@@ -176,10 +176,7 @@ mod tests {
                 .eval_time(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e
-                .eval_duration(&mut ctx, &row)
-                .unwrap_or(None)
-                .map(|t| t.into_owned());
+            let dur = e.eval_duration(&mut ctx, &row).unwrap_or(None);
             let j = e
                 .eval_json(&mut ctx, &row)
                 .unwrap_or(None)
@@ -202,7 +199,7 @@ mod tests {
         ];
         for tp in hybrid_cases {
             let mut c = col_expr(0);
-            let mut field_tp = FieldType::new();
+            let mut field_tp = FieldType::default();
             field_tp.as_mut_accessor().set_tp(tp);
             c.set_field_type(field_tp);
             let e = Expression::build(&ctx, c).unwrap();
@@ -212,7 +209,7 @@ mod tests {
 
         for tp in in_hybrid_cases {
             let mut c = col_expr(0);
-            let mut field_tp = FieldType::new();
+            let mut field_tp = FieldType::default();
             field_tp.as_mut_accessor().set_tp(tp);
             c.set_field_type(field_tp);
             let e = Expression::build(&ctx, c).unwrap();

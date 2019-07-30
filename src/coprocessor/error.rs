@@ -61,17 +61,7 @@ impl From<coprocessor::dag::expr::Error> for Error {
 impl From<storage::txn::Error> for Error {
     fn from(e: storage::txn::Error) -> Error {
         match e {
-            storage::txn::Error::Mvcc(storage::mvcc::Error::KeyIsLocked {
-                primary,
-                ts,
-                key,
-                ttl,
-            }) => {
-                let mut info = kvrpcpb::LockInfo::new();
-                info.set_primary_lock(primary);
-                info.set_lock_version(ts);
-                info.set_key(key);
-                info.set_lock_ttl(ttl);
+            storage::txn::Error::Mvcc(storage::mvcc::Error::KeyIsLocked(info)) => {
                 Error::Locked(info)
             }
             _ => Error::Other(Box::new(e)),

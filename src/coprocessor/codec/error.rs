@@ -1,9 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::coprocessor::dag::expr::{EvalContext, Flag};
 use regex::Error as RegexpError;
+use serde_json::error::Error as SerdeError;
 use std::error::Error as StdError;
 use std::io;
+use std::num::ParseFloatError;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
@@ -55,20 +56,6 @@ quick_error! {
 }
 
 impl Error {
-    pub fn handle_invalid_time_error(ctx: &mut EvalContext, err: Error) -> Result<()> {
-        if err.code() == ERR_TRUNCATE_WRONG_VALUE {
-            return Err(err);
-        }
-        if ctx.cfg.sql_mode.is_strict()
-            && (ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
-                || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT))
-        {
-            return Err(err);
-        }
-        ctx.warnings.append_warning(err);
-        Ok(())
-    }
-
     pub fn overflow(data: &str, expr: &str) -> Error {
         let msg = format!("{} value is out of range in '{}'", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
@@ -147,11 +134,11 @@ impl Error {
     }
 }
 
-impl Into<select::Error> for Error {
-    fn into(self) -> select::Error {
-        let mut err = select::Error::new();
-        err.set_code(self.code());
-        err.set_msg(format!("{:?}", self));
+impl From<Error> for select::Error {
+    fn from(error: Error) -> select::Error {
+        let mut err = select::Error::default();
+        err.set_code(error.code());
+        err.set_msg(format!("{:?}", error));
         err
     }
 }
@@ -159,6 +146,18 @@ impl Into<select::Error> for Error {
 impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
         Error::Encoding(err.utf8_error())
+    }
+}
+
+impl From<SerdeError> for Error {
+    fn from(err: SerdeError) -> Error {
+        box_err!("serde:{:?}", err)
+    }
+}
+
+impl From<ParseFloatError> for Error {
+    fn from(err: ParseFloatError) -> Error {
+        box_err!("parse float: {:?}", err)
     }
 }
 

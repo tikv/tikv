@@ -305,7 +305,7 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
 
-    let mut meta = SSTMeta::new();
+    let mut meta = SSTMeta::default();
     let uuid = Uuid::parse_str(elems[0])?;
     meta.set_uuid(uuid.as_bytes().to_vec());
     meta.set_region_id(elems[1].parse()?);
@@ -320,14 +320,14 @@ mod tests {
     use crate::import::test_helpers::*;
 
     use engine::rocks::util::new_engine;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_import_dir() {
-        let temp_dir = TempDir::new("test_import_dir").unwrap();
+        let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
-        let mut meta = SSTMeta::new();
+        let mut meta = SSTMeta::default();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
         let path = dir.join(&meta).unwrap();
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_import_file() {
-        let temp_dir = TempDir::new("test_import_file").unwrap();
+        let temp_dir = Builder::new().prefix("test_import_file").tempdir().unwrap();
 
         let path = ImportPath {
             save: temp_dir.path().join("save"),
@@ -401,7 +401,7 @@ mod tests {
         let data = b"test_data";
         let crc32 = calc_data_crc32(data);
 
-        let mut meta = SSTMeta::new();
+        let mut meta = SSTMeta::default();
 
         {
             let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_sst_meta_to_path() {
-        let mut meta = SSTMeta::new();
+        let mut meta = SSTMeta::default();
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
         meta.set_region_id(1);

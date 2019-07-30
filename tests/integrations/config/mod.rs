@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use engine::rocks::util::config::CompressionType;
+use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
@@ -227,7 +227,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: 2018,
+                min_blob_size: ReadableSize(2018),
                 blob_file_compression: CompressionType::Zstd,
                 blob_cache_size: ReadableSize::gb(12),
                 min_gc_batch_size: ReadableSize::kb(12),
@@ -235,6 +235,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
+                blob_run_mode: BlobRunMode::Fallback,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -278,7 +279,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -286,6 +287,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::ReadOnly,
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -329,7 +331,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -337,6 +339,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::ReadOnly, // default value
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -380,7 +383,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
@@ -388,6 +391,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
+                blob_run_mode: BlobRunMode::ReadOnly, // default value
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -397,6 +401,7 @@ fn test_serde_custom_tikv_config() {
             dirname: "bar".to_owned(),
             disable_gc: false,
             max_background_gc: 9,
+            purge_obsolete_files_period: ReadableDuration::secs(1),
         },
     };
     value.raftdb = RaftDbConfig {
@@ -498,16 +503,8 @@ fn test_serde_custom_tikv_config() {
         cipher_file: "invalid path".to_owned(),
     };
     value.import = ImportConfig {
-        import_dir: "/abc".to_owned(),
         num_threads: 123,
-        num_import_jobs: 123,
-        num_import_sst_jobs: 123,
-        max_prepare_duration: ReadableDuration::minutes(12),
-        region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
-        max_open_engines: 2,
-        upload_speed_limit: ReadableSize::mb(456),
-        min_available_ratio: 0.05,
     };
     value.panic_when_unexpected_key_or_data = true;
 

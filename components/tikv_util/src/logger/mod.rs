@@ -195,10 +195,9 @@ where
             let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
             slog::slog_crit!(
                 fatal_logger,
-                "logger encountered error, TiKV cannot continue working";
+                "logger encountered error";
                 "err" => %e,
             );
-            panic!("logger encountered error");
         }
         Ok(())
     }
@@ -455,7 +454,7 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// assert_eq!(true, validate_log_source_file("<unknown>", "<unknown>"));
     /// assert_eq!(true, validate_log_source_file("mod.rs:1", "mod.rs:1"));
     /// assert_eq!(true, validate_log_source_file("mod.rs:1", "mod.rs:100"));

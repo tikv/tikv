@@ -16,7 +16,6 @@ use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
-use protobuf::RepeatedField;
 
 use super::metrics::*;
 use super::{
@@ -163,7 +162,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
-        let mut header = RaftRequestHeader::new();
+        let mut header = RaftRequestHeader::default();
         header.set_region_id(ctx.get_region_id());
         header.set_peer(ctx.get_peer().clone());
         header.set_region_epoch(ctx.get_region_epoch().clone());
@@ -171,6 +170,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             header.set_term(ctx.get_term());
         }
         header.set_sync_log(ctx.get_sync_log());
+        header.set_replica_read(ctx.get_replica_read());
         header
     }
 
@@ -182,9 +182,9 @@ impl<S: RaftStoreRouter> RaftKv<S> {
     ) -> Result<()> {
         let len = reqs.len();
         let header = self.new_request_header(ctx);
-        let mut cmd = RaftCmdRequest::new();
+        let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
-        cmd.set_requests(RepeatedField::from_vec(reqs));
+        cmd.set_requests(reqs.into());
 
         self.router
             .send_command(
@@ -208,9 +208,9 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         ));
         let len = reqs.len();
         let header = self.new_request_header(ctx);
-        let mut cmd = RaftCmdRequest::new();
+        let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
-        cmd.set_requests(RepeatedField::from_vec(reqs));
+        cmd.set_requests(reqs.into());
 
         self.router
             .send_command(
@@ -259,10 +259,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
         let mut reqs = Vec::with_capacity(modifies.len());
         for m in modifies {
-            let mut req = Request::new();
+            let mut req = Request::default();
             match m {
                 Modify::Delete(cf, k) => {
-                    let mut delete = DeleteRequest::new();
+                    let mut delete = DeleteRequest::default();
                     delete.set_key(k.into_encoded());
                     if cf != CF_DEFAULT {
                         delete.set_cf(cf.to_string());
@@ -271,7 +271,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     req.set_delete(delete);
                 }
                 Modify::Put(cf, k, v) => {
-                    let mut put = PutRequest::new();
+                    let mut put = PutRequest::default();
                     put.set_key(k.into_encoded());
                     put.set_value(v);
                     if cf != CF_DEFAULT {
@@ -280,11 +280,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
                 }
-                Modify::DeleteRange(cf, start_key, end_key) => {
-                    let mut delete_range = DeleteRangeRequest::new();
+                Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                    let mut delete_range = DeleteRangeRequest::default();
                     delete_range.set_cf(cf.to_string());
                     delete_range.set_start_key(start_key.into_encoded());
                     delete_range.set_end_key(end_key.into_encoded());
+                    delete_range.set_notify_only(notify_only);
                     req.set_cmd_type(CmdType::DeleteRange);
                     req.set_delete_range(delete_range);
                 }
@@ -325,7 +326,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
     fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot");
-        let mut req = Request::new();
+        let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
 
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();

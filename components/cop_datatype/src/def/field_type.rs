@@ -193,6 +193,11 @@ pub trait FieldTypeAccessor {
     fn is_non_binary_string_like(&self) -> bool {
         self.collation() != Collation::Binary && self.is_string_like()
     }
+
+    /// Whether the flag contains `FieldTypeFlag::UNSIGNED`
+    fn is_unsigned(&self) -> bool {
+        self.flag().contains(FieldTypeFlag::UNSIGNED)
+    }
 }
 
 impl FieldTypeAccessor for FieldType {
@@ -309,18 +314,18 @@ impl FieldTypeAccessor for ColumnInfo {
     }
 }
 
-impl Into<FieldType> for FieldTypeTp {
-    fn into(self) -> FieldType {
-        let mut ft = FieldType::new();
-        ft.as_mut_accessor().set_tp(self);
+impl From<FieldTypeTp> for FieldType {
+    fn from(fp: FieldTypeTp) -> FieldType {
+        let mut ft = FieldType::default();
+        ft.as_mut_accessor().set_tp(fp);
         ft
     }
 }
 
-impl Into<ColumnInfo> for FieldTypeTp {
-    fn into(self) -> ColumnInfo {
-        let mut ft = ColumnInfo::new();
-        ft.as_mut_accessor().set_tp(self);
+impl From<FieldTypeTp> for ColumnInfo {
+    fn from(fp: FieldTypeTp) -> ColumnInfo {
+        let mut ft = ColumnInfo::default();
+        ft.as_mut_accessor().set_tp(fp);
         ft
     }
 }

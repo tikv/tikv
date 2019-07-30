@@ -5,8 +5,8 @@ use tipb::expression::{Expr, FieldType, ScalarFuncSig};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue};
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
+use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::Result;
 
 /// Helper utility to evaluate RPN function over scalar inputs.
@@ -33,6 +33,13 @@ impl RpnFnScalarEvaluator {
     /// value.
     pub fn push_param(mut self, value: impl Into<ScalarValue>) -> Self {
         self.rpn_expr_builder = self.rpn_expr_builder.push_constant(value);
+        self
+    }
+
+    pub fn push_params(mut self, values: impl IntoIterator<Item = impl Into<ScalarValue>>) -> Self {
+        for value in values {
+            self.rpn_expr_builder = self.rpn_expr_builder.push_constant(value);
+        }
         self
     }
 
@@ -82,8 +89,8 @@ impl RpnFnScalarEvaluator {
             .as_ref()
             .iter()
             .map(|expr_node| {
-                let mut ed = Expr::new();
-                ed.set_field_type(expr_node.field_type().unwrap().clone());
+                let mut ed = Expr::default();
+                ed.set_field_type(expr_node.field_type().clone());
                 ed
             })
             .collect();
@@ -91,17 +98,17 @@ impl RpnFnScalarEvaluator {
 
         let expr = self
             .rpn_expr_builder
-            .push_fn_call(func, return_field_type)
+            .push_fn_call(func, children_ed.len(), return_field_type)
             .build();
 
         let mut columns = LazyBatchColumnVec::empty();
-        let ret = expr.eval(&mut context, 1, &[], &mut columns)?;
+        let ret = expr.eval(&mut context, &[], &mut columns, &[0], 1)?;
         match ret {
             // Only used in tests, so clone is fine.
             RpnStackNode::Scalar { value, .. } => Ok(T::borrow_scalar_value(value).clone()),
             RpnStackNode::Vector { value, .. } => {
-                assert_eq!(value.len(), 1);
-                Ok(T::borrow_vector_value(&value)[0].clone())
+                assert_eq!(value.as_ref().len(), 1);
+                Ok(T::borrow_vector_value(value.as_ref())[0].clone())
             }
         }
     }

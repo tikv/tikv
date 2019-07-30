@@ -8,37 +8,28 @@ use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Store};
-
+use super::util::scan_executor::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::Scanner;
+use crate::coprocessor::dag::storage::Storage;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<S: Store>(
-    super::util::scan_executor::ScanExecutor<
-        S,
-        IndexScanExecutorImpl,
-        super::util::ranges_iter::PointRangeConditional,
-    >,
-);
+pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
-impl BatchIndexScanExecutor<FixtureStore> {
+impl<S: Storage> BatchIndexScanExecutor<S> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
-        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+        check_columns_info_supported(descriptor.get_columns())
     }
-}
 
-impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
-        store: S,
+        storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
-        desc: bool,
+        is_backward: bool,
         unique: bool,
     ) -> Result<Self> {
         // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
@@ -57,7 +48,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         let decode_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
         let schema: Vec<_> = columns_info
             .iter()
-            .map(|ci| super::util::scan_executor::field_type_from_column_info(&ci))
+            .map(|ci| field_type_from_column_info(&ci))
             .collect();
         let columns_len_without_handle = if decode_handle {
             schema.len() - 1
@@ -71,18 +62,21 @@ impl<S: Store> BatchIndexScanExecutor<S> {
             columns_len_without_handle,
             decode_handle,
         };
-        let wrapper = super::util::scan_executor::ScanExecutor::new(
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
-            store,
-            desc,
+            storage,
             key_ranges,
-            super::util::ranges_iter::PointRangeConditional::new(unique),
-        )?;
+            is_backward,
+            is_key_only: false,
+            accept_point_range: unique,
+        })?;
         Ok(Self(wrapper))
     }
 }
 
-impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
+impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
+    type StorageStats = S::Statistics;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -94,8 +88,13 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
@@ -113,7 +112,7 @@ struct IndexScanExecutorImpl {
     decode_handle: bool,
 }
 
-impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
+impl ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -122,22 +121,6 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
-    }
-
-    #[inline]
-    fn build_scanner<S: Store>(
-        &self,
-        store: &S,
-        desc: bool,
-        range: KeyRange,
-    ) -> Result<Scanner<S>> {
-        Scanner::new(
-            store,
-            crate::coprocessor::dag::ScanOn::Index,
-            desc,
-            false,
-            range,
-        )
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -180,7 +163,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
 
         for i in 0..self.columns_len_without_handle {
             let (val, remaining) = datum::split_datum(key_payload, false)?;
-            columns[i].push_raw(val);
+            columns[i].mut_raw().push(val);
             key_payload = remaining;
         }
 
@@ -244,8 +227,8 @@ mod tests {
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::expr::EvalConfig;
+    use crate::coprocessor::dag::storage::fixture::FixtureStorage;
     use crate::coprocessor::util::convert_to_prefix_next;
-    use crate::storage::{FixtureStore, Key};
 
     #[test]
     fn test_basic() {
@@ -264,17 +247,17 @@ mod tests {
         // The column info for each column in `data`. Used to build the executor.
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci
@@ -294,24 +277,23 @@ mod tests {
         // in the value. So let's build corresponding KV data.
 
         let store = {
-            let kv = data
+            let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
                     let index_data = datum::encode_key(datums).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
-                    let key = Key::from_raw(key.as_slice());
                     let value = vec![];
-                    (key, Ok(value))
+                    (key, value)
                 })
                 .collect();
-            FixtureStore::new(kv)
+            FixtureStorage::from(kv)
         };
 
         {
             // Case 1.1. Normal index, without PK, scan total index in reverse order.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::Min]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -333,18 +315,22 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.data.columns_len(), 2);
-            assert_eq!(result.data.rows_len(), 3);
-            assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 3);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
-                result.data[0].decoded().as_int_slice(),
+                result.physical_columns[0].decoded().as_int_slice(),
                 &[Some(5), Some(5), Some(-5)]
             );
-            assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
-                result.data[1].decoded().as_real_slice(),
+                result.physical_columns[1].decoded().as_real_slice(),
                 &[
                     Real::new(10.5).ok(),
                     Real::new(5.1).ok(),
@@ -357,7 +343,7 @@ mod tests {
             // Case 1.2. Normal index, with PK, scan index prefix.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(2)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -383,19 +369,29 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.data.columns_len(), 3);
-            assert_eq!(result.data.rows_len(), 2);
-            assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5), Some(5)]);
-            assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 2);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
-                result.data[1].decoded().as_real_slice(),
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(5), Some(5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
-            assert!(result.data[2].is_decoded());
-            assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5), Some(2)]);
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().as_int_slice(),
+                &[Some(5), Some(2)]
+            );
         }
 
         // Case 2. Unique index.
@@ -403,28 +399,27 @@ mod tests {
         // For a unique index, the PK handle is stored in the value.
 
         let store = {
-            let kv = data
+            let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
                     let index_data = datum::encode_key(&datums[0..2]).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
-                    let key = Key::from_raw(key.as_slice());
                     // PK handle in the value
                     let mut value = vec![];
                     value
                         .write_i64::<BigEndian>(datums[2].as_int().unwrap().unwrap())
                         .unwrap();
-                    (key, Ok(value))
+                    (key, value)
                 })
                 .collect();
-            FixtureStore::new(kv)
+            FixtureStorage::from(kv)
         };
 
         {
             // Case 2.1. Unique index, prefix range scan.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(5)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -449,26 +444,36 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.data.columns_len(), 3);
-            assert_eq!(result.data.rows_len(), 2);
-            assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5), Some(5)]);
-            assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 2);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
-                result.data[1].decoded().as_real_slice(),
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(5), Some(5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
-            assert!(result.data[2].is_decoded());
-            assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5), Some(2)]);
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().as_int_slice(),
+                &[Some(5), Some(2)]
+            );
         }
 
         {
             // Case 2.2. Unique index, point scan.
 
             let key_ranges = vec![{
-                let mut range = KeyRange::new();
+                let mut range = KeyRange::default();
                 let start_data = datum::encode_key(&[Datum::I64(5), Datum::F64(5.1)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
@@ -493,19 +498,29 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.data.columns_len(), 3);
-            assert_eq!(result.data.rows_len(), 1);
-            assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
-            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5)]);
-            assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 1);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
-                result.data[1].decoded().as_real_slice(),
+                result.physical_columns[0].decoded().as_int_slice(),
+                &[Some(5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok()]
             );
-            assert!(result.data[2].is_decoded());
-            assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5)]);
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().as_int_slice(),
+                &[Some(5)]
+            );
         }
     }
 }

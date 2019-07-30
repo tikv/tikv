@@ -37,7 +37,6 @@ use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
-const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
@@ -107,7 +106,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
-            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
+            .max_receive_message_len(-1)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .build_args();
@@ -357,11 +356,11 @@ mod tests {
         server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();
-        trans.report_unreachable(RaftMessage::new());
+        trans.report_unreachable(RaftMessage::default());
         let mut resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);
 
-        let mut msg = RaftMessage::new();
+        let mut msg = RaftMessage::default();
         msg.set_region_id(1);
         trans.send(msg.clone()).unwrap();
         trans.flush();

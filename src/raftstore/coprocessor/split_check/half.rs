@@ -174,7 +174,7 @@ mod tests {
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     use crate::raftstore::coprocessor::properties::{
         RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let cfs_opts = ALL_CFS
@@ -205,9 +205,9 @@ mod tests {
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(1);
-        region.mut_peers().push(Peer::new());
+        region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
@@ -246,7 +246,10 @@ mod tests {
 
     #[test]
     fn test_get_region_approximate_middle_cf() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();
@@ -271,8 +274,8 @@ mod tests {
             engine.flush_cf(cf_handle, true).unwrap();
         }
 
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
             .unwrap()
             .unwrap();

@@ -74,7 +74,7 @@ impl Runner {
             info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let raft_wb = WriteBatch::new();
+        let raft_wb = WriteBatch::default();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
@@ -135,11 +135,11 @@ mod tests {
     use engine::CF_DEFAULT;
     use std::sync::mpsc;
     use std::time::Duration;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_gc_raft_log() {
-        let path = TempDir::new("gc-raft-log-test").unwrap();
+        let path = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
         let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let raft_db = Arc::new(raft_db);
 
@@ -148,7 +148,7 @@ mod tests {
 
         // generate raft logs
         let region_id = 1;
-        let raft_wb = WriteBatch::new();
+        let raft_wb = WriteBatch::default();
         for i in 0..100 {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();

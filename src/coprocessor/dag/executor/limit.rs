@@ -2,32 +2,32 @@
 
 use tipb::executor::Limit;
 
-use super::ExecutorMetrics;
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::executor::{Executor, Row};
 use crate::coprocessor::dag::expr::EvalWarnings;
+use crate::coprocessor::dag::storage::IntervalRange;
 use crate::coprocessor::Result;
 
 /// Retrieves rows from the source executor and only produces part of the rows.
-pub struct LimitExecutor {
+pub struct LimitExecutor<Src: Executor> {
     limit: u64,
     cursor: u64,
-    src: Box<dyn Executor + Send>,
-    first_collect: bool,
+    src: Src,
 }
 
-impl LimitExecutor {
-    pub fn new(limit: Limit, src: Box<dyn Executor + Send>) -> Self {
+impl<Src: Executor> LimitExecutor<Src> {
+    pub fn new(limit: Limit, src: Src) -> Self {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
             src,
-            first_collect: true,
         }
     }
 }
 
-impl Executor for LimitExecutor {
+impl<Src: Executor> Executor for LimitExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     fn next(&mut self) -> Result<Option<Row>> {
         if self.cursor >= self.limit {
             return Ok(None);
@@ -40,28 +40,29 @@ impl Executor for LimitExecutor {
         }
     }
 
-    fn collect_output_counts(&mut self, _: &mut Vec<i64>) {
-        // We do not know whether `limit` has consumed all of it's source, so just ignore it.
+    #[inline]
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
     }
 
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.src.collect_metrics_into(metrics);
-        if self.first_collect {
-            metrics.executor_count.limit += 1;
-            self.first_collect = false;
-        }
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.src.collect_storage_stats(dest);
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
-    }
-
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.src.take_eval_warnings()
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.src.take_scanned_range()
     }
 }
 
@@ -104,7 +105,7 @@ mod tests {
         let mut limit_ect = LimitExecutor::new(limit_meta, ts_ect);
         let mut limit_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = limit_ect.next().unwrap() {
-            limit_rows.push(row.take_origin());
+            limit_rows.push(row.take_origin().unwrap());
         }
         assert_eq!(limit_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 2, 3, 5, 6];

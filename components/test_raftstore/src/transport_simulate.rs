@@ -527,6 +527,70 @@ impl Filter for DropSnapshotFilter {
     }
 }
 
+/// Capture the first snapshot message.
+pub struct RecvSnapshotFilter {
+    pub notifier: Mutex<Option<Sender<RaftMessage>>>,
+    pub region_id: u64,
+}
+
+impl Filter for RecvSnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot
+                && msg.get_region_id() == self.region_id
+            {
+                let tx = self.notifier.lock().unwrap().take().unwrap();
+                tx.send(msg.clone()).unwrap();
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Filters all `filter_type` packets until seeing the `flush_type`.
+///
+/// The first filtered message will be flushed too.
+pub struct LeadingFilter {
+    filter_type: MessageType,
+    flush_type: MessageType,
+    first_filtered_msg: Mutex<Option<RaftMessage>>,
+}
+
+impl LeadingFilter {
+    pub fn new(filter_type: MessageType, flush_type: MessageType) -> LeadingFilter {
+        LeadingFilter {
+            filter_type,
+            flush_type,
+            first_filtered_msg: Mutex::default(),
+        }
+    }
+}
+
+impl Filter for LeadingFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        let mut filtered_msg = self.first_filtered_msg.lock().unwrap();
+        let mut to_send = vec![];
+        for msg in msgs.drain(..) {
+            if msg.get_message().get_msg_type() == self.filter_type {
+                if filtered_msg.is_none() {
+                    *filtered_msg = Some(msg);
+                }
+            } else if msg.get_message().get_msg_type() == self.flush_type {
+                to_send.push(filtered_msg.take().unwrap());
+                to_send.push(msg);
+            } else {
+                to_send.push(msg);
+            }
+        }
+        msgs.extend(to_send);
+        check_messages(msgs)
+    }
+
+    fn after(&self, _: Result<()>) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Filter leading duplicated Snap.
 ///
 /// It will pause the first snapshot and filter out all the snapshot that
@@ -668,6 +732,24 @@ impl Filter for LeaseReadFilter {
                 msg.take_context();
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct DropMessageFilter {
+    ty: MessageType,
+}
+
+impl DropMessageFilter {
+    pub fn new(ty: MessageType) -> DropMessageFilter {
+        DropMessageFilter { ty }
+    }
+}
+
+impl Filter for DropMessageFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        msgs.retain(|m| m.get_message().get_msg_type() != self.ty);
         Ok(())
     }
 }

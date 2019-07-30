@@ -3,9 +3,14 @@
 //! This module provides aggregate functions for batch executors.
 
 mod impl_avg;
+mod impl_bit_op;
 mod impl_count;
+mod impl_first;
+mod impl_max_min;
+mod impl_sum;
 mod parser;
 mod summable;
+mod util;
 
 pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 
@@ -110,7 +115,12 @@ pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update_vector(&mut self, ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()>;
+    fn update_vector(
+        &mut self,
+        ctx: &mut EvalContext,
+        physical_values: &[Option<T>],
+        logical_rows: &[usize],
+    ) -> Result<()>;
 }
 
 impl<T: Evaluable, State> AggrFunctionStateUpdatePartial<T> for State
@@ -139,7 +149,8 @@ where
     default fn update_vector(
         &mut self,
         _ctx: &mut EvalContext,
-        _values: &[Option<T>],
+        _physical_values: &[Option<T>],
+        _logical_rows: &[usize],
     ) -> Result<()> {
         panic!("Unmatched parameter type")
     }
@@ -168,9 +179,14 @@ where
     }
 
     #[inline]
-    fn update_vector(&mut self, ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()> {
-        for value in values {
-            self.update_concrete(ctx, value)?;
+    fn update_vector(
+        &mut self,
+        ctx: &mut EvalContext,
+        physical_values: &[Option<T>],
+        logical_rows: &[usize],
+    ) -> Result<()> {
+        for physical_index in logical_rows {
+            self.update_concrete(ctx, &physical_values[*physical_index])?;
         }
         Ok(())
     }

@@ -12,10 +12,10 @@ use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 
 use crate::storage::{BlockCacheConfig, Key, Value};
 use tikv_util::escape;
@@ -67,11 +67,16 @@ struct RocksEngineCore {
 impl Drop for RocksEngineCore {
     fn drop(&mut self) {
         if let Some(h) = self.worker.stop() {
-            h.join().unwrap();
+            if let Err(e) = h.join() {
+                safe_panic!("RocksEngineCore engine thread panicked: {:?}", e);
+            }
         }
     }
 }
 
+/// The RocksEngine is based on `RocksDB`.
+///
+/// This is intended for **testing use only**.
 #[derive(Clone)]
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
@@ -89,7 +94,7 @@ impl RocksEngine {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
-                let td = TempDir::new("temp-rocksdb").unwrap();
+                let td = Builder::new().prefix("temp-rocksdb").tempdir().unwrap();
                 (td.path().to_str().unwrap().to_owned(), Some(td))
             }
             _ => (path.to_owned(), None),
@@ -192,7 +197,7 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::new();
+    let wb = WriteBatch::default();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -215,15 +220,20 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.put_cf(handle, k.as_encoded(), &v)
                 }
             }
-            Modify::DeleteRange(cf, start_key, end_key) => {
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
                 trace!(
                     "RocksEngine: delete_range_cf";
                     "cf" => cf,
                     "start_key" => %start_key,
-                    "end_key" => %end_key
+                    "end_key" => %end_key,
+                    "notify_only" => notify_only,
                 );
-                let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                if !notify_only {
+                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
+                    wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                } else {
+                    Ok(())
+                }
             }
         };
         // TODO: turn the error into an engine error.
@@ -346,7 +356,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::CFStatistics;
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_rocksdb() {
@@ -377,7 +387,7 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = TempDir::new("rocksdb_test").unwrap();
+        let dir = Builder::new().prefix("rocksdb_test").tempdir().unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())
@@ -417,7 +427,7 @@ mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();

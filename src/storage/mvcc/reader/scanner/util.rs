@@ -38,12 +38,13 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
     }
 
     // There is a pending lock. Client should wait or clean it.
-    Ok(CheckLockResult::Locked(Error::KeyIsLocked {
-        key: raw_key,
-        primary: lock.primary.clone(),
-        ts: lock.ts,
-        ttl: lock.ttl,
-    }))
+    let mut info = kvproto::kvrpcpb::LockInfo::default();
+    info.set_primary_lock(lock.primary.clone());
+    info.set_lock_version(lock.ts);
+    info.set_key(raw_key);
+    info.set_lock_ttl(lock.ttl);
+    info.set_txn_size(lock.txn_size);
+    Ok(CheckLockResult::Locked(Error::KeyIsLocked(info)))
 }
 
 /// Reads user key's value in default CF according to the given write CF value

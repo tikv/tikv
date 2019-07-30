@@ -21,7 +21,6 @@ use clap::{crate_authors, crate_version, App, AppSettings, Arg, ArgMatches, SubC
 use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
-use protobuf::RepeatedField;
 
 use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
@@ -57,6 +56,7 @@ fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
 fn new_debug_executor(
     db: Option<&str>,
     raft_db: Option<&str>,
+    skip_paranoid_checks: bool,
     host: Option<&str>,
     cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
@@ -65,6 +65,7 @@ fn new_debug_executor(
         (None, Some(kv_path)) => {
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
+            kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
@@ -180,7 +181,7 @@ trait DebugExecutor {
 
         match entry.get_entry_type() {
             EntryType::EntryNormal => {
-                let mut msg = RaftCmdRequest::new();
+                let mut msg = RaftCmdRequest::default();
                 msg.merge_from_bytes(&data).unwrap();
                 v1!("Normal: {:#?}", msg);
             }
@@ -189,7 +190,7 @@ trait DebugExecutor {
                 msg.merge_from_bytes(&data).unwrap();
                 let ctx = msg.take_context();
                 v1!("ConfChange: {:?}", msg);
-                let mut cmd = RaftCmdRequest::new();
+                let mut cmd = RaftCmdRequest::default();
                 cmd.merge_from_bytes(&ctx).unwrap();
                 v1!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
@@ -227,6 +228,7 @@ trait DebugExecutor {
                 .for_each(move |(key, mvcc)| {
                     if point_query && key != from {
                         v1!("no mvcc infos for {}", escape(&from));
+                        return future::err::<(), String>("no mvcc infos".to_owned());
                     }
 
                     v1!("key: {}", escape(&key));
@@ -291,7 +293,7 @@ trait DebugExecutor {
         cfg: &TiKvConfig,
         mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, host, cfg, mgr);
+        let rhs_debug_executor = new_debug_executor(db, raft_db, false, host, cfg, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
@@ -468,6 +470,11 @@ trait DebugExecutor {
         self.set_region_tombstone(regions);
     }
 
+    fn set_region_tombstone_force(&self, region_ids: Vec<u64>) {
+        self.check_local_mode();
+        self.set_region_tombstone_by_id(region_ids);
+    }
+
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
@@ -542,6 +549,8 @@ trait DebugExecutor {
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
+    fn set_region_tombstone_by_id(&self, regions: Vec<u64>);
+
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool);
 
     fn recover_all(&self, threads: usize, read_only: bool);
@@ -564,7 +573,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
-        let mut req = GetRequest::new();
+        let mut req = GetRequest::default();
         req.set_db(DBType::KV);
         req.set_cf(cf.to_owned());
         req.set_key(key);
@@ -574,9 +583,9 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
-        let cfs = cfs.into_iter().map(ToOwned::to_owned).collect();
-        let mut req = RegionSizeRequest::new();
-        req.set_cfs(RepeatedField::from_vec(cfs));
+        let cfs = cfs.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
+        let mut req = RegionSizeRequest::default();
+        req.set_cfs(cfs.into());
         req.set_region_id(region);
         self.region_size(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::region_size", e))
@@ -587,7 +596,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_region_info(&self, region: u64) -> RegionInfo {
-        let mut req = RegionInfoRequest::new();
+        let mut req = RegionInfoRequest::default();
         req.set_region_id(region);
         let mut resp = self
             .region_info(&req)
@@ -607,7 +616,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry {
-        let mut req = RaftLogRequest::new();
+        let mut req = RaftLogRequest::default();
         req.set_region_id(region);
         req.set_log_index(index);
         self.raft_log(&req)
@@ -621,7 +630,7 @@ impl DebugExecutor for DebugClient {
         to: Vec<u8>,
         limit: u64,
     ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
-        let mut req = ScanMvccRequest::new();
+        let mut req = ScanMvccRequest::default();
         req.set_from_key(from);
         req.set_to_key(to);
         req.set_limit(limit);
@@ -646,7 +655,7 @@ impl DebugExecutor for DebugClient {
         threads: u32,
         bottommost: BottommostLevelCompaction,
     ) {
-        let mut req = CompactRequest::new();
+        let mut req = CompactRequest::default();
         req.set_db(db);
         req.set_cf(cf.to_owned());
         req.set_from_key(from.to_owned());
@@ -658,7 +667,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn dump_metrics(&self, tags: Vec<&str>) {
-        let mut req = GetMetricsRequest::new();
+        let mut req = GetMetricsRequest::default();
         req.set_all(true);
         if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
             req.set_all(false);
@@ -685,6 +694,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
+    fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
+        unimplemented!("only avaliable for local mode");
+    }
+
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
         unimplemented!("only available for local mode");
     }
@@ -706,7 +719,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn check_region_consistency(&self, region_id: u64) {
-        let mut req = RegionConsistencyCheckRequest::new();
+        let mut req = RegionConsistencyCheckRequest::default();
         req.set_region_id(region_id);
         self.check_region_consistency(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
@@ -714,7 +727,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str) {
-        let mut req = ModifyTikvConfigRequest::new();
+        let mut req = ModifyTikvConfigRequest::default();
         req.set_module(module);
         req.set_config_name(config_name.to_owned());
         req.set_config_value(config_value.to_owned());
@@ -724,7 +737,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn dump_region_properties(&self, region_id: u64) {
-        let mut req = GetRegionPropertiesRequest::new();
+        let mut req = GetRegionPropertiesRequest::default();
         req.set_region_id(region_id);
         let resp = self
             .get_region_properties(&req)
@@ -817,6 +830,19 @@ impl DebugExecutor for Debugger {
         }
     }
 
+    fn set_region_tombstone_by_id(&self, region_ids: Vec<u64>) {
+        let ret = self
+            .set_region_tombstone_by_id(region_ids)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::set_region_tombstone_by_id", e));
+        if ret.is_empty() {
+            v1!("success!");
+            return;
+        }
+        for (region_id, error) in ret {
+            ve1!("region: {}, error: {}", region_id, error);
+        }
+    }
+
     fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
         let ret = self
             .recover_regions(regions, read_only)
@@ -883,7 +909,7 @@ impl DebugExecutor for Debugger {
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         region.peers.clear();
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_id(new_peer_id);
         peer.set_store_id(store_id);
         region.mut_peers().push(peer);
@@ -945,6 +971,13 @@ fn main() {
                 .long("raftdb")
                 .takes_value(true)
                 .help("Set the raft rocksdb path"),
+        )
+        .arg(
+            Arg::with_name("skip-paranoid-checks")
+                .required(false)
+                .long("skip-paranoid-checks")
+                .takes_value(false)
+                .help("skip paranoid checks when open rocksdb"),
         )
         .arg(
             Arg::with_name("config")
@@ -1332,7 +1365,6 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("pd")
-                        .required(true)
                         .short("p")
                         .takes_value(true)
                         .multiple(true)
@@ -1340,6 +1372,12 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("force")
+                        .long("force")
+                        .takes_value(false)
+                        .help("force execute without pd"),
                 ),
         )
         .subcommand(
@@ -1740,10 +1778,18 @@ fn main() {
 
     // Deal with all subcommands about db or host.
     let db = matches.value_of("db");
+    let skip_paranoid_checks = matches.is_present("skip-paranoid-checks");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
 
-    let debug_executor = new_debug_executor(db, raft_db, host, &cfg, Arc::clone(&mgr));
+    let debug_executor = new_debug_executor(
+        db,
+        raft_db,
+        skip_paranoid_checks,
+        host,
+        &cfg,
+        Arc::clone(&mgr),
+    );
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -1836,13 +1882,18 @@ fn main() {
             .map(str::parse)
             .collect::<Result<Vec<_>, _>>()
             .expect("parse regions fail");
-        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
-        let mut cfg = PdConfig::default();
-        cfg.endpoints = pd_urls;
-        if let Err(e) = cfg.validate() {
-            panic!("invalid pd configuration: {:?}", e);
+        if let Some(pd_urls) = matches.values_of("pd") {
+            let pd_urls = Vec::from_iter(pd_urls.map(ToOwned::to_owned));
+            let mut cfg = PdConfig::default();
+            cfg.endpoints = pd_urls;
+            if let Err(e) = cfg.validate() {
+                panic!("invalid pd configuration: {:?}", e);
+            }
+            debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
+        } else {
+            assert!(matches.is_present("force"));
+            debug_executor.set_region_tombstone_force(regions);
         }
-        debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("recover-mvcc") {
         let read_only = matches.is_present("read-only");
         if matches.is_present("all") {
@@ -1938,7 +1989,7 @@ fn main() {
                     v1!("No action for fail point {}", name);
                     continue;
                 }
-                let mut inject_req = InjectFailPointRequest::new();
+                let mut inject_req = InjectFailPointRequest::default();
                 inject_req.set_name(name);
                 inject_req.set_actions(actions);
 
@@ -1955,13 +2006,13 @@ fn main() {
                 }
             }
             for (name, _) in list {
-                let mut recover_req = RecoverFailPointRequest::new();
+                let mut recover_req = RecoverFailPointRequest::default();
                 recover_req.set_name(name);
                 let option = CallOption::default().timeout(Duration::from_secs(10));
                 client.recover_fail_point_opt(&recover_req, option).unwrap();
             }
         } else if matches.is_present("list") {
-            let list_req = ListFailPointsRequest::new();
+            let list_req = ListFailPointsRequest::default();
             let option = CallOption::default().timeout(Duration::from_secs(10));
             let resp = client.list_fail_points_opt(&list_req, option).unwrap();
             v1!("{:?}", resp.get_entries());
@@ -2049,7 +2100,7 @@ fn dump_snap_meta_file(path: &str) {
     let content =
         fs::read(path).unwrap_or_else(|e| panic!("read meta file {} failed, error {:?}", path, e));
 
-    let mut meta = SnapshotMeta::new();
+    let mut meta = SnapshotMeta::default();
     meta.merge_from_bytes(&content)
         .unwrap_or_else(|e| panic!("parse from bytes error {:?}", e));
     for cf_file in meta.get_cf_files() {
@@ -2092,7 +2143,7 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
         TikvClient::new(channel)
     };
 
-    let mut req = SplitRegionRequest::new();
+    let mut req = SplitRegionRequest::default();
     req.mut_context().set_region_id(region_id);
     req.mut_context()
         .set_region_epoch(region.get_region_epoch().clone());
@@ -2137,7 +2188,7 @@ fn compact_whole_cluster(
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string().clone()).collect();
         let h = thread::spawn(move || {
-            let debug_executor = new_debug_executor(None, None, Some(&addr), &cfg, mgr);
+            let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {
                 debug_executor.compact(
                     Some(&addr),

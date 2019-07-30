@@ -129,7 +129,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         do_coalesce(self, |v| v.eval_duration(ctx, row))
     }
 
@@ -475,7 +475,6 @@ mod tests {
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
     use crate::coprocessor::dag::expr::{EvalContext, Expression, Flag, SqlMode};
-    use protobuf::RepeatedField;
     use std::sync::Arc;
     use std::{i64, u64};
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
@@ -571,11 +570,11 @@ mod tests {
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(sig);
 
-            expr.set_children(RepeatedField::from_vec(children));
+            expr.set_children(children.into());
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
@@ -702,11 +701,11 @@ mod tests {
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(sig);
 
-            expr.set_children(RepeatedField::from_vec(children));
+            expr.set_children(children.into());
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
@@ -890,10 +889,10 @@ mod tests {
                 // Evaluate and test greatest
                 {
                     let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-                    let mut expr = Expr::new();
+                    let mut expr = Expr::default();
                     expr.set_tp(ExprType::ScalarFunc);
                     expr.set_sig(greatest_sig);
-                    expr.set_children(RepeatedField::from_vec(children));
+                    expr.set_children(children.into());
                     let e = Expression::build(&ctx, expr).unwrap();
                     let res = e.eval(&mut ctx, &[]).unwrap();
                     assert_eq!(res, greatest_exp);
@@ -901,10 +900,10 @@ mod tests {
                 // Evaluate and test least
                 {
                     let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-                    let mut expr = Expr::new();
+                    let mut expr = Expr::default();
                     expr.set_tp(ExprType::ScalarFunc);
                     expr.set_sig(least_sig);
-                    expr.set_children(RepeatedField::from_vec(children));
+                    expr.set_children(children.into());
                     let e = Expression::build(&ctx, expr).unwrap();
                     let res = e.eval(&mut ctx, &[]).unwrap();
                     assert_eq!(res, least_exp);
@@ -951,10 +950,10 @@ mod tests {
                 Datum::Bytes(t4.clone()),
             ];
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(ScalarFuncSig::GreatestTime);
-            expr.set_children(RepeatedField::from_vec(children));
+            expr.set_children(children.into());
             let e = Expression::build(&ctx, expr).unwrap();
             let err = e.eval(&mut ctx, &[]).unwrap_err();
             assert_eq!(err.code(), ERR_TRUNCATE_WRONG_VALUE);

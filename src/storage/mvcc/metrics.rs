@@ -8,14 +8,14 @@ make_static_metric! {
         prewrite_write_conflict,
         commit_lock_not_found,
         rollback_committed,
-        pessimistic_lock_conflict,
+        acquire_pessimistic_lock_conflict,
     }
 
     pub label_enum MvccDuplicateCommandKind {
         prewrite,
         commit,
         rollback,
-        pessimistic_lock,
+        acquire_pessimistic_lock,
     }
 
     pub struct MvccConflictCounterVec: IntCounter {

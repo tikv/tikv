@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::rocks::DBCompressionType;
+use crate::rocks::{DBCompressionType, DBTitanDBBlobRunMode};
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -15,9 +15,9 @@ pub enum CompressionType {
     ZstdNotFinal,
 }
 
-impl Into<DBCompressionType> for CompressionType {
-    fn into(self) -> DBCompressionType {
-        match self {
+impl From<CompressionType> for DBCompressionType {
+    fn from(compression_type: CompressionType) -> DBCompressionType {
+        match compression_type {
             CompressionType::No => DBCompressionType::No,
             CompressionType::Snappy => DBCompressionType::Snappy,
             CompressionType::Zlib => DBCompressionType::Zlib,
@@ -113,6 +113,24 @@ pub mod compression_type_level_serde {
         }
 
         deserializer.deserialize_seq(SeqVisitor)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BlobRunMode {
+    Normal,
+    ReadOnly,
+    Fallback,
+}
+
+impl Into<DBTitanDBBlobRunMode> for BlobRunMode {
+    fn into(self) -> DBTitanDBBlobRunMode {
+        match self {
+            BlobRunMode::Normal => DBTitanDBBlobRunMode::Normal,
+            BlobRunMode::ReadOnly => DBTitanDBBlobRunMode::ReadOnly,
+            BlobRunMode::Fallback => DBTitanDBBlobRunMode::Fallback,
+        }
     }
 }
 

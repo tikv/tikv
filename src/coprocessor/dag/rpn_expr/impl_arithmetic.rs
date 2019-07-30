@@ -1,52 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cop_codegen::RpnFunction;
+use cop_codegen::rpn_fn;
 
-use super::types::RpnFnCallPayload;
+use super::super::expr::EvalContext;
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::{self, Error};
-use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
 use crate::coprocessor::Result;
-use std::fmt::Debug;
 
-#[derive(Debug, RpnFunction)]
-#[rpn_function(args = 2)]
-pub struct RpnFnArithmetic<A: ArithmeticOp> {
-    _phantom: std::marker::PhantomData<A>,
-}
-
-impl<A: ArithmeticOp> RpnFnArithmetic<A> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-
-    #[inline]
-    fn call(
-        _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload<'_>,
-        arg0: &Option<A::T>,
-        arg1: &Option<A::T>,
-    ) -> Result<Option<A::T>> {
-        if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
-            A::calc(lhs, rhs)
-        } else {
-            // All arithmetical functions with a NULL argument return NULL
-            Ok(None)
-        }
+#[rpn_fn]
+#[inline]
+pub fn arithmetic<A: ArithmeticOp>(
+    arg0: &Option<A::T>,
+    arg1: &Option<A::T>,
+) -> Result<Option<A::T>> {
+    if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
+        A::calc(lhs, rhs)
+    } else {
+        // All arithmetical functions with a NULL argument return NULL
+        Ok(None)
     }
 }
 
-impl<A: ArithmeticOp> Clone for RpnFnArithmetic<A> {
-    fn clone(&self) -> Self {
-        Self::new()
-    }
-}
-
-impl<A: ArithmeticOp> Copy for RpnFnArithmetic<A> {}
-
-pub trait ArithmeticOp: Send + Sync + Debug + 'static {
+pub trait ArithmeticOp {
     type T: Evaluable;
 
     fn calc(lhs: &Self::T, rhs: &Self::T) -> Result<Option<Self::T>>;
@@ -327,6 +302,105 @@ impl ArithmeticOp for DecimalMod {
     }
 }
 
+#[derive(Debug)]
+pub struct DecimalMultiply;
+
+impl ArithmeticOp for DecimalMultiply {
+    type T = Decimal;
+
+    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        let res: codec::Result<Decimal> = (lhs * rhs).into();
+        Ok(Some(res?))
+    }
+}
+
+#[derive(Debug)]
+pub struct IntDivideInt;
+
+impl ArithmeticOp for IntDivideInt {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(div_i64(*lhs, *rhs)?))
+    }
+}
+
+#[derive(Debug)]
+pub struct IntDivideUint;
+
+impl ArithmeticOp for IntDivideUint {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(div_i64_with_u64(*lhs, *rhs as u64).map(|r| r as i64)?))
+    }
+}
+
+#[derive(Debug)]
+pub struct UintDivideUint;
+
+impl ArithmeticOp for UintDivideUint {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(((*lhs as u64) / (*rhs as u64)) as i64))
+    }
+}
+
+#[derive(Debug)]
+pub struct UintDivideInt;
+
+impl ArithmeticOp for UintDivideInt {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(div_u64_with_i64(*lhs as u64, *rhs).map(|r| r as i64)?))
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn int_divide_decimal(
+    ctx: &mut EvalContext,
+    lhs: &Option<Decimal>,
+    rhs: &Option<Decimal>,
+) -> Result<Option<Int>> {
+    use crate::coprocessor::codec::mysql::Res;
+
+    if lhs.is_none() || rhs.is_none() {
+        return Ok(None);
+    }
+    let lhs = lhs.as_ref().unwrap();
+    let rhs = rhs.as_ref().unwrap();
+
+    match lhs / rhs {
+        Some(v) => match v {
+            Res::Ok(v) => match v.as_i64() {
+                Res::Ok(v_i64) => Ok(Some(v_i64)),
+                Res::Truncated(v_i64) => Ok(Some(v_i64)),
+                Res::Overflow(_) => {
+                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
+                }
+            },
+            Res::Truncated(_) => Err(Error::truncated())?,
+            Res::Overflow(_) => Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))?,
+        },
+        None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,7 +409,7 @@ mod tests {
     use cop_datatype::{FieldTypeFlag, FieldTypeTp};
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use crate::coprocessor::dag::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_plus_int() {
@@ -554,6 +628,7 @@ mod tests {
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
+
     #[test]
     fn test_mod_int_unsigned() {
         let tests = vec![
@@ -669,6 +744,155 @@ mod tests {
                 .evaluate(ScalarFuncSig::ModDecimal)
                 .unwrap();
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_multiply_decimal() {
+        let test_cases = vec![("1.1", "2.2", "2.42")];
+        for (lhs, rhs, expected) in test_cases {
+            let expected: Option<Decimal> = expected.parse().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs.parse::<Decimal>().ok())
+                .push_param(rhs.parse::<Decimal>().ok())
+                .evaluate(ScalarFuncSig::MultiplyDecimal)
+                .unwrap();
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_int() {
+        let test_cases = vec![
+            (13, false, 11, false, Some(1)),
+            (13, false, -11, false, Some(-1)),
+            (-13, false, 11, false, Some(-1)),
+            (-13, false, -11, false, Some(1)),
+            (33, false, 11, false, Some(3)),
+            (33, false, -11, false, Some(-3)),
+            (-33, false, 11, false, Some(-3)),
+            (-33, false, -11, false, Some(3)),
+            (11, false, 0, false, None),
+            (-11, false, 0, false, None),
+            (-3, false, 5, true, Some(0)),
+            (3, false, -5, false, Some(0)),
+            (std::i64::MIN + 1, false, -1, false, Some(std::i64::MAX)),
+            (std::i64::MIN, false, 1, false, Some(std::i64::MIN)),
+            (std::i64::MAX, false, 1, false, Some(std::i64::MAX)),
+            (
+                std::u64::MAX as i64,
+                true,
+                1,
+                false,
+                Some(std::u64::MAX as i64),
+            ),
+        ];
+
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, expected) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(lhs, lhs_field_type)
+                .push_param_with_field_type(rhs, rhs_field_type)
+                .evaluate(ScalarFuncSig::IntDivideInt)
+                .unwrap();
+
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_int_overflow() {
+        let test_cases = vec![
+            (std::i64::MIN, false, -1, false),
+            (-1, false, 1, true),
+            (-2, false, 1, true),
+            (1, true, -1, false),
+            (2, true, -1, false),
+        ];
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(lhs, lhs_field_type)
+                .push_param_with_field_type(rhs, rhs_field_type)
+                .evaluate(ScalarFuncSig::IntDivideInt);
+            assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_decimal() {
+        let test_cases = vec![
+            (Some(11.01), Some(1.1), Some(10)),
+            (Some(-11.01), Some(1.1), Some(-10)),
+            (Some(11.01), Some(-1.1), Some(-10)),
+            (Some(-11.01), Some(-1.1), Some(10)),
+            (Some(123.0), None, None),
+            (None, Some(123.0), None),
+            // divide by zero
+            (Some(0.0), Some(0.0), None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expected) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs.map(|f| Decimal::from_f64(f).unwrap()))
+                .push_param(rhs.map(|f| Decimal::from_f64(f).unwrap()))
+                .evaluate(ScalarFuncSig::IntDivideDecimal)
+                .unwrap();
+
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_decimal_overflow() {
+        let test_cases = vec![
+            (Decimal::from(std::i64::MIN), Decimal::from(-1)),
+            (
+                Decimal::from(std::i64::MAX),
+                Decimal::from_f64(0.1).unwrap(),
+            ),
+        ];
+
+        for (lhs, rhs) in test_cases {
+            let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+                .push_param(lhs.clone())
+                .push_param(rhs.clone())
+                .evaluate(ScalarFuncSig::IntDivideDecimal);
+
+            assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
 }

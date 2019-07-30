@@ -186,7 +186,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     fn redirect(&self, mut cmd: RaftCommand) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
-        let mut err = errorpb::Error::new();
+        let mut err = errorpb::Error::default();
         match self.router.send(cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
@@ -204,7 +204,7 @@ impl<C: ProposalRouter> LocalReader<C> {
             }
         }
 
-        let mut resp = RaftCmdResponse::new();
+        let mut resp = RaftCmdResponse::default();
         resp.mut_header().set_error(err);
         let read_resp = ReadResponse {
             response: resp,
@@ -549,7 +549,7 @@ mod tests {
     use std::thread;
 
     use kvproto::raft_cmdpb::*;
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
     use time::Duration;
 
     use crate::raftstore::store::util::Lease;
@@ -569,7 +569,7 @@ mod tests {
         LocalReader<SyncSender<RaftCommand>>,
         Receiver<RaftCommand>,
     ) {
-        let path = TempDir::new(path).unwrap();
+        let path = Builder::new().prefix(path).tempdir().unwrap();
         let db =
             rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
@@ -589,7 +589,7 @@ mod tests {
         pr_ids
             .into_iter()
             .map(|id| {
-                let mut pr = metapb::Peer::new();
+                let mut pr = metapb::Peer::default();
                 pr.set_store_id(store_id);
                 pr.set_id(id);
                 pr
@@ -638,12 +638,12 @@ mod tests {
         // from "" to "",
         // epoch 1, 1,
         // term 6.
-        let mut region1 = metapb::Region::new();
+        let mut region1 = metapb::Region::default();
         region1.set_id(1);
         let prs = new_peers(store_id, vec![2, 3, 4]);
         region1.set_peers(prs.clone().into());
         let epoch13 = {
-            let mut ep = metapb::RegionEpoch::new();
+            let mut ep = metapb::RegionEpoch::default();
             ep.set_conf_ver(1);
             ep.set_version(3);
             ep
@@ -653,14 +653,14 @@ mod tests {
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
 
-        let mut cmd = RaftCmdRequest::new();
-        let mut header = RaftRequestHeader::new();
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
         header.set_region_id(1);
         header.set_peer(leader2.clone());
         header.set_region_epoch(epoch13.clone());
         header.set_term(term6);
         cmd.set_header(header);
-        let mut req = Request::new();
+        let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
         cmd.set_requests(vec![req].into());
 

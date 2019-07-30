@@ -254,7 +254,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         storage.clone(),
         cop,
         raft_router,
-        resolver,
+        resolver.clone(),
         snap_mgr.clone(),
         Some(engines.clone()),
         Some(import_service),
@@ -320,6 +320,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
             Arc::clone(&security_mgr),
             pd_client,
+            resolver,
             cfg.pessimistic_txn.monitor_membership_interval,
         );
         waiter_mgr_worker
@@ -343,7 +344,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut status_enabled = cfg.metric.address.is_empty() && !server_cfg.status_addr.is_empty();
 
     // Create a status server.
-    let mut status_server = StatusServer::new(server_cfg.status_thread_pool_size);
+    // TODO: How to keep cfg updated?
+    let mut status_server = StatusServer::new(server_cfg.status_thread_pool_size, cfg.clone());
     if status_enabled {
         // Start the status server.
         if let Err(e) = status_server.start(server_cfg.status_addr) {
@@ -432,9 +434,19 @@ fn pre_start(cfg: &TiKvConfig) {
 }
 
 fn check_system_config(config: &TiKvConfig) {
+<<<<<<< HEAD
     info!("beginning system configuration check");
+=======
+    let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
+    if config.rocksdb.titan.enabled {
+        // Titan engine maintains yet another pool of blob files and uses the same max
+        // number of open files setup as rocksdb does. So we double the max required
+        // open files here
+        rocksdb_max_open_files *= 2;
+    }
+>>>>>>> master
     if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
+        RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
     ) {
         fatal!("{}", e);
     }

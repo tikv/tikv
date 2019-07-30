@@ -16,7 +16,6 @@ use crate::coprocessor::dag::expr::EvalContext;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::escape;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -80,7 +79,7 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     if !key.starts_with(TABLE_PREFIX) {
         return Err(invalid_type!(
             "record key expected, but got {}",
-            escape(key)
+            hex::encode_upper(key)
         ));
     }
 
@@ -143,7 +142,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     if !encoded.starts_with(TABLE_PREFIX) {
         return Err(invalid_type!(
             "record key expected, but got {}",
-            escape(encoded)
+            hex::encode_upper(encoded)
         ));
     }
 
@@ -153,7 +152,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     if !remaining.starts_with(RECORD_PREFIX_SEP) {
         return Err(invalid_type!(
             "record key expected, but got {}",
-            escape(encoded)
+            hex::encode_upper(encoded)
         ));
     }
 
@@ -187,7 +186,7 @@ pub fn decode_index_key(
 
     for info in infos {
         if encoded.is_empty() {
-            return Err(box_err!("{} is too short.", escape(encoded)));
+            return Err(box_err!("{} is too short.", hex::encode_upper(encoded)));
         }
         let mut v = datum::decode_datum(&mut encoded)?;
         v = unflatten(ctx, v, info)?;
@@ -235,7 +234,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
                     FieldTypeTp::JSON
                 ]
                 .contains(&t),
-                "unknown type {} {:?}",
+                "unknown type {} {}",
                 t,
                 datum
             );
@@ -443,7 +442,7 @@ mod tests {
     }
 
     fn new_col_info(tp: FieldTypeTp) -> ColumnInfo {
-        let mut col_info = ColumnInfo::new();
+        let mut col_info = ColumnInfo::default();
         col_info.as_mut_accessor().set_tp(tp);
         col_info
     }
@@ -621,18 +620,18 @@ mod tests {
     fn test_check_table_range() {
         let small_key = b"t\x80\x00\x00\x00\x00\x00\x00\x01a".to_vec();
         let large_key = b"t\x80\x00\x00\x00\x00\x00\x00\x01b".to_vec();
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_start(small_key.clone());
         range.set_end(large_key.clone());
         assert!(check_table_ranges(&[range]).is_ok());
         //test range.start > range.end
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_end(small_key.clone());
         range.set_start(large_key);
         assert!(check_table_ranges(&[range]).is_err());
 
         // test invalid end
-        let mut range = KeyRange::new();
+        let mut range = KeyRange::default();
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
         assert!(check_table_ranges(&[range]).is_err());
