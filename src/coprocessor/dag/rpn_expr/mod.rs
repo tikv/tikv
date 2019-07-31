@@ -221,6 +221,13 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::InTime => compare_in_fn_meta::<DateTime>(),
         ScalarFuncSig::InDuration => compare_in_fn_meta::<Duration>(),
         ScalarFuncSig::InJson => compare_in_fn_meta::<Json>(),
+        ScalarFuncSig::IfReal => if_condition_fn_meta::<Real>(),
+        ScalarFuncSig::IfJson => if_condition_fn_meta::<Json>(),
+        ScalarFuncSig::IfInt => if_condition_fn_meta::<Int>(),
+        ScalarFuncSig::IfDuration => if_condition_fn_meta::<Duration>(),
+        ScalarFuncSig::IfString => if_condition_fn_meta::<Bytes>(),
+        ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
+        ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
