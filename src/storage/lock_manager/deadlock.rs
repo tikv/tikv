@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::client::Client;
+use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
@@ -393,8 +394,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         security_mgr: Arc<SecurityManager>,
         pd_client: Arc<RpcClient>,
         resolver: S,
-        monitor_membership_interval: u64,
-        ttl: u64,
+        cfg: &Config,
     ) -> Self {
         assert!(store_id != INVALID_ID);
         Self {
@@ -404,9 +404,9 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                 store_id,
                 waiter_mgr_scheduler,
                 security_mgr,
-                ttl,
+                cfg.wait_for_lock_timeout,
             ))),
-            monitor_membership_interval,
+            monitor_membership_interval: cfg.monitor_membership_interval,
             is_initialized: false,
         }
     }
