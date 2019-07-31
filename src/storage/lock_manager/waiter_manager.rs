@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
 use super::util::extract_raw_key_from_process_result;
@@ -240,16 +241,12 @@ pub struct WaiterManager {
 unsafe impl Send for WaiterManager {}
 
 impl WaiterManager {
-    pub fn new(
-        detector_scheduler: DetectorScheduler,
-        wait_for_lock_timeout: u64,
-        wake_up_delay_duration: u64,
-    ) -> Self {
+    pub fn new(detector_scheduler: DetectorScheduler, cfg: &Config) -> Self {
         Self {
             wait_table: Rc::new(RefCell::new(WaitTable::new())),
             detector_scheduler,
-            wait_for_lock_timeout,
-            wake_up_delay_duration,
+            wait_for_lock_timeout: cfg.wait_for_lock_timeout,
+            wake_up_delay_duration: cfg.wake_up_delay_duration,
         }
     }
 
@@ -263,7 +260,6 @@ impl WaiterManager {
         }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
-            let detector_scheduler = self.detector_scheduler.clone();
             let when = Instant::now() + Duration::from_millis(self.wait_for_lock_timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
@@ -273,7 +269,8 @@ impl WaiterManager {
                         .borrow_mut()
                         .remove_waiter(start_ts, lock.clone())
                         .and_then(|waiter| {
-                            detector_scheduler.clean_up_wait_for(start_ts, lock);
+                            // The corresponding `WaitForEntry` in deadlock detector
+                            // will be removed by expiration.
                             execute_callback(waiter.cb, waiter.pr);
                             Some(())
                         });
@@ -520,7 +517,10 @@ mod tests {
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
 
         let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
-        let waiter_mgr_runner = WaiterManager::new(detector_scheduler, 1000, 1);
+        let mut cfg = Config::default();
+        cfg.wait_for_lock_timeout = 1000;
+        cfg.wake_up_delay_duration = 1;
+        let waiter_mgr_runner = WaiterManager::new(detector_scheduler, &cfg);
         let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 
