@@ -62,7 +62,7 @@ impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
             if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-                return Err(box_err!("Group by expression is not a column"));
+                return Err(unknown_err!("Group by expression is not a column"));
             }
         }
 

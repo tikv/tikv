@@ -48,7 +48,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
 
         let curr: Box<dyn Executor<StorageStats = S::Statistics> + Send> = match exec.get_tp() {
             ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                return Err(box_err!(
+                return Err(unknown_err!(
                     "Unexpected non-first executor: {:?}",
                     exec.get_tp()
                 ));
@@ -142,7 +142,10 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
             );
             Ok(ex)
         }
-        _ => Err(box_err!("Unexpected first scanner: {:?}", first.get_tp())),
+        _ => Err(unknown_err!(
+            "Unexpected first scanner: {:?}",
+            first.get_tp()
+        )),
     }
 }
 

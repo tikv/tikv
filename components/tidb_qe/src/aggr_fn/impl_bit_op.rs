@@ -70,7 +70,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         let eval_type = box_try!(EvalType::try_from(child.get_field_type().tp()));
         match eval_type {
             EvalType::Int => {}
-            _ => return Err(box_err!("Cast from {:?} is not supported", eval_type)),
+            _ => return Err(unknown_err!("Cast from {:?} is not supported", eval_type)),
         }
         Ok(())
     }

@@ -53,7 +53,7 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinit
         ExprType::Agg_BitXor => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitXor>::new())),
         ExprType::Max => Ok(Box::new(AggrFnDefinitionParserExtremum::<Max>::new())),
         ExprType::Min => Ok(Box::new(AggrFnDefinitionParserExtremum::<Min>::new())),
-        v => Err(box_err!(
+        v => Err(unknown_err!(
             "Aggregation function meet blacklist aggr function {:?}",
             v
         )),
@@ -69,7 +69,7 @@ impl AggrDefinitionParser for AllAggrDefinitionParser {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp())?;
         parser.check_supported(aggr_def).map_err(|e| {
-            box_err!(
+            unknown_err!(
                 "Aggregation function meet blacklist expr type {:?}: {}",
                 aggr_def.get_tp(),
                 e

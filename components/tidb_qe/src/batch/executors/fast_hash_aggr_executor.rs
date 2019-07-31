@@ -64,7 +64,7 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         let group_by_definitions = descriptor.get_group_by();
         assert!(!group_by_definitions.is_empty());
         if group_by_definitions.len() > 1 {
-            return Err(box_err!("Multi group is not supported"));
+            return Err(unknown_err!("Multi group is not supported"));
         }
 
         let def = &group_by_definitions[0];
@@ -73,12 +73,12 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         let eval_type = box_try!(EvalType::try_from(def.get_field_type().tp()));
         match eval_type {
             EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
-            _ => return Err(box_err!("Eval type {} is not supported", eval_type)),
+            _ => return Err(unknown_err!("Eval type {} is not supported", eval_type)),
         }
 
         RpnExpressionBuilder::check_expr_tree_supported(def)?;
         if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-            return Err(box_err!("Group by expression is not a column"));
+            return Err(unknown_err!("Group by expression is not a column"));
         }
 
         let aggr_definitions = descriptor.get_agg_func();

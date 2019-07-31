@@ -67,7 +67,7 @@ impl BatchTopNExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     #[inline]
     pub fn check_supported(descriptor: &TopN) -> Result<()> {
         if descriptor.get_order_by().is_empty() {
-            return Err(box_err!("Missing Top N column"));
+            return Err(unknown_err!("Missing Top N column"));
         }
         for item in descriptor.get_order_by() {
             RpnExpressionBuilder::check_expr_tree_supported(item.get_expr())?;

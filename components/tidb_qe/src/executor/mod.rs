@@ -56,7 +56,7 @@ impl ExprColumnRefVisitor {
         if expr.get_tp() == ExprType::ColumnRef {
             let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
             if offset >= self.cols_len {
-                return Err(box_err!(
+                return Err(unknown_err!(
                     "offset {} overflow, should be less than {}",
                     offset,
                     self.cols_len
@@ -126,7 +126,7 @@ impl Row {
     pub fn take_origin(self) -> Result<OriginCols> {
         match self {
             Row::Origin(row) => Ok(row),
-            _ => Err(box_err!(
+            _ => Err(unknown_err!(
                 "unexpected: aggregation columns cannot take origin"
             )),
         }
@@ -159,7 +159,11 @@ impl OriginCols {
             let value = match self.data.get(col_id) {
                 None if col.has_default_val() => col.get_default_val().to_vec(),
                 None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
-                    return Err(box_err!("column {} of {} is missing", col_id, self.handle));
+                    return Err(unknown_err!(
+                        "column {} of {} is missing",
+                        col_id,
+                        self.handle
+                    ));
                 }
                 None => box_try!(datum::encode_value(&[Datum::Null])),
                 Some(bs) => bs.to_vec(),
@@ -185,7 +189,11 @@ impl OriginCols {
                     values.extend_from_slice(col.get_default_val());
                 }
                 None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
-                    return Err(box_err!("column {} of {} is missing", col_id, self.handle));
+                    return Err(unknown_err!(
+                        "column {} of {} is missing",
+                        col_id,
+                        self.handle
+                    ));
                 }
                 None => {
                     box_try!(values.encode(&[Datum::Null], false));
@@ -222,7 +230,11 @@ impl OriginCols {
                         ))
                     }
                     None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
-                        return Err(box_err!("column {} of {} is missing", col_id, self.handle));
+                        return Err(unknown_err!(
+                            "column {} of {} is missing",
+                            col_id,
+                            self.handle
+                        ));
                     }
                     None => Datum::Null,
                     Some(mut bs) => box_try!(table::decode_col_value(&mut bs, ctx, col)),

@@ -44,7 +44,7 @@ impl RpnExpressionBuilder {
             ExprType::MysqlDecimal => {}
             ExprType::MysqlJson => {}
             ExprType::ColumnRef => {}
-            _ => return Err(box_err!("Blacklist expression type {:?}", c.get_tp())),
+            _ => return Err(unknown_err!("Blacklist expression type {:?}", c.get_tp())),
         }
 
         Ok(())
@@ -67,7 +67,7 @@ impl RpnExpressionBuilder {
             | ExprType::MysqlJson => Ok(true),
             ExprType::ScalarFunc => Ok(false),
             ExprType::ColumnRef => Ok(false),
-            _ => Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+            _ => Err(unknown_err!("Unsupported expression type {:?}", c.get_tp())),
         }
     }
 
@@ -271,7 +271,7 @@ fn handle_node_column_ref(
         .map_err(|_| unknown_err!("Unable to decode column reference offset from the request"))?
         as usize;
     if offset >= max_columns {
-        return Err(box_err!(
+        return Err(unknown_err!(
             "Invalid column offset (schema has {} columns, access index {})",
             max_columns,
             offset
@@ -320,7 +320,7 @@ where
             Datum::Bytes(bytes) => ScalarValue::Bytes(Some(bytes)),
             Datum::Dec(dec) => ScalarValue::Decimal(Some(dec)),
             Datum::Json(json) => ScalarValue::Json(Some(json)),
-            _ => return Err(box_err!("Unsupported push down datum {}", d)),
+            _ => return Err(unknown_err!("Unsupported push down datum {}", d)),
         };
         implicit_args.push(arg);
     }
@@ -375,7 +375,7 @@ fn handle_node_constant(
             extract_scalar_value_json(tree_node.take_val())?
         }
         expr_type => {
-            return Err(box_err!(
+            return Err(unknown_err!(
                 "Unexpected ExprType {:?} and EvalType {:?}",
                 expr_type,
                 eval_type

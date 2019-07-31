@@ -581,7 +581,7 @@ mod tests {
         #[rpn_fn]
         fn foo(v: &Option<i64>) -> Result<Option<i64>> {
             match v {
-                None => Err(box_err!("foo")),
+                None => Err(unknown_err!("foo")),
                 Some(v) => Ok(Some(*v)),
             }
         }

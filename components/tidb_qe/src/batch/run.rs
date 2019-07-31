@@ -157,7 +157,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
             );
         }
         _ => {
-            return Err(box_err!(
+            return Err(unknown_err!(
                 "Unexpected first executor {:?}",
                 first_ed.get_tp()
             ));
@@ -281,7 +281,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             _ => {
-                return Err(box_err!(
+                return Err(unknown_err!(
                     "Unexpected non-first executor {:?}",
                     first_ed.get_tp()
                 ));
@@ -325,7 +325,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let schema_len = out_most_executor.schema().len();
         for offset in &output_offsets {
             if (*offset as usize) >= schema_len {
-                return Err(box_err!(
+                return Err(unknown_err!(
                     "Invalid output offset (schema has {} columns, access index {})",
                     schema_len,
                     offset
