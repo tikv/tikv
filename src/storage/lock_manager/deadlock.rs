@@ -472,8 +472,10 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             } else {
                 info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id);
             }
-            self.reset(role);
         }
+        // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when the leader
+        // is changed. It should reset itself even if the role of the node is not changed.
+        self.reset(role);
     }
 
     /// Reconnects the leader. The leader info must exist.
