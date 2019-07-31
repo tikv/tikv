@@ -9,6 +9,7 @@ use tipb::expression::Expr;
 use tikv::coprocessor::dag::batch::executors::BatchTopNExecutor;
 use tikv::coprocessor::dag::executor::{Executor, TopNExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
+use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::top_n;
@@ -64,7 +65,7 @@ impl TopNBencher for NormalBencher {
                     black_box(Box::new(src)),
                 )
                 .unwrap(),
-            ) as Box<dyn Executor>
+            ) as Box<dyn Executor<StorageStats = Statistics>>
         })
         .bench(b);
     }

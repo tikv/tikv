@@ -8,37 +8,28 @@ use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::{FixtureStore, Statistics, Store};
-
+use super::util::scan_executor::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::Scanner;
+use crate::coprocessor::dag::storage::Storage;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<S: Store>(
-    super::util::scan_executor::ScanExecutor<
-        S,
-        IndexScanExecutorImpl,
-        super::util::ranges_iter::PointRangeConditional,
-    >,
-);
+pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
-impl BatchIndexScanExecutor<FixtureStore> {
+impl<S: Storage> BatchIndexScanExecutor<S> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
-        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+        check_columns_info_supported(descriptor.get_columns())
     }
-}
 
-impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
-        store: S,
+        storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
-        desc: bool,
+        is_backward: bool,
         unique: bool,
     ) -> Result<Self> {
         // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
@@ -57,7 +48,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         let decode_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
         let schema: Vec<_> = columns_info
             .iter()
-            .map(|ci| super::util::scan_executor::field_type_from_column_info(&ci))
+            .map(|ci| field_type_from_column_info(&ci))
             .collect();
         let columns_len_without_handle = if decode_handle {
             schema.len() - 1
@@ -71,18 +62,21 @@ impl<S: Store> BatchIndexScanExecutor<S> {
             columns_len_without_handle,
             decode_handle,
         };
-        let wrapper = super::util::scan_executor::ScanExecutor::new(
+        let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
-            store,
-            desc,
+            storage,
             key_ranges,
-            super::util::ranges_iter::PointRangeConditional::new(unique),
-        )?;
+            is_backward,
+            is_key_only: false,
+            accept_point_range: unique,
+        })?;
         Ok(Self(wrapper))
     }
 }
 
-impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
+impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
+    type StorageStats = S::Statistics;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -99,7 +93,7 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.0.collect_storage_stats(dest);
     }
 }
@@ -118,7 +112,7 @@ struct IndexScanExecutorImpl {
     decode_handle: bool,
 }
 
-impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
+impl ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -127,16 +121,6 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
-    }
-
-    #[inline]
-    fn build_scanner<S: Store>(
-        &self,
-        store: &S,
-        desc: bool,
-        range: KeyRange,
-    ) -> Result<Scanner<S>> {
-        Scanner::new(store, desc, false, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -243,8 +227,8 @@ mod tests {
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::expr::EvalConfig;
+    use crate::coprocessor::dag::storage::fixture::FixtureStorage;
     use crate::coprocessor::util::convert_to_prefix_next;
-    use crate::storage::{FixtureStore, Key};
 
     #[test]
     fn test_basic() {
@@ -293,17 +277,16 @@ mod tests {
         // in the value. So let's build corresponding KV data.
 
         let store = {
-            let kv = data
+            let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
                     let index_data = datum::encode_key(datums).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
-                    let key = Key::from_raw(key.as_slice());
                     let value = vec![];
-                    (key, Ok(value))
+                    (key, value)
                 })
                 .collect();
-            FixtureStore::new(kv)
+            FixtureStorage::from(kv)
         };
 
         {
@@ -416,21 +399,20 @@ mod tests {
         // For a unique index, the PK handle is stored in the value.
 
         let store = {
-            let kv = data
+            let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
                     let index_data = datum::encode_key(&datums[0..2]).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
-                    let key = Key::from_raw(key.as_slice());
                     // PK handle in the value
                     let mut value = vec![];
                     value
                         .write_i64::<BigEndian>(datums[2].as_int().unwrap().unwrap())
                         .unwrap();
-                    (key, Ok(value))
+                    (key, value)
                 })
                 .collect();
-            FixtureStore::new(kv)
+            FixtureStorage::from(kv)
         };
 
         {

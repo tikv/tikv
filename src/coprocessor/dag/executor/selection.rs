@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
-use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use crate::coprocessor::Result;
-
 use super::{Executor, ExprColumnRefVisitor, Row};
 use crate::coprocessor::dag::execute_stats::ExecuteStats;
-use crate::storage::Statistics;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::dag::storage::IntervalRange;
+use crate::coprocessor::Result;
 
 /// Retrieves rows from the source executor and filter rows by expressions.
 pub struct SelectionExecutor<Src: Executor> {
@@ -35,6 +34,8 @@ impl<Src: Executor> SelectionExecutor<Src> {
 }
 
 impl<Src: Executor> Executor for SelectionExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let row = row.take_origin()?;
@@ -56,7 +57,7 @@ impl<Src: Executor> Executor for SelectionExecutor<Src> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.src.collect_storage_stats(dest);
     }
 
@@ -72,6 +73,11 @@ impl<Src: Executor> Executor for SelectionExecutor<Src> {
         } else {
             Some(self.ctx.take_warnings())
         }
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.src.take_scanned_range()
     }
 }
 

@@ -107,7 +107,6 @@ To build TiKV you'll need to at least have the following installed:
 * `rustup` - Rust toolchain manager
 * `awk` - Pattern scanning/processing language
 * `cmake` - Build tool (required for gRPC)
-* `go` - Programming language (required for gRPC)
 * `make` - Build tool (run common workflows)
 * `llvm` and `clang` - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb)
 
