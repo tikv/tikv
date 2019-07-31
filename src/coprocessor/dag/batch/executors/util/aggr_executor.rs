@@ -39,7 +39,6 @@ use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::Result;
-use crate::storage::Statistics;
 
 pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     /// Accepts entities without any group by columns and modifies them optionally.
@@ -270,6 +269,8 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
 impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     for AggregationExecutor<Src, I>
 {
+    type StorageStats = Src::StorageStats;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.entities.schema.as_slice()
@@ -312,7 +313,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.entities.src.collect_storage_stats(dest);
     }
 }

@@ -19,6 +19,7 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::{self, Engine, SnapshotStore};
 use tikv_util::Either;
 
+use crate::coprocessor::dag::storage_impl::TiKVStorage;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
@@ -127,10 +128,11 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                     );
+                    let storage = TiKVStorage::from(store);
                     dag::DAGBuilder::build(
                         dag,
                         ranges,
-                        store,
+                        storage,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
@@ -240,6 +242,7 @@ impl<E: Engine> Endpoint<E> {
                 // There might be errors when handling requests. In this case, we still need its
                 // execution metrics.
                 let result = handler.handle_request();
+
                 let mut storage_stats = Statistics::default();
                 handler.collect_scan_statistics(&mut storage_stats);
 
