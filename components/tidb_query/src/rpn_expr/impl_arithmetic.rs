@@ -939,6 +939,12 @@ mod tests {
         }
     }
 
+    fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
+        use crate::coprocessor::codec::convert::ConvertTo;
+        let val = f.convert(ctx)?;
+        Ok(val)
+    }
+
     #[test]
     fn test_int_divide_decimal() {
         let test_cases = vec![
@@ -953,10 +959,11 @@ mod tests {
             (None, None, None),
         ];
 
+        let mut ctx = EvalContext::default();
         for (lhs, rhs, expected) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(lhs.map(|f| Decimal::from_f64(f).unwrap()))
-                .push_param(rhs.map(|f| Decimal::from_f64(f).unwrap()))
+                .push_param(lhs.map(|f| f64_to_decimal(&mut ctx, f).unwrap()))
+                .push_param(rhs.map(|f| f64_to_decimal(&mut ctx, f).unwrap()))
                 .evaluate(ScalarFuncSig::IntDivideDecimal)
                 .unwrap();
 
@@ -966,11 +973,12 @@ mod tests {
 
     #[test]
     fn test_int_divide_decimal_overflow() {
+        let mut ctx = EvalContext::default();
         let test_cases = vec![
             (Decimal::from(std::i64::MIN), Decimal::from(-1)),
             (
                 Decimal::from(std::i64::MAX),
-                Decimal::from_f64(0.1).unwrap(),
+                f64_to_decimal(&mut ctx, 0.1).unwrap(),
             ),
         ];
 

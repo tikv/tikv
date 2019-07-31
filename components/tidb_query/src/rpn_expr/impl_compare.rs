@@ -512,6 +512,13 @@ mod tests {
 
     #[test]
     fn test_compare_decimal() {
+        use crate::coprocessor::codec::convert::ConvertTo;
+        use crate::coprocessor::dag::expr::EvalContext;
+        fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
+            let val = f.convert(ctx)?;
+            Ok(val)
+        }
+        let mut ctx = EvalContext::default();
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
                 TestCaseCmpOp::GT => ScalarFuncSig::GTDecimal,
@@ -523,8 +530,8 @@ mod tests {
                 TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQDecimal,
             };
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg0.map(|v| Decimal::from_f64(v.into_inner()).unwrap()))
-                .push_param(arg1.map(|v| Decimal::from_f64(v.into_inner()).unwrap()))
+                .push_param(arg0.map(|v| f64_to_decimal(&mut ctx, v.into_inner()).unwrap()))
+                .push_param(arg1.map(|v| f64_to_decimal(&mut ctx, v.into_inner()).unwrap()))
                 .evaluate(sig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}, {:?}, {:?}", arg0, arg1, sig);
