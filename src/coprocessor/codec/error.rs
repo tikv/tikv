@@ -1,8 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use regex::Error as RegexpError;
+use serde_json::error::Error as SerdeError;
 use std::error::Error as StdError;
 use std::io;
+use std::num::ParseFloatError;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
@@ -134,7 +136,7 @@ impl Error {
 
 impl From<Error> for select::Error {
     fn from(error: Error) -> select::Error {
-        let mut err = select::Error::new();
+        let mut err = select::Error::default();
         err.set_code(error.code());
         err.set_msg(format!("{:?}", error));
         err
@@ -144,6 +146,18 @@ impl From<Error> for select::Error {
 impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
         Error::Encoding(err.utf8_error())
+    }
+}
+
+impl From<SerdeError> for Error {
+    fn from(err: SerdeError) -> Error {
+        box_err!("serde:{:?}", err)
+    }
+}
+
+impl From<ParseFloatError> for Error {
+    fn from(err: ParseFloatError) -> Error {
+        box_err!("parse float: {:?}", err)
     }
 }
 

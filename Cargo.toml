@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "3.0.0-beta.1"
+version = "4.0.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -14,12 +14,13 @@ publish = false
 [features]
 default = ["tikv_alloc/default"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
-jemalloc = ["tikv_alloc/jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc"]
+mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 profiling = ["profiler/profiling"]
-no-fail = ["fail/no_fail"]
+failpoints = ["fail/failpoints"]
 
 [lib]
 name = "tikv"
@@ -33,6 +34,7 @@ name = "tikv-ctl"
 [[test]]
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
 
 [[test]]
 name = "integrations"
@@ -57,8 +59,12 @@ path = "benches/hierarchy/mod.rs"
 name = "misc"
 path = "benches/misc/mod.rs"
 
+[[bench]]
+name = "deadlock_detector"
+harness = false
+path = "benches/deadlock_detector/mod.rs"
+
 [dependencies]
-hashbrown = { version = "0.5", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = { version = "2.3", default-features = false }
@@ -100,10 +106,10 @@ serde_json = "1.0"
 serde_derive = "1.0"
 zipf = "5.0.1"
 bitflags = "1.0.1"
-fail = "0.2"
+fail = "0.3"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.4", features = [ "secure" ] }
-raft = "0.4.3"
+grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+raft = "0.6.0-alpha"
 crossbeam = "0.5"
 derive_more = "0.11.0"
 num = { version = "0.2", default-features = false }
@@ -133,12 +139,12 @@ cop_codegen = { path = "components/cop_codegen" }
 codec = { path = "components/codec" }
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-# TODO: use master branch after the next version is released.
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
 farmhash = "1.1.5"
+fxhash = "0.2.1"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -152,11 +158,12 @@ features = ["nightly", "push", "process"]
 version = "0.1.4"
 default-features = false
 
-# TODO: remove this when slog is compatible with the log 0.4
 [replace]
+# Replace openssl with libressl
+"openssl-src:111.3.0" = { git = "https://github.com/BusyJay/libressl-src.git" }
+# TODO: remove this when slog is compatible with the log 0.4
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
-"raft:0.4.3" = { git = "https://github.com/pingcap/raft-rs/", branch = "0.4.x" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }

@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2018"
 publish = false
 
+[features]
+failpoints = ["fail/failpoints"]
+
 [dependencies]
-hashbrown = { version = "0.5", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"
@@ -37,9 +39,10 @@ tokio-threadpool = "0.1.13"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
-grpcio = { version = "0.4", features = [ "secure" ] }
+grpcio = { version = "0.5.0-alpha.3", features = [ "secure" ] }
 crossbeam = "0.5"
-fail = "0.2"
+fail = "0.3"
+fxhash = "0.2.1"
 
 [dependencies.prometheus]
 version = "0.4.2"
@@ -54,7 +57,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs" }
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
-raft = "0.4"
+raft = "0.6.0-alpha"
 
 [[bench]]
 name = "channel"

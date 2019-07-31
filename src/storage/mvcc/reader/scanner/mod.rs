@@ -198,8 +198,8 @@ mod tests {
             match scanner.next() {
                 Ok(None) => break,
                 Ok(Some((key, value))) => scan_result.push((key.to_raw().unwrap(), Some(value))),
-                Err(TxnError::Mvcc(MvccError::KeyIsLocked { key, .. })) => {
-                    scan_result.push((key, None))
+                Err(TxnError::Mvcc(MvccError::KeyIsLocked(mut info))) => {
+                    scan_result.push((info.take_key(), None))
                 }
                 e => panic!("got error while scanning: {:?}", e),
             }
@@ -223,7 +223,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, &[3], &[3], 105, 110);
         must_prewrite_put(&engine, &[4], b"a", &[4], 105);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         let mut expected_result = vec![
             (vec![0], Some(vec![b'v', 0])),

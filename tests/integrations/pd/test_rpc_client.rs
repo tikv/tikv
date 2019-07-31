@@ -62,17 +62,17 @@ fn test_rpc_client() {
     assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
-    let mut store = metapb::Store::new();
+    let mut store = metapb::Store::default();
     store.set_id(store_id);
     debug!("bootstrap store {:?}", store);
 
     let peer_id = client.alloc_id().unwrap();
-    let mut peer = metapb::Peer::new();
+    let mut peer = metapb::Peer::default();
     peer.set_id(peer_id);
     peer.set_store_id(store_id);
 
     let region_id = client.alloc_id().unwrap();
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.mut_peers().push(peer.clone());
     debug!("bootstrap region {:?}", region);
@@ -127,15 +127,15 @@ fn test_rpc_client() {
     assert_eq!(region_info.leader.unwrap(), peer);
 
     client
-        .store_heartbeat(pdpb::StoreStats::new())
+        .store_heartbeat(pdpb::StoreStats::default())
         .wait()
         .unwrap();
     client
-        .ask_batch_split(metapb::Region::new(), 1)
+        .ask_batch_split(metapb::Region::default(), 1)
         .wait()
         .unwrap();
     client
-        .report_batch_split(vec![metapb::Region::new(), metapb::Region::new()])
+        .report_batch_split(vec![metapb::Region::default(), metapb::Region::default()])
         .wait()
         .unwrap();
 
@@ -152,10 +152,10 @@ fn test_get_tombstone_stores() {
 
     let mut all_stores = vec![];
     let store_id = client.alloc_id().unwrap();
-    let mut store = metapb::Store::new();
+    let mut store = metapb::Store::default();
     store.set_id(store_id);
     let region_id = client.alloc_id().unwrap();
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(region_id);
     client
         .bootstrap_cluster(store.clone(), region.clone())
@@ -167,7 +167,7 @@ fn test_get_tombstone_stores() {
     assert_eq!(s, all_stores);
 
     // Add tombstone store.
-    let mut store99 = metapb::Store::new();
+    let mut store99 = metapb::Store::default();
     store99.set_id(99);
     store99.set_state(metapb::StoreState::Tombstone);
     server.default_handler().add_store(store99.clone());
@@ -208,7 +208,7 @@ fn test_reboot() {
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
-    match client.bootstrap_cluster(metapb::Store::new(), metapb::Region::new()) {
+    match client.bootstrap_cluster(metapb::Store::default(), metapb::Region::default()) {
         Err(PdError::ClusterBootstrapped(_)) => (),
         _ => {
             panic!("failed, should return ClusterBootstrapped");
@@ -300,7 +300,7 @@ fn test_incompatible_version() {
 
     let client = new_client(eps, None);
 
-    let resp = client.ask_batch_split(metapb::Region::new(), 2);
+    let resp = client.ask_batch_split(metapb::Region::default(), 2);
     assert_eq!(
         resp.wait().unwrap_err().to_string(),
         PdError::Incompatible.to_string()
@@ -317,16 +317,16 @@ fn restart_leader(mgr: SecurityManager) {
     let client = new_client(eps.clone(), Some(Arc::clone(&mgr)));
     // Put a region.
     let store_id = client.alloc_id().unwrap();
-    let mut store = metapb::Store::new();
+    let mut store = metapb::Store::default();
     store.set_id(store_id);
 
     let peer_id = client.alloc_id().unwrap();
-    let mut peer = metapb::Peer::new();
+    let mut peer = metapb::Peer::default();
     peer.set_id(peer_id);
     peer.set_store_id(store_id);
 
     let region_id = client.alloc_id().unwrap();
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.mut_peers().push(peer);
     client
@@ -408,8 +408,8 @@ fn test_region_heartbeat_on_leader_change() {
         tx.send(resp).unwrap();
     });
     poller.spawn(f).forget();
-    let region = metapb::Region::new();
-    let peer = metapb::Peer::new();
+    let region = metapb::Region::default();
+    let peer = metapb::Peer::default();
     let stat = RegionStat::default();
     poller
         .spawn(client.region_heartbeat(region.clone(), peer.clone(), stat.clone()))

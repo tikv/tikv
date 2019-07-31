@@ -4,8 +4,8 @@ use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use hashbrown::hash_map::Entry;
 use tikv_util::collections::HashMap;
+use tikv_util::collections::HashMapEntry;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, FieldType};
 
@@ -30,6 +30,8 @@ pub struct BatchSlowHashAggregationExecutor<Src: BatchExecutor>(
 );
 
 impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -41,31 +43,17 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.0.collect_statistics(destination)
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.0.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.0.collect_storage_stats(dest);
     }
 }
 
-impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
-    #[cfg(test)]
-    pub fn new_for_test(
-        src: Src,
-        group_by_exps: Vec<RpnExpression>,
-        aggr_defs: Vec<Expr>,
-        aggr_def_parser: impl AggrDefinitionParser,
-    ) -> Self {
-        Self::new_impl(
-            Arc::new(EvalConfig::default()),
-            src,
-            group_by_exps,
-            aggr_defs,
-            aggr_def_parser,
-        )
-        .unwrap()
-    }
-}
-
-impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
+impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -87,6 +75,23 @@ impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
 }
 
 impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
+    #[cfg(test)]
+    pub fn new_for_test(
+        src: Src,
+        group_by_exps: Vec<RpnExpression>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(
+            Arc::new(EvalConfig::default()),
+            src,
+            group_by_exps,
+            aggr_defs,
+            aggr_def_parser,
+        )
+        .unwrap()
+    }
+
     pub fn new(
         config: Arc<EvalConfig>,
         src: Src,
@@ -251,7 +256,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
             let group_len = self.groups.len();
             let group_index = match self.groups.entry(group_key_ref_unsafe) {
-                Entry::Vacant(entry) => {
+                HashMapEntry::Vacant(entry) => {
                     // if it's a new group, the group index is the current group count
                     entry.insert(group_len);
                     for aggr_fn in &entities.each_aggr_fn {
@@ -259,7 +264,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                     }
                     group_len
                 }
-                Entry::Occupied(entry) => {
+                HashMapEntry::Occupied(entry) => {
                     // remove the duplicated group key
                     self.group_key_buffer.truncate(offset_begin);
                     self.group_key_offsets
@@ -449,27 +454,27 @@ mod tests {
             .unwrap();
         assert_eq!(
             r.physical_columns[3].decoded().as_int_slice(),
-            &[Some(5), None, None, Some(1)]
+            &[Some(5), Some(1), None, None]
         );
         r.physical_columns[4]
             .ensure_all_decoded(&Tz::utc(), &exec.schema()[4])
             .unwrap();
         assert_eq!(
             r.physical_columns[4].decoded().as_real_slice(),
-            &[Real::new(2.5).ok(), Real::new(8.0).ok(), None, None]
+            &[Real::new(2.5).ok(), None, Real::new(8.0).ok(), None]
         );
 
         assert_eq!(
             r.physical_columns[0].decoded().as_int_slice(),
-            &[Some(1), Some(1), Some(2), Some(1)]
+            &[Some(1), Some(1), Some(1), Some(2)]
         );
         assert_eq!(
             r.physical_columns[1].decoded().as_int_slice(),
-            &[Some(1), Some(1), Some(0), Some(0)]
+            &[Some(1), Some(0), Some(1), Some(0)]
         );
         assert_eq!(
             r.physical_columns[2].decoded().as_real_slice(),
-            &[Real::new(6.5).ok(), Real::new(12.0).ok(), None, None]
+            &[Real::new(6.5).ok(), None, Real::new(12.0).ok(), None]
         );
     }
 }

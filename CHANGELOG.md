@@ -3,8 +3,157 @@ All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [Unreleased]
-- Leader responds to learner read index message. (https://github.com/pingcap/raft-rs/pull/220)
-- Snapshot may lose some applied results. (https://github.com/tikv/tikv/pull/4716)
+- Make several `INFO` logs `DEBUG` and refined some log messages. (https://github.com/tikv/tikv/pull/4768)
+
+## [3.0.0]
+
++ Engine
+  - Introduce Titan, a key-value plugin that improves write performance for
+  scenarios with value sizes greater than 1KiB, and relieves write
+  amplification in certain degrees
+  - Optimize memory management to reduce memory allocation and copying for `Iterator Key Bound Option` 
+  - Support `block cache` sharing among different column families
+
++ Server
+  - Support reversed `raw_scan` and `raw_batch_scan`
+  - Support batch receiving and sending Raft messages, improving TPS by 7% for write intensive scenarios
+  - Support getting monitoring information via HTTP
+  - Support Local Reader in RawKV to improve performance  
+  - Reduce context switch overhead from `batch commands`
+
++ Raftstore
+  - Support Multi-thread Raftstore and Multi-thread Apply to improve scalabilities,
+    concurrency capacity, and resource usage within a single node.
+    Performance improves by 70% under the same level of pressure
+  - Support checking RocksDB Level 0 files before applying snapshots to avoid write stall
+  - Support Hibernate Regions to optimize CPU consumption from RaftStore (Experimental)
+  - Remove the local reader thread
+
++ Transaction
+  - Support distributed GC and concurrent lock resolving for improved GC performance
+  - Support the pessimistic transaction model (Experimental)
+  - Modify the semantics of `Insert` to allow Prewrite to succeed only when there is no Key
+  - Remove `txn scheduler `
+  - Add monitoring items related to `read index` and `GC worker`
+
++ Coprocessor
+  - Refactor the computation framework to implement vector operators, computation
+  using vector expressions, and vector aggregations to improve performance  
+  - Support providing operator execution status for the `EXPLAIN ANALYZE` statement
+  in TiDB  
+  - Switch to the `work-stealing` thread pool model to reduce context switch cost
+
++ Misc
+  - Develop a unified log format specification with restructured log system to
+  facilitate collection and analysis by tools
+  - Add performance metrics related to configuration information and key bound crossing. 
+
+## [3.0.0-rc.3]
+
++ Engine
+    - Check iterator status when scanning. [4936](https://github.com/tikv/tikv/pull/4936)
+    - Fix the issue that ingested files and directory are not synchronized. [4937](https://github.com/tikv/tikv/pull/4937)
+
++ Server
+    - Sanitize block size configuration. [4928](https://github.com/tikv/tikv/pull/4928)
+    - Support replicating the `delete_range` request without deleting the data when applying. [4490](https://github.com/tikv/tikv/pull/4490)
+    - Add read index related metrics. [4830](https://github.com/tikv/tikv/pull/4830)
+    - Add GC worker related metrics. [4922](https://github.com/tikv/tikv/pull/4922)
+
++ Raftstore
+    - Fix the issue that local reader cache is not cleared correctly. [4778](https://github.com/tikv/tikv/pull/4778)
+    - Fix request latency jetter when transferring leader and conf changes. [4734](https://github.com/tikv/tikv/pull/4734)
+    - Remove invalid empty callbacks. [4682](https://github.com/tikv/tikv/pull/4682)
+    - Clear stale reads after role change. [4810](https://github.com/tikv/tikv/pull/4810)
+    - Synchronize all CF files for the received snapshots. [4807](https://github.com/tikv/tikv/pull/4807)
+    - Fix missing fsync calls for snapshots. [4850](https://github.com/tikv/tikv/pull/4850)
+
++ Coprocessor
+    - Improve coprocessor batch executor. [4877](https://github.com/tikv/tikv/pull/4877)
+
++ Transaction 
+    - Support `ResolveLockLite` to allow only resolving specified lock keys. [4882](https://github.com/tikv/tikv/pull/4882)
+    - Improve pessimistic lock transaction. [4889](https://github.com/tikv/tikv/pull/4889)
+
++ Tikv-ctl 
+    - Improve `bad-regions` and `tombstone` subcommands. [4862](https://github.com/tikv/tikv/pull/4862)
+
++ Misc
+    - Add dist_release. [4841](https://github.com/tikv/tikv/pull/4841)
+
+## [3.0.0-rc.2]
+
++ Engine
+    - Support multiple column families sharing a block cache [#4563](https://github.com/tikv/tikv/pull/4563)
+
++ Server
+    - Remove `TxnScheduler` [#4098](https://github.com/tikv/tikv/pull/4098)
+    - Support pessimistic lock transactions [#4698](https://github.com/tikv/tikv/pull/4698)
+
++ Raftstore
+    - Support hibernate Regions to reduce the consumption of the raftstore CPU [#4591](https://github.com/tikv/tikv/pull/4591)
+    - Fix the issue that the leader does not reply to the `ReadIndex` requests for the learner [#4653](https://github.com/tikv/tikv/pull/4653)
+    - Fix the issue of transferring leader failure in some cases [#4684](https://github.com/tikv/tikv/pull/4684)
+    - Fix the possible dirty read issue in some cases [#4688](https://github.com/tikv/tikv/pull/4688)
+    - Fix the issue that a snapshot lacks data in some cases [#4716](https://github.com/tikv/tikv/pull/4716)
+
++ Coprocessor
+    - Add more RPN functions
+        - `LogicalOr` [#4691](https://github.com/tikv/tikv/pull/4601)
+        - `LTReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `LEReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `GTReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `GEReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `NEReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `EQReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `IsNull` [#4720](https://github.com/tikv/tikv/pull/4720)
+        - `IsTrue` [#4720](https://github.com/tikv/tikv/pull/4720)
+        - `IsFalse` [#4720](https://github.com/tikv/tikv/pull/4720)
+        - Support comparison arithmetic for `Int` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for `Decimal` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for  `String` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for  `Time` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for  `Duration` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for  `Json` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support plus arithmetic for `Int` [#4733](https://github.com/tikv/tikv/pull/4733)
+        - Support plus arithmetic for `Real` [#4733](https://github.com/tikv/tikv/pull/4733)
+        - Support plus arithmetic for `Decimal` [#4733](https://github.com/tikv/tikv/pull/4733)
+        - Support MOD functions for `Int` [#4727](https://github.com/tikv/tikv/pull/4727)
+        - Support MOD functions for `Real` [#4727](https://github.com/tikv/tikv/pull/4727)
+        - Support MOD functions for `Decimal` [#4727](https://github.com/tikv/tikv/pull/4727)
+        - Support minus arithmetic for `Int` [#4746](https://github.com/tikv/tikv/pull/4746)
+        - Support minus arithmetic for `Real` [#4746](https://github.com/tikv/tikv/pull/4746)
+        - Support minus arithmetic for `Decimal` [#4746](https://github.com/tikv/tikv/pull/4746)
+
+## [3.0.0-rc.1]
++ Engine
+    - Fix the issue that may cause incorrect statistics on read traffic [#4436](https://github.com/tikv/tikv/pull/4436)
+    - Fix the issue that may cause prefix extractor panic when deleting a range [#4503](https://github.com/tikv/tikv/pull/4503)
+    - Optimize memory management to reduce memory allocation and copying for `Iterator Key Bound Option` [#4537](https://github.com/tikv/tikv/pull/4537)
+    - Fix the issue that failing to consider learner log gap may in some cases cause panic [#4559](https://github.com/tikv/tikv/pull/4559)
+    - Support `block cache` sharing  among different `column families`[#4612](https://github.com/tikv/tikv/pull/4612)
+
++ Server
+    - Reduce context switch overhead of  `batch commands` [#4473](https://github.com/tikv/tikv/pull/4473)
+    - Check the validity of seek iterator status [#4470](https://github.com/tikv/tikv/pull/4470)
+
++ RaftStore
+    - Support configurable `properties index distance` [#4517](https://github.com/tikv/tikv/pull/4517)
+
++ Coprocessor
+    - Add batch index scan executor [#4419](https://github.com/tikv/tikv/pull/4419)
+    - Add vectorized evaluation framework [#4322](https://github.com/tikv/tikv/pull/4322)
+    - Add execution summary framework for batch executors [#4433](https://github.com/tikv/tikv/pull/4433)
+    - Check the maximum column when constructing the RPN expression to avoid invalid column offset that may cause evaluation panic [#4481](https://github.com/tikv/tikv/pull/4481)
+    - Add `BatchLimitExecutor` [#4469](https://github.com/tikv/tikv/pull/4469)
+    - Replace the original `futures-cpupool` with `tokio-threadpool` in ReadPool to reduce context switch [#4486](https://github.com/tikv/tikv/pull/4486)
+    - Add batch aggregation framework [#4533](https://github.com/tikv/tikv/pull/4533)
+    - Add `BatchSelectionExecutor` [#4562](https://github.com/tikv/tikv/pull/4562)
+    - Add batch aggression function `AVG` [#4570](https://github.com/tikv/tikv/pull/4570)
+    - Add RPN function `LogicalAnd`[#4575](https://github.com/tikv/tikv/pull/4575)
+
++ Misc
+    - Support `tcmalloc` as a memory allocator [#4370](https://github.com/tikv/tikv/pull/4370)
 
 ## [3.0.0-beta.1]
 - Optimize the Coprocessor calculation execution framework and implement the TableScan section, with the Single TableScan performance improved by 5% ~ 30%

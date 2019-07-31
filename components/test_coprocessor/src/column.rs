@@ -19,7 +19,7 @@ pub struct Column {
 
 impl Column {
     pub fn as_column_info(&self) -> ColumnInfo {
-        let mut c_info = ColumnInfo::new();
+        let mut c_info = ColumnInfo::default();
         c_info.set_column_id(self.id);
         c_info.set_tp(self.col_type);
         c_info.set_pk_handle(self.index == 0);

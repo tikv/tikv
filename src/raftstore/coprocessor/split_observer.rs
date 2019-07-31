@@ -7,7 +7,6 @@ use tikv_util::codec::bytes::{self, encode_bytes};
 use crate::raftstore::store::util;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-use protobuf::RepeatedField;
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't separate
@@ -153,8 +152,7 @@ impl AdminObserver for SplitObserver {
                     );
                     return Err(box_err!(e));
                 }
-                req.mut_splits()
-                    .set_requests(RepeatedField::from_vec(requests));
+                req.mut_splits().set_requests(requests.into());
             }
             _ => return Ok(()),
         }
@@ -174,19 +172,19 @@ mod tests {
     use tikv_util::codec::bytes::encode_bytes;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
-        let mut req = AdminRequest::new();
+        let mut req = AdminRequest::default();
         req.set_cmd_type(AdminCmdType::Split);
-        let mut split_req = SplitRequest::new();
+        let mut split_req = SplitRequest::default();
         split_req.set_split_key(key.to_vec());
         req.set_split(split_req);
         req
     }
 
     fn new_batch_split_request(keys: Vec<Vec<u8>>) -> AdminRequest {
-        let mut req = AdminRequest::new();
+        let mut req = AdminRequest::default();
         req.set_cmd_type(AdminCmdType::BatchSplit);
         for key in keys {
-            let mut split_req = SplitRequest::new();
+            let mut split_req = SplitRequest::default();
             split_req.set_split_key(key);
             req.mut_splits().mut_requests().push(split_req);
         }
@@ -212,7 +210,7 @@ mod tests {
     fn test_forget_encode() {
         let region_start_key = new_row_key(256, 1, 0);
         let key = new_row_key(256, 2, 0);
-        let mut r = Region::new();
+        let mut r = Region::default();
         r.set_id(10);
         r.set_start_key(region_start_key);
 
@@ -232,11 +230,11 @@ mod tests {
 
     #[test]
     fn test_split() {
-        let mut region = Region::new();
+        let mut region = Region::default();
         let start_key = new_row_key(1, 1, 1);
         region.set_start_key(start_key.clone());
         let mut ctx = ObserverContext::new(&region);
-        let mut req = AdminRequest::new();
+        let mut req = AdminRequest::default();
 
         let observer = SplitObserver;
 

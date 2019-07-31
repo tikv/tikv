@@ -97,7 +97,7 @@ struct WaitTable {
 impl WaitTable {
     fn new() -> Self {
         Self {
-            wait_table: HashMap::new(),
+            wait_table: HashMap::default(),
         }
     }
 
@@ -113,7 +113,7 @@ impl WaitTable {
     }
 
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
-        self.wait_table.entry(ts).or_insert(vec![]).push(waiter);
+        self.wait_table.entry(ts).or_default().push(waiter);
         true
     }
 
@@ -161,7 +161,7 @@ impl WaitTable {
             .iter()
             .flat_map(|(_, waiters)| {
                 waiters.iter().map(|waiter| {
-                    let mut wait_for_entry = WaitForEntry::new();
+                    let mut wait_for_entry = WaitForEntry::default();
                     wait_for_entry.set_txn(waiter.start_ts);
                     wait_for_entry.set_wait_for_txn(waiter.lock.ts);
                     wait_for_entry.set_key_hash(waiter.lock.hash);
@@ -263,7 +263,6 @@ impl WaiterManager {
         }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
-            let detector_scheduler = self.detector_scheduler.clone();
             let when = Instant::now() + Duration::from_millis(self.wait_for_lock_timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
@@ -273,7 +272,8 @@ impl WaiterManager {
                         .borrow_mut()
                         .remove_waiter(start_ts, lock)
                         .and_then(|waiter| {
-                            detector_scheduler.clean_up_wait_for(start_ts, lock);
+                            // The corresponding `WaitForEntry` in deadlock detector
+                            // will be removed by expiration.
                             execute_callback(waiter.cb, waiter.pr);
                             Some(())
                         });

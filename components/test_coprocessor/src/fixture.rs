@@ -89,7 +89,7 @@ pub fn init_data_with_commit(
     commit: bool,
 ) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
     let engine = TestEngineBuilder::new().build().unwrap();
-    init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
+    init_data_with_engine_and_commit(Context::default(), engine, tbl, vals, commit)
 }
 
 // This function will create a Product table and initialize with the specified data.

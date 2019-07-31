@@ -20,7 +20,7 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     conditions: Vec<RpnExpression>,
 }
 
-impl BatchSelectionExecutor<Box<dyn BatchExecutor>> {
+impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Selection) -> Result<()> {
@@ -156,6 +156,8 @@ fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
 }
 
 impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         // The selection executor's schema comes from its child.
@@ -180,8 +182,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.src.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.src.collect_storage_stats(dest);
     }
 }
 

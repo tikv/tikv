@@ -10,12 +10,16 @@ use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 use super::{Error, Result};
 
 pub trait Store: Send {
+    /// The scanner type returned by `scanner()`.
     type Scanner: Scanner;
 
+    /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
+    /// Fetch the provided set of keys.
     fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Value>>>;
 
+    /// Retrieve a scanner over the bounds.
     fn scanner(
         &self,
         desc: bool,
@@ -25,9 +29,14 @@ pub trait Store: Send {
     ) -> Result<Self::Scanner>;
 }
 
+/// [`Scanner`]s allow retrieving items or batches from a scan result.
+///
+/// Commonly they are obtained as a result of a [`scanner`](Store::scanner) operation.
 pub trait Scanner: Send {
+    /// Get the next [`KvPair`](KvPair) if it exists.
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
+    /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
     fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = Vec::with_capacity(limit);
         while results.len() < limit {
@@ -45,6 +54,7 @@ pub trait Scanner: Send {
         Ok(results)
     }
 
+    /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
 }
 
@@ -320,7 +330,7 @@ mod tests {
             let keys: Vec<String> = (START_ID..START_ID + key_num)
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();
-            let ctx = Context::new();
+            let ctx = Context::default();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
                 keys,
@@ -634,14 +644,9 @@ mod tests {
         data.insert(Key::from_raw(b"bb"), Ok(b"alphaalpha".to_vec()));
         data.insert(
             Key::from_raw(b"bba"),
-            Err(Error::Mvcc(MvccError::KeyIsLocked {
-                // We won't check error detail in tests, so we can just fill fields casually
-                key: vec![],
-                primary: vec![],
-                ts: 1,
-                ttl: 2,
-                txn_size: 0,
-            })),
+            Err(Error::Mvcc(MvccError::KeyIsLocked(
+                kvproto::kvrpcpb::LockInfo::default(),
+            ))),
         );
         data.insert(Key::from_raw(b"z"), Ok(b"beta".to_vec()));
         data.insert(Key::from_raw(b"ca"), Ok(b"hello".to_vec()));

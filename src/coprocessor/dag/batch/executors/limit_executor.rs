@@ -22,6 +22,8 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
 }
 
 impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.src.schema()
@@ -43,8 +45,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.src.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.src.collect_storage_stats(dest);
     }
 }
 

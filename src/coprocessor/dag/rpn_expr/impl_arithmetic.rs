@@ -2,8 +2,9 @@
 
 use cop_codegen::rpn_fn;
 
+use super::super::expr::EvalContext;
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::{self, Error};
+use crate::coprocessor::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
 use crate::coprocessor::Result;
 
 #[rpn_fn]
@@ -310,6 +311,161 @@ impl ArithmeticOp for DecimalMultiply {
     fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
         let res: codec::Result<Decimal> = (lhs * rhs).into();
         Ok(Some(res?))
+    }
+}
+
+#[derive(Debug)]
+pub struct RealMultiply;
+
+impl ArithmeticOp for RealMultiply {
+    type T = Real;
+    fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+        let res = *lhs * *rhs;
+        if res.is_infinite() {
+            Err(Error::overflow("REAL", &format!("({} * {})", lhs, rhs)).into())
+        } else {
+            Ok(Some(res))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct IntIntMultiply;
+
+impl ArithmeticOp for IntIntMultiply {
+    type T = Int;
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        lhs.checked_mul(*rhs)
+            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} * {})", lhs, rhs)).into())
+            .map(Some)
+    }
+}
+
+#[derive(Debug)]
+pub struct IntUintMultiply;
+
+impl ArithmeticOp for IntUintMultiply {
+    type T = Int;
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *lhs >= 0 {
+            (*lhs as u64).checked_mul(*rhs as u64).map(|x| x as i64)
+        } else {
+            None
+        }
+        .ok_or_else(|| Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)).into())
+        .map(Some)
+    }
+}
+
+#[derive(Debug)]
+pub struct UintIntMultiply;
+
+impl ArithmeticOp for UintIntMultiply {
+    type T = Int;
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        IntUintMultiply::calc(rhs, lhs)
+    }
+}
+
+#[derive(Debug)]
+pub struct UintUintMultiply;
+
+impl ArithmeticOp for UintUintMultiply {
+    type T = Int;
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        (*lhs as u64)
+            .checked_mul(*rhs as u64)
+            .ok_or_else(|| {
+                Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)).into()
+            })
+            .map(|v| Some(v as i64))
+    }
+}
+
+#[derive(Debug)]
+pub struct IntDivideInt;
+
+impl ArithmeticOp for IntDivideInt {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(div_i64(*lhs, *rhs)?))
+    }
+}
+
+#[derive(Debug)]
+pub struct IntDivideUint;
+
+impl ArithmeticOp for IntDivideUint {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(div_i64_with_u64(*lhs, *rhs as u64).map(|r| r as i64)?))
+    }
+}
+
+#[derive(Debug)]
+pub struct UintDivideUint;
+
+impl ArithmeticOp for UintDivideUint {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(((*lhs as u64) / (*rhs as u64)) as i64))
+    }
+}
+
+#[derive(Debug)]
+pub struct UintDivideInt;
+
+impl ArithmeticOp for UintDivideInt {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(div_u64_with_i64(*lhs as u64, *rhs).map(|r| r as i64)?))
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn int_divide_decimal(
+    ctx: &mut EvalContext,
+    lhs: &Option<Decimal>,
+    rhs: &Option<Decimal>,
+) -> Result<Option<Int>> {
+    use crate::coprocessor::codec::mysql::Res;
+
+    if lhs.is_none() || rhs.is_none() {
+        return Ok(None);
+    }
+    let lhs = lhs.as_ref().unwrap();
+    let rhs = rhs.as_ref().unwrap();
+
+    match lhs / rhs {
+        Some(v) => match v {
+            Res::Ok(v) => match v.as_i64() {
+                Res::Ok(v_i64) => Ok(Some(v_i64)),
+                Res::Truncated(v_i64) => Ok(Some(v_i64)),
+                Res::Overflow(_) => {
+                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
+                }
+            },
+            Res::Truncated(_) => Err(Error::truncated())?,
+            Res::Overflow(_) => Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))?,
+        },
+        None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
     }
 }
 
@@ -670,6 +826,302 @@ mod tests {
                 .evaluate(ScalarFuncSig::MultiplyDecimal)
                 .unwrap();
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_int() {
+        let test_cases = vec![
+            (13, false, 11, false, Some(1)),
+            (13, false, -11, false, Some(-1)),
+            (-13, false, 11, false, Some(-1)),
+            (-13, false, -11, false, Some(1)),
+            (33, false, 11, false, Some(3)),
+            (33, false, -11, false, Some(-3)),
+            (-33, false, 11, false, Some(-3)),
+            (-33, false, -11, false, Some(3)),
+            (11, false, 0, false, None),
+            (-11, false, 0, false, None),
+            (-3, false, 5, true, Some(0)),
+            (3, false, -5, false, Some(0)),
+            (std::i64::MIN + 1, false, -1, false, Some(std::i64::MAX)),
+            (std::i64::MIN, false, 1, false, Some(std::i64::MIN)),
+            (std::i64::MAX, false, 1, false, Some(std::i64::MAX)),
+            (
+                std::u64::MAX as i64,
+                true,
+                1,
+                false,
+                Some(std::u64::MAX as i64),
+            ),
+        ];
+
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, expected) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(lhs, lhs_field_type)
+                .push_param_with_field_type(rhs, rhs_field_type)
+                .evaluate(ScalarFuncSig::IntDivideInt)
+                .unwrap();
+
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_int_overflow() {
+        let test_cases = vec![
+            (std::i64::MIN, false, -1, false),
+            (-1, false, 1, true),
+            (-2, false, 1, true),
+            (1, true, -1, false),
+            (2, true, -1, false),
+        ];
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(lhs, lhs_field_type)
+                .push_param_with_field_type(rhs, rhs_field_type)
+                .evaluate(ScalarFuncSig::IntDivideInt);
+            assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_decimal() {
+        let test_cases = vec![
+            (Some(11.01), Some(1.1), Some(10)),
+            (Some(-11.01), Some(1.1), Some(-10)),
+            (Some(11.01), Some(-1.1), Some(-10)),
+            (Some(-11.01), Some(-1.1), Some(10)),
+            (Some(123.0), None, None),
+            (None, Some(123.0), None),
+            // divide by zero
+            (Some(0.0), Some(0.0), None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expected) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs.map(|f| Decimal::from_f64(f).unwrap()))
+                .push_param(rhs.map(|f| Decimal::from_f64(f).unwrap()))
+                .evaluate(ScalarFuncSig::IntDivideDecimal)
+                .unwrap();
+
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_int_divide_decimal_overflow() {
+        let test_cases = vec![
+            (Decimal::from(std::i64::MIN), Decimal::from(-1)),
+            (
+                Decimal::from(std::i64::MAX),
+                Decimal::from_f64(0.1).unwrap(),
+            ),
+        ];
+
+        for (lhs, rhs) in test_cases {
+            let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+                .push_param(lhs.clone())
+                .push_param(rhs.clone())
+                .evaluate(ScalarFuncSig::IntDivideDecimal);
+
+            assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_real_multiply() {
+        let should_pass = vec![(1.01001, -0.01, Real::new(-0.0101001).ok())];
+
+        for (lhs, rhs, expected) in should_pass {
+            assert_eq!(
+                expected,
+                RpnFnScalarEvaluator::new()
+                    .push_param(lhs)
+                    .push_param(rhs)
+                    .evaluate(ScalarFuncSig::MultiplyReal)
+                    .unwrap()
+            );
+        }
+
+        let should_fail = vec![
+            (std::f64::MAX, std::f64::MAX),
+            (std::f64::MAX, std::f64::MIN),
+        ];
+
+        for (lhs, rhs) in should_fail {
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param(lhs)
+                    .push_param(rhs)
+                    .evaluate::<Real>(ScalarFuncSig::MultiplyReal)
+                    .is_err(),
+                "{} * {} should fail",
+                lhs,
+                rhs
+            );
+        }
+    }
+
+    #[test]
+    fn test_int_multiply() {
+        let should_pass = vec![
+            (11, 17, Some(187)),
+            (-1, -3, Some(3)),
+            (1, std::i64::MIN, Some(std::i64::MIN)),
+        ];
+        for (lhs, rhs, expected) in should_pass {
+            assert_eq!(
+                expected,
+                RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(rhs, FieldTypeTp::LongLong)
+                    .evaluate(ScalarFuncSig::MultiplyInt)
+                    .unwrap()
+            );
+        }
+
+        let should_fail = vec![(std::i64::MAX, 2), (std::i64::MIN, -1)];
+        for (lhs, rhs) in should_fail {
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(rhs, FieldTypeTp::LongLong)
+                    .evaluate::<Int>(ScalarFuncSig::MultiplyInt)
+                    .is_err(),
+                "{} * {} should fail",
+                lhs,
+                rhs
+            );
+        }
+    }
+
+    #[test]
+    fn test_int_uint_multiply() {
+        let should_pass = vec![(std::i64::MAX, 1, Some(std::i64::MAX)), (3, 7, Some(21))];
+
+        for (lhs, rhs, expected) in should_pass {
+            assert_eq!(
+                expected,
+                RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(
+                        rhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
+                    .evaluate(ScalarFuncSig::MultiplyInt)
+                    .unwrap()
+            );
+        }
+
+        let should_fail = vec![(-2, 1), (std::i64::MIN, 2)];
+        for (lhs, rhs) in should_fail {
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(lhs, FieldTypeTp::LongLong)
+                    .push_param_with_field_type(
+                        rhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
+                    .evaluate::<Int>(ScalarFuncSig::MultiplyInt)
+                    .is_err(),
+                "{} * {} should fail",
+                lhs,
+                rhs
+            );
+        }
+    }
+
+    #[test]
+    fn test_uint_uint_multiply() {
+        let should_pass = vec![
+            (7, 11, Some(77)),
+            (1, 2, Some(2)),
+            (std::u64::MAX as i64, 1, Some(std::u64::MAX as i64)),
+        ];
+
+        for (lhs, rhs, expected) in should_pass {
+            assert_eq!(
+                expected,
+                RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(
+                        lhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
+                    .push_param_with_field_type(
+                        rhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
+                    .evaluate(ScalarFuncSig::MultiplyIntUnsigned)
+                    .unwrap()
+            );
+        }
+
+        let should_fail = vec![(std::u64::MAX as i64, 2)];
+        for (lhs, rhs) in should_fail {
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(
+                        lhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
+                    .push_param_with_field_type(
+                        rhs,
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::LongLong)
+                            .flag(FieldTypeFlag::UNSIGNED)
+                    )
+                    .evaluate::<Int>(ScalarFuncSig::MultiplyIntUnsigned)
+                    .is_err(),
+                "{} * {} should fail",
+                lhs,
+                rhs
+            );
         }
     }
 }

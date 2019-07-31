@@ -9,6 +9,7 @@ pub mod impl_control;
 pub mod impl_like;
 pub mod impl_math;
 pub mod impl_op;
+pub mod impl_time;
 
 pub use self::types::*;
 
@@ -24,6 +25,7 @@ use self::impl_control::*;
 use self::impl_like::*;
 use self::impl_math::*;
 use self::impl_op::*;
+use self::impl_time::*;
 
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
@@ -75,12 +77,30 @@ fn minus_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+fn multiply_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
+    match (lhs_is_unsigned, rhs_is_unsigned) {
+        (false, false) => arithmetic_fn_meta::<IntIntMultiply>(),
+        (false, true) => arithmetic_fn_meta::<IntUintMultiply>(),
+        (true, false) => arithmetic_fn_meta::<UintIntMultiply>(),
+        (true, true) => arithmetic_fn_meta::<UintUintMultiply>(),
+    }
+}
+
 fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     match (lhs_is_unsigned, rhs_is_unsigned) {
         (false, false) => arithmetic_fn_meta::<IntIntMod>(),
         (false, true) => arithmetic_fn_meta::<IntUintMod>(),
         (true, false) => arithmetic_fn_meta::<UintIntMod>(),
         (true, true) => arithmetic_fn_meta::<UintUintMod>(),
+    }
+}
+
+fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
+    match (lhs_is_unsigned, rhs_is_unsigned) {
+        (false, false) => arithmetic_fn_meta::<IntDivideInt>(),
+        (false, true) => arithmetic_fn_meta::<IntDivideUint>(),
+        (true, false) => arithmetic_fn_meta::<UintDivideInt>(),
+        (true, true) => arithmetic_fn_meta::<UintDivideUint>(),
     }
 }
 
@@ -159,6 +179,9 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::MinusReal => arithmetic_fn_meta::<RealMinus>(),
         ScalarFuncSig::MinusDecimal => arithmetic_fn_meta::<DecimalMinus>(),
         ScalarFuncSig::MultiplyDecimal => arithmetic_fn_meta::<DecimalMultiply>(),
+        ScalarFuncSig::MultiplyInt => map_int_sig(value, children, multiply_mapper)?,
+        ScalarFuncSig::MultiplyIntUnsigned => arithmetic_fn_meta::<UintUintMultiply>(),
+        ScalarFuncSig::MultiplyReal => arithmetic_fn_meta::<RealMultiply>(),
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_fn_meta::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
@@ -170,6 +193,8 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfNullTime => if_null_fn_meta::<DateTime>(),
         ScalarFuncSig::IfNullDuration => if_null_fn_meta::<Duration>(),
         ScalarFuncSig::IfNullJson => if_null_fn_meta::<Json>(),
+        ScalarFuncSig::IntDivideInt => map_int_sig(value, children, divide_mapper)?,
+        ScalarFuncSig::IntDivideDecimal => int_divide_decimal_fn_meta(),
         ScalarFuncSig::CaseWhenInt => case_when_fn_meta::<Int>(),
         ScalarFuncSig::CaseWhenReal => case_when_fn_meta::<Real>(),
         ScalarFuncSig::CaseWhenString => case_when_fn_meta::<Bytes>(),
@@ -177,6 +202,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
@@ -195,6 +221,13 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::InTime => compare_in_fn_meta::<DateTime>(),
         ScalarFuncSig::InDuration => compare_in_fn_meta::<Duration>(),
         ScalarFuncSig::InJson => compare_in_fn_meta::<Json>(),
+        ScalarFuncSig::IfReal => if_condition_fn_meta::<Real>(),
+        ScalarFuncSig::IfJson => if_condition_fn_meta::<Json>(),
+        ScalarFuncSig::IfInt => if_condition_fn_meta::<Int>(),
+        ScalarFuncSig::IfDuration => if_condition_fn_meta::<Duration>(),
+        ScalarFuncSig::IfString => if_condition_fn_meta::<Bytes>(),
+        ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
+        ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

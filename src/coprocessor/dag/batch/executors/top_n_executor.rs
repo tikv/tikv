@@ -60,9 +60,9 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
 /// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
 /// `BatchTopNExecutor` doesn't leak the pointers to other threads. Therefore, with those `NonNull`
 /// pointers, BatchTopNExecutor still remains `Send`.
-unsafe impl<Src: BatchExecutor + Send> Send for BatchTopNExecutor<Src> {}
+unsafe impl<Src: BatchExecutor> Send for BatchTopNExecutor<Src> {}
 
-impl BatchTopNExecutor<Box<dyn BatchExecutor>> {
+impl BatchTopNExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TopN) -> Result<()> {
@@ -98,9 +98,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             is_ended: false,
         }
     }
-}
 
-impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     pub fn new(
         config: std::sync::Arc<EvalConfig>,
         src: Src,
@@ -261,6 +259,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 }
 
 impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
+    type StorageStats = Src::StorageStats;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.src.schema()
@@ -313,8 +313,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.src.collect_statistics(destination);
+    fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
+        self.src.collect_exec_stats(dest);
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+        self.src.collect_storage_stats(dest);
     }
 }
 

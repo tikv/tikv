@@ -12,22 +12,24 @@ use std::{mem, str};
 
 use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
-
 use cop_datatype::FieldTypeTp;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
 
+use crate::coprocessor::codec::convert::ConvertTo;
 use crate::coprocessor::codec::mysql::duration::{
     Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
 };
 use crate::coprocessor::codec::mysql::{self, Decimal};
 use crate::coprocessor::codec::{Error, Result, TEN_POW};
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::BytesSlice;
+use crate::coprocessor::dag::expr::EvalContext;
 
 pub use self::extension::*;
+pub use self::tz::Tz;
 pub use self::weekmode::WeekMode;
 
-pub use self::tz::Tz;
-
+const ZERO_DATETIME_NUMERIC_STR: &str = "00000000000000";
+const ZERO_DATE_NUMERIC_STR: &str = "00000000";
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -265,36 +267,51 @@ impl Time {
         self.time = time
     }
 
-    fn to_numeric_str(&self) -> String {
+    /// Converts a `DateTime` to printable string representation
+    #[inline]
+    pub fn to_numeric_string(&self) -> String {
         if self.time_type == TimeType::Date {
-            // TODO: pure calculation should be enough.
-            format!("{}", self.time.format("%Y%m%d"))
-        } else {
-            let s = self.time.format("%Y%m%d%H%M%S");
-            if self.fsp > 0 {
-                // Do we need to round the result?
-                let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
-                format!("{}.{1:02$}", s, nanos, self.fsp as usize)
+            if self.is_zero() {
+                String::from(ZERO_DATE_NUMERIC_STR)
             } else {
-                format!("{}", s)
+                format!("{}", self.time.format("%Y%m%d"))
+            }
+        } else {
+            if self.is_zero() {
+                if self.fsp > 0 {
+                    // Do we need to round the result?
+                    let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
+                    format!(
+                        "{}.{1:02$}",
+                        ZERO_DATETIME_NUMERIC_STR, nanos, self.fsp as usize
+                    )
+                } else {
+                    String::from(ZERO_DATETIME_NUMERIC_STR)
+                }
+            } else {
+                if self.fsp > 0 {
+                    let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
+                    format!(
+                        "{}.{1:02$}",
+                        self.time.format("%Y%m%d%H%M%S"),
+                        nanos,
+                        self.fsp as usize
+                    )
+                } else {
+                    format!("{}", self.time.format("%Y%m%d%H%M%S"))
+                }
             }
         }
     }
 
+    /// Returns the `Decimal` representation of the `DateTime/Date`
+    #[inline]
     pub fn to_decimal(&self) -> Result<Decimal> {
         if self.is_zero() {
             return Ok(0.into());
         }
-        let dec: Decimal = box_try!(self.to_numeric_str().parse());
-        Ok(dec)
-    }
 
-    pub fn to_f64(&self) -> Result<f64> {
-        if self.is_zero() {
-            return Ok(0f64);
-        }
-        let f: f64 = box_try!(self.to_numeric_str().parse());
-        Ok(f)
+        self.to_numeric_string().parse()
     }
 
     fn parse_datetime_format(s: &str) -> Vec<&str> {
@@ -478,7 +495,7 @@ impl Time {
         let t = t.unwrap();
         if t.year() < 1000 || t.year() > 9999 {
             return Err(box_err!(
-                "datetime :{:?} out of range ('1000-01-01' to '9999-12-31')",
+                "datetime :{} out of range ('1000-01-01' to '9999-12-31')",
                 t
             ));
         }
@@ -797,6 +814,16 @@ impl Time {
     }
 }
 
+impl ConvertTo<f64> for Time {
+    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+        if self.is_zero() {
+            return Ok(0f64);
+        }
+        let f: f64 = box_try!(self.to_numeric_string().parse());
+        Ok(f)
+    }
+}
+
 impl PartialOrd for Time {
     fn partial_cmp(&self, right: &Time) -> Option<Ordering> {
         Some(self.cmp(right))
@@ -949,10 +976,13 @@ mod tests {
     use super::*;
 
     use std::cmp::Ordering;
+    use std::f64::EPSILON;
 
     use chrono::{Duration, Local};
 
+    use crate::coprocessor::codec::convert::convert_bytes_to_decimal;
     use crate::coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
+    use crate::coprocessor::dag::expr::EvalContext;
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -1250,6 +1280,48 @@ mod tests {
     }
 
     #[test]
+    fn test_to_numeric_string() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "00000000000000"),
+        ];
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get = t.to_numeric_string();
+            assert_eq!(get, expect);
+        }
+    }
+
+    #[test]
+    fn test_to_decimal() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "0"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get = t.to_decimal().unwrap();
+            assert_eq!(
+                get,
+                convert_bytes_to_decimal(&mut ctx, expect.as_bytes()).unwrap(),
+                "convert datetime {} to decimal",
+                s
+            );
+        }
+    }
+
+    #[test]
     fn test_to_dec() {
         let cases = vec![
             ("12-12-31 11:30:45", 0, "20121231113045", "20121231"),
@@ -1299,6 +1371,30 @@ mod tests {
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
             });
+        }
+    }
+
+    #[test]
+    fn test_convert_to_f64() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),
+            ("2012-12-31 11:30:45.123456", 6, 20121231113045.123456f64),
+            ("2012-12-31 11:30:45.123456", 0, 20121231113045f64),
+            ("2012-12-31 11:30:45.999999", 0, 20121231113046f64),
+            ("2017-01-05 08:40:59.575601", 0, 20170105084100f64),
+            ("2017-01-05 23:59:59.575601", 0, 20170106000000f64),
+            ("0000-00-00 00:00:00", 6, 0f64),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_utc_datetime(s, fsp).unwrap();
+            let get: f64 = t.convert(&mut ctx).unwrap();
+            assert!(
+                (expect - get).abs() < EPSILON,
+                "expect: {}, got: {}",
+                expect,
+                get
+            );
         }
     }
 

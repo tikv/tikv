@@ -41,7 +41,7 @@ pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb:
 
 // a helper function to create peer easily.
 pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = metapb::Peer::new();
+    let mut peer = metapb::Peer::default();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
     peer
@@ -134,6 +134,9 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
+        ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+            unimplemented!()
+        }
     }
 }
 
@@ -770,7 +773,7 @@ mod tests {
             ("6", "3", "6", false, true, false),
         ];
         for (key, start_key, end_key, is_in_region, inclusive, exclusive) in test_cases {
-            let mut region = metapb::Region::new();
+            let mut region = metapb::Region::default();
             region.set_start_key(start_key.as_bytes().to_vec());
             region.set_end_key(end_key.as_bytes().to_vec());
             let mut result = check_key_in_region(key.as_bytes(), &region);
@@ -784,13 +787,13 @@ mod tests {
 
     #[test]
     fn test_conf_state_from_region() {
-        let mut region = metapb::Region::new();
+        let mut region = metapb::Region::default();
 
-        let mut peer = metapb::Peer::new();
+        let mut peer = metapb::Peer::default();
         peer.set_id(1);
         region.mut_peers().push(peer);
 
-        let mut peer = metapb::Peer::new();
+        let mut peer = metapb::Peer::default();
         peer.set_id(2);
         peer.set_is_learner(true);
         region.mut_peers().push(peer);
@@ -802,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_peer() {
-        let mut region = metapb::Region::new();
+        let mut region = metapb::Region::default();
         region.set_id(1);
         region.mut_peers().push(new_peer(1, 1));
         region.mut_peers().push(new_learner_peer(2, 2));
@@ -885,7 +888,7 @@ mod tests {
 
     #[test]
     fn test_epoch_stale() {
-        let mut epoch = metapb::RegionEpoch::new();
+        let mut epoch = metapb::RegionEpoch::default();
         epoch.set_version(10);
         epoch.set_conf_ver(10);
 
@@ -897,7 +900,7 @@ mod tests {
         ];
 
         for (version, conf_version, is_stale) in tbl {
-            let mut check_epoch = metapb::RegionEpoch::new();
+            let mut check_epoch = metapb::RegionEpoch::default();
             check_epoch.set_version(version);
             check_epoch.set_conf_ver(conf_version);
             assert_eq!(is_epoch_stale(&epoch, &check_epoch), is_stale);
@@ -918,7 +921,7 @@ mod tests {
         ];
 
         for (s1, s2, s3, s4, exp) in cases {
-            let mut r1 = metapb::Region::new();
+            let mut r1 = metapb::Region::default();
             for (store_id, peer_id) in s1.into_iter().zip(0..) {
                 r1.mut_peers().push(new_peer(store_id, peer_id));
             }
@@ -926,7 +929,7 @@ mod tests {
                 r1.mut_peers().push(new_learner_peer(store_id, peer_id));
             }
 
-            let mut r2 = metapb::Region::new();
+            let mut r2 = metapb::Region::default();
             for (store_id, peer_id) in s3.into_iter().zip(10..) {
                 r2.mut_peers().push(new_peer(store_id, peer_id));
             }
@@ -953,7 +956,7 @@ mod tests {
 
     #[test]
     fn test_region_sibling() {
-        let r1 = metapb::Region::new();
+        let r1 = metapb::Region::default();
         check_sibling(&r1, &r1, false);
 
         let (r1, r2) = split(r1, b"k1");
@@ -973,7 +976,7 @@ mod tests {
 
     #[test]
     fn test_check_store_id() {
-        let mut req = RaftCmdRequest::new();
+        let mut req = RaftCmdRequest::default();
         req.mut_header().mut_peer().set_store_id(1);
         check_store_id(&req, 1).unwrap();
         check_store_id(&req, 2).unwrap_err();
@@ -981,7 +984,7 @@ mod tests {
 
     #[test]
     fn test_check_peer_id() {
-        let mut req = RaftCmdRequest::new();
+        let mut req = RaftCmdRequest::default();
         req.mut_header().mut_peer().set_id(1);
         check_peer_id(&req, 1).unwrap();
         check_peer_id(&req, 2).unwrap_err();
@@ -989,7 +992,7 @@ mod tests {
 
     #[test]
     fn test_check_term() {
-        let mut req = RaftCmdRequest::new();
+        let mut req = RaftCmdRequest::default();
         req.mut_header().set_term(7);
         check_term(&req, 7).unwrap();
         check_term(&req, 8).unwrap();
@@ -1001,14 +1004,14 @@ mod tests {
 
     #[test]
     fn test_check_region_epoch() {
-        let mut epoch = RegionEpoch::new();
+        let mut epoch = RegionEpoch::default();
         epoch.set_conf_ver(2);
         epoch.set_version(2);
-        let mut region = metapb::Region::new();
+        let mut region = metapb::Region::default();
         region.set_region_epoch(epoch.clone());
 
         // Epoch is required for most requests even if it's empty.
-        check_region_epoch(&RaftCmdRequest::new(), &region, false).unwrap_err();
+        check_region_epoch(&RaftCmdRequest::default(), &region, false).unwrap_err();
 
         // These admin commands do not require epoch.
         for ty in &[
@@ -1017,9 +1020,9 @@ mod tests {
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
         ] {
-            let mut admin = AdminRequest::new();
+            let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
-            let mut req = RaftCmdRequest::new();
+            let mut req = RaftCmdRequest::default();
             req.set_admin_request(admin);
 
             // It is Okay if req does not have region epoch.
@@ -1039,9 +1042,9 @@ mod tests {
             AdminCmdType::RollbackMerge,
             AdminCmdType::TransferLeader,
         ] {
-            let mut admin = AdminRequest::new();
+            let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
-            let mut req = RaftCmdRequest::new();
+            let mut req = RaftCmdRequest::default();
             req.set_admin_request(admin);
 
             // Error if req does not have region epoch.
@@ -1049,7 +1052,7 @@ mod tests {
 
             let mut stale_version_epoch = epoch.clone();
             stale_version_epoch.set_version(1);
-            let mut stale_region = metapb::Region::new();
+            let mut stale_region = metapb::Region::default();
             stale_region.set_region_epoch(stale_version_epoch.clone());
             req.mut_header()
                 .set_region_epoch(stale_version_epoch.clone());
@@ -1074,9 +1077,9 @@ mod tests {
             AdminCmdType::RollbackMerge,
             AdminCmdType::TransferLeader,
         ] {
-            let mut admin = AdminRequest::new();
+            let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
-            let mut req = RaftCmdRequest::new();
+            let mut req = RaftCmdRequest::default();
             req.set_admin_request(admin);
 
             // Error if req does not have region epoch.
@@ -1084,7 +1087,7 @@ mod tests {
 
             let mut stale_conf_epoch = epoch.clone();
             stale_conf_epoch.set_conf_ver(1);
-            let mut stale_region = metapb::Region::new();
+            let mut stale_region = metapb::Region::default();
             stale_region.set_region_epoch(stale_conf_epoch.clone());
             req.mut_header().set_region_epoch(stale_conf_epoch.clone());
             check_region_epoch(&req, &stale_region, false).unwrap();
