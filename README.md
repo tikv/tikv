@@ -45,7 +45,7 @@ For instructions on deployment, configuration, and maintenance of TiKV, see our 
 
 > **Note:**
 >
-> We are currently migrating our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to our [official website](https://tikv.org/docs/3.0/tasks/getting-started/). We'd appreciate if you could check out the new look on the website and offer your feedback [here](https://github.com/tikv/website). The Wiki page will be discontinued when the migration is finished. Stay tuned!
+> We are currently migrating our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to the [official website](https://tikv.org/docs). We'd appreciate if you could check out the new look on the website and offer your feedback [here](https://github.com/tikv/website). The Wiki page will be discontinued when the migration is finished. Stay tuned!
 
 ## TiKV Adopters
 
