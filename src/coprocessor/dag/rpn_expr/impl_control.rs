@@ -131,10 +131,10 @@ mod tests {
     fn test_if() {
         use std::f64::consts::{E, PI};
 
-        let cases: Vec<((ScalarValue, _, _), Option<Real>)> = vec![
-            ((0.into(), E, PI), Real::new(PI).ok()),
-            ((1.into(), E, PI), Real::new(E).ok()),
-            ((ScalarValue::Int(None), E, PI), Real::new(PI).ok()),
+        let cases = vec![
+            ((Some(0), E, PI), Real::new(PI).ok()),
+            ((Some(1), E, PI), Real::new(E).ok()),
+            ((None, E, PI), Real::new(PI).ok()),
         ];
 
         for ((condition, value1, value2), expected) in cases {
