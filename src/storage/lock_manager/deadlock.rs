@@ -25,60 +25,114 @@ use tikv_util::time;
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
 
-/// `Locks` is a set of locks belonging to one transaction.
-struct Locks {
-    ts: u64,
-    hashes: Vec<u64>,
-    last_detect_time: time::Instant,
-}
-
-impl Locks {
-    /// Creates a new `Locks`.
-    fn new(ts: u64, hash: u64, last_detect_time: time::Instant) -> Self {
-        Self {
-            ts,
-            hashes: vec![hash],
-            last_detect_time,
-        }
-    }
-
-    /// Pushes the `hash` if not exist and updates `last_detect_time`.
-    fn push(&mut self, lock_hash: u64, now: time::Instant) {
-        if !self.hashes.contains(&lock_hash) {
-            self.hashes.push(lock_hash)
-        }
-        self.last_detect_time = now
-    }
-
-    /// Removes the `lock_hash` and returns true if the `Locks` is empty.
-    fn remove(&mut self, lock_hash: u64) -> bool {
-        if let Some(idx) = self.hashes.iter().position(|hash| *hash == lock_hash) {
-            self.hashes.remove(idx);
-        }
-        self.hashes.is_empty()
-    }
-
-    /// Returns true if the `Locks` is expired.
-    fn is_expired(&self, now: time::Instant, ttl: Duration) -> bool {
-        now.duration_since(self.last_detect_time) >= ttl
-    }
-}
-
 /// Used to detect the deadlock of wait-for-lock in the cluster.
 pub struct DetectTable {
-    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts` has a survival time -- `ttl`.
+    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `waited_txns` has a survival time -- `ttl`.
     /// When checking the deadlock, if the ttl has elpased, the corresponding edge will be removed.
-    /// `last_detect_time` is the start time of the edge. `Detect` requests will refresh it.
-    // txn_ts => (lock_ts => Locks)
-    wait_for_map: HashMap<u64, HashMap<u64, Locks>>,
+    /// `last_detect_ts` is the start time of the edge. `Detect` requests will refresh it.
+    // txn_ts => waited_txn,which means the txn_ts is waiting for the waited_txns
+    wait_for_map: HashMap<u64, WaitForTxns>,
 
     /// The ttl of every edge.
     ttl: time::Duration,
 
     /// The time of last `active_expire`.
     last_active_expire: time::Instant,
+}
 
-    now: time::Instant,
+/// `WaitForTxns` maintain a transaction list.
+#[derive(Default)]
+struct WaitForTxns {
+    // txn_ts => transaction's information.
+    txns: HashMap<u64, DetectedTxn>,
+}
+
+/// `DetectedTxn` maintain a lock list which belongs to one transaction.
+struct DetectedTxn {
+    locks: HashSet<u64>, // the locked keys
+    last_detect_ts: time::Instant,
+}
+
+impl DetectedTxn {
+    /// Creates a new `DetectedTxn`.
+    fn new(lock_key: u64, detect_ts: time::Instant) -> Self {
+        let mut locks: HashSet<u64> = HashSet::default();
+        locks.insert(lock_key);
+        Self {
+            locks,
+            last_detect_ts: detect_ts,
+        }
+    }
+
+    /// Pushes the lock and updates `last_detect_ts`.
+    fn push(&mut self, lock_key: u64, detect_ts: time::Instant) {
+        self.locks.insert(lock_key);
+        self.last_detect_ts = detect_ts
+    }
+
+    /// Removes the `lock_key` and returns true if the `Locks` is empty.
+    /// It happens when the client rollback a pessmistic lock.
+    fn remove(&mut self, lock_key: u64) -> bool {
+        self.locks.remove(&lock_key);
+        self.locks.is_empty()
+    }
+
+    /// Returns true if the `Locks` is expired since last detection.
+    fn is_expired(&mut self, now: time::Instant, ttl: Duration) -> bool {
+        now.duration_since(self.last_detect_ts) >= ttl
+    }
+
+    fn first_locked_key(&self) -> u64 {
+        for lock in self.locks.iter() {
+            return *lock;
+        }
+        unreachable!();
+    }
+}
+
+impl WaitForTxns {
+    /// clean the timeout transactions, return true once the current trasaction is empty.
+    fn clean_expired_txns(&mut self, now: time::Instant, ttl: Duration) -> bool {
+        self.txns.retain(|_, locks| !locks.is_expired(now, ttl));
+        self.txns.is_empty()
+    }
+
+    /// register the current key if the corresponding transaction already exist.
+    fn register_key_if_txn_exist(
+        &mut self,
+        ts: u64,
+        locked_key: u64,
+        detect_ts: time::Instant,
+    ) -> bool {
+        self.txns
+            .get_mut(&ts)
+            .map(|txn| txn.push(locked_key, detect_ts))
+            .is_some()
+    }
+
+    /// register the current transaction with a locked key, the current transaction should not exist before.
+    fn new_wait_for_txn(&mut self, ts: u64, lock: u64, detected_time: time::Instant) {
+        assert!(!self.txns.contains_key(&ts));
+        let waited_txn_keys = DetectedTxn::new(lock, detected_time);
+        self.txns.insert(ts, waited_txn_keys);
+    }
+
+    /// clean the locked keys which the caller is waiting for, returns true once there is no more transaction.
+    fn clean_wait_for_locked_keys(&mut self, wait_for_ts: u64, wait_for_lock: u64) -> bool {
+        let txn = self.txns.get_mut(&wait_for_ts);
+        let txn_empty = txn.and_then(|locks| {
+            let is_empty = locks.remove(wait_for_lock);
+            Some(is_empty)
+        });
+        match txn_empty {
+            Some(true) => {
+                self.txns.remove(&wait_for_ts);
+                self.txns.is_empty()
+            }
+            Some(false) => false,
+            None => true,
+        }
+    }
 }
 
 impl DetectTable {
@@ -88,7 +142,6 @@ impl DetectTable {
             wait_for_map: HashMap::default(),
             ttl,
             last_active_expire: time::Instant::now_coarse(),
-            now: time::Instant::now_coarse(),
         }
     }
 
@@ -97,46 +150,54 @@ impl DetectTable {
         let _timer = DETECTOR_HISTOGRAM_VEC.detect.start_coarse_timer();
         TASK_COUNTER_VEC.detect.inc();
 
-        self.now = time::Instant::now_coarse();
-        self.active_expire();
+        let detect_ts = time::Instant::now_coarse();
+        self.active_expire(detect_ts);
 
         // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
-        if self.register_if_existed(txn_ts, lock_ts, lock_hash) {
+        if self.register_if_existed(txn_ts, lock_ts, lock_hash, detect_ts) {
             return None;
         }
 
-        if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
-            return Some(deadlock_key_hash);
+        let dead_lock = self.do_detect(txn_ts, lock_ts, detect_ts);
+        if dead_lock.is_none() {
+            self.register(txn_ts, lock_ts, lock_hash, detect_ts);
         }
-        self.register(txn_ts, lock_ts, lock_hash);
-        None
+        dead_lock
     }
 
     /// Checks if there is a edge from `wait_for_ts` to `txn_ts`.
-    fn do_detect(&mut self, txn_ts: u64, wait_for_ts: u64) -> Option<u64> {
-        let now = self.now;
+    fn do_detect(
+        &mut self,
+        txn_ts: u64,
+        wait_for_ts: u64,
+        detect_ts: time::Instant,
+    ) -> Option<u64> {
         let ttl = self.ttl;
-
         let mut stack = vec![wait_for_ts];
-        // Memorize the pushed vertexes to avoid duplicate search.
-        let mut pushed: HashSet<u64> = HashSet::default();
-        pushed.insert(wait_for_ts);
+        // visited collected the txn which is already visited by BFS.
+        let mut visited: HashSet<u64> = HashSet::default();
+        visited.insert(wait_for_ts);
         while let Some(wait_for_ts) = stack.pop() {
-            if let Some(wait_for) = self.wait_for_map.get_mut(&wait_for_ts) {
-                // Remove expired edges.
-                wait_for.retain(|_, locks| !locks.is_expired(now, ttl));
-                if wait_for.is_empty() {
-                    self.wait_for_map.remove(&wait_for_ts);
-                } else {
-                    for (lock_ts, locks) in wait_for {
-                        if *lock_ts == txn_ts {
-                            return Some(locks.hashes[0]);
-                        }
-                        if !pushed.contains(lock_ts) {
-                            stack.push(*lock_ts);
-                            pushed.insert(*lock_ts);
-                        }
-                    }
+            let txns = if let Some(wait_for) = self.wait_for_map.get_mut(&wait_for_ts) {
+                wait_for
+            } else {
+                continue;
+            };
+
+            // Remove expired edges.
+            let is_empty = txns.clean_expired_txns(detect_ts, ttl);
+            if is_empty {
+                self.wait_for_map.remove(&wait_for_ts);
+                continue;
+            }
+            // do BFS
+            for (ts, locks) in txns.txns.iter() {
+                if *ts == txn_ts {
+                    return Some(locks.first_locked_key());
+                }
+                if !visited.contains(ts) {
+                    stack.push(*ts);
+                    visited.insert(*ts);
                 }
             }
         }
@@ -144,34 +205,31 @@ impl DetectTable {
     }
 
     /// Returns true and adds to the detect table if `txn_ts` is waiting for `lock_ts`.
-    fn register_if_existed(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) -> bool {
+    fn register_if_existed(
+        &mut self,
+        txn_ts: u64,
+        lock_ts: u64,
+        lock_hash: u64,
+        detect_ts: time::Instant,
+    ) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
-            if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                locks.push(lock_hash, self.now);
-                return true;
-            }
+            return wait_for.register_key_if_txn_exist(lock_ts, lock_hash, detect_ts);
         }
         false
     }
 
     /// Adds to the detect table. The edge from `txn_ts` to `lock_ts` must not exist.
-    fn register(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
+    fn register(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64, detect_ts: time::Instant) {
         let wait_for = self.wait_for_map.entry(txn_ts).or_default();
-        assert!(!wait_for.contains_key(&lock_ts));
-        let locks = Locks::new(lock_ts, lock_hash, self.now);
-        wait_for.insert(locks.ts, locks);
+        wait_for.new_wait_for_txn(lock_ts, lock_hash, detect_ts);
     }
 
     /// Removes the corresponding wait_for_entry.
     pub fn clean_up_wait_for(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
-            if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                if locks.remove(lock_hash) {
-                    wait_for.remove(&lock_ts);
-                    if wait_for.is_empty() {
-                        self.wait_for_map.remove(&txn_ts);
-                    }
-                }
+            let is_empty = wait_for.clean_wait_for_locked_keys(lock_ts, lock_hash);
+            if is_empty {
+                self.wait_for_map.remove(&txn_ts);
             }
         }
         TASK_COUNTER_VEC.clean_up_wait_for.inc();
@@ -194,17 +252,14 @@ impl DetectTable {
     const ACTIVE_EXPIRE_INTERVAL: Duration = Duration::from_secs(3600);
 
     /// Iterates the whole table to remove all expired entries.
-    fn active_expire(&mut self) {
+    fn active_expire(&mut self, detect_ts: time::Instant) {
         if self.wait_for_map.len() >= Self::ACTIVE_EXPIRE_THRESHOLD
-            && self.now.duration_since(self.last_active_expire) >= Self::ACTIVE_EXPIRE_INTERVAL
+            && detect_ts.duration_since(self.last_active_expire) >= Self::ACTIVE_EXPIRE_INTERVAL
         {
-            let now = self.now;
             let ttl = self.ttl;
-            for (_, wait_for) in self.wait_for_map.iter_mut() {
-                wait_for.retain(|_, locks| !locks.is_expired(now, ttl));
-            }
-            self.wait_for_map.retain(|_, wait_for| !wait_for.is_empty());
-            self.last_active_expire = self.now;
+            self.wait_for_map
+                .retain(|_, wait_for| !wait_for.clean_expired_txns(detect_ts, ttl));
+            self.last_active_expire = detect_ts;
         }
     }
 }
@@ -690,15 +745,16 @@ mod tests {
 
         // After cycle is broken, no deadlock.
         assert_eq!(detect_table.detect(3, 1, 1), None);
-        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 1);
+        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().txns.len(), 1);
         assert_eq!(
             detect_table
                 .wait_for_map
                 .get(&3)
                 .unwrap()
+                .txns
                 .get(&1)
                 .unwrap()
-                .hashes
+                .locks
                 .len(),
             1
         );
@@ -710,9 +766,10 @@ mod tests {
                 .wait_for_map
                 .get(&3)
                 .unwrap()
+                .txns
                 .get(&1)
                 .unwrap()
-                .hashes
+                .locks
                 .len(),
             2
         );
@@ -724,24 +781,26 @@ mod tests {
                 .wait_for_map
                 .get(&3)
                 .unwrap()
+                .txns
                 .get(&1)
                 .unwrap()
-                .hashes
+                .locks
                 .len(),
             2
         );
 
         // Different lock_ts grows the map.
         assert_eq!(detect_table.detect(3, 2, 2), None);
-        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 2);
+        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().txns.len(), 2);
         assert_eq!(
             detect_table
                 .wait_for_map
                 .get(&3)
                 .unwrap()
+                .txns
                 .get(&2)
                 .unwrap()
-                .hashes
+                .locks
                 .len(),
             1
         );
@@ -753,14 +812,15 @@ mod tests {
                 .wait_for_map
                 .get(&3)
                 .unwrap()
+                .txns
                 .get(&1)
                 .unwrap()
-                .hashes
+                .locks
                 .len(),
             1
         );
         detect_table.clean_up_wait_for(3, 1, 2);
-        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().len(), 1);
+        assert_eq!(detect_table.wait_for_map.get(&3).unwrap().txns.len(), 1);
         detect_table.clean_up_wait_for(3, 2, 2);
         assert_eq!(detect_table.wait_for_map.contains_key(&3), false);
 
@@ -782,7 +842,7 @@ mod tests {
         assert!(detect_table.detect(2, 1, 2).is_none());
         assert_eq!(detect_table.wait_for_map.len(), 1);
 
-        // `Detect` updates the last_detect_time, so the entry won't be removed.
+        // `Detect` updates the last_detect_ts, so the entry won't be removed.
         detect_table.clear();
         assert!(detect_table.detect(1, 2, 1).is_none());
         std::thread::sleep(Duration::from_millis(500));
@@ -797,15 +857,16 @@ mod tests {
         std::thread::sleep(Duration::from_millis(500));
         assert!(detect_table.detect(1, 3, 2).is_none());
         assert!(detect_table.detect(2, 1, 2).is_none());
-        assert_eq!(detect_table.wait_for_map.get(&1).unwrap().len(), 1);
+        assert_eq!(detect_table.wait_for_map.get(&1).unwrap().txns.len(), 1);
         assert_eq!(
             detect_table
                 .wait_for_map
                 .get(&1)
                 .unwrap()
+                .txns
                 .get(&3)
                 .unwrap()
-                .hashes
+                .locks
                 .len(),
             2
         );
