@@ -21,10 +21,30 @@ pub fn arithmetic<A: ArithmeticOp>(
     }
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn arithmetic_with_ctx<A: ArithmeticOpWithCtx>(
+    ctx: &mut EvalContext,
+    arg0: &Option<A::T>,
+    arg1: &Option<A::T>,
+) -> Result<Option<A::T>> {
+    if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
+        A::calc(ctx, lhs, rhs)
+    } else {
+        Ok(None)
+    }
+}
+
 pub trait ArithmeticOp {
     type T: Evaluable;
 
     fn calc(lhs: &Self::T, rhs: &Self::T) -> Result<Option<Self::T>>;
+}
+
+pub trait ArithmeticOpWithCtx {
+    type T: Evaluable;
+
+    fn calc(ctx: &mut EvalContext, lhs: &Self::T, rhs: &Self::T) -> Result<Option<Self::T>>;
 }
 
 #[derive(Debug)]
