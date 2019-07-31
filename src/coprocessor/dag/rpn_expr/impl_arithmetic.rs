@@ -489,6 +489,27 @@ fn int_divide_decimal(
     }
 }
 
+pub struct DecimalDivide;
+
+impl ArithmeticOpWithCtx for DecimalDivide {
+    type T = Decimal;
+
+    fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        use crate::coprocessor::codec::mysql::Res;
+
+        Ok(match lhs / rhs {
+            Some(value) => match value {
+                Res::Ok(value) => Some(value),
+                Res::Truncated(_) => ctx.handle_truncate(true).map(|_| None)?,
+                Res::Overflow(_) => ctx
+                    .handle_overflow(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))
+                    .map(|_| None)?,
+            },
+            None => ctx.handle_division_by_zero().map(|_| None)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1142,6 +1163,20 @@ mod tests {
                 lhs,
                 rhs
             );
+        }
+    }
+
+    #[test]
+    fn test_decimal_divide() {
+        let test_cases = vec![("2.2", "1.1", "2.0")];
+        for (lhs, rhs, expected) in test_cases {
+            let expected: Option<Decimal> = expected.parse().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs.parse::<Decimal>().ok())
+                .push_param(rhs.parse::<Decimal>().ok())
+                .evaluate(ScalarFuncSig::DivideDecimal)
+                .unwrap();
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
     }
 }
