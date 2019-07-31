@@ -312,8 +312,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if cfg.pessimistic_txn.enabled {
         let waiter_mgr_runner = WaiterManager::new(
             DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
-            cfg.pessimistic_txn.wait_for_lock_timeout,
-            cfg.pessimistic_txn.wake_up_delay_duration,
+            &cfg.pessimistic_txn,
         );
         let detector_runner = Detector::new(
             node.id(),
@@ -321,8 +320,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             Arc::clone(&security_mgr),
             pd_client,
             resolver,
-            cfg.pessimistic_txn.monitor_membership_interval,
-            cfg.pessimistic_txn.wait_for_lock_timeout,
+            &cfg.pessimistic_txn,
         );
         waiter_mgr_worker
             .as_mut()
