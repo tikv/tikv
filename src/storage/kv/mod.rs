@@ -19,9 +19,7 @@ use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 mod btree_engine;
 mod compact_listener;
 mod cursor_builder;
-mod metrics;
 mod perf_context;
-pub mod raftkv;
 mod rocksdb_engine;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
