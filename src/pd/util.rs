@@ -70,7 +70,7 @@ impl Stream for HeartbeatReceiver {
                 receiver = recv.take();
             }
             if receiver.is_some() {
-                info!("heartbeat receiver is refreshed");
+                debug!("heartbeat receiver is refreshed");
                 self.receiver = receiver;
             } else {
                 inner.hb_receiver = Either::Right(task::current());
@@ -173,11 +173,11 @@ impl LeaderClient {
         {
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap();
-            warn!("heartbeat sender and receiver are stale, refreshing ...");
+            info!("heartbeat sender and receiver are stale, refreshing ...");
 
             // Try to cancel an unused heartbeat sender.
             if let Either::Left(Some(ref mut r)) = inner.hb_sender {
-                info!("cancel region heartbeat sender");
+                debug!("cancel region heartbeat sender");
                 r.cancel();
             }
             inner.hb_sender = Either::Left(Some(tx));
@@ -230,7 +230,7 @@ where
         self.reconnect_count -= 1;
 
         // FIXME: should not block the core.
-        info!("updating PD client, block the tokio core");
+        debug!("(re)connecting PD client");
         match self.client.reconnect() {
             Ok(_) => {
                 self.request_sent = 0;

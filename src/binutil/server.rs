@@ -434,6 +434,7 @@ fn pre_start(cfg: &TiKvConfig) {
 }
 
 fn check_system_config(config: &TiKvConfig) {
+    info!("beginning system configuration check");
     let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
     if config.rocksdb.titan.enabled {
         // Titan engine maintains yet another pool of blob files and uses the same max
@@ -449,7 +450,7 @@ fn check_system_config(config: &TiKvConfig) {
 
     for e in tikv_util::config::check_kernel() {
         warn!(
-            "check-kernel";
+            "check: kernel";
             "err" => %e
         );
     }
@@ -457,14 +458,16 @@ fn check_system_config(config: &TiKvConfig) {
     // Check RocksDB data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
         warn!(
-            "rocksdb check data dir";
+            "check: rocksdb-data-dir";
+            "path" => &config.storage.data_dir,
             "err" => %e
         );
     }
     // Check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
         warn!(
-            "raft check data dir";
+            "check: raftdb-path";
+            "path" => &config.raft_store.raftdb_path,
             "err" => %e
         );
     }
