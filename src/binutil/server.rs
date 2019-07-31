@@ -16,12 +16,12 @@ use crate::server::resolve;
 use crate::server::status_server::StatusServer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
-use crate::server::{create_raft_storage, Node, Server};
+use crate::server::{create_raft_storage, Node, RaftKv, Server};
 use crate::storage::lock_manager::{
     register_role_change_observer, Detector, DetectorScheduler, Service as DeadlockService,
     WaiterManager, WaiterMgrScheduler,
 };
-use crate::storage::{self, AutoGCConfig, RaftKv, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
@@ -318,8 +318,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if cfg.pessimistic_txn.enabled {
         let waiter_mgr_runner = WaiterManager::new(
             DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
-            cfg.pessimistic_txn.wait_for_lock_timeout,
-            cfg.pessimistic_txn.wake_up_delay_duration,
+            &cfg.pessimistic_txn,
         );
         let detector_runner = Detector::new(
             node.id(),
@@ -327,7 +326,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             resolver,
             Arc::clone(&security_mgr),
             WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
-            cfg.pessimistic_txn.wait_for_lock_timeout,
+            &cfg.pessimistic_txn,
         );
         waiter_mgr_worker
             .as_mut()
