@@ -122,7 +122,7 @@ impl DetectTable {
         None
     }
 
-    /// Checks if there is a edge from `wait_for_ts` to `txn_ts`.
+    /// Checks if there is an edge from `wait_for_ts` to `txn_ts`.
     fn do_detect(&mut self, txn_ts: u64, wait_for_ts: u64) -> Option<u64> {
         let now = self.now;
         let ttl = self.ttl;
@@ -253,7 +253,7 @@ impl Display for Task {
                 "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
                 tp, txn_ts, lock
             ),
-            Task::DetectRpc { .. } => write!(f, "detect rpc"),
+            Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
         }
     }
@@ -350,7 +350,6 @@ pub struct Detector<S: StoreAddrResolver + 'static> {
     resolver: S,
     /// Used to connect other nodes.
     security_mgr: Arc<SecurityManager>,
-
     /// Used to schedule Deadlock msgs to the waiter manager.
     waiter_mgr_scheduler: WaiterMgrScheduler,
 
@@ -398,8 +397,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         self.leader_info.take();
     }
 
-    /// Refreshes the leader info.
-    /// Returns true if the leader exists.
+    /// Refreshes the leader info. Returns true if the leader exists.
     fn refresh_leader_info(&mut self) -> bool {
         assert!(!self.is_leader());
         match self.get_leader_info() {
@@ -455,7 +453,9 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             }
             _ => {
                 // The leader info is stale if the leader is itself.
-                if leader_id != self.store_id {
+                if leader_id == self.store_id {
+                    info!("stale leader info");
+                } else {
                     info!("leader changed"; "leader_id" => leader_id, "leader_addr" => %leader_addr);
                     self.leader_client.take();
                     self.leader_info.replace((leader_id, leader_addr));
@@ -476,7 +476,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         }
     }
 
-    /// Reconnects the leader.
+    /// Reconnects the leader. The leader info must exist.
     fn reconnect_leader(&mut self, handle: &Handle) {
         assert!(self.leader_client.is_none() && self.leader_info.is_some());
         ERROR_COUNTER_VEC.reconnect_leader.inc();
@@ -512,8 +512,8 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
     /// Returns true if sends successfully.
     ///
-    /// If the client is None, reconnects the leader first. Then sends the request to the leader.
-    /// If send failed, sets the client to None for retry.
+    /// If the client is None, reconnects the leader first, then sends the request to the leader.
+    /// If sends failed, sets the client to None for retry.
     fn send_request_to_leader(
         &mut self,
         handle: &Handle,
