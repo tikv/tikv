@@ -24,8 +24,7 @@ use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
-use tikv_util::time;
+use tikv_util::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 
 /// The leader of the region containing the LEADER_KEY is the leader of deadlock detector.
@@ -40,12 +39,12 @@ fn is_leader_region(region: &'_ Region) -> bool {
 struct Locks {
     ts: u64,
     hashes: Vec<u64>,
-    last_detect_time: time::Instant,
+    last_detect_time: Instant,
 }
 
 impl Locks {
     /// Creates a new `Locks`.
-    fn new(ts: u64, hash: u64, last_detect_time: time::Instant) -> Self {
+    fn new(ts: u64, hash: u64, last_detect_time: Instant) -> Self {
         Self {
             ts,
             hashes: vec![hash],
@@ -54,7 +53,7 @@ impl Locks {
     }
 
     /// Pushes the `hash` if not exist and updates `last_detect_time`.
-    fn push(&mut self, lock_hash: u64, now: time::Instant) {
+    fn push(&mut self, lock_hash: u64, now: Instant) {
         if !self.hashes.contains(&lock_hash) {
             self.hashes.push(lock_hash)
         }
@@ -70,7 +69,7 @@ impl Locks {
     }
 
     /// Returns true if the `Locks` is expired.
-    fn is_expired(&self, now: time::Instant, ttl: Duration) -> bool {
+    fn is_expired(&self, now: Instant, ttl: Duration) -> bool {
         now.duration_since(self.last_detect_time) >= ttl
     }
 }
@@ -84,22 +83,22 @@ pub struct DetectTable {
     wait_for_map: HashMap<u64, HashMap<u64, Locks>>,
 
     /// The ttl of every edge.
-    ttl: time::Duration,
+    ttl: Duration,
 
     /// The time of last `active_expire`.
-    last_active_expire: time::Instant,
+    last_active_expire: Instant,
 
-    now: time::Instant,
+    now: Instant,
 }
 
 impl DetectTable {
     /// Creates a auto-expiring detect table.
-    pub fn new(ttl: time::Duration) -> Self {
+    pub fn new(ttl: Duration) -> Self {
         Self {
             wait_for_map: HashMap::default(),
             ttl,
-            last_active_expire: time::Instant::now_coarse(),
-            now: time::Instant::now_coarse(),
+            last_active_expire: Instant::now_coarse(),
+            now: Instant::now_coarse(),
         }
     }
 
@@ -108,7 +107,7 @@ impl DetectTable {
         let _timer = DETECTOR_HISTOGRAM_VEC.detect.start_coarse_timer();
         TASK_COUNTER_VEC.detect.inc();
 
-        self.now = time::Instant::now_coarse();
+        self.now = Instant::now_coarse();
         self.active_expire();
 
         // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
@@ -379,9 +378,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             waiter_mgr_scheduler,
             inner: Rc::new(RefCell::new(Inner {
                 role: StateRole::Follower,
-                detect_table: DetectTable::new(time::Duration::from_millis(
-                    cfg.wait_for_lock_timeout,
-                )),
+                detect_table: DetectTable::new(Duration::from_millis(cfg.wait_for_lock_timeout)),
             })),
         }
     }
@@ -755,7 +752,6 @@ impl deadlock_grpc::Deadlock for Service {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn test_detect_table() {
