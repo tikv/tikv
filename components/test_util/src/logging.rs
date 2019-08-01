@@ -113,7 +113,7 @@ pub fn init_log_for_test() {
         enabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
     let filtered = drain.filter(move |record| {
-        let module = record.module().splitn(2, "::").nth(1).unwrap();
+        let module = record.module().splitn(2, "::").nth(0).unwrap();
         enabled_targets.contains(module)
     });
 
