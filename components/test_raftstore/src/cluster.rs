@@ -10,14 +10,14 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{RaftMessage,RaftTruncatedState,RaftApplyState};
+use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
 use tempdir::TempDir;
 
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
-use engine::CF_DEFAULT;
 use engine::Peekable;
+use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
