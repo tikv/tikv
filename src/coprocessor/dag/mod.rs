@@ -7,7 +7,7 @@ pub use self::storage_impl::TiKVStorage;
 use protobuf::Message;
 
 use kvproto::coprocessor::{KeyRange, Response};
-use tidb_qe::storage::IntervalRange;
+use tidb_query::storage::IntervalRange;
 use tipb::select::{DAGRequest, SelectResponse, StreamResponse};
 
 use crate::coprocessor::metrics::*;
@@ -26,7 +26,7 @@ pub fn build_handler<S: Store + 'static>(
     let mut is_batch = false;
     if enable_batch_if_possible && !is_streaming {
         let is_supported =
-            tidb_qe::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
+            tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
         if let Err(e) = is_supported {
             // Not supported, will fallback to normal executor.
             // To avoid user worries, let's output success message.
@@ -48,7 +48,7 @@ pub fn build_handler<S: Store + 'static>(
     }
 }
 
-pub struct DAGHandler(tidb_qe::executor::ExecutorsRunner<Statistics>);
+pub struct DAGHandler(tidb_query::executor::ExecutorsRunner<Statistics>);
 
 impl DAGHandler {
     pub fn new<S: Store + 'static>(
@@ -59,7 +59,7 @@ impl DAGHandler {
         batch_row_limit: usize,
         is_streaming: bool,
     ) -> Result<Self> {
-        Ok(Self(tidb_qe::executor::ExecutorsRunner::from_request(
+        Ok(Self(tidb_query::executor::ExecutorsRunner::from_request(
             req,
             ranges,
             TiKVStorage::from(store),
@@ -84,7 +84,7 @@ impl RequestHandler for DAGHandler {
     }
 }
 
-pub struct BatchDAGHandler(tidb_qe::batch::runner::BatchExecutorsRunner<Statistics>);
+pub struct BatchDAGHandler(tidb_query::batch::runner::BatchExecutorsRunner<Statistics>);
 
 impl BatchDAGHandler {
     pub fn new<S: Store + 'static>(
@@ -94,7 +94,7 @@ impl BatchDAGHandler {
         deadline: Deadline,
     ) -> Result<Self> {
         Ok(Self(
-            tidb_qe::batch::runner::BatchExecutorsRunner::from_request(
+            tidb_query::batch::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
                 TiKVStorage::from(store),
@@ -114,8 +114,8 @@ impl RequestHandler for BatchDAGHandler {
     }
 }
 
-fn handle_qe_response(result: tidb_qe::Result<SelectResponse>) -> Result<Response> {
-    use tidb_qe::error::ErrorInner;
+fn handle_qe_response(result: tidb_query::Result<SelectResponse>) -> Result<Response> {
+    use tidb_query::error::ErrorInner;
 
     match result {
         Ok(sel_resp) => {
@@ -138,9 +138,9 @@ fn handle_qe_response(result: tidb_qe::Result<SelectResponse>) -> Result<Respons
 }
 
 fn handle_qe_stream_response(
-    result: tidb_qe::Result<(Option<(StreamResponse, IntervalRange)>, bool)>,
+    result: tidb_query::Result<(Option<(StreamResponse, IntervalRange)>, bool)>,
 ) -> Result<(Option<Response>, bool)> {
-    use tidb_qe::error::ErrorInner;
+    use tidb_query::error::ErrorInner;
 
     match result {
         Ok((Some((s_resp, range)), finished)) => {

@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_qe::storage::{IntervalRange, OwnedKvPair, PointRange, Result as QEResult, Storage};
+use tidb_query::storage::{IntervalRange, OwnedKvPair, PointRange, Result as QEResult, Storage};
 
 use crate::coprocessor::Error;
 use crate::storage::Statistics;

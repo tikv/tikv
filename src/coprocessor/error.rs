@@ -27,14 +27,14 @@ impl From<Box<dyn std::error::Error + Send + Sync>> for Error {
     }
 }
 
-impl From<Error> for tidb_qe::error::StorageError {
+impl From<Error> for tidb_query::error::StorageError {
     fn from(err: Error) -> Self {
         failure::Error::from(err).into()
     }
 }
 
-impl From<tidb_qe::error::StorageError> for Error {
-    fn from(err: tidb_qe::error::StorageError) -> Self {
+impl From<tidb_query::error::StorageError> for Error {
+    fn from(err: tidb_query::error::StorageError) -> Self {
         match err.0.downcast::<Error>() {
             Ok(e) => e,
             Err(e) => box_err!("Unknown storage error: {}", e),
@@ -42,15 +42,15 @@ impl From<tidb_qe::error::StorageError> for Error {
     }
 }
 
-impl From<tidb_qe::error::EvaluateError> for Error {
-    fn from(err: tidb_qe::error::EvaluateError) -> Self {
+impl From<tidb_query::error::EvaluateError> for Error {
+    fn from(err: tidb_query::error::EvaluateError) -> Self {
         Error::Other(err.to_string())
     }
 }
 
-impl From<tidb_qe::Error> for Error {
-    fn from(err: tidb_qe::Error) -> Self {
-        use tidb_qe::error::ErrorInner;
+impl From<tidb_query::Error> for Error {
+    fn from(err: tidb_query::Error) -> Self {
+        use tidb_query::error::ErrorInner;
 
         match *err.0 {
             ErrorInner::Storage(err) => err.into(),

@@ -8,19 +8,19 @@ use rand::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
 
 use test_coprocessor::*;
-use tidb_qe_datatype::{FieldTypeAccessor, FieldTypeTp};
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::collections::HashMap;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use tidb_qe::batch::interface::*;
-use tidb_qe::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_qe::codec::data_type::Decimal;
-use tidb_qe::codec::datum::{Datum, DatumEncoder};
-use tidb_qe::codec::table::RowColsDict;
-use tidb_qe::executor::{Executor, Row};
-use tidb_qe::expr::EvalWarnings;
-use tidb_qe::storage::IntervalRange;
+use tidb_query::batch::interface::*;
+use tidb_query::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use tidb_query::codec::data_type::Decimal;
+use tidb_query::codec::datum::{Datum, DatumEncoder};
+use tidb_query::codec::table::RowColsDict;
+use tidb_query::executor::{Executor, Row};
+use tidb_query::expr::EvalWarnings;
+use tidb_query::storage::IntervalRange;
 use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;
@@ -371,7 +371,7 @@ impl Executor for NormalFixtureExecutor {
     type StorageStats = Statistics;
 
     #[inline]
-    fn next(&mut self) -> tidb_qe::Result<Option<Row>> {
+    fn next(&mut self) -> tidb_query::Result<Option<Row>> {
         Ok(self.rows.next())
     }
 

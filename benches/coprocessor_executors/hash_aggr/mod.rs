@@ -2,7 +2,7 @@
 
 mod util;
 
-use tidb_qe_datatype::FieldTypeTp;
+use tidb_query_datatype::FieldTypeTp;
 use tipb::expression::{ExprType, ScalarFuncSig};
 use tipb_helper::ExprDefBuilder;
 

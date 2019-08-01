@@ -7,11 +7,11 @@ use criterion::black_box;
 use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 
-use tidb_qe::batch::executors::BatchFastHashAggregationExecutor;
-use tidb_qe::batch::executors::BatchSlowHashAggregationExecutor;
-use tidb_qe::batch::interface::*;
-use tidb_qe::executor::{Executor, HashAggExecutor};
-use tidb_qe::expr::EvalConfig;
+use tidb_query::batch::executors::BatchFastHashAggregationExecutor;
+use tidb_query::batch::executors::BatchSlowHashAggregationExecutor;
+use tidb_query::batch::interface::*;
+use tidb_query::executor::{Executor, HashAggExecutor};
+use tidb_query::expr::EvalConfig;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

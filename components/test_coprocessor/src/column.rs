@@ -2,7 +2,7 @@
 
 use super::*;
 
-use tidb_qe::codec::{datum, Datum};
+use tidb_query::codec::{datum, Datum};
 use tipb::schema::ColumnInfo;
 
 pub const TYPE_VAR_CHAR: i32 = 1;

@@ -6,9 +6,9 @@ use arrow::array;
 use arrow::datatypes::{self, DataType, Field};
 use arrow::record_batch::RecordBatch;
 
-use tidb_qe::codec::Datum;
-use tidb_qe_datatype::prelude::*;
-use tidb_qe_datatype::{FieldTypeFlag, FieldTypeTp};
+use tidb_query::codec::Datum;
+use tidb_query_datatype::prelude::*;
+use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::expression::FieldType;
 
 pub struct Chunk {

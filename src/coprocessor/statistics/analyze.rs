@@ -9,8 +9,8 @@ use rand::{thread_rng, Rng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
 
-use tidb_qe::codec::datum;
-use tidb_qe::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
+use tidb_query::codec::datum;
+use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
@@ -292,8 +292,8 @@ impl SampleCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tidb_qe::codec::datum;
-    use tidb_qe::codec::datum::Datum;
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
 
     #[test]
     fn test_sample_collector() {

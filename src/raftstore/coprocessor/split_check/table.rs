@@ -10,7 +10,7 @@ use kvproto::pdpb::CheckPolicy;
 
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
-use tidb_qe::codec::table as table_codec;
+use tidb_query::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
 
 use super::super::{
@@ -231,7 +231,7 @@ mod tests {
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
     use engine::ALL_CFS;
-    use tidb_qe::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;

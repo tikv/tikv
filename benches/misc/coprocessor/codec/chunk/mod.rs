@@ -4,12 +4,12 @@ mod arrow;
 
 use test::Bencher;
 
-use tidb_qe_datatype::{FieldTypeAccessor, FieldTypeTp};
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tipb::expression::FieldType;
 
-use tidb_qe::codec::chunk::{Chunk, ChunkEncoder};
-use tidb_qe::codec::datum::Datum;
-use tidb_qe::codec::mysql::*;
+use tidb_query::codec::chunk::{Chunk, ChunkEncoder};
+use tidb_query::codec::datum::Datum;
+use tidb_query::codec::mysql::*;
 
 fn field_type(tp: FieldTypeTp) -> FieldType {
     let mut fp = FieldType::default();

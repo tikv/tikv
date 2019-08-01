@@ -156,8 +156,8 @@ impl Histogram {
 mod tests {
     use super::*;
     use std::iter::repeat;
-    use tidb_qe::codec::datum;
-    use tidb_qe::codec::datum::Datum;
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
 
     #[test]
     fn test_histogram() {

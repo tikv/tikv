@@ -6,10 +6,10 @@ use criterion::black_box;
 
 use tipb::expression::Expr;
 
-use tidb_qe::batch::executors::BatchSelectionExecutor;
-use tidb_qe::batch::interface::BatchExecutor;
-use tidb_qe::executor::{Executor, SelectionExecutor};
-use tidb_qe::expr::EvalConfig;
+use tidb_query::batch::executors::BatchSelectionExecutor;
+use tidb_query::batch::interface::BatchExecutor;
+use tidb_query::executor::{Executor, SelectionExecutor};
+use tidb_query::expr::EvalConfig;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

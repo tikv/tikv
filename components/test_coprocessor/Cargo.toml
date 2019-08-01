@@ -13,4 +13,4 @@ futures = "0.1"
 
 tikv_util = { path = "../tikv_util" }
 test_storage = { path = "../test_storage" }
-tidb_qe = { path = "../tidb_qe" }
+tidb_query = { path = "../tidb_query" }

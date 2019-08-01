@@ -68,8 +68,8 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
     use std::cmp::min;
-    use tidb_qe::codec::datum;
-    use tidb_qe::codec::datum::Datum;
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
     use tikv_util::as_slice;
     use tikv_util::collections::HashMap;
     use zipf::ZipfDistribution;

@@ -7,4 +7,4 @@ publish = false
 [dependencies]
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 codec = { path = "../codec" }
-tidb_qe_datatype = { path = "../tidb_qe_datatype" }
+tidb_query_datatype = { path = "../tidb_query_datatype" }
