@@ -101,20 +101,18 @@ pub fn init_log_for_test() {
     let drain = CaseTraceLogger { f: writer };
 
     // Collects following targets.
-    const ENABLED_TARGETS: &[&str] = &[
-        "tikv::",
-        "tests::",
-        "benches::",
-        "integrations::",
-        "failpoints::",
-        "raft::",
-        // Collects logs for test components.
-        "test_",
-    ];
+    let mut enabled_targets = vec!["raft".to_owned()];
+    // Collects logs for components.
+    if let Some(components_modules) = option_env!("TIKV_LOG_TARGETS") {
+        enabled_targets.extend(components_modules.split(' ').map(ToOwned::to_owned));
+    }
+    // Only for debug purpose, so use environment instead of configuration file.
+    if let Ok(extra_modules) = env::var("TIKV_EXTRA_LOG_TARGETS") {
+        enabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
+    }
     let filtered = drain.filter(|record| {
-        ENABLED_TARGETS
-            .iter()
-            .any(|target| record.module().starts_with(target))
+        let module = record.module().splitn(2, "::").nth(1).unwrap();
+        enabled_targets.iter().any(|target| target == module)
     });
 
     // CaseTraceLogger relies on test's thread name, however slog_async has
