@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use smallvec::SmallVec;
 use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
@@ -19,6 +20,8 @@ use crate::coprocessor::Result;
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
 
+type HandleIndicesVec = SmallVec<[usize; 2]>;
+
 impl<S: Storage> BatchTableScanExecutor<S> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -35,7 +38,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
-        let mut handle_index = None;
+        let mut handle_indices = HandleIndicesVec::new();
         let mut schema = Vec::with_capacity(columns_info.len());
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
         let mut column_id_index = HashMap::default();
@@ -48,10 +51,10 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // - Prepare column default value (will be used to fill missing column later).
             columns_default_value.push(ci.take_default_val());
 
-            // - Store the index of the PK handle.
+            // - Store the index of the PK handles.
             // - Check whether or not we don't need KV values (iff PK handle is given).
             if ci.get_pk_handle() {
-                handle_index = Some(index);
+                handle_indices.push(index);
             } else {
                 is_key_only = false;
                 column_id_index.insert(ci.get_column_id(), index);
@@ -66,7 +69,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             schema,
             columns_default_value,
             column_id_index,
-            handle_index,
+            handle_indices,
             is_column_filled,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -121,8 +124,8 @@ struct TableScanExecutorImpl {
     /// The output position in the schema giving the column id.
     column_id_index: HashMap<i64, usize>,
 
-    /// The index in output row to put the handle.
-    handle_index: Option<usize>,
+    /// Vec of indices in output row to put the handle. The indices must be sorted in the vec.
+    handle_indices: HandleIndicesVec,
 
     /// A vector of flags indicating whether corresponding column is filled in `next_batch`.
     /// It is a struct level field in order to prevent repeated memory allocations since its length
@@ -146,32 +149,26 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
-        if let Some(handle_index) = self.handle_index {
-            // PK is specified in schema. PK column should be decoded and the rest is in raw format
-            // like this:
-            // non-pk non-pk non-pk pk non-pk non-pk non-pk
-            //                      ^handle_index = 3
-            //                                             ^columns_len = 7
+        let mut last_index = 0usize;
 
-            // Columns before `handle_index` (if any) should be raw.
-            for _ in 0..handle_index {
+        for handle_index in &self.handle_indices {
+            for _ in last_index..*handle_index {
                 columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
-            // For PK handle, we construct a decoded `VectorValue` because it is directly
+
+            // For PK handles, we construct a decoded `VectorValue` because it is directly
             // stored as i64, without a datum flag, at the end of key.
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                 scan_rows,
                 EvalType::Int,
             ));
-            // Columns after `handle_index` (if any) should also be raw.
-            for _ in handle_index + 1..columns_len {
-                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
-            }
-        } else {
-            // PK is unspecified in schema. All column should be in raw format.
-            for _ in 0..columns_len {
-                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
-            }
+
+            last_index = *handle_index + 1;
+        }
+
+        // Fill remaining columns after the last handle column.
+        for _ in last_index..columns_len {
+            columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
 
         assert_eq!(columns.len(), columns_len);
@@ -190,15 +187,15 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
-        if let Some(handle_index) = self.handle_index {
+        for handle_index in &self.handle_indices {
             let handle_id = table::decode_handle(key)?;
             // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
             // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
-            columns[handle_index]
+            columns[*handle_index]
                 .mut_decoded()
                 .push_int(Some(handle_id));
             decoded_columns += 1;
-            self.is_column_filled[handle_index] = true;
+            self.is_column_filled[*handle_index] = true;
         }
 
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
@@ -992,4 +989,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
     }
+
+    #[test]
+    fn test_multi_handle_column() {}
 }
