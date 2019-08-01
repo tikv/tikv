@@ -3,6 +3,8 @@
 mod file_log;
 mod formatter;
 
+use std::collections::HashSet;
+use std::env;
 use std::fmt;
 use std::io::{self, BufWriter};
 use std::path::Path;
@@ -36,8 +38,24 @@ where
     D: Drain + Send + 'static,
     <D as Drain>::Err: std::fmt::Display,
 {
+    // Collects following targets.
+    let mut disabled_targets = HashSet::new();
+    // Only for debug purpose, so use environment instead of configuration file.
+    if let Ok(extra_modules) = env::var("TIKV_DISABLE_LOG_TARGETS") {
+        disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
+    }
+
+    let filtered = drain.filter(move |record| {
+        if !disabled_targets.is_empty() {
+            let module = record.module().splitn(2, "::").nth(0).unwrap();
+            !disabled_targets.contains(module)
+        } else {
+            true
+        }
+    });
+
     let logger = if use_async {
-        let drain = Async::new(LogAndFuse(drain))
+        let drain = Async::new(LogAndFuse(filtered))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
@@ -46,7 +64,7 @@ where
             .fuse();
         slog::Logger::root(drain, slog_o!())
     } else {
-        let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
+        let drain = LogAndFuse(Mutex::new(filtered).filter_level(level));
         slog::Logger::root(drain, slog_o!())
     };
 

@@ -43,7 +43,6 @@ export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
-export TIKV_LOG_TARGETS := $(shell find . -name Cargo.toml -exec awk -F ' ' '/name/{gsub(/"/, "", $$3); print $$3};' {} \; | uniq | xargs)
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
