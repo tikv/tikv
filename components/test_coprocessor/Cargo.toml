@@ -13,8 +13,8 @@ test_storage = { path = "../test_storage" }
 futures = "0.1"
 
 [dependencies.kvproto]
-git = "https://github.com/MyonKeminta/kvproto.git"
-branch="misono/reverse-raw-scan-2.1"
+git = "https://github.com/pingcap/kvproto.git"
+branch="release-2.1"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
