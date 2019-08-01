@@ -38,7 +38,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     let mut exec_descriptors = exec_descriptors.into_iter();
     let first = exec_descriptors
         .next()
-        .ok_or_else(|| unknown_err!("No executor specified"))?;
+        .ok_or_else(|| other_err!("No executor specified"))?;
 
     let mut src = build_first_executor::<_, C>(first, storage, ranges, is_streaming)?;
     let mut summary_slot_index = 0;
@@ -47,12 +47,6 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
         summary_slot_index += 1;
 
         let curr: Box<dyn Executor<StorageStats = S::Statistics> + Send> = match exec.get_tp() {
-            ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                return Err(unknown_err!(
-                    "Unexpected non-first executor: {:?}",
-                    exec.get_tp()
-                ));
-            }
             ExecType::TypeSelection => {
                 COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
 
@@ -94,6 +88,12 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     super::LimitExecutor::new(exec.take_limit(), src)
                         .with_summary_collector(C::new(summary_slot_index)),
                 )
+            }
+            _ => {
+                return Err(other_err!(
+                    "Unexpected non-first executor {:?}",
+                    exec.get_tp()
+                ));
             }
         };
         src = curr;
@@ -142,10 +142,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
             );
             Ok(ex)
         }
-        _ => Err(unknown_err!(
-            "Unexpected first scanner: {:?}",
-            first.get_tp()
-        )),
+        _ => Err(other_err!("Unexpected first scanner: {:?}", first.get_tp())),
     }
 }
 

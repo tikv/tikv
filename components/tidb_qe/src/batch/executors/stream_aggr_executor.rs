@@ -46,6 +46,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     }
 }
 
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
+// when calling `check_supported`.
 impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]

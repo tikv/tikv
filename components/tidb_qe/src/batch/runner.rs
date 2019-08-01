@@ -48,6 +48,7 @@ pub struct BatchExecutorsRunner<SS> {
     exec_stats: ExecuteStats,
 }
 
+// We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
 impl BatchExecutorsRunner<()> {
     /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
@@ -57,30 +58,30 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
                     BatchTableScanExecutor::check_supported(&descriptor)
-                        .map_err(|e| unknown_err!("BatchTableScanExecutor: {}", e))?;
+                        .map_err(|e| other_err!("BatchTableScanExecutor: {}", e))?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
                     BatchIndexScanExecutor::check_supported(&descriptor)
-                        .map_err(|e| unknown_err!("BatchIndexScanExecutor: {}", e))?;
+                        .map_err(|e| other_err!("BatchIndexScanExecutor: {}", e))?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
                     BatchSelectionExecutor::check_supported(&descriptor)
-                        .map_err(|e| unknown_err!("BatchSelectionExecutor: {}", e))?;
+                        .map_err(|e| other_err!("BatchSelectionExecutor: {}", e))?;
                 }
                 ExecType::TypeAggregation | ExecType::TypeStreamAgg
                     if ed.get_aggregation().get_group_by().is_empty() =>
                 {
                     let descriptor = ed.get_aggregation();
                     BatchSimpleAggregationExecutor::check_supported(&descriptor)
-                        .map_err(|e| unknown_err!("BatchSimpleAggregationExecutor: {}", e))?;
+                        .map_err(|e| other_err!("BatchSimpleAggregationExecutor: {}", e))?;
                 }
                 ExecType::TypeAggregation => {
                     let descriptor = ed.get_aggregation();
                     if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
                         BatchSlowHashAggregationExecutor::check_supported(&descriptor)
-                            .map_err(|e| unknown_err!("BatchSlowHashAggregationExecutor: {}", e))?;
+                            .map_err(|e| other_err!("BatchSlowHashAggregationExecutor: {}", e))?;
                     }
                 }
                 ExecType::TypeStreamAgg => {
@@ -88,13 +89,13 @@ impl BatchExecutorsRunner<()> {
                     //       It is undefined behavior if the source is unordered.
                     let descriptor = ed.get_aggregation();
                     BatchStreamAggregationExecutor::check_supported(&descriptor)
-                        .map_err(|e| unknown_err!("BatchStreamAggregationExecutor: {}", e))?;
+                        .map_err(|e| other_err!("BatchStreamAggregationExecutor: {}", e))?;
                 }
                 ExecType::TypeLimit => {}
                 ExecType::TypeTopN => {
                     let descriptor = ed.get_topN();
                     BatchTopNExecutor::check_supported(&descriptor)
-                        .map_err(|e| unknown_err!("BatchTopNExecutor: {}", e))?;
+                        .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
             }
         }
@@ -112,7 +113,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
         .next()
-        .ok_or_else(|| unknown_err!("No executors"))?;
+        .ok_or_else(|| other_err!("No executors"))?;
 
     let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>>;
     let mut summary_slot_index = 0;
@@ -157,7 +158,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
             );
         }
         _ => {
-            return Err(unknown_err!(
+            return Err(other_err!(
                 "Unexpected first executor {:?}",
                 first_ed.get_tp()
             ));
@@ -281,9 +282,9 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             _ => {
-                return Err(unknown_err!(
+                return Err(other_err!(
                     "Unexpected non-first executor {:?}",
-                    first_ed.get_tp()
+                    ed.get_tp()
                 ));
             }
         };
@@ -325,7 +326,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let schema_len = out_most_executor.schema().len();
         for offset in &output_offsets {
             if (*offset as usize) >= schema_len {
-                return Err(unknown_err!(
+                return Err(other_err!(
                     "Invalid output offset (schema has {} columns, access index {})",
                     schema_len,
                     offset

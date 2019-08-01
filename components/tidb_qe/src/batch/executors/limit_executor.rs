@@ -102,7 +102,7 @@ mod tests {
                 ])]),
                 logical_rows: vec![1, 2],
                 warnings: EvalWarnings::default(),
-                is_drained: Err(unknown_err!("foo")),
+                is_drained: Err(other_err!("foo")),
             }],
         );
 
@@ -178,7 +178,7 @@ mod tests {
                     ])]),
                     logical_rows: vec![0, 2],
                     warnings: EvalWarnings::default(),
-                    is_drained: Err(unknown_err!("foo")),
+                    is_drained: Err(other_err!("foo")),
                 },
             ],
         );

@@ -13,7 +13,7 @@ use crate::Result;
 /// Checks whether or not there is only one child and the child expression is supported.
 pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {
     if aggr_def.get_children().len() != 1 {
-        return Err(unknown_err!(
+        return Err(other_err!(
             "Expect 1 parameter, but got {}",
             aggr_def.get_children().len()
         ));

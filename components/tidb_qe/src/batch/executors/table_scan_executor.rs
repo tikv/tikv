@@ -19,6 +19,8 @@ use crate::Result;
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
 
+// We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
+// when calling `check_supported`.
 impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]

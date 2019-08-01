@@ -62,12 +62,14 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
 /// pointers, BatchTopNExecutor still remains `Send`.
 unsafe impl<Src: BatchExecutor> Send for BatchTopNExecutor<Src> {}
 
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
+// when calling `check_supported`.
 impl BatchTopNExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TopN) -> Result<()> {
         if descriptor.get_order_by().is_empty() {
-            return Err(unknown_err!("Missing Top N column"));
+            return Err(other_err!("Missing Top N column"));
         }
         for item in descriptor.get_order_by() {
             RpnExpressionBuilder::check_expr_tree_supported(item.get_expr())?;
@@ -136,7 +138,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
         // always needs to calculate over all data.
-        let src_result = self.src.next_batch(crate::batch::run::BATCH_MAX_SIZE);
+        let src_result = self.src.next_batch(crate::batch::runner::BATCH_MAX_SIZE);
 
         self.context.warnings = src_result.warnings;
 

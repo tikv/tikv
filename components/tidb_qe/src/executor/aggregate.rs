@@ -25,7 +25,7 @@ pub fn build_aggr_func(tp: ExprType) -> Result<Box<dyn AggrFunc>> {
         })),
         ExprType::Max => Ok(Box::new(Extremum::new(Ordering::Less))),
         ExprType::Min => Ok(Box::new(Extremum::new(Ordering::Greater))),
-        et => Err(unknown_err!("unsupport AggrExprType: {:?}", et)),
+        et => Err(other_err!("unsupport AggrExprType: {:?}", et)),
     }
 }
 
@@ -44,7 +44,7 @@ struct AggBitAnd {
 impl AggrFunc for AggBitAnd {
     fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
-            return Err(unknown_err!(
+            return Err(other_err!(
                 "bit_and only support one column, but got {}",
                 args.len()
             ));
@@ -74,7 +74,7 @@ struct AggBitOr {
 impl AggrFunc for AggBitOr {
     fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
-            return Err(unknown_err!(
+            return Err(other_err!(
                 "bit_or only support one column, but got {}",
                 args.len()
             ));
@@ -104,7 +104,7 @@ struct AggBitXor {
 impl AggrFunc for AggBitXor {
     fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
-            return Err(unknown_err!(
+            return Err(other_err!(
                 "bit_xor only support one column, but got {}",
                 args.len()
             ));
@@ -158,7 +158,7 @@ impl AggrFunc for First {
             return Ok(());
         }
         if args.len() != 1 {
-            return Err(unknown_err!(
+            return Err(other_err!(
                 "Wrong number of args for AggFuncFirstRow: {}",
                 args.len()
             ));
@@ -184,7 +184,7 @@ impl Sum {
     /// Keep compatible with TiDB's `calculateSum` function.
     fn add_asssign(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<bool> {
         if args.len() != 1 {
-            return Err(unknown_err!(
+            return Err(other_err!(
                 "sum only support one column, but got {}",
                 args.len()
             ));
@@ -264,7 +264,7 @@ impl Extremum {
 impl AggrFunc for Extremum {
     fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
-            return Err(unknown_err!(
+            return Err(other_err!(
                 "max/min only support one column, but got {}",
                 args.len()
             ));

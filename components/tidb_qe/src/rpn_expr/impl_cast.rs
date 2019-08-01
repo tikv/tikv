@@ -104,7 +104,7 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::DateTime, EvalType::Bytes) => cast_any_as_any_fn_meta::<DateTime, Bytes>(),
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_any_fn_meta::<Duration, Bytes>(),
         (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
-        _ => return Err(unknown_err!("Unsupported cast from {} to {}", from, to)),
+        _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
     // This cast function is inserted by `Coprocessor` automatically,
     // the `inUnion` flag always false in this situation. Ideally,

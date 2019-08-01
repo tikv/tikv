@@ -295,7 +295,7 @@ pub fn validate_expr_return_type(expr: &Expr, et: EvalType) -> Result<()> {
     if et == received_et {
         Ok(())
     } else {
-        Err(unknown_err!("Expect `{}`, received `{}`", et, received_et))
+        Err(other_err!("Expect `{}`, received `{}`", et, received_et))
     }
 }
 
@@ -305,7 +305,7 @@ pub fn validate_expr_arguments_eq(expr: &Expr, args: usize) -> Result<()> {
     if received_args == args {
         Ok(())
     } else {
-        Err(unknown_err!(
+        Err(other_err!(
             "Expect {} arguments, received {}",
             args,
             received_args
@@ -319,7 +319,7 @@ pub fn validate_expr_arguments_gte(expr: &Expr, args: usize) -> Result<()> {
     if received_args >= args {
         Ok(())
     } else {
-        Err(unknown_err!(
+        Err(other_err!(
             "Expect at least {} arguments, received {}",
             args,
             received_args

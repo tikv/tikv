@@ -4,7 +4,7 @@ mod aggregate;
 mod aggregation;
 mod index_scan;
 mod limit;
-pub mod run;
+pub mod runner;
 mod scan;
 mod selection;
 mod table_scan;
@@ -14,7 +14,7 @@ mod topn_heap;
 pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
 pub use self::index_scan::IndexScanExecutor;
 pub use self::limit::LimitExecutor;
-pub use self::run::ExecutorsRunner;
+pub use self::runner::ExecutorsRunner;
 pub use self::scan::{ScanExecutor, ScanExecutorOptions};
 pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
@@ -56,7 +56,7 @@ impl ExprColumnRefVisitor {
         if expr.get_tp() == ExprType::ColumnRef {
             let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
             if offset >= self.cols_len {
-                return Err(unknown_err!(
+                return Err(other_err!(
                     "offset {} overflow, should be less than {}",
                     offset,
                     self.cols_len
@@ -126,7 +126,7 @@ impl Row {
     pub fn take_origin(self) -> Result<OriginCols> {
         match self {
             Row::Origin(row) => Ok(row),
-            _ => Err(unknown_err!(
+            _ => Err(other_err!(
                 "unexpected: aggregation columns cannot take origin"
             )),
         }
@@ -159,7 +159,7 @@ impl OriginCols {
             let value = match self.data.get(col_id) {
                 None if col.has_default_val() => col.get_default_val().to_vec(),
                 None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
-                    return Err(unknown_err!(
+                    return Err(other_err!(
                         "column {} of {} is missing",
                         col_id,
                         self.handle
@@ -189,7 +189,7 @@ impl OriginCols {
                     values.extend_from_slice(col.get_default_val());
                 }
                 None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
-                    return Err(unknown_err!(
+                    return Err(other_err!(
                         "column {} of {} is missing",
                         col_id,
                         self.handle
@@ -230,7 +230,7 @@ impl OriginCols {
                         ))
                     }
                     None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
-                        return Err(unknown_err!(
+                        return Err(other_err!(
                             "column {} of {} is missing",
                             col_id,
                             self.handle

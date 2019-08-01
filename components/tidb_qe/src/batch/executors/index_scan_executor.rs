@@ -17,6 +17,8 @@ use crate::Result;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
+// We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
+// when calling `check_supported`.
 impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -178,7 +180,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 // NOTE: it is not `number::decode_i64`.
                 value
                     .read_i64::<BigEndian>()
-                    .map_err(|_| unknown_err!("Failed to decode handle in value as i64"))?
+                    .map_err(|_| other_err!("Failed to decode handle in value as i64"))?
             } else {
                 // This is a normal index. The remaining payload part is the PK handle.
                 // Let's decode it and put in the column.
@@ -191,10 +193,10 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
 
                 match flag {
                     datum::INT_FLAG => number::decode_i64(&mut val)
-                        .map_err(|_| unknown_err!("Failed to decode handle in key as i64"))?,
+                        .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
                     datum::UINT_FLAG => {
                         (number::decode_u64(&mut val)
-                            .map_err(|_| unknown_err!("Failed to decode handle in key as u64"))?)
+                            .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
                             as i64
                     }
                     _ => {

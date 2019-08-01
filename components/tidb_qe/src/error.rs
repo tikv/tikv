@@ -13,7 +13,7 @@ pub enum EvaluateError {
     Custom { code: i32, msg: String },
 
     #[fail(display = "{}", _0)]
-    Unknown(String),
+    Other(String),
 }
 
 impl EvaluateError {
@@ -21,9 +21,9 @@ impl EvaluateError {
     pub fn code(&self) -> i32 {
         match self {
             // TODO: We should assign our own error code
-            EvaluateError::MaxExecuteTimeExceeded => 1105,
+            EvaluateError::MaxExecuteTimeExceeded => 8501,
             EvaluateError::Custom { code, .. } => *code,
-            EvaluateError::Unknown(_) => 1105,
+            EvaluateError::Other(_) => 8500,
         }
     }
 }
@@ -34,7 +34,7 @@ impl From<CodecError> for EvaluateError {
     fn from(err: CodecError) -> Self {
         match err {
             CodecError::Eval(msg, code) => EvaluateError::Custom { code, msg },
-            e => EvaluateError::Unknown(e.to_string()),
+            e => EvaluateError::Other(e.to_string()),
         }
     }
 }
@@ -43,7 +43,7 @@ impl From<CodecError> for EvaluateError {
 impl From<Box<dyn std::error::Error + Send + Sync>> for EvaluateError {
     #[inline]
     fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
-        EvaluateError::Unknown(err.to_string())
+        EvaluateError::Other(err.to_string())
     }
 }
 

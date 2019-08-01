@@ -33,7 +33,7 @@ where
 {
     // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
     if children.len() != 2 {
-        return Err(unknown_err!(
+        return Err(other_err!(
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",
             value,
             children.len()
@@ -228,7 +228,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfString => if_condition_fn_meta::<Bytes>(),
         ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
         ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
-        _ => return Err(unknown_err!(
+        _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
         ))?,

@@ -192,7 +192,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         let src_result = self
             .entities
             .src
-            .next_batch(crate::batch::run::BATCH_MAX_SIZE);
+            .next_batch(crate::batch::runner::BATCH_MAX_SIZE);
 
         self.entities.context.warnings = src_result.warnings;
 

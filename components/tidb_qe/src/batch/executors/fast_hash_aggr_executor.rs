@@ -57,6 +57,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 }
 
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
+// when calling `check_supported`.
 impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -64,7 +66,7 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         let group_by_definitions = descriptor.get_group_by();
         assert!(!group_by_definitions.is_empty());
         if group_by_definitions.len() > 1 {
-            return Err(unknown_err!("Multi group is not supported"));
+            return Err(other_err!("Multi group is not supported"));
         }
 
         let def = &group_by_definitions[0];
@@ -73,12 +75,12 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         let eval_type = box_try!(EvalType::try_from(def.get_field_type().tp()));
         match eval_type {
             EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
-            _ => return Err(unknown_err!("Eval type {} is not supported", eval_type)),
+            _ => return Err(other_err!("Eval type {} is not supported", eval_type)),
         }
 
         RpnExpressionBuilder::check_expr_tree_supported(def)?;
         if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-            return Err(unknown_err!("Group by expression is not a column"));
+            return Err(other_err!("Group by expression is not a column"));
         }
 
         let aggr_definitions = descriptor.get_agg_func();
@@ -150,7 +152,9 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             groups,
             group_by_exp,
             group_by_field_type: Some(group_by_field_type),
-            states_offset_each_logical_row: Vec::with_capacity(crate::batch::run::BATCH_MAX_SIZE),
+            states_offset_each_logical_row: Vec::with_capacity(
+                crate::batch::runner::BATCH_MAX_SIZE,
+            ),
         };
 
         Ok(Self(AggregationExecutor::new(

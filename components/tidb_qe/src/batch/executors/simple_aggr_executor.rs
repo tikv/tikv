@@ -45,6 +45,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 }
 
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
+// when calling `check_supported`.
 impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -52,7 +54,7 @@ impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
         assert_eq!(descriptor.get_group_by().len(), 0);
         let aggr_definitions = descriptor.get_agg_func();
         if aggr_definitions.is_empty() {
-            return Err(unknown_err!("Aggregation expression is empty"));
+            return Err(other_err!("Aggregation expression is empty"));
         }
 
         for def in aggr_definitions {

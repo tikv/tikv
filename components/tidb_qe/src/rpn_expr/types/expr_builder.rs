@@ -44,7 +44,7 @@ impl RpnExpressionBuilder {
             ExprType::MysqlDecimal => {}
             ExprType::MysqlJson => {}
             ExprType::ColumnRef => {}
-            _ => return Err(unknown_err!("Blacklist expression type {:?}", c.get_tp())),
+            _ => return Err(other_err!("Blacklist expression type {:?}", c.get_tp())),
         }
 
         Ok(())
@@ -67,7 +67,7 @@ impl RpnExpressionBuilder {
             | ExprType::MysqlJson => Ok(true),
             ExprType::ScalarFunc => Ok(false),
             ExprType::ColumnRef => Ok(false),
-            _ => Err(unknown_err!("Unsupported expression type {:?}", c.get_tp())),
+            _ => Err(other_err!("Unsupported expression type {:?}", c.get_tp())),
         }
     }
 
@@ -268,10 +268,10 @@ fn handle_node_column_ref(
     max_columns: usize,
 ) -> Result<()> {
     let offset = number::decode_i64(&mut tree_node.get_val())
-        .map_err(|_| unknown_err!("Unable to decode column reference offset from the request"))?
+        .map_err(|_| other_err!("Unable to decode column reference offset from the request"))?
         as usize;
     if offset >= max_columns {
-        return Err(unknown_err!(
+        return Err(other_err!(
             "Invalid column offset (schema has {} columns, access index {})",
             max_columns,
             offset
@@ -297,7 +297,7 @@ where
 
     // Validate the input expression.
     (func_meta.validator_ptr)(&tree_node).map_err(|e| {
-        unknown_err!(
+        other_err!(
             "Invalid {} (sig = {:?}) signature: {}",
             func_meta.name,
             tree_node.get_sig(),
@@ -320,7 +320,7 @@ where
             Datum::Bytes(bytes) => ScalarValue::Bytes(Some(bytes)),
             Datum::Dec(dec) => ScalarValue::Decimal(Some(dec)),
             Datum::Json(json) => ScalarValue::Json(Some(json)),
-            _ => return Err(unknown_err!("Unsupported push down datum {}", d)),
+            _ => return Err(other_err!("Unsupported push down datum {}", d)),
         };
         implicit_args.push(arg);
     }
@@ -375,7 +375,7 @@ fn handle_node_constant(
             extract_scalar_value_json(tree_node.take_val())?
         }
         expr_type => {
-            return Err(unknown_err!(
+            return Err(other_err!(
                 "Unexpected ExprType {:?} and EvalType {:?}",
                 expr_type,
                 eval_type
@@ -401,14 +401,14 @@ fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
 #[inline]
 fn extract_scalar_value_int64(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_i64(&mut val.as_slice())
-        .map_err(|_| unknown_err!("Unable to decode int64 from the request"))?;
+        .map_err(|_| other_err!("Unable to decode int64 from the request"))?;
     Ok(ScalarValue::Int(Some(value)))
 }
 
 #[inline]
 fn extract_scalar_value_uint64(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_u64(&mut val.as_slice())
-        .map_err(|_| unknown_err!("Unable to decode uint64 from the request"))?;
+        .map_err(|_| other_err!("Unable to decode uint64 from the request"))?;
     Ok(ScalarValue::Int(Some(value as i64)))
 }
 
@@ -420,7 +420,7 @@ fn extract_scalar_value_bytes(val: Vec<u8>) -> Result<ScalarValue> {
 #[inline]
 fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_f64(&mut val.as_slice())
-        .map_err(|_| unknown_err!("Unable to decode float from the request"))?;
+        .map_err(|_| other_err!("Unable to decode float from the request"))?;
     Ok(ScalarValue::Real(Real::new(value).ok()))
 }
 
@@ -431,33 +431,33 @@ fn extract_scalar_value_date_time(
     time_zone: &Tz,
 ) -> Result<ScalarValue> {
     let v = number::decode_u64(&mut val.as_slice())
-        .map_err(|_| unknown_err!("Unable to decode date time from the request"))?;
+        .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     let fsp = field_type.decimal() as i8;
     let value = DateTime::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
-        .map_err(|_| unknown_err!("Unable to decode date time from the request"))?;
+        .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
 
 #[inline]
 fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
     let n = number::decode_i64(&mut val.as_slice())
-        .map_err(|_| unknown_err!("Unable to decode duration from the request"))?;
+        .map_err(|_| other_err!("Unable to decode duration from the request"))?;
     let value = Duration::from_nanos(n, MAX_FSP)
-        .map_err(|_| unknown_err!("Unable to decode duration from the request"))?;
+        .map_err(|_| other_err!("Unable to decode duration from the request"))?;
     Ok(ScalarValue::Duration(Some(value)))
 }
 
 #[inline]
 fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
     let value = Decimal::decode(&mut val.as_slice())
-        .map_err(|_| unknown_err!("Unable to decode decimal from the request"))?;
+        .map_err(|_| other_err!("Unable to decode decimal from the request"))?;
     Ok(ScalarValue::Decimal(Some(value)))
 }
 
 #[inline]
 fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
     let value = Json::decode(&mut val.as_slice())
-        .map_err(|_| unknown_err!("Unable to decode json from the request"))?;
+        .map_err(|_| other_err!("Unable to decode json from the request"))?;
     Ok(ScalarValue::Json(Some(value)))
 }
 

@@ -26,7 +26,7 @@ pub fn build_handler<S: Store + 'static>(
     let mut is_batch = false;
     if enable_batch_if_possible && !is_streaming {
         let is_supported =
-            tidb_qe::batch::run::BatchExecutorsRunner::check_supported(req.get_executors());
+            tidb_qe::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
         if let Err(e) = is_supported {
             // Not supported, will fallback to normal executor.
             // To avoid user worries, let's output success message.
@@ -84,7 +84,7 @@ impl RequestHandler for DAGHandler {
     }
 }
 
-pub struct BatchDAGHandler(tidb_qe::batch::run::BatchExecutorsRunner<Statistics>);
+pub struct BatchDAGHandler(tidb_qe::batch::runner::BatchExecutorsRunner<Statistics>);
 
 impl BatchDAGHandler {
     pub fn new<S: Store + 'static>(
@@ -94,7 +94,7 @@ impl BatchDAGHandler {
         deadline: Deadline,
     ) -> Result<Self> {
         Ok(Self(
-            tidb_qe::batch::run::BatchExecutorsRunner::from_request(
+            tidb_qe::batch::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
                 TiKVStorage::from(store),

@@ -20,6 +20,8 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     conditions: Vec<RpnExpression>,
 }
 
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
+// when calling `check_supported`.
 impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -581,7 +583,7 @@ mod tests {
         #[rpn_fn]
         fn foo(v: &Option<i64>) -> Result<Option<i64>> {
             match v {
-                None => Err(unknown_err!("foo")),
+                None => Err(other_err!("foo")),
                 Some(v) => Ok(Some(*v)),
             }
         }

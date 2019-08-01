@@ -53,6 +53,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     }
 }
 
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
+// when calling `check_supported`.
 impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -62,7 +64,7 @@ impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
             if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-                return Err(unknown_err!("Group by expression is not a column"));
+                return Err(other_err!("Group by expression is not a column"));
             }
         }
 
@@ -132,7 +134,9 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             group_by_exps,
             group_key_buffer: Box::new(Vec::with_capacity(8192)),
             group_key_offsets,
-            states_offset_each_logical_row: Vec::with_capacity(crate::batch::run::BATCH_MAX_SIZE),
+            states_offset_each_logical_row: Vec::with_capacity(
+                crate::batch::runner::BATCH_MAX_SIZE,
+            ),
             group_by_results_unsafe: Vec::with_capacity(group_by_len),
         };
 
