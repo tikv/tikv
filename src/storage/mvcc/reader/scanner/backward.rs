@@ -1100,27 +1100,27 @@ mod tests {
         // Generate RocksDB tombstones in write cf.
         let start_ts = 1;
         let safe_point = 2;
-        for i in 0..256 {
-            for y in 0..256 {
+        for i in 0..16 {
+            for y in 0..16 {
                 let pk = &[i as u8, y as u8];
                 must_prewrite_put(&engine, pk, b"", pk, start_ts);
                 must_rollback(&engine, pk, start_ts);
-                // Generate 65534 RocksDB tombstones between [0,0] and [255,255].
-                if !((i == 0 && y == 0) || (i == 255 && y == 255)) {
+                // Generate 254 RocksDB tombstones between [0,0] and [15,15].
+                if !((i == 0 && y == 0) || (i == 15 && y == 15)) {
                     must_gc(&engine, pk, safe_point);
                 }
             }
         }
 
-        // Generate 256 locks in lock cf.
+        // Generate 16 locks in lock cf.
         let start_ts = 3;
-        for i in 0..256 {
+        for i in 0..16 {
             let pk = &[i as u8];
             must_prewrite_put(&engine, pk, b"", pk, start_ts);
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let row = &[255 as u8];
+        let row = &[15 as u8];
         let k = Key::from_raw(row);
 
         // Call reverse scan
@@ -1131,7 +1131,7 @@ mod tests {
             .unwrap();
         assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
-        assert_eq!(statistics.lock.prev, 255);
+        assert_eq!(statistics.lock.prev, 15);
         assert_eq!(statistics.write.prev, 1);
     }
 
