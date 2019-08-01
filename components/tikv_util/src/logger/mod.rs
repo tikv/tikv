@@ -47,10 +47,13 @@ where
 
     let filtered = drain.filter(move |record| {
         if !disabled_targets.is_empty() {
-            // The returned value from module() would be:
+            // The format of the returned value from module() would like this:
             // ```
             //  tikv::raftstore::store::fsm::store
             //  tikv_util
+            //  tikv_util::config::check_data_dir
+            //  raft::raft
+            //  grpcio::log_util
             //  ...
             // ```
             // Here get the highest level module name to check.
