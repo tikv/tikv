@@ -73,7 +73,7 @@ impl RpnFnScalarEvaluator {
     }
 
     /// Evaluates the given function by using collected parameters.
-    /// Then return the evaluation result and the inner `EvalContext`
+    /// Then return the inner `EvalContext` and the evaluation result.
     pub fn evaluate_ctx<T: Evaluable>(
         self,
         sig: ScalarFuncSig,
@@ -107,20 +107,18 @@ impl RpnFnScalarEvaluator {
 
         let mut columns = LazyBatchColumnVec::empty();
         let ret = expr.eval(&mut context, &[], &mut columns, &[0], 1);
-
-        (
-            context,
-            ret.map(|ret| {
-                match ret {
-                    // Only used in tests, so clone is fine.
-                    RpnStackNode::Scalar { value, .. } => T::borrow_scalar_value(value).clone(),
-                    RpnStackNode::Vector { value, .. } => {
-                        assert_eq!(value.as_ref().len(), 1);
-                        T::borrow_vector_value(value.as_ref())[0].clone()
-                    }
+        let result = ret.map(|ret| {
+            match ret {
+                // Only used in tests, so clone is fine.
+                RpnStackNode::Scalar { value, .. } => T::borrow_scalar_value(value).clone(),
+                RpnStackNode::Vector { value, .. } => {
+                    assert_eq!(value.as_ref().len(), 1);
+                    T::borrow_vector_value(value.as_ref())[0].clone()
                 }
-            }),
-        )
+            }
+        });
+
+        (context, result)
     }
 
     /// Evaluates the given function by using collected parameters.
