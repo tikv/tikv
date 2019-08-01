@@ -37,14 +37,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        KeyIsLocked { key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64, txn_size: u64 } {
+        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {}-{}@{} ttl {} txn_size {}",
-                        hex::encode_upper(key),
-                        hex::encode_upper(primary),
-                        ts,
-                        ttl,
-                        txn_size)
+            display("key is locked (backoff or cleanup) {:?}", info)
         }
         BadFormatLock { description("bad format lock data") }
         BadFormatWrite { description("bad format write data") }
@@ -98,82 +93,72 @@ quick_error! {
 
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
-        match *self {
-            Error::Engine(ref e) => e.maybe_clone().map(Error::Engine),
-            Error::Codec(ref e) => e.maybe_clone().map(Error::Codec),
-            Error::KeyIsLocked {
-                ref key,
-                ref primary,
-                ts,
-                ttl,
-                txn_size,
-            } => Some(Error::KeyIsLocked {
-                key: key.clone(),
-                primary: primary.clone(),
-                ts,
-                ttl,
-                txn_size,
-            }),
+        match self {
+            Error::Engine(e) => e.maybe_clone().map(Error::Engine),
+            Error::Codec(e) => e.maybe_clone().map(Error::Codec),
+            Error::KeyIsLocked(info) => Some(Error::KeyIsLocked(info.clone())),
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),
             Error::TxnLockNotFound {
                 start_ts,
                 commit_ts,
-                ref key,
+                key,
             } => Some(Error::TxnLockNotFound {
-                start_ts,
-                commit_ts,
+                start_ts: *start_ts,
+                commit_ts: *commit_ts,
                 key: key.to_owned(),
             }),
             Error::LockTypeNotMatch {
                 start_ts,
-                ref key,
+                key,
                 pessimistic,
             } => Some(Error::LockTypeNotMatch {
-                start_ts,
+                start_ts: *start_ts,
                 key: key.to_owned(),
-                pessimistic,
+                pessimistic: *pessimistic,
             }),
             Error::WriteConflict {
                 start_ts,
                 conflict_start_ts,
                 conflict_commit_ts,
-                ref key,
-                ref primary,
+                key,
+                primary,
             } => Some(Error::WriteConflict {
-                start_ts,
-                conflict_start_ts,
-                conflict_commit_ts,
+                start_ts: *start_ts,
+                conflict_start_ts: *conflict_start_ts,
+                conflict_commit_ts: *conflict_commit_ts,
                 key: key.to_owned(),
                 primary: primary.to_owned(),
             }),
             Error::Deadlock {
                 start_ts,
                 lock_ts,
-                ref lock_key,
+                lock_key,
                 deadlock_key_hash,
             } => Some(Error::Deadlock {
-                start_ts,
-                lock_ts,
+                start_ts: *start_ts,
+                lock_ts: *lock_ts,
                 lock_key: lock_key.to_owned(),
-                deadlock_key_hash,
+                deadlock_key_hash: *deadlock_key_hash,
             }),
-            Error::AlreadyExist { ref key } => Some(Error::AlreadyExist { key: key.clone() }),
-            Error::DefaultNotFound { ref key, ref write } => Some(Error::DefaultNotFound {
+            Error::AlreadyExist { key } => Some(Error::AlreadyExist { key: key.clone() }),
+            Error::DefaultNotFound { key, write } => Some(Error::DefaultNotFound {
                 key: key.to_owned(),
                 write: write.clone(),
             }),
             Error::KeyVersion => Some(Error::KeyVersion),
-            Error::Committed { commit_ts } => Some(Error::Committed { commit_ts }),
-            Error::PessimisticLockRollbacked { start_ts, ref key } => {
+            Error::Committed { commit_ts } => Some(Error::Committed {
+                commit_ts: *commit_ts,
+            }),
+            Error::PessimisticLockRollbacked { start_ts, key } => {
                 Some(Error::PessimisticLockRollbacked {
-                    start_ts,
+                    start_ts: *start_ts,
                     key: key.to_owned(),
                 })
             }
-            Error::PessimisticLockNotFound { start_ts, ref key } => {
+            Error::PessimisticLockNotFound { start_ts, key } => {
                 Some(Error::PessimisticLockNotFound {
-                    start_ts,
+                    start_ts: *start_ts,
                     key: key.to_owned(),
                 })
             }
@@ -416,13 +401,31 @@ pub mod tests {
         must_prewrite_delete_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
-    pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+    fn must_prewrite_lock_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
-            .unwrap();
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        let mutation = Mutation::Lock(Key::from_raw(key));
+        if for_update_ts == 0 {
+            txn.prewrite(mutation, pk, &options).unwrap();
+        } else {
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+                .unwrap();
+        }
         engine.write(&ctx, txn.into_modifies()).unwrap();
+    }
+
+    pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+        must_prewrite_lock_impl(engine, key, pk, ts, 0, false);
     }
 
     pub fn must_prewrite_lock_err<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
@@ -432,6 +435,17 @@ pub mod tests {
         assert!(txn
             .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
             .is_err());
+    }
+
+    pub fn must_pessimistic_prewrite_lock<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
+        must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
     pub fn must_acquire_pessimistic_lock<E: Engine>(

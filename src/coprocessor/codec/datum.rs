@@ -16,9 +16,10 @@ use tikv_util::escape;
 
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
-    PathExpression, RoundMode, Time, DEFAULT_FSP, MAX_FSP,
+    PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
-use super::{convert, Error, Result};
+use super::{Error, Result};
+use crate::coprocessor::codec::convert::{ConvertTo, ToInt};
 use crate::coprocessor::dag::expr::EvalContext;
 
 pub const NIL_FLAG: u8 = 0;
@@ -126,7 +127,7 @@ impl Datum {
             Datum::Dur(d) => self.cmp_dur(ctx, d),
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(ref t) => self.cmp_time(ctx, t),
-            Datum::Json(ref j) => self.cmp_json(j),
+            Datum::Json(ref j) => self.cmp_json(ctx, j),
         }
     }
 
@@ -165,23 +166,11 @@ impl Datum {
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
-            Datum::Bytes(ref bs) => {
-                let ff = convert::bytes_to_f64(ctx, bs)?;
-                cmp_f64(ff, f)
-            }
-            Datum::Dec(ref d) => {
-                let ff = d.as_f64()?;
-                cmp_f64(ff, f)
-            }
-            Datum::Dur(ref d) => {
-                let ff = d.to_secs_f64();
-                cmp_f64(ff, f)
-            }
-            Datum::Time(ref t) => {
-                let ff = t.to_f64()?;
-                cmp_f64(ff, f)
-            }
-            Datum::Json(ref json) => Datum::F64(f).cmp_json(json),
+            Datum::Bytes(ref bs) => cmp_f64(bs.convert(ctx)?, f),
+            Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
+            Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
+            Datum::Time(ref t) => cmp_f64(t.convert(ctx)?, f),
+            Datum::Json(ref json) => Datum::F64(f).cmp_json(ctx, json),
         }
     }
 
@@ -205,7 +194,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = convert::bytes_to_f64(ctx, bs)?;
+                let f = bs.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -220,7 +209,7 @@ impl Datum {
                 Ok(d.cmp(dec))
             }
             _ => {
-                let f = dec.as_f64()?;
+                let f = dec.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -246,20 +235,20 @@ impl Datum {
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
             _ => {
-                let f = time.to_f64()?;
+                let f = time.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
     }
 
-    fn cmp_json(&self, json: &Json) -> Result<Ordering> {
+    fn cmp_json(&self, ctx: &mut EvalContext, json: &Json) -> Result<Ordering> {
         let order = match *self {
             Datum::Json(ref j) => j.cmp(json),
             Datum::I64(d) => Json::I64(d).cmp(json),
             Datum::U64(d) => Json::U64(d).cmp(json),
             Datum::F64(d) => Json::Double(d).cmp(json),
             Datum::Dec(ref d) => {
-                let ff = d.as_f64()?;
+                let ff = d.convert(ctx)?;
                 Json::Double(ff).cmp(json)
             }
             Datum::Bytes(ref d) => {
@@ -281,13 +270,12 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => Some(
-                !bs.is_empty()
-                    && convert::convert_bytes_to_int(ctx, bs, FieldTypeTp::LongLong)? != 0,
-            ),
+            Datum::Bytes(ref bs) => {
+                Some(!bs.is_empty() && bs.to_int(ctx, FieldTypeTp::LongLong)? != 0)
+            }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
-            Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
+            Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
@@ -328,19 +316,11 @@ impl Datum {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
             Datum::F64(f) => Ok(f),
-            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs),
-            Datum::Time(t) => {
-                // TODO: replace with `convert_datetime_to_f64` after implementing
-                let d = t.to_decimal()?;
-                d.as_f64()
-            }
-            Datum::Dur(d) => {
-                // TODO: replace with `convert_duration_to_f64` after implementing
-                let d = Decimal::try_from(d)?;
-                d.as_f64()
-            }
-            Datum::Dec(d) => d.as_f64(),
-            Datum::Json(j) => j.cast_to_real(ctx),
+            Datum::Bytes(bs) => bs.convert(ctx),
+            Datum::Time(t) => t.convert(ctx),
+            Datum::Dur(d) => d.convert(ctx),
+            Datum::Dec(d) => d.convert(ctx),
+            Datum::Json(j) => j.convert(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
         }
     }
@@ -351,23 +331,13 @@ impl Datum {
         let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => convert::convert_uint_to_int(ctx, u, tp),
-            Datum::F64(f) => convert::convert_float_to_int(ctx, f, tp),
-            Datum::Bytes(bs) => convert::convert_bytes_to_int(ctx, &bs, FieldTypeTp::LongLong),
-            Datum::Time(mut t) => {
-                t.round_frac(mysql::DEFAULT_FSP)?;
-                let d = t.to_decimal()?;
-                d.as_i64().into()
-            }
-            Datum::Dur(d) => {
-                let d = Decimal::try_from(d.round_frac(mysql::DEFAULT_FSP)?)?;
-                d.as_i64().into()
-            }
-            Datum::Dec(d) => {
-                let res: Result<Decimal> = d.round(mysql::DEFAULT_FSP, RoundMode::HalfEven).into();
-                res?.as_i64().into()
-            }
-            Datum::Json(j) => j.cast_to_int(ctx),
+            Datum::U64(u) => u.to_int(ctx, tp),
+            Datum::F64(f) => f.to_int(ctx, tp),
+            Datum::Bytes(bs) => bs.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Time(t) => t.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Dur(d) => d.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Dec(d) => d.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Json(j) => j.to_int(ctx, FieldTypeTp::LongLong),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
@@ -408,7 +378,7 @@ impl Datum {
     pub fn into_arith(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs).map(From::from),
+            Datum::Bytes(bs) => ConvertTo::<f64>::convert(&bs, ctx).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec = t.to_decimal()?;
@@ -460,7 +430,8 @@ impl Datum {
             Datum::U64(d) => Ok(Json::U64(d)),
             Datum::F64(d) => Ok(Json::Double(d)),
             Datum::Dec(d) => {
-                let ff = d.as_f64()?;
+                // TODO: remove the `cast_as_json` method
+                let ff = d.convert(&mut EvalContext::default())?;
                 Ok(Json::Double(ff))
             }
             Datum::Json(d) => Ok(d),
@@ -517,7 +488,8 @@ impl Datum {
             Datum::I64(i) => Ok(Datum::F64(i as f64)),
             Datum::U64(u) => Ok(Datum::F64(u as f64)),
             Datum::Dec(d) => {
-                let f = d.as_f64()?;
+                // TODO: remove this function `coerce_to_f64`
+                let f = d.convert(&mut EvalContext::default())?;
                 Ok(Datum::F64(f))
             }
             a => Ok(a),
@@ -1847,11 +1819,7 @@ mod tests {
             (Datum::Bytes(b"123".to_vec()), f64::from(123)),
             (
                 Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap()),
-                Decimal::from_bytes(b"20121231113045")
-                    .unwrap()
-                    .unwrap()
-                    .as_f64()
-                    .unwrap(),
+                20121231113045f64,
             ),
             (
                 Datum::Dur(Duration::parse(b"11:30:45", 0).unwrap()),

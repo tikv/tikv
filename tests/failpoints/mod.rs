@@ -2,7 +2,7 @@
 
 #![recursion_limit = "100"]
 
-#[macro_use(slog_kv, slog_debug, slog_log, slog_record, slog_b, slog_record_static)]
+#[macro_use(slog_debug)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;

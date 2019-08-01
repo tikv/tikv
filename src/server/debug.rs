@@ -513,7 +513,6 @@ impl Debugger {
 
             let raft_cfg = raft::Config {
                 id: peer_id,
-                peers: vec![],
                 election_tick: 10,
                 heartbeat_tick: 2,
                 max_size_per_msg: ReadableSize::mb(1).0,
@@ -525,7 +524,7 @@ impl Debugger {
                 ..Default::default()
             };
 
-            box_try!(RawNode::new(&raft_cfg, peer_storage, vec![]));
+            box_try!(RawNode::new(&raft_cfg, peer_storage));
             Ok(())
         };
 

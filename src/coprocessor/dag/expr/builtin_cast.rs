@@ -8,9 +8,7 @@ use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::coprocessor::codec::convert::{
-    self, convert_bytes_to_int, convert_bytes_to_uint, convert_float_to_int, convert_float_to_uint,
-};
+use crate::coprocessor::codec::convert::*;
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
@@ -33,10 +31,10 @@ impl ScalarFunc {
     pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
-            let uval = convert_float_to_uint(ctx, val, FieldTypeTp::LongLong)?;
+            let uval = val.to_uint(ctx, FieldTypeTp::LongLong)?;
             Ok(Some(uval as i64))
         } else {
-            let res = convert_float_to_int(ctx, val, FieldTypeTp::LongLong)?;
+            let res = val.to_int(ctx, FieldTypeTp::LongLong)?;
             Ok(Some(res))
         }
     }
@@ -72,7 +70,7 @@ impl ScalarFunc {
             _ => false,
         };
         let res = if is_negative {
-            convert_bytes_to_int(ctx, &val, FieldTypeTp::LongLong).map(|v| {
+            val.to_int(ctx, FieldTypeTp::LongLong).map(|v| {
                 // TODO: handle inUion flag
                 if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                     ctx.warnings
@@ -81,7 +79,7 @@ impl ScalarFunc {
                 v
             })
         } else {
-            convert_bytes_to_uint(ctx, &val, FieldTypeTp::LongLong).map(|urs| {
+            val.to_uint(ctx, FieldTypeTp::LongLong).map(|urs| {
                 if !self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
                     && urs > (i64::MAX as u64)
                 {
@@ -131,7 +129,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let res = val.cast_to_int(ctx)?;
+        let res = val.to_int(ctx, FieldTypeTp::LongLong)?;
         Ok(Some(res))
     }
 
@@ -158,7 +156,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let res = val.as_f64()?;
+        let res = val.convert(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
@@ -167,14 +165,13 @@ impl ScalarFunc {
             return self.children[0].eval_real(ctx, row);
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let res = convert::bytes_to_f64(ctx, &val)?;
+        let res = val.convert(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
     pub fn cast_time_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let val = val.to_decimal()?;
-        let res = val.as_f64()?;
+        let res = val.convert(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
@@ -185,13 +182,13 @@ impl ScalarFunc {
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let val = Decimal::try_from(val)?;
-        let res = val.as_f64()?;
+        let res = val.convert(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
     pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real(ctx)?;
+        let val = val.convert(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
@@ -279,7 +276,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real(ctx)?;
+        let val = val.convert(ctx)?;
         let dec = Decimal::from_f64(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
@@ -558,7 +555,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let val = val.as_f64()?;
+        let val = val.convert(ctx)?;
         let j = Json::Double(val);
         Ok(Some(Cow::Owned(j)))
     }
@@ -666,7 +663,7 @@ impl ScalarFunc {
             )))?;
 
             let mut res = s.into_owned();
-            convert::truncate_binary(&mut res, truncate_pos as isize);
+            truncate_binary(&mut res, truncate_pos as isize);
             return Ok(Cow::Owned(res));
         }
 
@@ -677,7 +674,7 @@ impl ScalarFunc {
                 s.len()
             )))?;
             let mut res = s.into_owned();
-            convert::truncate_binary(&mut res, flen as isize);
+            truncate_binary(&mut res, flen as isize);
             return Ok(Cow::Owned(res));
         }
 
@@ -714,7 +711,7 @@ impl ScalarFunc {
         if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
             return Ok(f);
         }
-        match convert::truncate_f64(f, flen as u8, decimal as u8) {
+        match truncate_f64(f, flen as u8, decimal as u8) {
             Res::Ok(d) => Ok(d),
             Res::Overflow(d) | Res::Truncated(d) => {
                 //TODO process warning with ctx

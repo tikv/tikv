@@ -18,7 +18,7 @@ use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
+    RpcStatusCode::*, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -72,13 +72,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         }
     }
 
-    fn send_fail_status<M>(
-        &self,
-        ctx: RpcContext<'_>,
-        sink: UnarySink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
+    fn send_fail_status<M>(&self, ctx: RpcContext<'_>, sink: UnarySink<M>, err: Error, code: i32) {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
         ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
@@ -624,7 +618,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
-                let code = RpcStatusCode::Unknown;
+                let code = GRPC_STATUS_UNKNOWN;
                 let msg = Some(format!("{:?}", e));
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
@@ -662,9 +656,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                            RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                        Ok(_) => RpcStatus::new(GRPC_STATUS_UNKNOWN, None),
                     };
                     sink.fail(status)
                         .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
@@ -699,9 +693,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                            RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                        Ok(_) => RpcStatus::new(GRPC_STATUS_UNKNOWN, None),
                     };
                     sink.fail(status).map_err(
                         |e| error!("KvService::batch_raft send response fail"; "err" => ?e),
@@ -723,7 +717,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 SnapTask::Recv { sink, .. } => sink,
                 _ => unreachable!(),
             };
-            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, Some(err_msg));
+            let status = RpcStatus::new(GRPC_STATUS_RESOURCE_EXHAUSTED, Some(err_msg));
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -831,7 +825,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         };
 
         if let Err(e) = self.ch.casual_send(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), GRPC_STATUS_RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -902,7 +896,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let (cb, future) = paired_future_callback();
 
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), GRPC_STATUS_RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -987,9 +981,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 (r, WriteFlags::default().buffer_hint(false))
             })
             .map_err(|e| {
-                let code = RpcStatusCode::Unknown;
                 let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(code, msg))
+                GrpcError::RpcFailure(RpcStatus::new(GRPC_STATUS_UNKNOWN, msg))
             });
 
         ctx.spawn(sink.send_all(response_retriever).map(|_| ()).map_err(|e| {
@@ -1912,42 +1905,30 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 
 fn extract_key_error(err: &storage::Error) -> KeyError {
     let mut key_error = KeyError::default();
-    match *err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
-            ref key,
-            ref primary,
-            ts,
-            ttl,
-            txn_size,
-        })) => {
-            let mut lock_info = LockInfo::default();
-            lock_info.set_key(key.to_owned());
-            lock_info.set_primary_lock(primary.to_owned());
-            lock_info.set_lock_version(ts);
-            lock_info.set_lock_ttl(ttl);
-            lock_info.set_txn_size(txn_size);
-            key_error.set_locked(lock_info);
+    match err {
+        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
+            key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
             start_ts,
             conflict_start_ts,
             conflict_commit_ts,
-            ref key,
-            ref primary,
+            key,
+            primary,
             ..
         })) => {
             let mut write_conflict = WriteConflict::default();
-            write_conflict.set_start_ts(start_ts);
-            write_conflict.set_conflict_ts(conflict_start_ts);
-            write_conflict.set_conflict_commit_ts(conflict_commit_ts);
+            write_conflict.set_start_ts(*start_ts);
+            write_conflict.set_conflict_ts(*conflict_start_ts);
+            write_conflict.set_conflict_commit_ts(*conflict_commit_ts);
             write_conflict.set_key(key.to_owned());
             write_conflict.set_primary(primary.to_owned());
             key_error.set_conflict(write_conflict);
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { ref key })) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { key })) => {
             let mut exist = AlreadyExist::default();
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
@@ -1959,15 +1940,15 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         }
         storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
             lock_ts,
-            ref lock_key,
+            lock_key,
             deadlock_key_hash,
             ..
         })) => {
             warn!("txn deadlocks"; "err" => ?err);
             let mut deadlock = Deadlock::default();
-            deadlock.set_lock_ts(lock_ts);
+            deadlock.set_lock_ts(*lock_ts);
             deadlock.set_lock_key(lock_key.to_owned());
-            deadlock.set_deadlock_key_hash(deadlock_key_hash);
+            deadlock.set_deadlock_key_hash(*deadlock_key_hash);
             key_error.set_deadlock(deadlock);
         }
         _ => {
