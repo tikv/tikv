@@ -21,9 +21,9 @@ impl EvaluateError {
     pub fn code(&self) -> i32 {
         match self {
             // TODO: We should assign our own error code
-            EvaluateError::MaxExecuteTimeExceeded => 8501,
+            EvaluateError::MaxExecuteTimeExceeded => 9007,
             EvaluateError::Custom { code, .. } => *code,
-            EvaluateError::Other(_) => 8500,
+            EvaluateError::Other(_) => 10000,
         }
     }
 }
