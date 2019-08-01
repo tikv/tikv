@@ -1168,15 +1168,27 @@ mod tests {
 
     #[test]
     fn test_decimal_divide() {
-        let test_cases = vec![("2.2", "1.1", "2.0")];
-        for (lhs, rhs, expected) in test_cases {
-            let expected: Option<Decimal> = expected.parse().ok();
+        let cases = vec![
+            (str2dec("2.2"), str2dec("1.1"), str2dec("2.0")),
+            (str2dec("12.3"), str2dec("-0.3"), str2dec("-41")),
+            (str2dec("12.3"), str2dec("0.3"), str2dec("41")),
+            (str2dec("12.3"), str2dec("0"), None),
+            (None, str2dec("2"), None),
+            (str2dec("123"), None, None),
+        ];
+
+        for (lhs, rhs, expected) in cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(lhs.parse::<Decimal>().ok())
-                .push_param(rhs.parse::<Decimal>().ok())
+                .push_param(lhs.clone())
+                .push_param(rhs.clone())
                 .evaluate(ScalarFuncSig::DivideDecimal)
                 .unwrap();
+
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
+    }
+
+    fn str2dec(s: &str) -> Option<Decimal> {
+        s.parse().ok()
     }
 }
