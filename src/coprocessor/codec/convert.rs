@@ -627,7 +627,7 @@ fn exp_float_str_to_int_str<'a>(
     }
     // make `digits` immutable
     let digits = digits;
-    let exp = box_try!((&valid_float[(e_idx + 1)..]).parse::<i64>());
+    let exp: i64 = box_try!((&valid_float[(e_idx + 1)..]).parse::<i64>());
     let (int_cnt, is_overflow): (i64, bool) = int_cnt.overflowing_add(exp);
     if int_cnt > 21 || is_overflow {
         // MaxInt64 has 19 decimal digits.
@@ -659,7 +659,8 @@ fn exp_float_str_to_int_str<'a>(
         } else {
             Cow::Borrowed(int_str)
         };
-        if (res.starts_with('+') || res.starts_with('-')) && (res.as_bytes()[1] == b'0') {
+        let tmp = &res.as_bytes()[0..2];
+        if tmp == b"+0" || tmp == b"-0" {
             return Ok(Cow::Borrowed("0"));
         } else {
             return Ok(res);
@@ -725,7 +726,7 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<
     // others(even if `00`) will be prefix with `-` if valid_float[0]=='-'.
     // so we need to remove `-` of `-0`.
     let res_bytes = res.as_bytes();
-    if res_bytes.len() == 2 && res_bytes[0] == b'-' && res_bytes[1] == b'0' {
+    if res_bytes == b"-0" {
         Ok(Cow::Owned(String::from(&res[1..])))
     } else {
         Ok(res.to_owned())
