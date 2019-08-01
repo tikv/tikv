@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashSet;
-use std::env;
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -99,23 +97,7 @@ pub fn init_log_for_test() {
     .unwrap();
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
-    let drain = CaseTraceLogger { f: writer };
-
-    // Collects following targets.
-    let mut enabled_targets = HashSet::new();
-    enabled_targets.insert("raft".to_owned());
-    // Collects logs for components.
-    if let Some(components_modules) = option_env!("TIKV_LOG_TARGETS") {
-        enabled_targets.extend(components_modules.split(' ').map(ToOwned::to_owned));
-    }
-    // Only for debug purpose, so use environment instead of configuration file.
-    if let Ok(extra_modules) = env::var("TIKV_EXTRA_LOG_TARGETS") {
-        enabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
-    }
-    let filtered = drain.filter(move |record| {
-        let module = record.module().splitn(2, "::").nth(0).unwrap();
-        enabled_targets.contains(module)
-    });
+    let drainer = CaseTraceLogger { f: writer };
 
     // CaseTraceLogger relies on test's thread name, however slog_async has
     // its own thread, and the name is "".
@@ -124,7 +106,7 @@ pub fn init_log_for_test() {
     //
     // [1]: https://github.com/rust-lang/rfcs/blob/master/text/2318-custom-test-frameworks.md
     tikv_util::logger::init_log(
-        filtered, level, false, // disable async drainer
+        drainer, level, false, // disable async drainer
         true,  // init std log
     )
     .unwrap()
