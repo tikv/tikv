@@ -213,7 +213,9 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             let mut remaining = value;
             while !remaining.is_empty() && decoded_columns < columns_len {
                 if remaining[0] != datum::VAR_INT_FLAG {
-                    return Err(box_err!("Unable to decode row: column id must be VAR_INT"));
+                    return Err(other_err!(
+                        "Unable to decode row: column id must be VAR_INT"
+                    ));
                 }
                 remaining = &remaining[1..];
                 let column_id = box_try!(number::decode_var_i64(&mut remaining));
@@ -260,7 +262,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                     // NULL is allowed, use NULL
                     datum::DATUM_DATA_NULL
                 } else {
-                    return Err(box_err!(
+                    return Err(other_err!(
                         "Data is corrupted, missing data for NOT NULL column (offset = {})",
                         i
                     ));

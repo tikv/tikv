@@ -200,7 +200,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                             as i64
                     }
                     _ => {
-                        return Err(box_err!("Unexpected handle flag {}", flag));
+                        return Err(other_err!("Unexpected handle flag {}", flag));
                     }
                 }
             };
