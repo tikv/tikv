@@ -73,11 +73,11 @@ impl RpnFnScalarEvaluator {
     }
 
     /// Evaluates the given function by using collected parameters.
-    /// Then return the inner `EvalContext` and the evaluation result.
+    /// Then return the evaluation result and the inner `EvalContext`
     pub fn evaluate_ctx<T: Evaluable>(
         self,
         sig: ScalarFuncSig,
-    ) -> (EvalContext, Result<Option<T>>) {
+    ) -> (Result<Option<T>>, EvalContext) {
         let return_field_type = match self.return_field_type {
             Some(ft) => ft,
             None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
@@ -118,11 +118,11 @@ impl RpnFnScalarEvaluator {
             }
         });
 
-        (context, result)
+        (result, context)
     }
 
     /// Evaluates the given function by using collected parameters.
     pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>> {
-        self.evaluate_ctx(sig).1
+        self.evaluate_ctx(sig).0
     }
 }
