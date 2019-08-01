@@ -35,16 +35,11 @@ pub fn initial_logger(config: &TiKvConfig) {
             .expect("config.log_rotation_timespan is an invalid duration.");
 
     // Collects following targets.
-    let mut enabled_targets = vec![
-        "tikv::".to_owned(),
-        "raft::".to_owned(),
-        "tests::".to_owned(),
-        "benches::".to_owned(),
-        "integrations::".to_owned(),
-        "failpoints::".to_owned(),
-        // Collects logs for test components.
-        "test_".to_owned(),
-    ];
+    let mut enabled_targets = vec!["raft".to_owned()];
+    // Collects logs for components.
+    if let Some(components_modules) = option_env!("TIKV_LOG_TARGETS") {
+        enabled_targets.extend(components_modules.split(' ').map(ToOwned::to_owned));
+    }
     // Only for debug purpose, so use environment instead of configuration file.
     if let Ok(extra_modules) = env::var("TIKV_EXTRA_LOG_TARGETS") {
         enabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
@@ -52,9 +47,8 @@ pub fn initial_logger(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         let filtered = drainer.filter(move |record| {
-            enabled_targets
-                .iter()
-                .any(|target| record.module().starts_with(target))
+            let module = record.module().splitn(2, "::").nth(0).unwrap();
+            enabled_targets.iter().any(|target| target == module)
         });
         // use async drainer and init std log.
         logger::init_log(filtered, config.log_level, true, true).unwrap_or_else(|e| {
@@ -71,9 +65,8 @@ pub fn initial_logger(config: &TiKvConfig) {
             });
 
         let filtered = drainer.filter(move |record| {
-            enabled_targets
-                .iter()
-                .any(|target| record.module().starts_with(target))
+            let module = record.module().splitn(2, "::").nth(0).unwrap();
+            enabled_targets.iter().any(|target| target == module)
         });
         // use async drainer and init std log.
         logger::init_log(filtered, config.log_level, true, true).unwrap_or_else(|e| {
