@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
+use std::collections::HashSet;
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -35,7 +36,8 @@ pub fn initial_logger(config: &TiKvConfig) {
             .expect("config.log_rotation_timespan is an invalid duration.");
 
     // Collects following targets.
-    let mut enabled_targets = vec!["raft".to_owned()];
+    let mut enabled_targets = HashSet::new();
+    enabled_targets.insert("raft".to_owned());
     // Collects logs for components.
     if let Some(components_modules) = option_env!("TIKV_LOG_TARGETS") {
         enabled_targets.extend(components_modules.split(' ').map(ToOwned::to_owned));
@@ -48,7 +50,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         let drainer = logger::term_drainer();
         let filtered = drainer.filter(move |record| {
             let module = record.module().splitn(2, "::").nth(0).unwrap();
-            enabled_targets.iter().any(|target| target == module)
+            enabled_targets.contains(module)
         });
         // use async drainer and init std log.
         logger::init_log(filtered, config.log_level, true, true).unwrap_or_else(|e| {
@@ -66,7 +68,7 @@ pub fn initial_logger(config: &TiKvConfig) {
 
         let filtered = drainer.filter(move |record| {
             let module = record.module().splitn(2, "::").nth(0).unwrap();
-            enabled_targets.iter().any(|target| target == module)
+            enabled_targets.contains(module)
         });
         // use async drainer and init std log.
         logger::init_log(filtered, config.log_level, true, true).unwrap_or_else(|e| {

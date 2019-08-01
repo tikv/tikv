@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashSet;
 use std::env;
 use std::fmt;
 use std::fs::File;
@@ -101,7 +102,8 @@ pub fn init_log_for_test() {
     let drain = CaseTraceLogger { f: writer };
 
     // Collects following targets.
-    let mut enabled_targets = vec!["raft".to_owned()];
+    let mut enabled_targets = HashSet::new();
+    enabled_targets.insert("raft".to_owned());
     // Collects logs for components.
     if let Some(components_modules) = option_env!("TIKV_LOG_TARGETS") {
         enabled_targets.extend(components_modules.split(' ').map(ToOwned::to_owned));
@@ -110,9 +112,9 @@ pub fn init_log_for_test() {
     if let Ok(extra_modules) = env::var("TIKV_EXTRA_LOG_TARGETS") {
         enabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
-    let filtered = drain.filter(|record| {
+    let filtered = drain.filter(move |record| {
         let module = record.module().splitn(2, "::").nth(1).unwrap();
-        enabled_targets.iter().any(|target| target == module)
+        enabled_targets.contains(module)
     });
 
     // CaseTraceLogger relies on test's thread name, however slog_async has
