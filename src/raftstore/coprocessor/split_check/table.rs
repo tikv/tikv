@@ -7,11 +7,11 @@ use engine::CF_WRITE;
 use engine::{IterOption, Iterable};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use tidb_query::codec::table as table_codec;
+use tikv_util::keybuilder::KeyBuilder;
 
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
-use tidb_query::codec::table as table_codec;
-use tikv_util::keybuilder::KeyBuilder;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,

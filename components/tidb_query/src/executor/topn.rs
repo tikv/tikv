@@ -153,13 +153,13 @@ pub mod tests {
     use std::sync::Arc;
 
     use tidb_query_datatype::FieldTypeTp;
+    use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::collections::HashMap;
     use tipb::expression::{Expr, ExprType};
 
     use crate::codec::table::RowColsDict;
     use crate::codec::Datum;
     use crate::executor::OriginCols;
-    use tikv_util::codec::number::NumberEncoder;
-    use tikv_util::collections::HashMap;
 
     use super::super::tests::*;
     use super::*;

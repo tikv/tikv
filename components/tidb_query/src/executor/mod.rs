@@ -24,11 +24,10 @@ use std::sync::Arc;
 
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
-use tipb::expression::{Expr, ExprType};
-use tipb::schema::ColumnInfo;
-
 use tikv_util::codec::number;
 use tikv_util::collections::HashSet;
+use tipb::expression::{Expr, ExprType};
+use tipb::schema::ColumnInfo;
 
 use crate::codec::datum::{self, Datum, DatumEncoder};
 use crate::codec::table::{self, RowColsDict};

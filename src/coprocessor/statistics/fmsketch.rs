@@ -57,7 +57,9 @@ impl FMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use std::iter::repeat;
+
     use tidb_query::codec::datum;
     use tidb_query::codec::datum::Datum;
     use tidb_query::codec::Result;

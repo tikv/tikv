@@ -2,15 +2,15 @@
 
 use std::mem;
 
-use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use tipb::executor::TableScan;
 
+use kvproto::coprocessor::{KeyRange, Response};
+use protobuf::Message;
 use tidb_query::codec::datum;
 use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
+use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
+use tipb::executor::TableScan;
 
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
@@ -292,6 +292,7 @@ impl SampleCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use tidb_query::codec::datum;
     use tidb_query::codec::datum::Datum;
 

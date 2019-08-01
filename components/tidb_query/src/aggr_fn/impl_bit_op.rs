@@ -148,14 +148,14 @@ impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::EvalType;
-    use tipb_helper::ExprDefBuilder;
-
     use super::super::AggrFunction;
     use super::*;
+
+    use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+    use tipb_helper::ExprDefBuilder;
+
     use crate::aggr_fn::parser::AggrDefinitionParser;
     use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 
     #[test]
     fn test_bit_and() {

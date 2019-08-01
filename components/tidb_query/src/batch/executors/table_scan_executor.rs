@@ -4,11 +4,10 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::collections::HashMap;
 use tipb::executor::TableScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
-
-use tikv_util::collections::HashMap;
 
 use super::util::scan_executor::*;
 use crate::batch::interface::*;

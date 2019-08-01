@@ -4,9 +4,8 @@ mod storage_impl;
 
 pub use self::storage_impl::TiKVStorage;
 
-use protobuf::Message;
-
 use kvproto::coprocessor::{KeyRange, Response};
+use protobuf::Message;
 use tidb_query::storage::IntervalRange;
 use tipb::select::{DAGRequest, SelectResponse, StreamResponse};
 

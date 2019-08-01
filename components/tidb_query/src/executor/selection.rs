@@ -87,13 +87,12 @@ mod tests {
     use std::sync::Arc;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
-
-    use crate::codec::datum::Datum;
     use tikv_util::codec::number::NumberEncoder;
+    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use super::super::tests::*;
     use super::*;
+    use crate::codec::datum::Datum;
 
     fn new_const_expr() -> Expr {
         let mut expr = Expr::default();

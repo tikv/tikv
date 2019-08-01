@@ -7,14 +7,14 @@ use std::str;
 
 use rand_xorshift::XorShiftRng;
 
+use tidb_query_datatype::prelude::*;
+use tidb_query_datatype::FieldTypeFlag;
+use tikv_util::codec::number;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::mysql::charset;
 use crate::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::codec::{self, datum, Datum};
-use tidb_query_datatype::prelude::*;
-use tidb_query_datatype::FieldTypeFlag;
-use tikv_util::codec::number;
 
 mod builtin_arithmetic;
 mod builtin_cast;

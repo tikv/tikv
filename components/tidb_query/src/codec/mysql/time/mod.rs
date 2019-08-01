@@ -12,6 +12,7 @@ use std::{mem, str};
 
 use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
+
 use tidb_query_datatype::FieldTypeTp;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
