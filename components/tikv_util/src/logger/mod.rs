@@ -47,6 +47,13 @@ where
 
     let filtered = drain.filter(move |record| {
         if !disabled_targets.is_empty() {
+            // The returned value from module() would be:
+            // ```
+            //  tikv::raftstore::store::fsm::store
+            //  tikv_util
+            //  ...
+            // ```
+            // Here get the highest level module name to check.
             let module = record.module().splitn(2, "::").nth(0).unwrap();
             !disabled_targets.contains(module)
         } else {
