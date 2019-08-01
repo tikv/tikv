@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::mem;
 use std::sync::{Arc, Mutex};
 
 use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, Config, ReadPool};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::{Engine, Statistics};
+use crate::storage::{Engine, FlowStatistics, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
 
@@ -21,7 +22,7 @@ pub struct CopLocalMetrics {
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_scan_details: LocalIntCounterVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
-    local_cop_flow_stats: HashMap<u64, crate::storage::FlowStatistics>,
+    local_cop_flow_stats: HashMap<u64, FlowStatistics>,
 }
 
 thread_local! {
@@ -93,8 +94,8 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
             return;
         }
 
-        let read_stats = cop_metrics.local_cop_flow_stats.clone();
-        cop_metrics.local_cop_flow_stats = HashMap::default();
+        let mut read_stats = HashMap::default();
+        mem::swap(&mut read_stats, &mut cop_metrics.local_cop_flow_stats);
 
         let result = pd_sender.schedule(PdTask::ReadStats { read_stats });
         if let Err(e) = result {

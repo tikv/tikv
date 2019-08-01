@@ -73,7 +73,11 @@ impl RpnFnScalarEvaluator {
     }
 
     /// Evaluates the given function by using collected parameters.
-    pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>> {
+    /// Then return the evaluation result and the inner `EvalContext`
+    pub fn evaluate_ctx<T: Evaluable>(
+        self,
+        sig: ScalarFuncSig,
+    ) -> (Result<Option<T>>, EvalContext) {
         let return_field_type = match self.return_field_type {
             Some(ft) => ft,
             None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
@@ -102,14 +106,23 @@ impl RpnFnScalarEvaluator {
             .build();
 
         let mut columns = LazyBatchColumnVec::empty();
-        let ret = expr.eval(&mut context, &[], &mut columns, &[0], 1)?;
-        match ret {
-            // Only used in tests, so clone is fine.
-            RpnStackNode::Scalar { value, .. } => Ok(T::borrow_scalar_value(value).clone()),
-            RpnStackNode::Vector { value, .. } => {
-                assert_eq!(value.as_ref().len(), 1);
-                Ok(T::borrow_vector_value(value.as_ref())[0].clone())
+        let ret = expr.eval(&mut context, &[], &mut columns, &[0], 1);
+        let result = ret.map(|ret| {
+            match ret {
+                // Only used in tests, so clone is fine.
+                RpnStackNode::Scalar { value, .. } => T::borrow_scalar_value(value).clone(),
+                RpnStackNode::Vector { value, .. } => {
+                    assert_eq!(value.as_ref().len(), 1);
+                    T::borrow_vector_value(value.as_ref())[0].clone()
+                }
             }
-        }
+        });
+
+        (result, context)
+    }
+
+    /// Evaluates the given function by using collected parameters.
+    pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>> {
+        self.evaluate_ctx(sig).0
     }
 }
