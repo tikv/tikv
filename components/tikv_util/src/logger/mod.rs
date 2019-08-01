@@ -38,9 +38,9 @@ where
     D: Drain + Send + 'static,
     <D as Drain>::Err: std::fmt::Display,
 {
-    // Collects following targets.
-    let mut disabled_targets = HashSet::new();
+    // Collects disabled log targets.
     // Only for debug purpose, so use environment instead of configuration file.
+    let mut disabled_targets = HashSet::new();
     if let Ok(extra_modules) = env::var("TIKV_DISABLE_LOG_TARGETS") {
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
