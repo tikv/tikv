@@ -6,10 +6,11 @@ use criterion::black_box;
 
 use tipb::expression::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchSelectionExecutor;
-use tikv::coprocessor::dag::batch::interface::BatchExecutor;
-use tikv::coprocessor::dag::executor::{Executor, SelectionExecutor};
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_query::batch::executors::BatchSelectionExecutor;
+use tidb_query::batch::interface::BatchExecutor;
+use tidb_query::executor::{Executor, SelectionExecutor};
+use tidb_query::expr::EvalConfig;
+use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::selection;
@@ -49,7 +50,7 @@ impl SelectionBencher for NormalBencher {
                     black_box(Box::new(src)),
                 )
                 .unwrap(),
-            ) as Box<dyn Executor>
+            ) as Box<dyn Executor<StorageStats = Statistics>>
         })
         .bench(b);
     }
@@ -77,7 +78,7 @@ impl SelectionBencher for BatchBencher {
                     black_box(exprs.to_vec()),
                 )
                 .unwrap(),
-            ) as Box<dyn BatchExecutor>
+            ) as Box<dyn BatchExecutor<StorageStats = Statistics>>
         })
         .bench(b);
     }

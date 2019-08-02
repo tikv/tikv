@@ -1,82 +1,97 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error;
-use std::result;
-use std::time::Duration;
-
-use kvproto::{errorpb, kvrpcpb};
-use tipb;
-
-use crate::coprocessor;
 use crate::storage;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Region(err: errorpb::Error) {
-            description("region related failure")
-            display("region {:?}", err)
-        }
-        Locked(l: kvrpcpb::LockInfo) {
-            description("key is locked")
-            display("locked {:?}", l)
-        }
-        Outdated(elapsed: Duration, tag: &'static str) {
-            description("request is outdated")
-        }
-        Full {
-            description("Coprocessor end-point thread pool is full")
-        }
-        Eval(err: tipb::select::Error) {
-            from()
-            description("eval failed")
-            display("Eval error: {}", err.get_msg())
-        }
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("{}", err)
+#[derive(Fail, Debug)]
+pub enum Error {
+    #[fail(display = "Region error (will back off and retry) {:?}", _0)]
+    Region(kvproto::errorpb::Error),
+
+    #[fail(display = "Key is locked (will clean up) {:?}", _0)]
+    Locked(kvproto::kvrpcpb::LockInfo),
+
+    #[fail(display = "Coprocessor task terminated due to exceeding max time limit")]
+    MaxExecuteTimeExceeded,
+
+    #[fail(display = "Coprocessor task canceled due to exceeding max pending tasks")]
+    MaxPendingTasksExceeded,
+
+    #[fail(display = "{}", _0)]
+    Other(String),
+}
+
+impl From<Box<dyn std::error::Error + Send + Sync>> for Error {
+    #[inline]
+    fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
+impl From<Error> for tidb_query::error::StorageError {
+    fn from(err: Error) -> Self {
+        failure::Error::from(err).into()
+    }
+}
+
+impl From<tidb_query::error::StorageError> for Error {
+    fn from(err: tidb_query::error::StorageError) -> Self {
+        match err.0.downcast::<Error>() {
+            Ok(e) => e,
+            Err(e) => box_err!("Unknown storage error: {}", e),
         }
     }
 }
 
-pub type Result<T> = result::Result<T, Error>;
+impl From<tidb_query::error::EvaluateError> for Error {
+    fn from(err: tidb_query::error::EvaluateError) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
+impl From<tidb_query::Error> for Error {
+    fn from(err: tidb_query::Error) -> Self {
+        use tidb_query::error::ErrorInner;
+
+        match *err.0 {
+            ErrorInner::Storage(err) => err.into(),
+            ErrorInner::Evaluate(err) => err.into(),
+        }
+    }
+}
 
 impl From<storage::kv::Error> for Error {
-    fn from(e: storage::kv::Error) -> Error {
-        match e {
+    fn from(err: storage::kv::Error) -> Self {
+        match err {
             storage::kv::Error::Request(e) => Error::Region(e),
-            _ => Error::Other(Box::new(e)),
+            e => Error::Other(e.to_string()),
         }
     }
 }
 
-impl From<coprocessor::dag::expr::Error> for Error {
-    fn from(e: coprocessor::dag::expr::Error) -> Error {
-        Error::Eval(e.into())
+impl From<storage::mvcc::Error> for Error {
+    fn from(err: storage::mvcc::Error) -> Self {
+        match err {
+            storage::mvcc::Error::KeyIsLocked(info) => Error::Locked(info),
+            storage::mvcc::Error::Engine(engine_error) => Error::from(engine_error),
+            e => Error::Other(e.to_string()),
+        }
     }
 }
 
 impl From<storage::txn::Error> for Error {
-    fn from(e: storage::txn::Error) -> Error {
-        match e {
-            storage::txn::Error::Mvcc(storage::mvcc::Error::KeyIsLocked {
-                primary,
-                ts,
-                key,
-                ttl,
-                txn_size,
-            }) => {
-                let mut info = kvrpcpb::LockInfo::default();
-                info.set_primary_lock(primary);
-                info.set_lock_version(ts);
-                info.set_key(key);
-                info.set_lock_ttl(ttl);
-                info.set_txn_size(txn_size);
-                Error::Locked(info)
-            }
-            _ => Error::Other(Box::new(e)),
+    fn from(err: storage::txn::Error) -> Self {
+        match err {
+            storage::txn::Error::Mvcc(mvcc_error) => Error::from(mvcc_error),
+            storage::txn::Error::Engine(engine_error) => Error::from(engine_error),
+            e => Error::Other(e.to_string()),
         }
     }
 }
+
+impl From<tikv_util::deadline::DeadlineError> for Error {
+    fn from(_: tikv_util::deadline::DeadlineError) -> Self {
+        Error::MaxExecuteTimeExceeded
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;

@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use prometheus::local::*;
 use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, Config, ReadPool};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
+use crate::storage::FlowStatistics;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
 
@@ -22,7 +24,7 @@ pub struct StorageLocalMetrics {
     local_kv_command_counter_vec: LocalIntCounterVec,
     local_sched_commands_pri_counter_vec: LocalIntCounterVec,
     local_kv_command_scan_details: LocalIntCounterVec,
-    local_read_flow_stats: HashMap<u64, crate::storage::FlowStatistics>,
+    local_read_flow_stats: HashMap<u64, FlowStatistics>,
 }
 
 thread_local! {
@@ -89,8 +91,8 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
             return;
         }
 
-        let read_stats = storage_metrics.local_read_flow_stats.clone();
-        storage_metrics.local_read_flow_stats = HashMap::default();
+        let mut read_stats = HashMap::default();
+        mem::swap(&mut read_stats, &mut storage_metrics.local_read_flow_stats);
 
         let result = pd_sender.schedule(PdTask::ReadStats { read_stats });
         if let Err(e) = result {

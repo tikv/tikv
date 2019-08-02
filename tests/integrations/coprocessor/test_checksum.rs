@@ -9,13 +9,12 @@ use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
+use test_coprocessor::*;
+use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query::storage::Range;
+use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
-
-use test_coprocessor::*;
-use tikv::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tikv::coprocessor::dag::storage::Range;
-use tikv::coprocessor::dag::storage_impl::TiKVStorage;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::default();

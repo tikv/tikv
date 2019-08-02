@@ -19,9 +19,7 @@ use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 mod btree_engine;
 mod compact_listener;
 mod cursor_builder;
-mod metrics;
 mod perf_context;
-pub mod raftkv;
 mod rocksdb_engine;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
@@ -353,6 +351,10 @@ impl<I: Iterator> Cursor<I> {
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        fail_point!("kv_cursor_seek", |_| {
+            return Err(box_err!("kv cursor seek error"));
+        });
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self
             .max_key
