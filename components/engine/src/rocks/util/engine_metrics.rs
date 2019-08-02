@@ -796,9 +796,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
         // families.
-        let cf_used_size = engine
-            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-            .expect("rocksdb is too old, missing total-sst-files-size property");
+        let cf_used_size = rocks::util::get_engine_cf_used_size(engine, handle);
         STORE_ENGINE_SIZE_GAUGE_VEC
             .with_label_values(&[name, cf])
             .set(cf_used_size as i64);
