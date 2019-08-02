@@ -100,11 +100,8 @@ pub fn init_log_for_test() {
     // we don't mind set it multiple times.
     let drainer = CaseTraceLogger { f: writer };
 
-    // Collects disabled log targets.
-    // Only for debug purpose, so use environment instead of configuration file.
-    let mut disabled_targets = HashSet::new();
-    disabled_targets.insert("tokio_core".to_owned());
-    disabled_targets.insert("tokio_reactor".to_owned());
+    // Default disabled log targets for test.
+    let disabled_targets = vec!["tokio_core".to_owned(), "tokio_reactor".to_owned()];
 
     // CaseTraceLogger relies on test's thread name, however slog_async has
     // its own thread, and the name is "".
@@ -113,8 +110,11 @@ pub fn init_log_for_test() {
     //
     // [1]: https://github.com/rust-lang/rfcs/blob/master/text/2318-custom-test-frameworks.md
     tikv_util::logger::init_log(
-        drainer, level, false, // disable async drainer
+        drainer,
+        level,
+        false, // disable async drainer
         true,  // init std log
+        disabled_targets,
     )
     .unwrap()
 }

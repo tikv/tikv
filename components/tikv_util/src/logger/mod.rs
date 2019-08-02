@@ -3,7 +3,6 @@
 mod file_log;
 mod formatter;
 
-use std::collections::HashSet;
 use std::env;
 use std::fmt;
 use std::io::{self, BufWriter};
@@ -33,12 +32,13 @@ pub fn init_log<D>(
     level: Level,
     use_async: bool,
     init_stdlog: bool,
-    mut disabled_targets: HashSet<String>,
+    mut disabled_targets: Vec<String>,
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
     <D as Drain>::Err: std::fmt::Display,
 {
+    // Only for debug purpose, so use environment instead of configuration file.
     if let Ok(extra_modules) = env::var("TIKV_DISABLE_LOG_TARGETS") {
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
@@ -56,7 +56,7 @@ where
             // ```
             // Here get the highest level module name to check.
             let module = record.module().splitn(2, "::").nth(0).unwrap();
-            !disabled_targets.contains(module)
+            disabled_targets.iter().any(|target| target == module)
         } else {
             true
         }
