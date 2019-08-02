@@ -2276,8 +2276,8 @@ mod tests {
     use super::*;
     use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN};
 
-    use crate::coprocessor::codec::error::*;
-    use crate::coprocessor::dag::expr::{EvalConfig, Flag};
+    use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
+    use crate::expr::{EvalConfig, Flag};
     use std::cmp::Ordering;
     use std::f64::EPSILON;
     use std::iter::repeat;

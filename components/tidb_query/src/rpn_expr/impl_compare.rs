@@ -512,8 +512,8 @@ mod tests {
 
     #[test]
     fn test_compare_decimal() {
-        use crate::coprocessor::codec::convert::ConvertTo;
-        use crate::coprocessor::dag::expr::EvalContext;
+        use crate::codec::convert::ConvertTo;
+        use crate::expr::EvalContext;
         fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
             let val = f.convert(ctx)?;
             Ok(val)

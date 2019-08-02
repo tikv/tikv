@@ -103,8 +103,7 @@ impl<T: ReadLiteralExt> ReadAsDecimalRoundMode for T {}
 #[inline(always)]
 pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
     use tidb_query::codec::convert::ConvertTo;
-    use tidb_query::codec::mysql::decimal::Decimal;
-    use tidb_query::codec::mysql::decimal::Decimal;
+    use tidb_query::codec::data_type::Decimal;
     use tidb_query::expr::EvalContext;
 
     fn fuzz(lhs: &Decimal, rhs: &Decimal, cursor: &mut Cursor<&[u8]>) -> Result<(), Error> {

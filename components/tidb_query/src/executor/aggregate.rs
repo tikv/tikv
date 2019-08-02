@@ -342,7 +342,7 @@ mod tests {
     }
 
     fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
-        use crate::coprocessor::codec::convert::ConvertTo;
+        use crate::codec::convert::ConvertTo;
         let val = f.convert(ctx)?;
         Ok(val)
     }
