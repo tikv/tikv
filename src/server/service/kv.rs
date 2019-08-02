@@ -576,6 +576,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 req.take_start_key(),
                 req.get_limit() as usize,
                 req.get_key_only(),
+                req.get_reverse(),
             )
             .then(|v| {
                 let mut resp = RawScanResponse::new();
@@ -611,6 +612,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 req.take_ranges().into_vec(),
                 req.get_each_limit() as usize,
                 req.get_key_only(),
+                req.get_reverse(),
             )
             .then(|v| {
                 let mut resp = RawBatchScanResponse::new();
