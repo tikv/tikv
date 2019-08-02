@@ -149,8 +149,9 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
+        // If there are any PK columns, for each of them, fill non-PK columns before it and push the
+        // PK column.
         let mut last_index = 0usize;
-
         for handle_index in &self.handle_indices {
             for _ in last_index..*handle_index {
                 columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
@@ -166,7 +167,8 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             last_index = *handle_index + 1;
         }
 
-        // Fill remaining columns after the last handle column.
+        // Then fill remaining columns after the last handle column. If there are no PK columns,
+        // the previous loop will be skipped and this loop will be run on 0..columns_len.
         for _ in last_index..columns_len {
             columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
@@ -187,15 +189,17 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
-        for handle_index in &self.handle_indices {
+        if !self.handle_indices.is_empty() {
             let handle_id = table::decode_handle(key)?;
-            // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
-            // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
-            columns[*handle_index]
-                .mut_decoded()
-                .push_int(Some(handle_id));
-            decoded_columns += 1;
-            self.is_column_filled[*handle_index] = true;
+            for handle_index in &self.handle_indices {
+                // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
+                // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
+                columns[*handle_index]
+                    .mut_decoded()
+                    .push_int(Some(handle_id));
+                decoded_columns += 1;
+                self.is_column_filled[*handle_index] = true;
+            }
         }
 
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
