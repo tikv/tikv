@@ -33,20 +33,20 @@ pub fn init_log<D>(
     level: Level,
     use_async: bool,
     init_stdlog: bool,
+    disabled_targets: HashSet<String>,
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
     <D as Drain>::Err: std::fmt::Display,
 {
-    // Collects disabled log targets.
-    // Only for debug purpose, so use environment instead of configuration file.
-    let mut disabled_targets = HashSet::new();
     if let Ok(extra_modules) = env::var("TIKV_DISABLE_LOG_TARGETS") {
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
 
-    let filtered = drain.filter(move |record| {
-        if !disabled_targets.is_empty() {
+    let filtered = if disabled_targets.is_empty() {
+        drain.filter(|_| {})
+    } else {
+        drain.filter(move |record| {
             // The format of the returned value from module() would like this:
             // ```
             //  tikv::raftstore::store::fsm::store
@@ -59,10 +59,8 @@ where
             // Here get the highest level module name to check.
             let module = record.module().splitn(2, "::").nth(0).unwrap();
             !disabled_targets.contains(module)
-        } else {
-            true
-        }
-    });
+        });
+    };
 
     let logger = if use_async {
         let drain = Async::new(LogAndFuse(filtered))

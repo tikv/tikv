@@ -99,6 +99,12 @@ pub fn init_log_for_test() {
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let drainer = CaseTraceLogger { f: writer };
+    
+    // Collects disabled log targets.
+    // Only for debug purpose, so use environment instead of configuration file.
+    let mut disabled_targets = HashSet::new();
+    disabled_targets.insert("tokio_core".to_owned());
+    disabled_targets.insert("tokio_reactor".to_owned());
 
     // CaseTraceLogger relies on test's thread name, however slog_async has
     // its own thread, and the name is "".
