@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono;
