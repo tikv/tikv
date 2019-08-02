@@ -32,7 +32,6 @@ extern crate test;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
-use std::collections::HashSet;
 use std::fs::File;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -516,7 +515,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 logger::convert_log_level_to_slog_level(level),
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
-                HashSet::new(),
+                vec![],
             );
         }
 
