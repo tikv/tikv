@@ -53,7 +53,8 @@ extern crate vlog;
 #[macro_use]
 extern crate tikv_util;
 #[macro_use]
-extern crate match_template;
+extern crate failure;
+
 #[cfg(test)]
 extern crate test;
 
