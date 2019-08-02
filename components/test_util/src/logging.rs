@@ -99,7 +99,7 @@ pub fn init_log_for_test() {
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let drainer = CaseTraceLogger { f: writer };
-    
+
     // Collects disabled log targets.
     // Only for debug purpose, so use environment instead of configuration file.
     let mut disabled_targets = HashSet::new();
