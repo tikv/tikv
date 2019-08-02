@@ -3,7 +3,7 @@
 mod fixture;
 mod util;
 
-use cop_datatype::FieldTypeTp;
+use tidb_query_datatype::FieldTypeTp;
 use tipb::expression::{ExprType, ScalarFuncSig};
 use tipb_helper::ExprDefBuilder;
 

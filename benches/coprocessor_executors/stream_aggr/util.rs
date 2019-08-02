@@ -6,10 +6,10 @@ use criterion::black_box;
 
 use tipb::expression::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchStreamAggregationExecutor;
-use tikv::coprocessor::dag::batch::interface::BatchExecutor;
-use tikv::coprocessor::dag::executor::{Executor, StreamAggExecutor};
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_query::batch::executors::BatchStreamAggregationExecutor;
+use tidb_query::batch::interface::BatchExecutor;
+use tidb_query::executor::{Executor, StreamAggExecutor};
+use tidb_query::expr::EvalConfig;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
