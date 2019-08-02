@@ -576,7 +576,7 @@ impl ScalarFunc {
         if let Some(start) = start {
             Ok(Some(Cow::Owned(s[start..].as_bytes().to_vec())))
         } else {
-            return Ok(Some(Cow::Borrowed(b"")));
+            Ok(Some(Cow::Borrowed(b"")))
         }
     }
 
@@ -631,9 +631,9 @@ impl ScalarFunc {
             positions[0]
         };
         if let Some(start) = start {
-            return Ok(Some(Cow::Owned(s[start..end].as_bytes().to_vec())));
+            Ok(Some(Cow::Owned(s[start..end].as_bytes().to_vec())))
         } else {
-            return Ok(Some(Cow::Borrowed(b"")));
+            Ok(Some(Cow::Borrowed(b"")))
         }
     }
 

@@ -623,7 +623,7 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_destroy_peer(&mut self, region_id: u64) {
         match self.region_peers.remove(&region_id) {
-            None => return,
+            None => {}
             Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
         }
     }
