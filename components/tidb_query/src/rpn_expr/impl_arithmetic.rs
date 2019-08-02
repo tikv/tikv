@@ -965,21 +965,21 @@ mod tests {
     #[test]
     fn test_int_divide_decimal() {
         let test_cases = vec![
-            (Some(11.01), Some(1.1), Some(10)),
-            (Some(-11.01), Some(1.1), Some(-10)),
-            (Some(11.01), Some(-1.1), Some(-10)),
-            (Some(-11.01), Some(-1.1), Some(10)),
-            (Some(123.0), None, None),
-            (None, Some(123.0), None),
+            (Some("11.01"), Some("1.1"), Some(10)),
+            (Some("-11.01"), Some("1.1"), Some(-10)),
+            (Some("11.01"), Some("-1.1"), Some(-10)),
+            (Some("-11.01"), Some("-1.1"), Some(10)),
+            (Some("123.0"), None, None),
+            (None, Some("123.0"), None),
             // divide by zero
-            (Some(0.0), Some(0.0), None),
+            (Some("0.0"), Some("0.0"), None),
             (None, None, None),
         ];
 
         for (lhs, rhs, expected) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(lhs.map(|f| Decimal::from_f64(f).unwrap()))
-                .push_param(rhs.map(|f| Decimal::from_f64(f).unwrap()))
+                .push_param(lhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
+                .push_param(rhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
                 .evaluate(ScalarFuncSig::IntDivideDecimal)
                 .unwrap();
 
@@ -993,7 +993,7 @@ mod tests {
             (Decimal::from(std::i64::MIN), Decimal::from(-1)),
             (
                 Decimal::from(std::i64::MAX),
-                Decimal::from_f64(0.1).unwrap(),
+                Decimal::from_bytes(b"0.1").unwrap().unwrap(),
             ),
         ];
 
