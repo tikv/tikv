@@ -1068,7 +1068,6 @@ impl Decimal {
         self.word_buf[buf_from] /= TEN_POW[shift];
     }
 
-
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
     /// # panic

@@ -1,20 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryFrom;
+use std::borrow::Cow;
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeTp};
+use tidb_query_datatype::UNSPECIFIED_LENGTH;
 use tipb::expression::FieldType;
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
-use crate::expr::EvalContext;
 use crate::codec::mysql::charset;
-use crate::coprocessor::dag::expr::{Error, EvalContext};
-use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
 use crate::Result;
-use std::borrow::Cow;
+use crate::expr::{Error, EvalContext};
 
 /// Gets the cast function between specified data types.
 ///
@@ -132,7 +131,7 @@ fn produce_dec_with_specified_tp(
     ft: &FieldType,
 ) -> Result<Decimal> {
     let (flen, decimal) = (ft.flen(), ft.decimal());
-    if flen != cop_datatype::UNSPECIFIED_LENGTH && decimal != cop_datatype::UNSPECIFIED_LENGTH {
+    if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
         dec = dec.convert_to(ctx, flen as u8, decimal as u8)?;
     }
     if ft.is_unsigned() && dec.is_negative() {
@@ -200,12 +199,10 @@ fn produce_str_with_specified_tp<'a>(
     }
 }
 
-
 #[inline]
 fn is_binary_str(ft: &FieldType) -> bool {
     ft.collation() == Collation::Binary && ft.is_string_like()
 }
-
 
 fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
     let flen = ft.flen();
@@ -218,7 +215,6 @@ fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
         s.resize(flen, 0);
     }
 }
-
 
 /// Indicates whether the current expression is evaluated in union statement
 ///
