@@ -13,7 +13,7 @@ use tipb::select::Chunk;
 
 use test_coprocessor::*;
 use test_storage::*;
-use tikv::coprocessor::codec::{datum, Datum};
+use tidb_query::codec::{datum, Datum};
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
 use tikv_util::codec::number::*;
@@ -108,7 +108,7 @@ fn test_stream_batch_row_limit() {
     assert_eq!(req.get_ranges().len(), 1);
 
     // only ignore first 7 bytes of the row id
-    let ignored_suffix_len = tikv::coprocessor::codec::table::RECORD_ROW_KEY_LEN - 1;
+    let ignored_suffix_len = tidb_query::codec::table::RECORD_ROW_KEY_LEN - 1;
     let mut expected_ranges_last_bytes: Vec<(&[u8], &[u8])> = vec![
         (b"\x00", b"\x02\x00"),
         (b"\x02\x00", b"\x05\x00"),
@@ -1165,7 +1165,7 @@ fn test_index_aggr_extre() {
 
 #[test]
 fn test_where() {
-    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 
     let data = vec![
         (1, Some("name:0"), 2),
@@ -1529,4 +1529,19 @@ fn test_invalid_range() {
     let req = select.build();
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_other_error().is_empty());
+}
+
+#[test]
+fn test_snapshot_failed() {
+    let product = ProductTable::new();
+    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
+
+    let (_, endpoint) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+
+    // Use an invalid context to make errors.
+    let req = DAGSelect::from(&product).build_with(Context::default(), &[0]);
+    let resp = handle_request(&endpoint, req);
+
+    assert!(resp.get_region_error().has_store_not_match());
 }

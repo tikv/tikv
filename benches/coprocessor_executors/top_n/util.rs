@@ -6,9 +6,9 @@ use criterion::black_box;
 
 use tipb::expression::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchTopNExecutor;
-use tikv::coprocessor::dag::executor::{Executor, TopNExecutor};
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_query::batch::executors::BatchTopNExecutor;
+use tidb_query::executor::{Executor, TopNExecutor};
+use tidb_query::expr::EvalConfig;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

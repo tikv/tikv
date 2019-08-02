@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
-use tikv::coprocessor::codec::{datum, table, Datum};
+use tidb_query::codec::{datum, table, Datum};
 use tikv::storage::{
     Engine, FixtureStore, Key, Mutation, RocksEngine, SnapshotStore, TestEngineBuilder,
 };
