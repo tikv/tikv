@@ -18,7 +18,7 @@ use tikv_util::escape;
 use crate::codec::convert::{self, ConvertTo};
 use crate::codec::data_type::*;
 use crate::codec::{Error, Result, TEN_POW};
-use crate::expr::EvalContext;
+use crate::expr::{EvalContext, Flag};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -1068,27 +1068,38 @@ impl Decimal {
         self.word_buf[buf_from] /= TEN_POW[shift];
     }
 
+
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
+    /// # panic
+    /// - flen should >=decimal, so panic when flen < decimal
     pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
+        assert!(flen >= decimal);
         let (prec, frac) = self.prec_and_frac();
         if !self.is_zero() && prec - frac > flen - decimal {
-            return Ok(max_or_min_dec(self.negative, flen, decimal));
-            // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
+            // select (cast 111 as decimal(1)) causes a warning in MySQL.
+            ctx.handle_overflow(Error::overflow(
+                "Decimal",
+                &format!("({}, {})", flen, decimal),
+            ))?;
+            Ok(max_or_min_dec(self.negative, flen, decimal))
+        } else if frac != decimal {
+            let old = self.clone();
+            // TODO, is unwrap ok?
+            let rounded = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
+            if !rounded.is_zero() && frac > decimal && rounded != old {
+                if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
+                    || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
+                {
+                    ctx.warnings.append_warning(Error::truncated());
+                } else {
+                    ctx.handle_truncate(true)?;
+                }
+            }
+            Ok(rounded)
+        } else {
+            Ok(self)
         }
-
-        if frac == decimal {
-            return Ok(self);
-        }
-
-        let tmp = self.clone();
-        let ret = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
-        // TODO: process over_flow
-        if !ret.is_zero() && frac > decimal && ret != tmp {
-            // TODO handle InInsertStmt in ctx
-            ctx.handle_truncate(true)?;
-        }
-        Ok(ret)
     }
 
     /// Round rounds the decimal to "frac" digits.

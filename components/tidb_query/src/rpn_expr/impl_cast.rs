@@ -3,14 +3,18 @@
 use std::convert::TryFrom;
 
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeTp};
 use tipb::expression::FieldType;
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::expr::EvalContext;
+use crate::codec::mysql::charset;
+use crate::coprocessor::dag::expr::{Error, EvalContext};
+use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
 use crate::Result;
+use std::borrow::Cow;
 
 /// Gets the cast function between specified data types.
 ///
@@ -124,18 +128,97 @@ pub fn get_cast_fn_rpn_node(
 
 fn produce_dec_with_specified_tp(
     ctx: &mut EvalContext,
-    dec: Decimal,
+    mut dec: Decimal,
     ft: &FieldType,
 ) -> Result<Decimal> {
-    // FIXME: The implementation is not exactly the same as TiDB's `ProduceDecWithSpecifiedTp`.
     let (flen, decimal) = (ft.flen(), ft.decimal());
-    if flen == tidb_query_datatype::UNSPECIFIED_LENGTH
-        || decimal == tidb_query_datatype::UNSPECIFIED_LENGTH
-    {
-        return Ok(dec);
+    if flen != cop_datatype::UNSPECIFIED_LENGTH && decimal != cop_datatype::UNSPECIFIED_LENGTH {
+        dec = dec.convert_to(ctx, flen as u8, decimal as u8)?;
     }
-    Ok(dec.convert_to(ctx, flen as u8, decimal as u8)?)
+    if ft.is_unsigned() && dec.is_negative() {
+        Ok(Decimal::zero())
+    } else {
+        Ok(dec)
+    }
 }
+
+/// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
+/// a new string according to `flen` and `chs`.
+/// # panic
+/// The s must represent a valid str, otherwise, panic!
+fn produce_str_with_specified_tp<'a>(
+    ctx: &mut EvalContext,
+    s: Cow<'a, [u8]>,
+    ft: &FieldType,
+    pad_zero: bool,
+) -> Result<Cow<'a, [u8]>> {
+    let (flen, chs) = (ft.flen(), ft.get_charset());
+    if flen < 0 {
+        return Ok(s);
+    }
+    let flen = flen as usize;
+    // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
+    // char count and truncate to flen chars if it is too long.
+    if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
+        let truncate_info = {
+            let s: &str = std::str::from_utf8(s.as_ref()).unwrap();
+            let mut indices = s.char_indices().skip(flen);
+            if let Some((truncate_pos, _)) = indices.next() {
+                let char_count = flen + 1 + indices.count();
+                Some((char_count, truncate_pos))
+            } else {
+                None
+            }
+        };
+        if truncate_info.is_none() {
+            return Ok(s);
+        }
+        let (char_count, truncate_pos) = truncate_info.unwrap();
+        ctx.handle_truncate_err(Error::data_too_long(format!(
+            "Data Too Long, field len {}, data len {}",
+            flen, char_count
+        )))?;
+
+        let mut res = s.into_owned();
+        truncate_binary(&mut res, truncate_pos as isize);
+        Ok(Cow::Owned(res))
+    } else if s.len() > flen {
+        ctx.handle_truncate_err(Error::data_too_long(format!(
+            "Data Too Long, field len {}, data len {}",
+            flen,
+            s.len()
+        )))?;
+        let mut res = s.into_owned();
+        truncate_binary(&mut res, flen as isize);
+        Ok(Cow::Owned(res))
+    } else if ft.tp() == FieldTypeTp::String && s.len() < flen && is_binary_str(ft) && pad_zero {
+        let mut s = s.into_owned();
+        s.resize(flen, 0);
+        Ok(Cow::Owned(s))
+    } else {
+        Ok(s)
+    }
+}
+
+
+#[inline]
+fn is_binary_str(ft: &FieldType) -> bool {
+    ft.collation() == Collation::Binary && ft.is_string_like()
+}
+
+
+fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
+    let flen = ft.flen();
+    if flen < 0 {
+        return;
+    }
+    let flen = flen as usize;
+    if ft.tp() == FieldTypeTp::String && is_binary_str(ft) && s.len() < flen {
+        // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
+        s.resize(flen, 0);
+    }
+}
+
 
 /// Indicates whether the current expression is evaluated in union statement
 ///
@@ -150,7 +233,7 @@ fn in_union(implicit_args: &[ScalarValue]) -> bool {
 /// The unsigned int implementation for push down signature `CastIntAsDecimal`.
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-pub fn cast_uint_as_decimal(
+fn cast_uint_as_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra<'_>,
     val: &Option<i64>,
@@ -158,12 +241,17 @@ pub fn cast_uint_as_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            let dec = Decimal::from(*val as u64);
-            Ok(Some(produce_dec_with_specified_tp(
-                ctx,
-                dec,
-                extra.ret_field_type,
-            )?))
+            if in_union(extra.implicit_args) && *val < 0 {
+                Ok(Some(Decimal::zero()))
+            } else {
+                // TODO, TiDB use ConvertIntToUint, but I think it is a bug
+                let dec = Decimal::from(*val as u64);
+                Ok(Some(produce_dec_with_specified_tp(
+                    ctx,
+                    dec,
+                    extra.ret_field_type,
+                )?))
+            }
         }
     }
 }
@@ -204,14 +292,73 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn(capture = [ctx, extra])]
 #[inline]
-pub fn cast_uint_as_int(ctx: &mut EvalContext, val: &Option<Int>) -> Result<Option<i64>> {
+fn cast_uint_as_int(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<i64>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = (*val as u64).to_int(ctx, FieldTypeTp::LongLong)?;
-            Ok(Some(val))
+            if in_union(extra.implicit_args) && *val < 0 {
+                Ok(Some(0))
+            } else {
+                let val = *val as u64;
+                Ok(Some(<u64 as ConvertTo<i64>>::convert(&val, ctx)?))
+            }
+        }
+    }
+}
+
+/// The implementation for push down signature `CastIntAsReal` from unsigned integer.
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_uint_as_real(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            if in_union(extra.implicit_args) && *val < 0 {
+                return Ok(Some(Real::new(0f64).unwrap()));
+            }
+            // TODO, TiDB use ConvertIntToUint here, but I think it is a bug
+            let val = *val as u64;
+            let val: u64 = <u64 as ConvertTo<u64>>::convert(&val, ctx)?;
+            Ok(Real::new(val as f64).ok())
+        }
+    }
+}
+
+/// The implementation for push down signature `CastIntAsString` from unsigned integer.
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_uint_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            // TODO, tidb use ConvertIntToUint here, I think it is a bug.
+            let p = (*val as u64).to_string().into_bytes();
+            let res = produce_str_with_specified_tp(
+                ctx,
+                Cow::Borrowed(p.as_slice()),
+                &extra.ret_field_type,
+                false,
+            )?;
+            let mut res = match res {
+                Cow::Borrowed(_) => p,
+                Cow::Owned(x) => x.to_vec(),
+            };
+            pad_zero_for_binary_type(&mut res, &extra.ret_field_type);
+            Ok(Some(res))
         }
     }
 }
@@ -276,33 +423,6 @@ cast_as_unsigned_integer!(
 cast_as_unsigned_integer!(DateTime, cast_datetime_as_uint);
 cast_as_unsigned_integer!(Duration, cast_duration_as_uint);
 cast_as_unsigned_integer!(Json, cast_json_as_uint);
-
-/// The implementation for push down signature `CastIntAsReal` from unsigned integer.
-#[rpn_fn(capture = [ctx])]
-#[inline]
-pub fn cast_uint_as_real(ctx: &mut EvalContext, val: &Option<Int>) -> Result<Option<Real>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let val = (*val as u64).convert(ctx)?;
-            // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
-            Ok(Real::new(val).ok())
-        }
-    }
-}
-
-/// The implementation for push down signature `CastIntAsString` from unsigned integer.
-#[rpn_fn]
-#[inline]
-pub fn cast_uint_as_string(val: &Option<Int>) -> Result<Option<Bytes>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-            Ok(Some((*val as u64).to_string().into_bytes()))
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
