@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::{i64, str, u64};
 
 use tidb_query_datatype::prelude::*;
@@ -105,7 +105,7 @@ impl ScalarFunc {
 
     pub fn cast_time_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec: Decimal = val.convert(ctx)?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
@@ -119,7 +119,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = Decimal::try_from(val)?;
+        let dec: Decimal = val.convert(ctx)?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
@@ -181,7 +181,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let val = Decimal::try_from(val)?;
+        let val: Decimal = val.convert(ctx)?;
         let res = val.convert(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
@@ -213,8 +213,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
-        let res = Decimal::from_f64(val)?;
+        let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
+        let res: Decimal = val.convert(ctx)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(res))
             .map(Some)
     }
@@ -254,7 +254,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec = val.convert(ctx)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -265,7 +265,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = Decimal::try_from(val)?;
+        let dec: Decimal = val.convert(ctx)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -276,8 +276,8 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.convert(ctx)?;
-        let dec = Decimal::from_f64(val)?;
+        let val: f64 = val.convert(ctx)?;
+        let dec: Decimal = val.convert(ctx)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -1019,6 +1019,12 @@ mod tests {
         }
     }
 
+    fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
+        use crate::codec::convert::ConvertTo;
+        let val = f.convert(ctx)?;
+        Ok(val)
+    }
+
     #[test]
     fn test_cast_as_decimal() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
@@ -1040,7 +1046,7 @@ mod tests {
                 vec![Datum::I64(1234)],
                 7,
                 3,
-                Decimal::from_f64(1234.000).unwrap(),
+                f64_to_decimal(&mut ctx, 1234.000).unwrap(),
             ),
             (
                 ScalarFuncSig::CastStringAsDecimal,
@@ -1056,7 +1062,7 @@ mod tests {
                 vec![Datum::Bytes(b"1234".to_vec())],
                 7,
                 3,
-                Decimal::from_f64(1234.000).unwrap(),
+                f64_to_decimal(&mut ctx, 1234.000).unwrap(),
             ),
             (
                 ScalarFuncSig::CastRealAsDecimal,
@@ -1072,7 +1078,7 @@ mod tests {
                 vec![Datum::F64(1234.123)],
                 8,
                 4,
-                Decimal::from_f64(1234.1230).unwrap(),
+                f64_to_decimal(&mut ctx, 1234.1230).unwrap(),
             ),
             (
                 ScalarFuncSig::CastTimeAsDecimal,
@@ -1104,7 +1110,7 @@ mod tests {
                 vec![Datum::Dur(duration_t)],
                 7,
                 1,
-                Decimal::from_f64(120023.0).unwrap(),
+                f64_to_decimal(&mut ctx, 120023.0).unwrap(),
             ),
             (
                 ScalarFuncSig::CastJsonAsDecimal,
@@ -1120,7 +1126,7 @@ mod tests {
                 vec![Datum::Json(Json::I64(1))],
                 2,
                 1,
-                Decimal::from_f64(1.0).unwrap(),
+                f64_to_decimal(&mut ctx, 1.0).unwrap(),
             ),
             (
                 ScalarFuncSig::CastDecimalAsDecimal,
@@ -1136,7 +1142,7 @@ mod tests {
                 vec![Datum::Dec(Decimal::from(1))],
                 2,
                 1,
-                Decimal::from_f64(1.0).unwrap(),
+                f64_to_decimal(&mut ctx, 1.0).unwrap(),
             ),
         ];
 
@@ -1733,7 +1739,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
-                vec![Datum::Dec(Decimal::from_f64(32.0001).unwrap())],
+                vec![Datum::Dec(f64_to_decimal(&mut ctx, 32.0001).unwrap())],
                 Some(Json::Double(32.0001)),
             ),
             (vec![Datum::Null], None),
@@ -1887,18 +1893,19 @@ mod tests {
 
     #[test]
     fn test_dec_as_int_with_overflow() {
+        let mut ctx = EvalContext::default();
         let cases = vec![
             (
                 FieldTypeFlag::empty(),
                 vec![Datum::Dec(
-                    Decimal::from_f64(i64::MAX as f64 + 100.5).unwrap(),
+                    f64_to_decimal(&mut ctx, i64::MAX as f64 + 100.5).unwrap(),
                 )],
                 i64::MAX,
             ),
             (
                 FieldTypeFlag::UNSIGNED,
                 vec![Datum::Dec(
-                    Decimal::from_f64(u64::MAX as f64 + 100.5).unwrap(),
+                    f64_to_decimal(&mut ctx, u64::MAX as f64 + 100.5).unwrap(),
                 )],
                 u64::MAX as i64,
             ),

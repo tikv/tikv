@@ -3,10 +3,8 @@
 use byteorder::WriteBytesExt;
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::convert::TryFrom;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
-use std::str::FromStr;
 use std::{i64, str};
 
 use tidb_query_datatype::FieldTypeTp;
@@ -381,14 +379,14 @@ impl Datum {
             Datum::Bytes(bs) => ConvertTo::<f64>::convert(&bs, ctx).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
-                let dec = t.to_decimal()?;
+                let dec: Decimal = t.convert(ctx)?;
                 if t.get_fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
                 Ok(Datum::Dec(dec))
             }
             Datum::Dur(d) => {
-                let dec = Decimal::try_from(d)?;
+                let dec: Decimal = d.convert(ctx)?;
                 if d.fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
@@ -399,10 +397,11 @@ impl Datum {
     }
 
     /// Keep compatible with TiDB's `ToDecimal` function.
+    /// FIXME: the `EvalContext` should be passed by caller
     pub fn into_dec(self) -> Result<Decimal> {
         match self {
-            Datum::Time(t) => t.to_decimal(),
-            Datum::Dur(d) => Decimal::try_from(d).map_err(From::from),
+            Datum::Time(t) => t.convert(&mut EvalContext::default()),
+            Datum::Dur(d) => d.convert(&mut EvalContext::default()),
             d => match d.coerce_to_dec()? {
                 Datum::Dec(d) => Ok(d),
                 d => Err(box_err!("failed to conver {} to decimal", d)),
@@ -471,10 +470,13 @@ impl Datum {
         let dec = match self {
             Datum::I64(i) => i.into(),
             Datum::U64(u) => u.into(),
-            Datum::F64(f) => Decimal::from_f64(f)?,
+            Datum::F64(f) => {
+                // FIXME: the `EvalContext` should be passed from caller
+                f.convert(&mut EvalContext::default())?
+            }
             Datum::Bytes(ref bs) => {
-                let s = box_try!(str::from_utf8(bs));
-                Decimal::from_str(s)?
+                // FIXME: the `EvalContext` should be passed from caller
+                bs.convert(&mut EvalContext::default())?
             }
             d @ Datum::Dec(_) => return Ok(d),
             _ => return Err(box_err!("failed to convert {} to decimal", self)),
@@ -483,15 +485,11 @@ impl Datum {
     }
 
     /// Try its best effort to convert into a f64 datum.
-    fn coerce_to_f64(self) -> Result<Datum> {
+    fn coerce_to_f64(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             Datum::I64(i) => Ok(Datum::F64(i as f64)),
             Datum::U64(u) => Ok(Datum::F64(u as f64)),
-            Datum::Dec(d) => {
-                // TODO: remove this function `coerce_to_f64`
-                let f = d.convert(&mut EvalContext::default())?;
-                Ok(Datum::F64(f))
-            }
+            Datum::Dec(d) => Ok(Datum::F64(d.convert(ctx)?)),
             a => Ok(a),
         }
     }
@@ -500,11 +498,11 @@ impl Datum {
     /// If left or right is F64, changes the both to F64.
     /// Else if left or right is Decimal, changes the both to Decimal.
     /// Keep compatible with TiDB's `CoerceDatum` function.
-    pub fn coerce(left: Datum, right: Datum) -> Result<(Datum, Datum)> {
+    pub fn coerce(ctx: &mut EvalContext, left: Datum, right: Datum) -> Result<(Datum, Datum)> {
         let res = match (left, right) {
             a @ (Datum::Dec(_), Datum::Dec(_)) | a @ (Datum::F64(_), Datum::F64(_)) => a,
-            (l @ Datum::F64(_), r) => (l, r.coerce_to_f64()?),
-            (l, r @ Datum::F64(_)) => (l.coerce_to_f64()?, r),
+            (l @ Datum::F64(_), r) => (l, r.coerce_to_f64(ctx)?),
+            (l, r @ Datum::F64(_)) => (l.coerce_to_f64(ctx)?, r),
             (l @ Datum::Dec(_), r) => (l, r.coerce_to_dec()?),
             (l, r @ Datum::Dec(_)) => (l.coerce_to_dec()?, r),
             p => p,
@@ -1011,6 +1009,7 @@ mod tests {
     use tikv_util::as_slice;
 
     use std::cmp::Ordering;
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::{i16, i32, i64, i8, u16, u32, u64, u8};
 
@@ -1049,7 +1048,7 @@ mod tests {
             ],
             vec![
                 Datum::U64(1),
-                Datum::Dec(Decimal::from_f64(2.3).unwrap()),
+                Datum::Dec(2.3.convert(&mut EvalContext::default()).unwrap()),
                 Datum::Dec("-34".parse().unwrap()),
             ],
             vec![
@@ -1654,7 +1653,7 @@ mod tests {
                 Some(true),
             ),
             (
-                Datum::Dec(Decimal::from_f64(0.1415926).unwrap()),
+                Datum::Dec(0.1415926.convert(&mut EvalContext::default()).unwrap()),
                 Some(false),
             ),
             (Datum::Dec(0u64.into()), Some(false)),
@@ -1751,8 +1750,9 @@ mod tests {
             ),
         ];
 
+        let mut ctx = EvalContext::default();
         for (x, y, exp_x, exp_y) in cases {
-            let (res_x, res_y) = Datum::coerce(x, y).unwrap();
+            let (res_x, res_y) = Datum::coerce(&mut ctx, x, y).unwrap();
             assert_eq!(res_x, exp_x);
             assert_eq!(res_y, exp_y);
         }
