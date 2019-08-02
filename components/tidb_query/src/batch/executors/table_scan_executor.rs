@@ -154,8 +154,19 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
         // If there are any PK columns, for each of them, fill non-PK columns before it and push the
         // PK column.
+        // For example, consider:
+        //                  non-pk non-pk non-pk pk non-pk non-pk pk pk non-pk non-pk
+        // handle_indices:                       ^3               ^6 ^7
+        // Each turn of the following loop will push this to `columns`:
+        // 1st turn: [non-pk, non-pk, non-pk, pk]
+        // 2nd turn: [non-pk, non-pk, pk]
+        // 3rd turn: [pk]
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
+            // `handle_indices` is expected to be sorted.
+            assert!(handle_index >= last_index);
+
+            // Fill last `handle_index - 1` columns.
             for _ in last_index..*handle_index {
                 columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
@@ -172,6 +183,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 
         // Then fill remaining columns after the last handle column. If there are no PK columns,
         // the previous loop will be skipped and this loop will be run on 0..columns_len.
+        // For the example above, this loop will push: [non-pk, non-pk]
         for _ in last_index..columns_len {
             columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
