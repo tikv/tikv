@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
@@ -8,7 +9,6 @@ use std::time::Instant;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
-use std::collections::HashMap;
 
 use procinfo::pid;
 
@@ -312,22 +312,20 @@ fn collect_metrics_by_name(
 }
 
 #[inline]
-fn update_metric(metrics: &mut HashMap<i32, f64>, tid: i32, new_value: f64) -> f64 {
-    let value = metrics.entry(tid).or_insert(0.0);
-    let mut delta = new_value - *value;
-    if delta > 0.0 {
-        *value = new_value;
-    } else {
-        delta = 0.0
-    }
-    delta
-}
+fn update_metric(
+    metrics: &mut HashMap<i32, f64>,
+    rates: &mut HashMap<i32, f64>,
+    tid: i32,
+    metric_new: f64,
+    time_delta: f64,
+) {
+    let metric_old = metrics.entry(tid).or_insert(0.0);
+    let rate = rates.entry(tid).or_insert(0.0);
 
-#[inline]
-fn update_rate(rates: &mut HashMap<i32, f64>, tid: i32, value_delta: f64, time_delta: f64) {
-    let value = rates.entry(tid).or_insert(0.0);
-    if value_delta > 0.0 && time_delta > 0.0 {
-        *value = value_delta / time_delta
+    let metric_delta = metric_new - *metric_old;
+    if metric_delta > 0.0 && time_delta > 0.0 {
+        *metric_old = metric_new;
+        *rate = metric_delta / time_delta;
     }
 }
 
@@ -384,24 +382,32 @@ impl ThreadInfoStatistics {
                 self.tid_names.entry(tid).or_insert(name);
 
                 let cpu_time = cpu_total(&stat) * 100.0;
-                let cpu_delta = update_metric(&mut self.metrics_total.cpu_times, tid, cpu_time);
-                update_rate(&mut self.metrics_rate.cpu_times, tid, cpu_delta, time_delta);
+                update_metric(
+                    &mut self.metrics_total.cpu_times,
+                    &mut self.metrics_rate.cpu_times,
+                    tid,
+                    cpu_time,
+                    time_delta,
+                );
 
                 if let Ok(io) = pid::io_task(self.pid, tid) {
                     // Threads IO.
                     let read_bytes = io.read_bytes;
                     let write_bytes = io.write_bytes;
 
-                    let read_delta =
-                        update_metric(&mut self.metrics_total.read_ios, tid, read_bytes as f64);
-                    update_rate(&mut self.metrics_rate.read_ios, tid, read_delta, time_delta);
+                    update_metric(
+                        &mut self.metrics_total.read_ios,
+                        &mut self.metrics_rate.read_ios,
+                        tid,
+                        read_bytes as f64,
+                        time_delta,
+                    );
 
-                    let write_delta =
-                        update_metric(&mut self.metrics_total.write_ios, tid, write_bytes as f64);
-                    update_rate(
+                    update_metric(
+                        &mut self.metrics_total.write_ios,
                         &mut self.metrics_rate.write_ios,
                         tid,
-                        write_delta,
+                        write_bytes as f64,
                         time_delta,
                     );
                 }
