@@ -1,6 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod db;
+mod sst;
+pub use sst::SstFileWriterBuilder;
+
 pub mod util;
 
 mod snapshot;
