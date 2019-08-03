@@ -2,7 +2,7 @@
 
 mod db;
 mod sst;
-pub use sst::SstFileWriterBuilder;
+pub use sst::{SstWriter, SstWriterBuilder};
 
 pub mod util;
 
@@ -19,7 +19,7 @@ pub use engine_rocksdb::{
     DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
     EnvOptions, EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData,
     IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, PerfContext, Range, RateLimiter,
-    ReadOptions, SeekKey, SequentialFile, SliceTransform, SstFileWriter, TablePropertiesCollection,
+    ReadOptions, SeekKey, SequentialFile, SliceTransform, TablePropertiesCollection,
     TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
     UserCollectedProperties, Writable, WriteBatch, WriteOptions, WriteStallCondition,
     WriteStallInfo, DB,
