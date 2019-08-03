@@ -44,7 +44,7 @@ where
     }
 
     let filtered = drain.filter(move |record| {
-        if disabled_targets.is_empty() {
+        if !disabled_targets.is_empty() {
             // The format of the returned value from module() would like this:
             // ```
             //  tikv::raftstore::store::fsm::store
