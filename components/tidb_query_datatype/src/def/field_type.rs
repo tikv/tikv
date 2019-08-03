@@ -195,8 +195,15 @@ pub trait FieldTypeAccessor {
     }
 
     /// Whether the flag contains `FieldTypeFlag::UNSIGNED`
+    #[inline]
     fn is_unsigned(&self) -> bool {
         self.flag().contains(FieldTypeFlag::UNSIGNED)
+    }
+
+    /// Whether the flag contaits `FieldTypeFlag::PARSE_TO_JSON`
+    #[inline]
+    fn is_parse_to_json(&self) -> bool {
+        self.flag().contains(FieldTypeFlag::PARSE_TO_JSON)
     }
 }
 

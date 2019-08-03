@@ -108,6 +108,18 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::DateTime, EvalType::Bytes) => cast_any_as_any_fn_meta::<DateTime, Bytes>(),
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_any_fn_meta::<Duration, Bytes>(),
         (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
+        (EvalType::Int, EvalType::Json) => {
+            if !from_field_type.is_unsigned() {
+                cast_any_as_any_fn_meta::<Int, Json>()
+            } else {
+                cast_uint_as_json_fn_meta()
+            }
+        }
+        (EvalType::Real, EvalType::Json) => cast_any_as_any_fn_meta::<Real, Json>(),
+        (EvalType::Bytes, EvalType::Json) => cast_string_as_json_fn_meta(),
+        (EvalType::Decimal, EvalType::Json) => cast_any_as_any_fn_meta::<Decimal, Json>(),
+        (EvalType::DateTime, EvalType::Json) => cast_any_as_any_fn_meta::<DateTime, Json>(),
+        (EvalType::Duration, EvalType::Json) => cast_any_as_any_fn_meta::<Duration, Json>(),
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
     // This cast function is inserted by `Coprocessor` automatically,
@@ -300,6 +312,38 @@ pub fn cast_uint_as_string(val: &Option<Int>) -> Result<Option<Bytes>> {
         Some(val) => {
             // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
             Ok(Some((*val as u64).to_string().into_bytes()))
+        }
+    }
+}
+
+/// The implementation for push down signature `CastIntAsJson` from unsigned integer.
+#[rpn_fn]
+#[inline]
+pub fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Some(Json::U64(*val as u64))),
+    }
+}
+
+#[rpn_fn(capture = [extra])]
+#[inline]
+pub fn cast_string_as_json(
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Bytes>,
+) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            if extra.ret_field_type.is_parse_to_json() {
+                let s = box_try!(String::from_utf8(val.to_owned()));
+                let val: Json = s.parse()?;
+                Ok(Some(val))
+            } else {
+                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8 string
+                let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
+                Ok(Some(Json::String(val)))
+            }
         }
     }
 }

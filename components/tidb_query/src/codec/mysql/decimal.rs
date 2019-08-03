@@ -1673,6 +1673,14 @@ impl ConvertTo<f64> for Decimal {
     }
 }
 
+impl ConvertTo<Json> for Decimal {
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
+        let val: f64 = self.convert(ctx)?;
+        Ok(Json::Double(val))
+    }
+}
+
 impl From<i64> for Decimal {
     fn from(i: i64) -> Decimal {
         let (neg, mut d) = if i < 0 {

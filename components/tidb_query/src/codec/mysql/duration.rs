@@ -8,7 +8,7 @@ use std::{i64, u64};
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use super::{check_fsp, Decimal};
+use super::{check_fsp, Decimal, Json};
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::MAX_FSP;
 use crate::codec::{Result, TEN_POW};
@@ -692,6 +692,15 @@ impl ConvertTo<Decimal> for Duration {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         self.to_numeric_string().parse()
+    }
+}
+
+impl ConvertTo<Json> for Duration {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        let mut d = *self;
+        d.set_fsp(MAX_FSP as u8);
+        Ok(Json::String(d.to_string()))
     }
 }
 
