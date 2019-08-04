@@ -96,10 +96,6 @@ fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         mem::swap(&mut read_stats, &mut cop_metrics.local_cop_flow_stats);
 
         reporter.report_read_stats(read_stats);
-        // let result = pd_sender.schedule(PdTask::ReadStats { read_stats });
-        // if let Err(e) = result {
-        //     error!("Failed to send cop pool read flow statistics"; "err" => ?e);
-        // }
     });
 }
 

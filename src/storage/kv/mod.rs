@@ -201,6 +201,7 @@ pub struct FlowStatistics {
 pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     // Reports read flow statistics, the argument `read_stats` is a hash map
     // saves the flow statistics of different region.
+    // TODO: maybe we need to return a Result later?
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
 }
 
