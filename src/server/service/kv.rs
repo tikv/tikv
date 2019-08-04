@@ -848,7 +848,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                             admin_resp
                         ));
                     } else {
-                        let mut regions = admin_resp.mut_splits().take_regions().into_vec();
+                        let mut regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
                         let mut d = regions.drain(..);
                         resp.set_left(d.next().unwrap());
                         resp.set_right(d.next().unwrap());
@@ -953,7 +953,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids();
-            let requests = req.take_requests().into_vec();
+            let requests: Vec<_> = req.take_requests().into();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
@@ -1674,7 +1674,7 @@ fn future_raw_batch_get<E: Engine>(
     storage: &Storage<E>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
-    let keys = req.take_keys().into_vec();
+    let keys = req.take_keys().into();
     storage
         .async_raw_batch_get(req.take_context(), req.take_cf(), keys)
         .then(|v| {
@@ -1760,7 +1760,7 @@ fn future_raw_batch_delete<E: Engine>(
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
     let cf = req.take_cf();
-    let keys = req.take_keys().into_vec();
+    let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
     let res = storage.async_raw_batch_delete(req.take_context(), cf, keys, cb);
 
@@ -1813,7 +1813,7 @@ fn future_raw_batch_scan<E: Engine>(
         .async_raw_batch_scan(
             req.take_context(),
             req.take_cf(),
-            req.take_ranges().into_vec(),
+            req.take_ranges().into(),
             req.get_each_limit() as usize,
             req.get_key_only(),
             req.get_reverse(),

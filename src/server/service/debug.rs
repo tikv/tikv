@@ -174,7 +174,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
         const TAG: &str = "debug_region_size";
 
         let region_id = req.get_region_id();
-        let cfs = req.take_cfs().into_vec();
+        let cfs = req.take_cfs().into();
 
         let f = self
             .pool

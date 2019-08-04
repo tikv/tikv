@@ -305,7 +305,7 @@ where
         )
     })?;
 
-    let args = tree_node.take_children().into_vec();
+    let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded

@@ -696,9 +696,13 @@ fn test_debug_region_size() {
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
     req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
-    let entries = debug_client.region_size(&req).unwrap().take_entries();
+    let entries: Vec<_> = debug_client
+        .region_size(&req)
+        .unwrap()
+        .take_entries()
+        .into();
     assert_eq!(entries.len(), 3);
-    for e in entries.into_vec() {
+    for e in entries {
         cfs.iter().find(|&&c| c == e.cf).unwrap();
         assert!(e.size > 0);
     }
