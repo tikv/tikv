@@ -136,6 +136,12 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::Decimal, EvalType::Json) => cast_any_as_any_fn_meta::<Decimal, Json>(),
         (EvalType::DateTime, EvalType::Json) => cast_any_as_any_fn_meta::<DateTime, Json>(),
         (EvalType::Duration, EvalType::Json) => cast_any_as_any_fn_meta::<Duration, Json>(),
+        (EvalType::Int, EvalType::Duration) => cast_int_as_duration_fn_meta(),
+        (EvalType::Real, EvalType::Duration) => cast_real_as_duration_fn_meta(),
+        (EvalType::Bytes, EvalType::Duration) => cast_bytes_as_duration_fn_meta(),
+        (EvalType::Decimal, EvalType::Duration) => cast_decimal_as_duration_fn_meta(),
+        (EvalType::DateTime, EvalType::Duration) => cast_any_as_any_fn_meta::<DateTime, Duration>(),
+        (EvalType::Json, EvalType::Duration) => cast_json_as_duration_fn_meta(),
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
     // This cast function is inserted by `Coprocessor` automatically,
@@ -382,6 +388,94 @@ pub fn cast_string_as_json(
                 let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
                 Ok(Some(Json::String(val)))
             }
+        }
+    }
+}
+
+/// The implementation for push down signature `CastIntAsDuration`
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn cast_int_as_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<Duration>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dur = Duration::from_i64(ctx, *val, extra.ret_field_type.get_decimal() as u8)?;
+            Ok(Some(dur))
+        }
+    }
+}
+
+#[rpn_fn(capture = [extra])]
+#[inline]
+pub fn cast_real_as_duration(
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Real>,
+) -> Result<Option<Duration>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            // FIXME: the `Duration::parse` should return `Res` which indicates whether `Overflow` or `Truncated` occurred.
+            let dur = Duration::parse(
+                val.into_inner().to_string().as_bytes(),
+                extra.ret_field_type.get_decimal() as i8,
+            )?;
+            Ok(Some(dur))
+        }
+    }
+}
+
+#[rpn_fn(capture = [extra])]
+#[inline]
+pub fn cast_bytes_as_duration(
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Json>,
+) -> Result<Option<Duration>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let s = val.unquote()?;
+            let dur = Duration::parse(s.as_bytes(), extra.ret_field_type.get_decimal() as i8)?;
+            Ok(Some(dur))
+        }
+    }
+}
+
+#[rpn_fn(capture = [extra])]
+#[inline]
+pub fn cast_decimal_as_duration(
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Decimal>,
+) -> Result<Option<Duration>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dur = Duration::parse(
+                val.to_string().as_bytes(),
+                extra.ret_field_type.get_decimal() as i8,
+            )?;
+            Ok(Some(dur))
+        }
+    }
+}
+
+#[rpn_fn(capture = [extra])]
+#[inline]
+pub fn cast_json_as_duration(
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Decimal>,
+) -> Result<Option<Duration>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dur = Duration::parse(
+                val.to_string().as_bytes(),
+                extra.ret_field_type.get_decimal() as i8,
+            )?;
+            Ok(Some(dur))
         }
     }
 }
