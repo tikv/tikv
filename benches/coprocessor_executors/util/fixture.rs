@@ -278,6 +278,7 @@ impl FixtureBuilder {
             .map(|(index, ft)| {
                 let mut ci = ColumnInfo::default();
                 ci.set_column_id(index as i64);
+                let ft = ft.as_accessor();
                 ci.as_mut_accessor()
                     .set_tp(ft.tp())
                     .set_flag(ft.flag())
