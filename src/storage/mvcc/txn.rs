@@ -165,12 +165,13 @@ impl<S: Snapshot> MvccTxn<S> {
         &mut self,
         should_not_exist: bool,
         write: &Write,
+        write_commit_ts: u64,
         key: &Key,
     ) -> Result<()> {
         if should_not_exist {
             if write.write_type == WriteType::Put
                 || (write.write_type != WriteType::Delete
-                    && self.key_exist(&key, write.start_ts - 1)?)
+                    && self.key_exist(&key, write_commit_ts - 1)?)
             {
                 return Err(Error::AlreadyExist { key: key.to_raw()? });
             }
@@ -289,7 +290,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
 
             // Check data constraint when acquiring pessimistic lock.
-            self.check_data_constraint(should_not_exist, &write, &key)?;
+            self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
         }
 
         self.lock_key(key, LockType::Pessimistic, primary.to_vec(), None, options);
@@ -387,7 +388,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             primary: primary.to_vec(),
                         });
                     }
-                    self.check_data_constraint(should_not_exist, &write, &key)?;
+                    self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
                 }
             }
             // ... or locks at any timestamp.
@@ -1397,5 +1398,26 @@ mod tests {
         must_pessimistic_locked(&engine, k, 1, 2);
         must_acquire_pessimistic_lock(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
+    #[test]
+    fn test_constraint_check_with_overlapping_txn() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v = b"v1";
+
+        must_prewrite_put(&engine, k, v, k, 10);
+        must_commit(&engine, k, 10, 11);
+        must_acquire_pessimistic_lock(&engine, k, k, 5, 12);
+        must_pessimistic_prewrite_lock(&engine, k, k, 5, 12, true);
+        must_commit(&engine, k, 5, 15);
+
+        // Now in write cf:
+        // start_ts = 10, commit_ts = 11, Put("v1")
+        // start_ts = 5,  commit_ts = 15, Lock
+
+        must_get(&engine, k, 19, v);
+        assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
     }
 }
