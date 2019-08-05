@@ -1,19 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
 use std::borrow::Cow;
+use std::convert::TryFrom;
 
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeTp};
 use tidb_query_datatype::UNSPECIFIED_LENGTH;
+use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeTp};
 use tipb::expression::FieldType;
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::mysql::charset;
+use crate::expr::{Error, EvalContext};
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
 use crate::Result;
-use crate::expr::{Error, EvalContext};
 
 /// Gets the cast function between specified data types.
 ///
