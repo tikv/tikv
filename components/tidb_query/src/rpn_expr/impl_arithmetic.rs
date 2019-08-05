@@ -1230,10 +1230,11 @@ mod tests {
                     .context(EvalContext::new(std::sync::Arc::new(config)))
                     .push_param(lhs.clone())
                     .push_param(rhs.clone())
-                    .evaluate_ctx::<Decimal>(ScalarFuncSig::DivideDecimal);
+                    .evaluate_raw(FieldTypeTp::NewDecimal, ScalarFuncSig::DivideDecimal);
 
                 if is_ok {
-                    assert_eq!(result.unwrap(), None);
+                    let r: Option<Decimal> = result.unwrap().into();
+                    assert_eq!(r, None);
                 } else {
                     assert!(result.is_err());
                 }
