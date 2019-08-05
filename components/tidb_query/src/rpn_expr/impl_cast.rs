@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::FieldType;
 
 use crate::codec::convert::*;
@@ -335,7 +335,11 @@ pub fn cast_string_as_json(
     match val {
         None => Ok(None),
         Some(val) => {
-            if extra.ret_field_type.is_parse_to_json() {
+            if extra
+                .ret_field_type
+                .flag()
+                .contains(FieldTypeFlag::PARSE_TO_JSON)
+            {
                 let s = box_try!(String::from_utf8(val.to_owned()));
                 let val: Json = s.parse()?;
                 Ok(Some(val))
