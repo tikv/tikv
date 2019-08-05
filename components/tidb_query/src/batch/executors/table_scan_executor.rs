@@ -269,6 +269,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                     // default value is provided, use the default value
                     self.columns_default_value[i].as_slice()
                 } else if !self.schema[i]
+                    .as_accessor()
                     .flag()
                     .contains(tidb_query_datatype::FieldTypeFlag::NOT_NULL)
                 {

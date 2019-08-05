@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::convert::TryFrom;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
 use tidb_query_datatype::{self, FieldTypeTp};
@@ -358,7 +357,8 @@ impl ToInt for DateTime {
         // TODO: avoid this clone after refactor the `Time`
         let mut t = self.clone();
         t.round_frac(DEFAULT_FSP)?;
-        let val = t.to_decimal()?.as_i64_with_ctx(ctx)?;
+        let dec: Decimal = t.convert(ctx)?;
+        let val = dec.as_i64_with_ctx(ctx)?;
         val.to_int(ctx, tp)
     }
 
@@ -367,7 +367,8 @@ impl ToInt for DateTime {
         // TODO: avoid this clone after refactor the `Time`
         let mut t = self.clone();
         t.round_frac(DEFAULT_FSP)?;
-        decimal_as_u64(ctx, t.to_decimal()?, tp)
+        let dec: Decimal = t.convert(ctx)?;
+        decimal_as_u64(ctx, dec, tp)
     }
 }
 
@@ -375,14 +376,16 @@ impl ToInt for Duration {
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let dur = (*self).round_frac(DEFAULT_FSP)?;
-        let val = Decimal::try_from(dur)?.as_i64_with_ctx(ctx)?;
+        let dec: Decimal = dur.convert(ctx)?;
+        let val = dec.as_i64_with_ctx(ctx)?;
         val.to_int(ctx, tp)
     }
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let dur = (*self).round_frac(DEFAULT_FSP)?;
-        decimal_as_u64(ctx, Decimal::try_from(dur)?, tp)
+        let dec: Decimal = dur.convert(ctx)?;
+        decimal_as_u64(ctx, dec, tp)
     }
 }
 
@@ -471,23 +474,6 @@ fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Resul
     val.to_uint(ctx, tp)
 }
 
-/// Converts a bytes slice to a `Decimal`
-#[inline]
-pub fn convert_bytes_to_decimal(ctx: &mut EvalContext, bytes: &[u8]) -> Result<Decimal> {
-    let dec = match Decimal::from_bytes(bytes)? {
-        Res::Ok(d) => d,
-        Res::Overflow(d) => {
-            ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
-            d
-        }
-        Res::Truncated(d) => {
-            ctx.handle_truncate(true)?;
-            d
-        }
-    };
-    Ok(dec)
-}
-
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
 pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
@@ -548,12 +534,14 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
 }
 
 impl ConvertTo<f64> for i64 {
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         Ok(*self as f64)
     }
 }
 
 impl ConvertTo<f64> for u64 {
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         Ok(*self as f64)
     }
@@ -581,12 +569,14 @@ impl ConvertTo<f64> for &[u8] {
 }
 
 impl ConvertTo<f64> for std::borrow::Cow<'_, [u8]> {
+    #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         self.as_ref().convert(ctx)
     }
 }
 
 impl ConvertTo<f64> for Bytes {
+    #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         self.as_slice().convert(ctx)
     }
@@ -798,7 +788,6 @@ mod tests {
     use std::{f64, i64, isize, u64};
 
     use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
-    use crate::codec::mysql::decimal::{self, DIGITS_PER_WORD, WORD_BUF_LEN};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
 
@@ -1478,45 +1467,6 @@ mod tests {
             let get = json.to_uint(&mut ctx, FieldTypeTp::LongLong).unwrap();
             assert_eq!(get, exp, "json.as_u64 get: {}, exp: {}", get, exp);
         }
-    }
-
-    #[test]
-    fn test_convert_bytes_to_decimal() {
-        let cases: Vec<(&[u8], Decimal)> = vec![
-            (b"123456.1", Decimal::from_f64(123456.1).unwrap()),
-            (b"-123456.1", Decimal::from_f64(-123456.1).unwrap()),
-            (b"123456", Decimal::from(123456)),
-            (b"-123456", Decimal::from(-123456)),
-        ];
-        let mut ctx = EvalContext::default();
-        for (s, expect) in cases {
-            let got = convert_bytes_to_decimal(&mut ctx, s).unwrap();
-            assert_eq!(got, expect, "from {:?}, expect: {} got: {}", s, expect, got);
-        }
-
-        // OVERFLOWING
-        let big = (0..85).map(|_| '9').collect::<String>();
-        let val = convert_bytes_to_decimal(&mut ctx, big.as_bytes());
-        assert!(
-            val.is_err(),
-            "expected error, but got {:?}",
-            val.unwrap().to_string()
-        );
-        assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
-
-        // OVERFLOW_AS_WARNING
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-        let val = convert_bytes_to_decimal(&mut ctx, big.as_bytes()).unwrap();
-        let max = decimal::max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0);
-        assert_eq!(
-            val,
-            max,
-            "expect: {}, got: {}",
-            val.to_string(),
-            max.to_string()
-        );
-        assert_eq!(ctx.warnings.warning_cnt, 1);
-        assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
     }
 
     #[test]

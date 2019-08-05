@@ -657,6 +657,7 @@ mod tests {
             let got = eval_func_with(sig, &[arg], |op, args| {
                 if args[0]
                     .get_field_type()
+                    .as_accessor()
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
@@ -731,6 +732,7 @@ mod tests {
             let got = eval_func_with(sig, &[arg], |op, args| {
                 if args[0]
                     .get_field_type()
+                    .as_accessor()
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
@@ -1350,6 +1352,7 @@ mod tests {
             let got = eval_func_with(ScalarFuncSig::TruncateInt, &[x, d], |op, args| {
                 if args[0]
                     .get_field_type()
+                    .as_accessor()
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
