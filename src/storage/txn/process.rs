@@ -176,7 +176,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     .with_label_values(&[task.tag, "snapshot_err"])
                     .inc();
 
-                error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool().pool.spawn(move || {
                     notify_scheduler(
                         self.take_scheduler(),
@@ -325,7 +325,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                             .with_label_values(&[tag, "async_write_err"])
                             .inc();
 
-                        error!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                        info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else {

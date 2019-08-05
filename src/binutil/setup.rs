@@ -1,14 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
-use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono;
 use clap::ArgMatches;
 
 use crate::config::{MetricConfig, TiKvConfig};
-use slog::Drain;
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
@@ -34,30 +32,10 @@ pub fn initial_logger(config: &TiKvConfig) {
         chrono::Duration::from_std(config.log_rotation_timespan.clone().into())
             .expect("config.log_rotation_timespan is an invalid duration.");
 
-    // Collects following targets.
-    let mut enabled_targets = vec![
-        "tikv::".to_owned(),
-        "raft::".to_owned(),
-        "tests::".to_owned(),
-        "benches::".to_owned(),
-        "integrations::".to_owned(),
-        "failpoints::".to_owned(),
-        // Collects logs for test components.
-        "test_".to_owned(),
-    ];
-    // Only for debug purpose, so use environment instead of configuration file.
-    if let Ok(extra_modules) = env::var("TIKV_EXTRA_LOG_TARGETS") {
-        enabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
-    }
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
-        let filtered = drainer.filter(move |record| {
-            enabled_targets
-                .iter()
-                .any(|target| record.module().starts_with(target))
-        });
         // use async drainer and init std log.
-        logger::init_log(filtered, config.log_level, true, true).unwrap_or_else(|e| {
+        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
@@ -70,13 +48,8 @@ pub fn initial_logger(config: &TiKvConfig) {
                 );
             });
 
-        let filtered = drainer.filter(move |record| {
-            enabled_targets
-                .iter()
-                .any(|target| record.module().starts_with(target))
-        });
         // use async drainer and init std log.
-        logger::init_log(filtered, config.log_level, true, true).unwrap_or_else(|e| {
+        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     };

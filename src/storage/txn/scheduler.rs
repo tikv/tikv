@@ -381,7 +381,7 @@ impl<E: Engine> Scheduler<E> {
                     .with_label_values(&[tag, "async_snapshot_err"])
                     .inc();
 
-                error!("engine async_snapshot failed"; "err" => ?e);
+                info!("engine async_snapshot failed"; "err" => ?e);
                 self.finish_with_err(cid, e.into());
             } else {
                 SCHED_STAGE_COUNTER_VEC
