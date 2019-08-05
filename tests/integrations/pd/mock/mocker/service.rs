@@ -79,7 +79,7 @@ impl PdMocker for Service {
 
         if self.is_bootstrapped.load(Ordering::SeqCst) {
             let mut err = Error::default();
-            err.field_type = ErrorType::UNKNOWN;
+            err.set_field_type(ErrorType::UNKNOWN);
             err.set_message("cluster is already bootstrapped".to_owned());
             header.set_error(err);
             resp.set_header(header);
@@ -128,7 +128,7 @@ impl PdMocker for Service {
             None => {
                 let mut header = Service::header();
                 let mut err = Error::default();
-                err.field_type = ErrorType::UNKNOWN;
+                err.set_field_type(ErrorType::UNKNOWN);
                 err.set_message(format!("store not found {}", req.get_store_id()));
                 header.set_error(err);
                 resp.set_header(header);
@@ -172,7 +172,7 @@ impl PdMocker for Service {
 
         let mut header = Service::header();
         let mut err = Error::default();
-        err.field_type = ErrorType::UNKNOWN;
+        err.set_field_type(ErrorType::UNKNOWN);
         err.set_message(format!("region not found {:?}", key));
         header.set_error(err);
         resp.set_header(header);
@@ -196,7 +196,7 @@ impl PdMocker for Service {
             None => {
                 let mut header = Service::header();
                 let mut err = Error::default();
-                err.field_type = ErrorType::UNKNOWN;
+                err.set_field_type(ErrorType::UNKNOWN);
                 err.set_message(format!("region not found {}", req.region_id));
                 header.set_error(err);
                 resp.set_header(header);
