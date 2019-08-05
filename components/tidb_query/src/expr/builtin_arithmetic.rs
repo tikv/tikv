@@ -538,10 +538,12 @@ mod tests {
 
             let lus = lhs
                 .get_field_type()
+                .as_accessor()
                 .flag()
                 .contains(FieldTypeFlag::UNSIGNED);
             let rus = rhs
                 .get_field_type()
+                .as_accessor()
                 .flag()
                 .contains(FieldTypeFlag::UNSIGNED);
             let unsigned = lus | rus;
@@ -952,10 +954,12 @@ mod tests {
 
             let lus = lhs
                 .get_field_type()
+                .as_accessor()
                 .flag()
                 .contains(FieldTypeFlag::UNSIGNED);
             let rus = rhs
                 .get_field_type()
+                .as_accessor()
                 .flag()
                 .contains(FieldTypeFlag::UNSIGNED);
             let unsigned = lus | rus;

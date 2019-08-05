@@ -20,8 +20,8 @@ pub fn get_cast_fn_rpn_node(
     from_field_type: &FieldType,
     to_field_type: FieldType,
 ) -> Result<RpnExpressionNode> {
-    let from = box_try!(EvalType::try_from(from_field_type.tp()));
-    let to = box_try!(EvalType::try_from(to_field_type.tp()));
+    let from = box_try!(EvalType::try_from(from_field_type.as_accessor().tp()));
+    let to = box_try!(EvalType::try_from(to_field_type.as_accessor().tp()));
     let func_meta = match (from, to) {
         (EvalType::Int, EvalType::Real) => {
             if !from_field_type.is_unsigned() {
@@ -128,7 +128,7 @@ fn produce_dec_with_specified_tp(
     ft: &FieldType,
 ) -> Result<Decimal> {
     // FIXME: The implementation is not exactly the same as TiDB's `ProduceDecWithSpecifiedTp`.
-    let (flen, decimal) = (ft.flen(), ft.decimal());
+    let (flen, decimal) = (ft.as_accessor().flen(), ft.as_accessor().decimal());
     if flen == tidb_query_datatype::UNSPECIFIED_LENGTH
         || decimal == tidb_query_datatype::UNSPECIFIED_LENGTH
     {
