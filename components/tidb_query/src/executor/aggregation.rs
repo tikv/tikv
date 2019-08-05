@@ -34,7 +34,7 @@ impl AggFuncExpr {
     }
 
     fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
-        let args = Expression::batch_build(ctx, expr.take_children().into_vec())?;
+        let args = Expression::batch_build(ctx, expr.take_children().into())?;
         let tp = expr.get_tp();
         let eval_buffer = Vec::with_capacity(args.len());
         Ok(AggFuncExpr {
@@ -159,8 +159,8 @@ pub struct HashAggExecutor<Src: Executor> {
 
 impl<Src: Executor> HashAggExecutor<Src> {
     pub fn new(mut meta: Aggregation, eval_config: Arc<EvalConfig>, src: Src) -> Result<Self> {
-        let group_bys = meta.take_group_by().into_vec();
-        let aggs = meta.take_agg_func().into_vec();
+        let group_bys = meta.take_group_by().into();
+        let aggs = meta.take_agg_func().into();
         let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
         Ok(HashAggExecutor {
             inner,
@@ -336,8 +336,8 @@ pub struct StreamAggExecutor<Src: Executor> {
 
 impl<Src: Executor> StreamAggExecutor<Src> {
     pub fn new(eval_config: Arc<EvalConfig>, src: Src, mut meta: Aggregation) -> Result<Self> {
-        let group_bys = meta.take_group_by().into_vec();
-        let aggs = meta.take_agg_func().into_vec();
+        let group_bys: Vec<_> = meta.take_group_by().into();
+        let aggs = meta.take_agg_func().into();
         let group_len = group_bys.len();
         let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
         // Get aggregation functions.
