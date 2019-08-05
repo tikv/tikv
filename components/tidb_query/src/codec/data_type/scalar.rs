@@ -48,6 +48,24 @@ impl ScalarValue {
             }
         }
     }
+
+    #[inline]
+    pub fn is_none(&self) -> bool {
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValue::TT(v) => v.is_none(),
+            }
+        }
+    }
+
+    #[inline]
+    pub fn is_some(&self) -> bool {
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValue::TT(v) => v.is_some(),
+            }
+        }
+    }
 }
 
 impl AsMySQLBool for ScalarValue {

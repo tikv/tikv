@@ -514,6 +514,8 @@ impl ArithmeticOpWithCtx for DecimalDivide {
 mod tests {
     use super::*;
 
+    use std::str::FromStr;
+
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
     use tipb::expression::ScalarFuncSig;
@@ -1170,27 +1172,42 @@ mod tests {
 
     #[test]
     fn test_decimal_divide() {
-        let normal = vec![
-            (str2dec("2.2"), str2dec("1.1"), str2dec("2.0")),
-            (str2dec("2.33"), str2dec("-0.01"), str2dec("-233")),
-            (str2dec("2.33"), str2dec("0.01"), str2dec("233")),
-            (None, str2dec("2"), None),
-            (str2dec("123"), None, None),
+        let cases = vec![
+            (Some("2.2"), Some("1.1"), Some("2.0")),
+            (Some("2.33"), Some("-0.01"), Some("-233")),
+            (Some("2.33"), Some("0.01"), Some("233")),
+            (None, Some("2"), None),
+            (Some("123"), None, None),
         ];
 
-        for (lhs, rhs, expected) in normal {
+        for (lhs, rhs, expected) in cases {
             let actual = RpnFnScalarEvaluator::new()
-                .push_param(lhs.clone())
-                .push_param(rhs.clone())
+                .push_param(lhs.map(|s| Decimal::from_str(s).unwrap()))
+                .push_param(rhs.map(|s| Decimal::from_str(s).unwrap()))
                 .evaluate(ScalarFuncSig::DivideDecimal)
                 .unwrap();
 
+            let expected = expected.map(|s| Decimal::from_str(s).unwrap());
+
             assert_eq!(actual, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
+    }
 
-        let abnormal = vec![
-            (str2dec("2.33"), str2dec("0.0")),
-            (str2dec("2.33"), str2dec("-0.0")),
+    #[test]
+    fn test_divide_by_zero() {
+        let cases: Vec<(ScalarFuncSig, FieldTypeTp, ScalarValue, ScalarValue)> = vec![
+            (
+                ScalarFuncSig::DivideDecimal,
+                FieldTypeTp::NewDecimal,
+                Decimal::from_str("2.33").unwrap().into(),
+                Decimal::from_str("0.0").unwrap().into(),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                FieldTypeTp::NewDecimal,
+                Decimal::from_str("2.33").unwrap().into(),
+                Decimal::from_str("-0.0").unwrap().into(),
+            ),
         ];
 
         // Vec<[(Flag, SqlMode, is_ok(bool), has_warning(bool))]>
@@ -1220,7 +1237,7 @@ mod tests {
             ),
         ];
 
-        for (lhs, rhs) in abnormal {
+        for (sig, ret_field_type, lhs, rhs) in &cases {
             for &(flag, sql_mode, is_ok, has_warning) in &modes {
                 // Construct an `EvalContext`
                 let mut config = EvalConfig::new();
@@ -1228,13 +1245,12 @@ mod tests {
 
                 let (result, mut ctx) = RpnFnScalarEvaluator::new()
                     .context(EvalContext::new(std::sync::Arc::new(config)))
-                    .push_param(lhs.clone())
-                    .push_param(rhs.clone())
-                    .evaluate_raw(FieldTypeTp::NewDecimal, ScalarFuncSig::DivideDecimal);
+                    .push_param(lhs.to_owned())
+                    .push_param(rhs.to_owned())
+                    .evaluate_raw(*ret_field_type, *sig);
 
                 if is_ok {
-                    let r: Option<Decimal> = result.unwrap().into();
-                    assert_eq!(r, None);
+                    assert!(result.unwrap().is_none());
                 } else {
                     assert!(result.is_err());
                 }
@@ -1249,9 +1265,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    fn str2dec(s: &str) -> Option<Decimal> {
-        s.parse().ok()
     }
 }
