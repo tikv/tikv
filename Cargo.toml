@@ -60,6 +60,11 @@ path = "benches/hierarchy/mod.rs"
 name = "misc"
 path = "benches/misc/mod.rs"
 
+[[bench]]
+name = "deadlock_detector"
+harness = false
+path = "benches/deadlock_detector/mod.rs"
+
 [dependencies]
 hashbrown = { version = "0.1", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
