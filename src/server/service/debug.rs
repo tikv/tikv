@@ -188,7 +188,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
                     entries
                         .into_iter()
                         .map(|(cf, size)| {
-                            let mut entry = RegionSizeResponse_Entry::default();
+                            let mut entry = region_size_response::Entry::default();
                             entry.set_cf(cf);
                             entry.set_size(size as u64);
                             entry
@@ -304,7 +304,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
         let f = self.pool.spawn_fn(move || {
             let list = fail::list().into_iter().map(|(name, actions)| {
-                let mut entry = ListFailPointsResponse_Entry::default();
+                let mut entry = list_fail_points_response::Entry::default();
                 entry.set_name(name);
                 entry.set_actions(actions);
                 entry
@@ -478,4 +478,12 @@ fn consistency_check<T: RaftStoreRouter>(
                     Ok(())
                 })
         })
+}
+
+mod region_size_response {
+    pub type Entry = kvproto::debugpb::RegionSizeResponse_Entry;
+}
+
+mod list_fail_points_response {
+    pub type Entry = kvproto::debugpb::ListFailPointsResponse_Entry;
 }
