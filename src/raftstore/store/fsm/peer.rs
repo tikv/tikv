@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use crate::pd::{PdClient, PdTask};
+use crate::pd::PdClient;
 use crate::raftstore::{Error, Result};
 use engine::Engines;
 use engine::CF_RAFT;
@@ -51,6 +51,7 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
+use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
