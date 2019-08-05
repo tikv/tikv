@@ -64,15 +64,18 @@ impl CMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::datum;
-    use crate::coprocessor::codec::datum::Datum;
+
+    use std::cmp::min;
+
     use rand::distributions::Distribution;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
-    use std::cmp::min;
+    use zipf::ZipfDistribution;
+
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
     use tikv_util::as_slice;
     use tikv_util::collections::HashMap;
-    use zipf::ZipfDistribution;
 
     impl CMSketch {
         fn query(&self, bytes: &[u8]) -> u32 {
