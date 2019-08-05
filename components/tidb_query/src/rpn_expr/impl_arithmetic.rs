@@ -489,6 +489,27 @@ fn int_divide_decimal(
     }
 }
 
+pub struct DecimalDivide;
+
+impl ArithmeticOpWithCtx for DecimalDivide {
+    type T = Decimal;
+
+    fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        use crate::codec::mysql::Res;
+
+        Ok(match lhs / rhs {
+            Some(value) => match value {
+                Res::Ok(value) => Some(value),
+                Res::Truncated(_) => ctx.handle_truncate(true).map(|_| None)?,
+                Res::Overflow(_) => ctx
+                    .handle_overflow(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))
+                    .map(|_| None)?,
+            },
+            None => ctx.handle_division_by_zero().map(|_| None)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,6 +518,8 @@ mod tests {
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
     use tipb::expression::ScalarFuncSig;
 
+    use crate::codec::error::ERR_DIVISION_BY_ZERO;
+    use crate::expr::{EvalConfig, Flag, SqlMode};
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -942,21 +965,21 @@ mod tests {
     #[test]
     fn test_int_divide_decimal() {
         let test_cases = vec![
-            (Some(11.01), Some(1.1), Some(10)),
-            (Some(-11.01), Some(1.1), Some(-10)),
-            (Some(11.01), Some(-1.1), Some(-10)),
-            (Some(-11.01), Some(-1.1), Some(10)),
-            (Some(123.0), None, None),
-            (None, Some(123.0), None),
+            (Some("11.01"), Some("1.1"), Some(10)),
+            (Some("-11.01"), Some("1.1"), Some(-10)),
+            (Some("11.01"), Some("-1.1"), Some(-10)),
+            (Some("-11.01"), Some("-1.1"), Some(10)),
+            (Some("123.0"), None, None),
+            (None, Some("123.0"), None),
             // divide by zero
-            (Some(0.0), Some(0.0), None),
+            (Some("0.0"), Some("0.0"), None),
             (None, None, None),
         ];
 
         for (lhs, rhs, expected) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(lhs.map(|f| Decimal::from_f64(f).unwrap()))
-                .push_param(rhs.map(|f| Decimal::from_f64(f).unwrap()))
+                .push_param(lhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
+                .push_param(rhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
                 .evaluate(ScalarFuncSig::IntDivideDecimal)
                 .unwrap();
 
@@ -970,7 +993,7 @@ mod tests {
             (Decimal::from(std::i64::MIN), Decimal::from(-1)),
             (
                 Decimal::from(std::i64::MAX),
-                Decimal::from_f64(0.1).unwrap(),
+                Decimal::from_bytes(b"0.1").unwrap().unwrap(),
             ),
         ];
 
@@ -1143,5 +1166,91 @@ mod tests {
                 rhs
             );
         }
+    }
+
+    #[test]
+    fn test_decimal_divide() {
+        let normal = vec![
+            (str2dec("2.2"), str2dec("1.1"), str2dec("2.0")),
+            (str2dec("2.33"), str2dec("-0.01"), str2dec("-233")),
+            (str2dec("2.33"), str2dec("0.01"), str2dec("233")),
+            (None, str2dec("2"), None),
+            (str2dec("123"), None, None),
+        ];
+
+        for (lhs, rhs, expected) in normal {
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param(lhs.clone())
+                .push_param(rhs.clone())
+                .evaluate(ScalarFuncSig::DivideDecimal)
+                .unwrap();
+
+            assert_eq!(actual, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+
+        let abnormal = vec![
+            (str2dec("2.33"), str2dec("0.0")),
+            (str2dec("2.33"), str2dec("-0.0")),
+        ];
+
+        // Vec<[(Flag, SqlMode, is_ok(bool), has_warning(bool))]>
+        let modes = vec![
+            // Warning
+            (Flag::empty(), SqlMode::empty(), true, true),
+            // Error
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
+                false,
+                false,
+            ),
+            // Ok
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::STRICT_ALL_TABLES,
+                true,
+                false,
+            ),
+            // Warning
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT | Flag::DIVIDED_BY_ZERO_AS_WARNING,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
+                true,
+                true,
+            ),
+        ];
+
+        for (lhs, rhs) in abnormal {
+            for &(flag, sql_mode, is_ok, has_warning) in &modes {
+                // Construct an `EvalContext`
+                let mut config = EvalConfig::new();
+                config.set_flag(flag).set_sql_mode(sql_mode);
+
+                let (result, mut ctx) = RpnFnScalarEvaluator::new()
+                    .context(EvalContext::new(std::sync::Arc::new(config)))
+                    .push_param(lhs.clone())
+                    .push_param(rhs.clone())
+                    .evaluate_ctx::<Decimal>(ScalarFuncSig::DivideDecimal);
+
+                if is_ok {
+                    assert_eq!(result.unwrap(), None);
+                } else {
+                    assert!(result.is_err());
+                }
+
+                if has_warning {
+                    assert_eq!(
+                        ctx.take_warnings().warnings[0].get_code(),
+                        ERR_DIVISION_BY_ZERO
+                    );
+                } else {
+                    assert!(ctx.take_warnings().warnings.is_empty());
+                }
+            }
+        }
+    }
+
+    fn str2dec(s: &str) -> Option<Decimal> {
+        s.parse().ok()
     }
 }
