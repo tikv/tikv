@@ -139,7 +139,7 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
         return (cb_ctx, Err(e));
     }
     let resps = write_resp.response.take_responses();
-    (cb_ctx, Ok(CmdRes::Resp(resps.into_vec())))
+    (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
 fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
@@ -151,7 +151,7 @@ fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Re
     if resps.len() >= 1 || resps[0].get_cmd_type() == CmdType::Snap {
         (cb_ctx, Ok(CmdRes::Snap(read_resp.snapshot.unwrap())))
     } else {
-        (cb_ctx, Ok(CmdRes::Resp(resps.into_vec())))
+        (cb_ctx, Ok(CmdRes::Resp(resps.into())))
     }
 }
 
