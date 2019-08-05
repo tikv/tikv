@@ -5,11 +5,11 @@ use std::{error, result};
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        // RocksDb uses plain string as the error.
-        RocksDb(msg: String) {
+        // Engine uses plain string as the error.
+        Engine(msg: String) {
             from()
-            description("RocksDb error")
-            display("RocksDb {}", msg)
+            description("Storage Engine error")
+            display("Storage Engine {}", msg)
         }
         // FIXME: It should not know Region.
         NotInRange( key: Vec<u8>, regoin_id: u64, start: Vec<u8>, end: Vec<u8>) {

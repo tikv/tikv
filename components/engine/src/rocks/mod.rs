@@ -1,10 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod db;
+pub use self::db::*;
 pub mod util;
 
 mod snapshot;
 pub use self::snapshot::*;
+mod writebatch;
+pub use self::writebatch::*;
+mod iterator;
+pub use self::iterator::*;
+mod options;
+pub use self::options::*;
 
 pub use engine_rocksdb::rocksdb_options::UnsafeSnap;
 pub use engine_rocksdb::{
@@ -16,10 +23,13 @@ pub use engine_rocksdb::{
     DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
     EnvOptions, EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData,
     IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, PerfContext, Range, RateLimiter,
-    ReadOptions, SeekKey, SequentialFile, SliceTransform, SstFileWriter, TablePropertiesCollection,
+    SequentialFile, SliceTransform, SstFileWriter, TablePropertiesCollection,
     TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
-    UserCollectedProperties, Writable, WriteBatch, WriteOptions, WriteStallCondition,
-    WriteStallInfo, DB,
+    UserCollectedProperties, Writable, WriteBatch, WriteStallCondition, WriteStallInfo, DB,
+};
+pub use engine_rocksdb::{
+    ColumnFamilyOptions as RocksCFOptions, ReadOptions as RocksReadOptions,
+    SeekKey as RocksSeekKey, WriteOptions as RocksWriteOptions,
 };
 
 #[cfg(test)]

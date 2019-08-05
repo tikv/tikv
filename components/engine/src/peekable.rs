@@ -1,12 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub use crate::rocks::DBVector;
-use crate::Result;
+use crate::*;
 
-// TODO: refactor this trait into rocksdb trait.
 pub trait Peekable {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>>;
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>>;
+    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8])
+        -> Result<Option<Vec<u8>>>;
+
+    fn get_value(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.get_value_opt(&ReadOptions::default(), key)
+    }
+
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.get_value_cf_opt(&ReadOptions::default(), cf, key)
+    }
 
     fn get_msg<M: protobuf::Message>(&self, key: &[u8]) -> Result<Option<M>> {
         let value = self.get_value(key)?;

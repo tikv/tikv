@@ -2,26 +2,25 @@
 
 use std::io;
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::rocks::util::engine_metrics::*;
-use crate::rocks::DB;
+use crate::rocks::{Rocks, DB};
 use crate::Engines;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
 
 pub struct MetricsFlusher {
-    engines: Engines,
+    engines: Engines<Rocks>,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
     interval: Duration,
 }
 
 impl MetricsFlusher {
-    pub fn new(engines: Engines, interval: Duration) -> MetricsFlusher {
+    pub fn new(engines: Engines<Rocks>, interval: Duration) -> MetricsFlusher {
         MetricsFlusher {
             engines,
             handle: None,
@@ -31,8 +30,8 @@ impl MetricsFlusher {
     }
 
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let db = Arc::clone(&self.engines.kv);
-        let raft_db = Arc::clone(&self.engines.raft);
+        let db = self.engines.kv.get_db();
+        let raft_db = self.engines.raft.get_db();
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
         let shared_block_cache = self.engines.shared_block_cache;

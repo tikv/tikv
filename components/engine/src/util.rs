@@ -3,12 +3,9 @@
 use std::u64;
 
 use crate::rocks;
-use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use crate::CF_LOCK;
+use crate::rocks::{Range, TablePropertiesCollection, DB};
 
 use super::{Error, Result};
-use super::{IterOption, Iterable};
-use tikv_util::keybuilder::KeyBuilder;
 
 /// Check if key in range [`start_key`, `end_key`).
 pub fn check_key_in_range(
@@ -27,85 +24,6 @@ pub fn check_key_in_range(
             end_key.to_vec(),
         ))
     }
-}
-
-// In our tests, we found that if the batch size is too large, running delete_all_in_range will
-// reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
-pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
-
-pub fn delete_all_in_range(
-    db: &DB,
-    start_key: &[u8],
-    end_key: &[u8],
-    use_delete_range: bool,
-) -> Result<()> {
-    if start_key >= end_key {
-        return Ok(());
-    }
-
-    for cf in db.cf_names() {
-        delete_all_in_range_cf(db, cf, start_key, end_key, use_delete_range)?;
-    }
-
-    Ok(())
-}
-
-pub fn delete_all_in_range_cf(
-    db: &DB,
-    cf: &str,
-    start_key: &[u8],
-    end_key: &[u8],
-    use_delete_range: bool,
-) -> Result<()> {
-    let handle = rocks::util::get_cf_handle(db, cf)?;
-    let wb = WriteBatch::default();
-    if use_delete_range && cf != CF_LOCK {
-        wb.delete_range_cf(handle, start_key, end_key)?;
-    } else {
-        let start = KeyBuilder::from_slice(start_key, 0, 0);
-        let end = KeyBuilder::from_slice(end_key, 0, 0);
-        let mut iter_opt = IterOption::new(Some(start), Some(end), false);
-        if db.is_titan() {
-            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-            // to avoid referring to missing blob files.
-            iter_opt.titan_key_only(true);
-        }
-        let mut it = db.new_iterator_cf(cf, iter_opt)?;
-        it.seek(start_key.into());
-        while it.valid() {
-            wb.delete_cf(handle, it.key())?;
-            if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
-                // Can't use write_without_wal here.
-                // Otherwise it may cause dirty data when applying snapshot.
-                db.write(&wb)?;
-                wb.clear();
-            }
-
-            if !it.next() {
-                break;
-            }
-        }
-        it.status()?;
-    }
-
-    if wb.count() > 0 {
-        db.write(&wb)?;
-    }
-
-    Ok(())
-}
-
-pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-    if start_key >= end_key {
-        return Ok(());
-    }
-
-    for cf in db.cf_names() {
-        let handle = rocks::util::get_cf_handle(db, cf)?;
-        db.delete_files_in_range_cf(handle, start_key, end_key, false)?;
-    }
-
-    Ok(())
 }
 
 pub fn get_range_properties_cf(

@@ -25,8 +25,8 @@ use crate::rocks::load_latest_options;
 use crate::rocks::set_external_sst_file_global_seq_no;
 use crate::rocks::supported_compression;
 use crate::rocks::{
-    CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
-    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
+    CColumnFamilyDescriptor, CompactOptions, CompactionOptions, DBCompressionType, DBOptions, Env,
+    Range, RocksCFOptions, SliceTransform, DB,
 };
 use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
 use tikv_util::file::calc_crc32;
@@ -70,7 +70,7 @@ pub fn get_fastest_supported_compression_type() -> DBCompressionType {
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
     let handle = db
         .cf_handle(cf)
-        .ok_or_else(|| Error::RocksDb(format!("cf {} not found", cf)))?;
+        .ok_or_else(|| Error::Engine(format!("cf {} not found", cf)))?;
     Ok(handle)
 }
 
@@ -78,7 +78,7 @@ pub fn open_opt(
     opts: DBOptions,
     path: &str,
     cfs: Vec<&str>,
-    cfs_opts: Vec<ColumnFamilyOptions>,
+    cfs_opts: Vec<RocksCFOptions>,
 ) -> Result<DB> {
     let db = DB::open_cf(opts, path, cfs.into_iter().zip(cfs_opts).collect())?;
     Ok(db)
@@ -86,11 +86,11 @@ pub fn open_opt(
 
 pub struct CFOptions<'a> {
     cf: &'a str,
-    options: ColumnFamilyOptions,
+    options: RocksCFOptions,
 }
 
 impl<'a> CFOptions<'a> {
-    pub fn new(cf: &'a str, options: ColumnFamilyOptions) -> CFOptions<'a> {
+    pub fn new(cf: &'a str, options: RocksCFOptions) -> CFOptions<'a> {
         CFOptions { cf, options }
     }
 }
@@ -111,7 +111,7 @@ pub fn new_engine(
         None => {
             let mut default_cfs_opts = Vec::with_capacity(cfs.len());
             for cf in cfs {
-                default_cfs_opts.push(CFOptions::new(*cf, ColumnFamilyOptions::new()));
+                default_cfs_opts.push(CFOptions::new(*cf, RocksCFOptions::new()));
             }
             default_cfs_opts
         }
@@ -211,7 +211,7 @@ pub fn new_engine_opt(
 
     // Opens db.
     let mut cfs_v: Vec<&str> = Vec::new();
-    let mut cfs_opts_v: Vec<ColumnFamilyOptions> = Vec::new();
+    let mut cfs_opts_v: Vec<RocksCFOptions> = Vec::new();
     for cf in &existed {
         cfs_v.push(cf);
         match cfs_opts.iter().find(|x| x.cf == *cf) {
@@ -221,7 +221,7 @@ pub fn new_engine_opt(
                 cfs_opts_v.push(tmp.options);
             }
             None => {
-                cfs_opts_v.push(ColumnFamilyOptions::new());
+                cfs_opts_v.push(RocksCFOptions::new());
             }
         }
     }
@@ -577,7 +577,7 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 
     let meta = f.metadata()?;
     if meta.len() != expected_size {
-        return Err(Error::RocksDb(format!(
+        return Err(Error::Engine(format!(
             "invalid size {} for {}, expected {}",
             meta.len(),
             path,
@@ -598,7 +598,7 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 
     let checksum = calc_crc32(path)?;
     if checksum != expected_checksum {
-        return Err(Error::RocksDb(format!(
+        return Err(Error::Engine(format!(
             "invalid checksum {} for {}, expected {}",
             checksum, path, expected_checksum
         )));
@@ -619,7 +619,7 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::rocks::{
-        ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
+        DBOptions, EnvOptions, IngestExternalFileOptions, RocksCFOptions, SstFileWriter,
         TitanDBOptions, Writable, DB,
     };
     use crate::CF_DEFAULT;
@@ -650,8 +650,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         // create db when db not exist
-        let mut cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
-        let mut opts = ColumnFamilyOptions::new();
+        let mut cfs_opts = vec![CFOptions::new(CF_DEFAULT, RocksCFOptions::new())];
+        let mut opts = RocksCFOptions::new();
         opts.set_level_compaction_dynamic_level_bytes(true);
         cfs_opts.push(CFOptions::new("cf_dynamic_level_bytes", opts.clone()));
         {
@@ -674,8 +674,8 @@ mod tests {
 
         // drop cf1.
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-            CFOptions::new("cf_dynamic_level_bytes", ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, RocksCFOptions::new()),
+            CFOptions::new("cf_dynamic_level_bytes", RocksCFOptions::new()),
         ];
         {
             let mut db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
@@ -718,7 +718,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         let opts = DBOptions::new();
-        let cf_opts = CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new());
+        let cf_opts = CFOptions::new(CF_DEFAULT, RocksCFOptions::new());
         let db = new_engine_opt(path_str, opts, vec![cf_opts]).unwrap();
         let cf = db.cf_handle(CF_DEFAULT).unwrap();
 
@@ -824,7 +824,7 @@ mod tests {
         // Force all values write out to blob files.
         titan_opts.set_min_blob_size(0);
         db_opts.set_titandb_options(&titan_opts);
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCFOptions::new();
         cf_opts.set_titandb_options(&titan_opts);
         check_prepare_sst_for_ingestion(
             Some(db_opts),
@@ -839,7 +839,7 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCFOptions::new();
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = vec![
             CFOptions::new("default", cf_opts.clone()),

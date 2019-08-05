@@ -30,12 +30,8 @@ use std::sync::Arc;
 
 pub mod util;
 
-pub mod rocks;
-pub use crate::rocks::{
-    CFHandle, DBIterator, DBVector, Range, ReadOptions, Snapshot, SyncSnapshot, WriteBatch,
-    WriteOptions, DB,
-};
 mod errors;
+pub mod rocks;
 pub use crate::errors::*;
 mod peekable;
 pub use crate::peekable::*;
@@ -45,18 +41,23 @@ mod mutable;
 pub use crate::mutable::*;
 mod cf;
 pub use crate::cf::*;
+mod engine;
+pub use crate::engine::*;
+mod options;
+pub use crate::options::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
+pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
 #[derive(Clone, Debug)]
-pub struct Engines {
-    pub kv: Arc<DB>,
-    pub raft: Arc<DB>,
+pub struct Engines<E: KVEngine> {
+    pub kv: Arc<E>,
+    pub raft: Arc<E>,
     pub shared_block_cache: bool,
 }
 
-impl Engines {
-    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>, shared_block_cache: bool) -> Engines {
+impl<E: KVEngine> Engines<E> {
+    pub fn new(kv_engine: Arc<E>, raft_engine: Arc<E>, shared_block_cache: bool) -> Self {
         Engines {
             kv: kv_engine,
             raft: raft_engine,
@@ -64,27 +65,27 @@ impl Engines {
         }
     }
 
-    pub fn write_kv(&self, wb: &WriteBatch) -> Result<()> {
-        self.kv.write(wb).map_err(Error::RocksDb)
+    pub fn write_kv(&self, wb: &E::Batch) -> Result<()> {
+        self.kv.write(wb)
     }
 
-    pub fn write_kv_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.kv.write_opt(wb, opts).map_err(Error::RocksDb)
+    pub fn write_kv_opt(&self, wb: &E::Batch, opts: &WriteOptions) -> Result<()> {
+        self.kv.write_opt(opts, wb)
     }
 
     pub fn sync_kv(&self) -> Result<()> {
-        self.kv.sync_wal().map_err(Error::RocksDb)
+        self.kv.sync()
     }
 
-    pub fn write_raft(&self, wb: &WriteBatch) -> Result<()> {
-        self.raft.write(wb).map_err(Error::RocksDb)
+    pub fn write_raft(&self, wb: &E::Batch) -> Result<()> {
+        self.raft.write(wb)
     }
 
-    pub fn write_raft_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.raft.write_opt(wb, opts).map_err(Error::RocksDb)
+    pub fn write_raft_opt(&self, wb: &E::Batch, opts: &WriteOptions) -> Result<()> {
+        self.raft.write_opt(opts, wb)
     }
 
     pub fn sync_raft(&self) -> Result<()> {
-        self.raft.sync_wal().map_err(Error::RocksDb)
+        self.raft.sync()
     }
 }
