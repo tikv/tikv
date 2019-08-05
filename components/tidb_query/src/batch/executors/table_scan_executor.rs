@@ -164,7 +164,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
             // `handle_indices` is expected to be sorted.
-            assert!(handle_index >= last_index);
+            assert!(*handle_index >= last_index);
 
             // Fill last `handle_index - 1` columns.
             for _ in last_index..*handle_index {
@@ -296,6 +296,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 mod tests {
     use super::*;
 
+    use std::iter;
     use std::sync::Arc;
 
     use kvproto::coprocessor::KeyRange;
@@ -1007,6 +1008,79 @@ mod tests {
         }
     }
 
+    fn test_multi_handle_column_impl(columns_is_pk: &[bool]) {
+        const TABLE_ID: i64 = 42;
+
+        // This test makes a pk column with id = 1 and non-pk columns with id
+        // in 10 to 10 + columns_is_pk.len().
+        // PK columns will be set to column 1 and others will be set to column 10 + i, where i is
+        // the index of each column.
+
+        let mut columns_info = Vec::new();
+        for (i, is_pk) in columns_is_pk.iter().enumerate() {
+            let mut ci = ColumnInfo::default();
+            ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ci.set_pk_handle(*is_pk);
+            ci.set_column_id(if *is_pk { 1 } else { i as i64 + 10 });
+            columns_info.push(ci);
+        }
+
+        let mut schema = Vec::new();
+        schema.resize(columns_is_pk.len(), FieldTypeTp::LongLong.into());
+
+        let key = table::encode_row_key(TABLE_ID, 1);
+        // col_ids is from 2 to schema.len() because the pk takes 1
+        let col_ids = (10..10 + schema.len() as i64).collect::<Vec<_>>();
+        let row = col_ids.iter().map(|i| Datum::I64(*i)).collect();
+        let value = table::encode_row(row, &col_ids).unwrap();
+
+        let mut key_range = KeyRange::default();
+        key_range.set_start(table::encode_row_key(TABLE_ID, std::i64::MIN));
+        key_range.set_end(table::encode_row_key(TABLE_ID, std::i64::MAX));
+
+        let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
+
+        let mut executor = BatchTableScanExecutor::new(
+            store.clone(),
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![key_range],
+            false,
+        )
+        .unwrap();
+
+        let mut result = executor.next_batch(10);
+        assert_eq!(result.is_drained.unwrap(), true);
+        assert_eq!(result.logical_rows.len(), 1);
+        assert_eq!(result.physical_columns.columns_len(), columns_is_pk.len());
+        for i in 0..columns_is_pk.len() {
+            result.physical_columns[i]
+                .ensure_all_decoded(&Tz::utc(), &schema[i])
+                .unwrap();
+            if columns_is_pk[i] {
+                assert_eq!(
+                    result.physical_columns[i].decoded().as_int_slice(),
+                    &[Some(1)]
+                );
+            } else {
+                assert_eq!(
+                    result.physical_columns[i].decoded().as_int_slice(),
+                    &[Some(i as i64 + 10)]
+                );
+            }
+        }
+    }
+
     #[test]
-    fn test_multi_handle_column() {}
+    fn test_multi_handle_column() {
+        test_multi_handle_column_impl(&[true]);
+        test_multi_handle_column_impl(&[false]);
+        test_multi_handle_column_impl(&[true, false]);
+        test_multi_handle_column_impl(&[false, true]);
+        test_multi_handle_column_impl(&[true, true]);
+        test_multi_handle_column_impl(&[true, false, true]);
+        test_multi_handle_column_impl(&[
+            false, false, false, true, false, false, true, true, false, false,
+        ]);
+    }
 }
