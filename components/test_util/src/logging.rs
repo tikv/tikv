@@ -98,24 +98,10 @@ pub fn init_log_for_test() {
     .unwrap();
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
-    let drain = CaseTraceLogger { f: writer };
+    let drainer = CaseTraceLogger { f: writer };
 
-    // Collects following targets.
-    const ENABLED_TARGETS: &[&str] = &[
-        "tikv::",
-        "tests::",
-        "benches::",
-        "integrations::",
-        "failpoints::",
-        "raft::",
-        // Collects logs for test components.
-        "test_",
-    ];
-    let filtered = drain.filter(|record| {
-        ENABLED_TARGETS
-            .iter()
-            .any(|target| record.module().starts_with(target))
-    });
+    // Default disabled log targets for test.
+    let disabled_targets = vec!["tokio_core".to_owned(), "tokio_reactor".to_owned()];
 
     // CaseTraceLogger relies on test's thread name, however slog_async has
     // its own thread, and the name is "".
@@ -124,8 +110,11 @@ pub fn init_log_for_test() {
     //
     // [1]: https://github.com/rust-lang/rfcs/blob/master/text/2318-custom-test-frameworks.md
     tikv_util::logger::init_log(
-        filtered, level, false, // disable async drainer
+        drainer,
+        level,
+        false, // disable async drainer
         true,  // init std log
+        disabled_targets,
     )
     .unwrap()
 }

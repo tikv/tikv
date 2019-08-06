@@ -17,7 +17,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use super::metrics::*;
+use crate::pd::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
@@ -282,7 +282,7 @@ impl<T: PdClient> Runner<T> {
 
                         let req = new_batch_split_region_request(
                             split_keys,
-                            resp.take_ids().into_vec(),
+                            resp.take_ids().into(),
                             right_derive,
                         );
                         let region_id = region.get_id();

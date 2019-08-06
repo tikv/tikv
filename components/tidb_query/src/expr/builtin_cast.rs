@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::{i64, str, u64};
 
 use tidb_query_datatype::prelude::*;
@@ -30,7 +30,12 @@ impl ScalarFunc {
 
     pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
-        if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+        if self
+            .field_type
+            .as_accessor()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             let uval = val.to_uint(ctx, FieldTypeTp::LongLong)?;
             Ok(Some(uval as i64))
         } else {
@@ -42,7 +47,12 @@ impl ScalarFunc {
     pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
-        let (overflow, res) = if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+        let (overflow, res) = if self
+            .field_type
+            .as_accessor()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             let uint = val.as_u64();
             (uint.is_overflow(), uint.unwrap() as i64)
         } else {
@@ -72,7 +82,12 @@ impl ScalarFunc {
         let res = if is_negative {
             val.to_int(ctx, FieldTypeTp::LongLong).map(|v| {
                 // TODO: handle inUion flag
-                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                if self
+                    .field_type
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
                     ctx.warnings
                         .append_warning(Error::cast_neg_int_as_unsigned());
                 }
@@ -80,7 +95,11 @@ impl ScalarFunc {
             })
         } else {
             val.to_uint(ctx, FieldTypeTp::LongLong).map(|urs| {
-                if !self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
+                if !self
+                    .field_type
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
                     && urs > (i64::MAX as u64)
                 {
                     ctx.warnings
@@ -105,7 +124,7 @@ impl ScalarFunc {
 
     pub fn cast_time_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec: Decimal = val.convert(ctx)?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
@@ -119,7 +138,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = Decimal::try_from(val)?;
+        let dec: Decimal = val.convert(ctx)?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
@@ -181,7 +200,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let val = Decimal::try_from(val)?;
+        let val: Decimal = val.convert(ctx)?;
         let res = val.convert(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
@@ -198,8 +217,12 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let field_type = &self.children[0].field_type();
-        let res = if !field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+        let field_type = self.children[0].field_type();
+        let res = if !field_type
+            .as_accessor()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             Cow::Owned(Decimal::from(val))
         } else {
             let uval = val as u64;
@@ -213,8 +236,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
-        let res = Decimal::from_f64(val)?;
+        let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
+        let res: Decimal = val.convert(ctx)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(res))
             .map(Some)
     }
@@ -254,7 +277,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let dec = val.to_decimal()?;
+        let dec = val.convert(ctx)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -265,7 +288,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let dec = Decimal::try_from(val)?;
+        let dec: Decimal = val.convert(ctx)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -276,8 +299,8 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.convert(ctx)?;
-        let dec = Decimal::from_f64(val)?;
+        let val: f64 = val.convert(ctx)?;
+        let dec: Decimal = val.convert(ctx)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -410,7 +433,7 @@ impl ScalarFunc {
         let mut val = val.into_owned();
         val.round_frac(self.field_type.decimal() as i8)?;
         // TODO: tidb only update tp when tp is Date
-        val.set_time_type(self.field_type.tp().try_into()?)?;
+        val.set_time_type(self.field_type.as_accessor().tp().try_into()?)?;
         Ok(Some(Cow::Owned(val)))
     }
 
@@ -420,7 +443,11 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val)?;
+        let mut val = Time::from_duration(
+            &ctx.cfg.tz,
+            self.field_type.as_accessor().tp().try_into()?,
+            val,
+        )?;
         val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
@@ -528,7 +555,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let flag = self.children[0].field_type().flag();
+        let flag = self.children[0].field_type().as_accessor().flag();
         let j = if flag.contains(FieldTypeFlag::IS_BOOLEAN) {
             Json::Boolean(val != 0)
         } else if flag.contains(FieldTypeFlag::UNSIGNED) {
@@ -568,6 +595,7 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if self
             .field_type
+            .as_accessor()
             .flag()
             .contains(FieldTypeFlag::PARSE_TO_JSON)
         {
@@ -616,8 +644,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         val: Cow<'a, Decimal>,
     ) -> Result<Cow<'a, Decimal>> {
-        let flen = self.field_type.flen();
-        let decimal = self.field_type.decimal();
+        let flen = self.field_type.as_accessor().flen();
+        let decimal = self.field_type.as_accessor().decimal();
         if flen == tidb_query_datatype::UNSPECIFIED_LENGTH
             || decimal == tidb_query_datatype::UNSPECIFIED_LENGTH
         {
@@ -680,7 +708,7 @@ impl ScalarFunc {
             return Ok(Cow::Owned(res));
         }
 
-        if self.field_type.tp() == FieldTypeTp::String && s.len() < flen {
+        if self.field_type.as_accessor().tp() == FieldTypeTp::String && s.len() < flen {
             let mut s = s.into_owned();
             s.resize(flen, 0);
             return Ok(Cow::Owned(s));
@@ -690,7 +718,7 @@ impl ScalarFunc {
 
     fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<'_, Time>> {
         let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, &ctx.cfg.tz)?;
-        t.set_time_type(self.field_type.tp().try_into()?)?;
+        t.set_time_type(self.field_type.as_accessor().tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }
 
@@ -700,7 +728,7 @@ impl ScalarFunc {
             self.field_type.decimal() as i8,
             &ctx.cfg.tz,
         )?;
-        t.set_time_type(self.field_type.tp().try_into()?)?;
+        t.set_time_type(self.field_type.as_accessor().tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }
 
@@ -708,8 +736,8 @@ impl ScalarFunc {
     /// a new float64 according to `flen` and `decimal` in `self.tp`.
     /// TODO port tests from tidb(tidb haven't implemented now)
     fn produce_float_with_specified_tp(&self, ctx: &mut EvalContext, f: f64) -> Result<f64> {
-        let flen = self.field_type.flen();
-        let decimal = self.field_type.decimal();
+        let flen = self.field_type.as_accessor().flen();
+        let decimal = self.field_type.as_accessor().decimal();
         if flen == tidb_query_datatype::UNSPECIFIED_LENGTH
             || decimal == tidb_query_datatype::UNSPECIFIED_LENGTH
         {
@@ -1019,6 +1047,12 @@ mod tests {
         }
     }
 
+    fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
+        use crate::codec::convert::ConvertTo;
+        let val = f.convert(ctx)?;
+        Ok(val)
+    }
+
     #[test]
     fn test_cast_as_decimal() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
@@ -1040,7 +1074,7 @@ mod tests {
                 vec![Datum::I64(1234)],
                 7,
                 3,
-                Decimal::from_f64(1234.000).unwrap(),
+                f64_to_decimal(&mut ctx, 1234.000).unwrap(),
             ),
             (
                 ScalarFuncSig::CastStringAsDecimal,
@@ -1056,7 +1090,7 @@ mod tests {
                 vec![Datum::Bytes(b"1234".to_vec())],
                 7,
                 3,
-                Decimal::from_f64(1234.000).unwrap(),
+                f64_to_decimal(&mut ctx, 1234.000).unwrap(),
             ),
             (
                 ScalarFuncSig::CastRealAsDecimal,
@@ -1072,7 +1106,7 @@ mod tests {
                 vec![Datum::F64(1234.123)],
                 8,
                 4,
-                Decimal::from_f64(1234.1230).unwrap(),
+                f64_to_decimal(&mut ctx, 1234.1230).unwrap(),
             ),
             (
                 ScalarFuncSig::CastTimeAsDecimal,
@@ -1104,7 +1138,7 @@ mod tests {
                 vec![Datum::Dur(duration_t)],
                 7,
                 1,
-                Decimal::from_f64(120023.0).unwrap(),
+                f64_to_decimal(&mut ctx, 120023.0).unwrap(),
             ),
             (
                 ScalarFuncSig::CastJsonAsDecimal,
@@ -1120,7 +1154,7 @@ mod tests {
                 vec![Datum::Json(Json::I64(1))],
                 2,
                 1,
-                Decimal::from_f64(1.0).unwrap(),
+                f64_to_decimal(&mut ctx, 1.0).unwrap(),
             ),
             (
                 ScalarFuncSig::CastDecimalAsDecimal,
@@ -1136,7 +1170,7 @@ mod tests {
                 vec![Datum::Dec(Decimal::from(1))],
                 2,
                 1,
-                Decimal::from_f64(1.0).unwrap(),
+                f64_to_decimal(&mut ctx, 1.0).unwrap(),
             ),
         ];
 
@@ -1733,7 +1767,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
-                vec![Datum::Dec(Decimal::from_f64(32.0001).unwrap())],
+                vec![Datum::Dec(f64_to_decimal(&mut ctx, 32.0001).unwrap())],
                 Some(Json::Double(32.0001)),
             ),
             (vec![Datum::Null], None),
@@ -1773,7 +1807,7 @@ mod tests {
             let col_expr = col_expr(0, FieldTypeTp::String);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
             if by_parse {
-                let mut flag = ex.get_field_type().flag();
+                let mut flag = ex.get_field_type().as_accessor().flag();
                 flag |= FieldTypeFlag::PARSE_TO_JSON;
                 ex.mut_field_type().as_mut_accessor().set_flag(flag);
             }
@@ -1887,18 +1921,19 @@ mod tests {
 
     #[test]
     fn test_dec_as_int_with_overflow() {
+        let mut ctx = EvalContext::default();
         let cases = vec![
             (
                 FieldTypeFlag::empty(),
                 vec![Datum::Dec(
-                    Decimal::from_f64(i64::MAX as f64 + 100.5).unwrap(),
+                    f64_to_decimal(&mut ctx, i64::MAX as f64 + 100.5).unwrap(),
                 )],
                 i64::MAX,
             ),
             (
                 FieldTypeFlag::UNSIGNED,
                 vec![Datum::Dec(
-                    Decimal::from_f64(u64::MAX as f64 + 100.5).unwrap(),
+                    f64_to_decimal(&mut ctx, u64::MAX as f64 + 100.5).unwrap(),
                 )],
                 u64::MAX as i64,
             ),
