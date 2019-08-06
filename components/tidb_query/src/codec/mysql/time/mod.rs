@@ -18,8 +18,9 @@ use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
 use crate::codec::convert::ConvertTo;
+use crate::codec::data_type::Real;
 use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use crate::codec::mysql::{self, Decimal};
+use crate::codec::mysql::{self, Decimal, Json};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -801,6 +802,62 @@ impl Time {
             None
         }
     }
+}
+
+// port from TiDB's types/time.go ParseTimeFromNum
+pub fn convert_int_as_time(ctx: &mut EvalContext, num: i64, fsp: i8) -> Result<Time> {
+    // FIXME: this impl is not same as TiDB's
+    let s = format!("{}", num);
+    Time::parse_datetime(s.as_str(), fsp, &ctx.cfg.tz)
+}
+
+// port from part of TiDB's builtinCastDecimalAsTimeSig::evalTime
+pub fn convert_decimal_as_time(ctx: &mut EvalContext, dec: &Decimal, fsp: i8) -> Result<Time> {
+    let s = dec.to_string();
+    Time::parse_datetime_from_float_string(s.as_str(), fsp, &ctx.cfg.tz)
+}
+
+// port from TiDB's Duration::ConvertToTime
+pub fn convert_duration_as_time(
+    ctx: &mut EvalContext,
+    dur: MyDuration,
+    tp: TimeType,
+) -> Result<Time> {
+    // TODO, there may be some difference between TiDB's and this one
+    let now = Utc::now();
+    let local = now.with_timezone(&ctx.cfg.tz);
+    let t = Time::new(local, tp, dur.fsp() as i8)?;
+    match Time::checked_add(t, dur) {
+        None => Err(Error::overflow("Time", "")),
+        Some(t) => Ok(convert_time_as_time(&t, tp, dur.fsp() as i8)?),
+    }
+}
+
+// port from part of TiDB's builtinCastRealAsTimeSig::evalTime
+pub fn convert_float_as_time(ctx: &mut EvalContext, num: f64, fsp: i8) -> Result<Time> {
+    let fs = format!("{}", num);
+    Time::parse_datetime_from_float_string(fs.as_str(), fsp, &ctx.cfg.tz)
+}
+
+pub fn convert_real_as_time(ctx: &mut EvalContext, num: Real, fsp: i8) -> Result<Time> {
+    convert_float_as_time(ctx, num.into_inner(), fsp)
+}
+
+// port from part of TiDB's builtinCastStringAsTimeSig::evalTime
+pub fn convert_str_as_time(ctx: &mut EvalContext, time: &str, fsp: i8) -> Result<Time> {
+    Time::parse_datetime(time, fsp, &ctx.cfg.tz)
+}
+
+// port from part of TiDB's builtinCastJSONAsTimeSig::evalTime
+pub fn convert_json_as_time(ctx: &mut EvalContext, json: &Json, fsp: i8) -> Result<Time> {
+    let s = json.unquote()?;
+    convert_str_as_time(ctx, s.as_str(), fsp)
+}
+
+// port from TiDB's Time::Convert
+pub fn convert_time_as_time(time: &Time, tp: TimeType, fsp: i8) -> Result<Time> {
+    // FIXME, there is one `check` in TiDB' time impl
+    Time::new(time.time, tp, fsp)
 }
 
 impl ConvertTo<f64> for Time {
@@ -1737,5 +1794,160 @@ mod tests {
         let lhs = Time::parse_utc_datetime("0000-01-01 00:00:01", 6).unwrap();
         let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
         assert_eq!(lhs.checked_sub(rhs), None);
+    }
+
+    fn make_time(
+        year: i32,
+        month: i32,
+        day: i32,
+        hour: i32,
+        minute: i32,
+        second: i32,
+        nano: i64,
+        time_type: TimeType,
+        fsp: i8,
+        tz: &Tz,
+    ) -> Time {
+        let t = chrono::Utc::now();
+        let t = t.with_year(year).unwrap();
+        let t = t.with_month(month as u32).unwrap();
+        let t = t.with_day(day as u32).unwrap();
+        let t = t.with_hour(hour as u32).unwrap();
+        let t = t.with_minute(minute as u32).unwrap();
+        let t = t.with_second(second as u32).unwrap();
+        let t = t.with_timezone(tz);
+        let t = t.with_nanosecond(x as u32).unwrap();
+        Time::new(t, time_type, fsp).unwrap()
+    }
+
+    #[test]
+    fn test_convert_int_to_time() {
+        let fsp = mysql::MAX_FSP;
+        let mut ctx = EvalContext::default();
+        let tz = Tz::utc();
+
+        let cases = vec![
+            (
+                20190801121212i64,
+                make_time(2019, 8, 1, 12, 12, 12, 0, TimeType::DateTime, fsp, &tz),
+            ),
+            (
+                10000101000000i64,
+                make_time(1000, 1, 1, 0, 0, 0, 0, TimeType::DateTime, fsp, &tz),
+            ),
+        ];
+        for (n, t) in cases {
+            let r = convert_int_as_time(&mut ctx, n, fsp);
+            assert!(r.is_ok(), "{}, {}", n, t);
+            assert_eq!(r.unwrap(), t);
+        }
+    }
+
+    // float to time can not test, too. because it is hard to print the float number exactly
+    //    #[test]
+    //    fn test_convert_real_as_time() {
+    //        let fsp = mysql::MAX_FSP;
+    //        let mut ctx = EvalContext::default();
+    //        let tz = Tz::utc();
+    //
+    //        let cases = vec![
+    //            (20190801121212.000123456, make_time(2019, 8, 1, 12, 12, 12, Some(123), &TimeType::DateTime, fsp, &tz)),
+    //            (10000101000000.123456000, make_time(1000, 1, 1, 0, 0, 0, Some(123456000), &TimeType::DateTime, fsp, &tz))
+    //        ];
+    //        for (n, t) in cases {
+    //            let r = convert_float_as_time(&mut ctx, n, fsp);
+    //            assert!(r.is_ok(), "{}, {}", n, t);
+    //            assert_eq!(r.unwrap(), t);
+    //        }
+    //    }
+
+    #[test]
+    fn test_convert_decimal_as_time() {
+        let fsp = mysql::MAX_FSP;
+        let mut ctx = EvalContext::default();
+        let tz = Tz::utc();
+
+        let cases = vec![
+            (
+                Decimal::from(20190801121212i64),
+                make_time(2019, 8, 1, 12, 12, 12, 0, TimeType::DateTime, fsp, &tz),
+            ),
+            (
+                Decimal::from(10000101000000i64),
+                make_time(1000, 1, 1, 0, 0, 0, 0, TimeType::DateTime, fsp, &tz),
+            ),
+        ];
+        for (dec, t) in cases {
+            let r = convert_decimal_as_time(&mut ctx, &dec, fsp);
+            assert!(r.is_ok(), "{}, {}", dec, t);
+            assert_eq!(r.unwrap(), t);
+        }
+    }
+
+    // duration_as_time is hard to test, because its result depend on utc::now();
+    //    #[test]
+    //    fn test_convert_duration_as_time() {
+    //        let fsp = mysql::MAX_FSP;
+    //        let mut ctx = EvalContext::default();
+    //        let tz = Tz::utc();
+    //
+    //        let cases = vec![
+    //            (MyDuration::parse(format!("{}", 20190801121212i64).as_bytes(), fsp).unwrap(), make_time(2019, 8, 1, 12, 12, 12, Some(0), &TimeType::DateTime, fsp, &tz)),
+    //            (MyDuration::parse(format!("{}", 10000101000000i64).as_bytes(), fsp).unwrap(), make_time(1000, 1, 1, 0, 0, 0, Some(0), &TimeType::DateTime, fsp, &tz))
+    //        ];
+    //
+    //        for (dur, t) in cases {
+    //            let r = convert_duration_as_time(&mut ctx, dur, &TimeType::DateTime);
+    //            assert!(r.is_ok(), "{}, {}", dur, t);
+    //            assert_eq!(r.unwrap(), t);
+    //        }
+    //    }
+
+    #[test]
+    fn test_convert_str_as_time() {
+        let fsp = mysql::MAX_FSP;
+        let mut ctx = EvalContext::default();
+        let tz = Tz::utc();
+
+        let cases = vec![
+            (
+                format!("{}", 20190801121212i64),
+                make_time(2019, 8, 1, 12, 12, 12, 0, TimeType::DateTime, fsp, &tz),
+            ),
+            (
+                format!("{}", 10000101000000i64),
+                make_time(1000, 1, 1, 0, 0, 0, 0, TimeType::DateTime, fsp, &tz),
+            ),
+        ];
+
+        for (s, t) in cases {
+            let r = convert_str_as_time(&mut ctx, s.as_str(), fsp);
+            assert!(r.is_ok(), "{}, {}", s, t);
+            assert_eq!(r.unwrap(), t);
+        }
+    }
+
+    #[test]
+    fn test_convert_json_as_time() {
+        let fsp = mysql::MAX_FSP;
+        let mut ctx = EvalContext::default();
+        let tz = Tz::utc();
+
+        let cases = vec![
+            (
+                Json::U64(20190801121212),
+                make_time(2019, 8, 1, 12, 12, 12, 0, TimeType::DateTime, fsp, &tz),
+            ),
+            (
+                Json::U64(10000101000000),
+                make_time(1000, 1, 1, 0, 0, 0, 0, TimeType::DateTime, fsp, &tz),
+            ),
+        ];
+
+        for (j, t) in cases {
+            let r = convert_json_as_time(&mut ctx, &j, fsp);
+            assert!(r.is_ok(), "{:?}, {}", j, t);
+            assert_eq!(r.unwrap(), t);
+        }
     }
 }
