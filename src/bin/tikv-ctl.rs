@@ -33,7 +33,7 @@ use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
-use pd::{Config as PdConfig, PdClient, RpcClient};
+use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::binutil as util;
 use tikv::config::TiKvConfig;

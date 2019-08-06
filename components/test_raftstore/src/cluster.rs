@@ -18,12 +18,12 @@ use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
 use engine::CF_DEFAULT;
+use pd_client::PdClient;
 use tikv::config::TiKvConfig;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv_pd::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 

@@ -9,7 +9,7 @@ use fail;
 use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
 
-use pd::PdClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::raftstore::store::Callback;
 use tikv_util::config::*;

@@ -10,7 +10,7 @@ extern crate slog;
 extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
-extern crate pd as tikv_pd;
+extern crate pd_client;
 
 mod config;
 mod coprocessor;

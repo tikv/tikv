@@ -10,7 +10,7 @@ use engine::rocks::util::config::{BlobRunMode, CompressionType};
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use pd::Config as PdConfig;
+use pd_client::Config as PdConfig;
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;

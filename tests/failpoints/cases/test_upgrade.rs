@@ -17,7 +17,7 @@ use tikv::storage::kv::{DBOptions, Writable, DB};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv_util::rocksdb_util;
 use tikv_util::config::MB;
-use pd::PdClient;
+use pd_client::PdClient;
 
 const CLUSTER_ID: u64 = 1_000_000_000;
 const STOER_ID: u64 = 1;

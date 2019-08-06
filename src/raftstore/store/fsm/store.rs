@@ -56,7 +56,7 @@ use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
-use pd::PdClient;
+use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};

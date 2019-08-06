@@ -43,7 +43,7 @@ use engine::rocks::util::{
     NoopSliceTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use pd::Config as PdConfig;
+use pd_client::Config as PdConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;

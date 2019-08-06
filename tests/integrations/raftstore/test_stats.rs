@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use pd::PdClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::config::*;
 

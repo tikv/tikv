@@ -14,7 +14,7 @@ use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
 
-use pd::PdClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::import::test_helpers::*;
 use tikv_util::HandyRwLock;

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::{thread, time};
 
-use pd::PdClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::config::*;
 

@@ -38,7 +38,7 @@ use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
-use pd::INVALID_ID;
+use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;

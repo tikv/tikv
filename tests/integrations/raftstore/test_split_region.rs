@@ -12,7 +12,7 @@ use raft::eraftpb::MessageType;
 
 use engine::Iterable;
 use engine::CF_WRITE;
-use pd::PdClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};

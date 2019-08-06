@@ -11,8 +11,8 @@ use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
+use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use test_util;
-use tikv_pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;

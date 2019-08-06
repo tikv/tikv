@@ -11,7 +11,7 @@ use raft::eraftpb::MessageType;
 
 use engine::Peekable;
 use engine::{CF_RAFT, CF_WRITE};
-use pd::PdClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::raftstore::store::*;
 use tikv_util::config::*;

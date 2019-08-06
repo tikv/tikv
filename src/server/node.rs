@@ -25,7 +25,7 @@ use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use pd::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;

@@ -2,7 +2,7 @@
 
 use fail;
 use futures::Future;
-use pd::PdClient;
+use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use std::thread;
 use std::time::Duration;

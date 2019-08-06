@@ -13,7 +13,7 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::*;
-use pd::PdClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;

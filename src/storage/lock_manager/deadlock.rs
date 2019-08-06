@@ -16,7 +16,7 @@ use grpcio::{
 };
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
-use pd::{RpcClient, INVALID_ID};
+use pd_client::{RpcClient, INVALID_ID};
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;

@@ -18,7 +18,7 @@ pub use self::waiter_manager::{
 };
 use futures::future::Future;
 use futures::Canceled;
-use pd::Error as PdError;
+use pd_client::Error as PdError;
 use std::error;
 use std::result;
 

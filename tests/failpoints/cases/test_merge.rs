@@ -13,7 +13,7 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
 use engine::*;
-use pd::PdClient;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::raftstore::store::*;
 use tikv_util::config::*;
