@@ -2,6 +2,25 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.2]
+
++ Raftstore
+  - Catch up merge logs to avoid panic
+
++ Engine
+  - Improve storage size metrics accuracy
+  - Improve GC performance of Titan engine
+
++ Server
+  - Fix the issue that panic info is missing in logs
+
++ Transaction
+  - Fix possible incorrect INSERT behaviour
+  - Improve deadlock detect performance
+
++ tikv-ctl
+  - Improve region size accuracy
+
 ## [3.0.1]
 + Engine
   - Count size of blob files in used size
