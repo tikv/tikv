@@ -8,9 +8,9 @@
 
 use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe, PanicInfo};
-use std::sync::{Once, ONCE_INIT};
+use std::sync::Once;
 
-static INIT: Once = ONCE_INIT;
+static INIT: Once = Once::new();
 // store the default panic hook defined in std.
 static mut DEFAULT_HOOK: Option<*mut (dyn Fn(&PanicInfo<'_>) + 'static + Sync + Send)> = None;
 
