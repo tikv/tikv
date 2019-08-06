@@ -40,8 +40,9 @@ pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKS
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::kv::{
     destroy_tls_engine, set_tls_engine, with_tls_engine, CFStatistics, Cursor, CursorBuilder,
-    Engine, Error as EngineError, FlowStatistics, Iterator, Modify, RegionInfoProvider,
-    RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
+    Engine, Error as EngineError, FlowStatistics, FlowStatsReporter, Iterator, Modify,
+    RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
+    TestEngineBuilder,
 };
 use self::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 pub use self::mvcc::Scanner as StoreScanner;
