@@ -1846,8 +1846,11 @@ impl Peer {
             return false;
         }
 
-        if !progress.get(peer_id).map_or(false, |pr| pr.recent_active) {
-            return false;
+        match progress.get(peer_id) {
+            // After the target store is reported as unreachable,
+            // the state will become ProgressState::Probe.
+            Some(pr) if pr.recent_active && pr.state == ProgressState::Replicate => {}
+            _ => return false,
         }
 
         for (_, progress) in progress.voters() {
