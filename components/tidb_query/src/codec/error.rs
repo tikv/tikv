@@ -3,6 +3,7 @@
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
 use std::error::Error as StdError;
+use std::fmt::Display;
 use std::io;
 use std::num::ParseFloatError;
 use std::str::Utf8Error;
@@ -56,12 +57,12 @@ quick_error! {
 }
 
 impl Error {
-    pub fn overflow(data: &str, expr: &str) -> Error {
+    pub fn overflow<A: Display, B: Display>(data: A, expr: B) -> Error {
         let msg = format!("{} value is out of range in '{}'", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
     }
 
-    pub fn truncated_wrong_val(data_type: &str, val: &str) -> Error {
+    pub fn truncated_wrong_val<A: Display, B: Display>(data_type: A, val: B) -> Error {
         let msg = format!("Truncated incorrect {} value: '{}'", data_type, val);
         Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
@@ -81,7 +82,7 @@ impl Error {
         Error::Eval(msg.into(), ERR_UNKNOWN)
     }
 
-    pub fn invalid_timezone(given_time_zone: &str) -> Error {
+    pub fn invalid_timezone<T: Display>(given_time_zone: T) -> Error {
         let msg = format!("unknown or incorrect time zone: {}", given_time_zone);
         Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
     }
@@ -114,12 +115,12 @@ impl Error {
         tikv_util::codec::Error::unexpected_eof().into()
     }
 
-    pub fn invalid_time_format(val: &str) -> Error {
+    pub fn invalid_time_format<T: Display>(val: T) -> Error {
         let msg = format!("invalid time format: '{}'", val);
         Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
 
-    pub fn incorrect_datetime_value(val: &str) -> Error {
+    pub fn incorrect_datetime_value<T: Display>(val: T) -> Error {
         let msg = format!("Incorrect datetime value: '{}'", val);
         Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
