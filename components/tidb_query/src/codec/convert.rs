@@ -927,6 +927,7 @@ mod tests {
     use crate::expr::{EvalConfig, EvalContext};
 
     use super::*;
+    use tidb_query_datatype::Collation;
 
     #[test]
     fn test_int_to_int() {
@@ -1825,6 +1826,131 @@ mod tests {
         for (f, flen, decimal, exp) in cases {
             let res = truncate_f64(f, flen, decimal);
             assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_produce_str_with_specified_tp() {
+        let cases = vec![
+            // branch 1
+            ("世界，中国", 1, charset::CHARSET_UTF8),
+            ("世界，中国", 2, charset::CHARSET_UTF8),
+            ("世界，中国", 3, charset::CHARSET_UTF8),
+            ("世界，中国", 4, charset::CHARSET_UTF8),
+            ("世界，中国", 5, charset::CHARSET_UTF8),
+            ("世界，中国", 6, charset::CHARSET_UTF8),
+            // branch 2
+            ("世界，中国", 1, charset::CHARSET_ASCII),
+            ("世界，中国", 2, charset::CHARSET_ASCII),
+            ("世界，中国", 3, charset::CHARSET_ASCII),
+            ("世界，中国", 4, charset::CHARSET_ASCII),
+            ("世界，中国", 5, charset::CHARSET_ASCII),
+            ("世界，中国", 6, charset::CHARSET_ASCII),
+        ];
+
+        let mut cfg = EvalConfig::new();
+        cfg.set_flag(Flag::TRUNCATE_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::new();
+
+        for (s, char_num, cs) in cases {
+            ft.set_charset(cs.to_string());
+            ft.set_flen(char_num);
+            let bs = s.as_bytes();
+            let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, false);
+            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+            let p = r.unwrap();
+
+            if cs == charset::CHARSET_UTF8MB4 || cs == charset::CHARSET_UTF8 {
+                let ns: String = s.chars().take(char_num as usize).collect();
+                assert_eq!(p.as_ref(), ns.as_bytes(), "{}, {}, {}", s, char_num, cs);
+            } else {
+                assert_eq!(
+                    p.as_ref(),
+                    &bs[..(char_num as usize)],
+                    "{}, {}, {}",
+                    s,
+                    char_num,
+                    cs
+                );
+            }
+        }
+
+        let cases = vec![
+            // branch 3
+            ("世界，中国", 20, charset::CHARSET_ASCII),
+            ("世界，中国", 30, charset::CHARSET_ASCII),
+            ("世界，中国", 50, charset::CHARSET_ASCII),
+        ];
+
+        use tidb_query_datatype::FieldTypeAccessor;
+
+        let mut cfg = EvalConfig::new();
+        cfg.set_flag(Flag::TRUNCATE_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::new();
+
+        <FieldType as FieldTypeAccessor>::set_tp(&mut ft, FieldTypeTp::String);
+        <FieldType as FieldTypeAccessor>::set_collation(&mut ft, Collation::Binary);
+
+        for (s, char_num, cs) in cases {
+            ft.set_charset(cs.to_string());
+            ft.set_flen(char_num);
+            let bs = s.as_bytes();
+            let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, true);
+            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+
+            let p = r.unwrap();
+            assert_eq!(p.len(), char_num as usize, "{}, {}, {}", s, char_num, cs);
+        }
+    }
+
+    #[test]
+    fn test_produce_dec_with_specified_tp() {
+        use std::str::FromStr;
+
+        let cases = vec![
+            // branch 1
+            (
+                Decimal::from_str("11.1").unwrap(),
+                2,
+                2,
+                max_or_min_dec(false, 2u8, 2u8),
+            ),
+            (
+                Decimal::from_str("-111.1").unwrap(),
+                2,
+                2,
+                max_or_min_dec(true, 2u8, 2u8),
+            ),
+            // branch 2
+            (
+                Decimal::from_str("-1111.1").unwrap(),
+                5,
+                1,
+                Decimal::from_str("-1111.1").unwrap(),
+            ),
+            (
+                Decimal::from_str("-111.111").unwrap(),
+                5,
+                2,
+                Decimal::from_str("-111.11").unwrap(),
+            ),
+        ];
+
+        let mut cfg = EvalConfig::new();
+        cfg.set_flag(Flag::TRUNCATE_AS_WARNING);
+        cfg.set_flag(Flag::OVERFLOW_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::new();
+
+        for (dec, flen, decimal, want) in cases {
+            ft.set_flen(flen);
+            ft.set_decimal(decimal);
+            let nd = produce_dec_with_specified_tp(&mut ctx, dec.clone(), &ft);
+            assert!(nd.is_ok());
+            let nd = nd.unwrap();
+            assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
         }
     }
 }
