@@ -4,22 +4,14 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [3.0.2]
 
-+ Raftstore
-  - Catch up merge logs to avoid panic
-
-+ Engine
-  - Improve storage size metrics accuracy
-  - Improve GC performance of Titan engine
-
-+ Server
-  - Fix the issue that panic info is missing in logs
-
-+ Transaction
-  - Fix possible incorrect INSERT behaviour
-  - Improve deadlock detect performance
-
-+ tikv-ctl
-  - Improve region size accuracy
++ Fix the bug that TiKV panics if the Raft Log is not written in time [#5160](https://github.com/tikv/tikv/pull/5160)
++ Fix the bug that the panic information is not written into the log file after TiKV panics [#5198](https://github.com/tikv/tikv/pull/5198)
++ Fix the bug that the insert operation might be incorrectly performed in the pessimistic transaction [#5203](https://github.com/tikv/tikv/pull/5203)
++ Lower the output level of some logs that require no manual intervention to INFO [#5193](https://github.com/tikv/tikv/pull/5193)
++ Improve the accuracy of monitoring the storage engine size [#5200](https://github.com/tikv/tikv/pull/5200)
++ Improve the accuracy of the Region size in TiKV Control [#5195](https://github.com/tikv/tikv/pull/5195)
++ Improve the performance of the deadlock detector for pessimistic locks [#5192](https://github.com/tikv/tikv/pull/5192)
++ Improve the performance of GC in the Titan storage engine [#5197](https://github.com/tikv/tikv/pull/5197)
 
 ## [3.0.1]
 + Engine
