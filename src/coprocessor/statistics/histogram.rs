@@ -28,7 +28,6 @@ impl Bucket {
     fn count_repeated(&mut self) {
         self.count += 1;
         self.repeats += 1;
-        return;
     }
 
     // insert a item bigger than current upper_bound,
