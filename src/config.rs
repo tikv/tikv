@@ -32,7 +32,6 @@ use crate::raftstore::coprocessor::properties::{
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
-use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
@@ -1178,6 +1177,14 @@ macro_rules! readpool_config {
 
 const DEFAULT_STORAGE_READPOOL_CONCURRENCY: usize = 4;
 
+// Assume a request can be finished in 1ms, a request at position x will wait about
+// 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
+// backoff. So when it needs to wait for more than 2 seconds, return error won't causse
+// larger latency.
+const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 as usize * 1000;
+
+const DEFAULT_READPOOL_STACK_SIZE_MB: u64 = 10;
+
 readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
@@ -1186,10 +1193,10 @@ impl Default for StorageReadPoolConfig {
             high_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
             normal_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
             low_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            max_tasks_per_worker_high: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_normal: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_low: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
+            max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
         }
     }
 }
@@ -1214,10 +1221,10 @@ impl Default for CoprocessorReadPoolConfig {
             high_concurrency: concurrency,
             normal_concurrency: concurrency,
             low_concurrency: concurrency,
-            max_tasks_per_worker_high: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_normal: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_low: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
+            max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
         }
     }
 }

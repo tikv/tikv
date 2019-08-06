@@ -5,12 +5,10 @@ use std::mem;
 use std::sync::{Arc, Mutex};
 
 use crate::config::CoprocessorReadPoolConfig;
-use crate::pd::PdTask;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::{Engine, FlowStatistics, Statistics};
+use crate::storage::{Engine, FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
 use tikv_util::future_pool::{Builder, Config, TaskLimitedFuturePool};
-use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;
 use prometheus::local::*;
@@ -49,9 +47,9 @@ thread_local! {
     );
 }
 
-pub fn build_read_pool<E: Engine>(
+pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &CoprocessorReadPoolConfig,
-    pd_sender: FutureScheduler<PdTask>,
+    reporter: R,
     engine: E,
 ) -> Vec<TaskLimitedFuturePool> {
     let names = vec!["cop-low", "cop-normal", "cop-high"];
@@ -62,16 +60,16 @@ pub fn build_read_pool<E: Engine>(
         .into_iter()
         .zip(names)
         .map(|(config, name)| {
-            let sender = pd_sender.clone();
-            let sender2 = pd_sender.clone();
+            let reporter = reporter.clone();
+            let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
             Builder::from_config(config)
                 .name_prefix(name)
-                .on_tick(move || tls_flush(&sender))
+                .on_tick(move || tls_flush(&reporter))
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(move || {
                     destroy_tls_engine::<E>();
-                    tls_flush(&sender2)
+                    tls_flush(&reporter2)
                 })
                 .build_with_task_limit()
         })
@@ -98,7 +96,7 @@ pub fn build_read_pool_for_test<E: Engine>(
 }
 
 #[inline]
-fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
+fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut cop_metrics = m.borrow_mut();
@@ -118,10 +116,7 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
         let mut read_stats = HashMap::default();
         mem::swap(&mut read_stats, &mut cop_metrics.local_cop_flow_stats);
 
-        let result = pd_sender.schedule(PdTask::ReadStats { read_stats });
-        if let Err(e) = result {
-            error!("Failed to send cop pool read flow statistics"; "err" => ?e);
-        }
+        reporter.report_read_stats(read_stats);
     });
 }
 
