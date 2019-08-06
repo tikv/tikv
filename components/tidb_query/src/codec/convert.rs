@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
-use crate::expr::Flag;
 use tidb_query_datatype::{self, prelude::FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH};
 use tipb::expression::FieldType;
 
@@ -14,6 +13,7 @@ use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::codec::mysql::charset;
 use crate::codec::mysql::decimal::max_or_min_dec;
 use crate::expr::EvalContext;
+use crate::expr::Flag;
 
 /// A trait for converting a value to an `Int`.
 pub trait ToInt {
