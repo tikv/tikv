@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 
 use super::super::expr::EvalContext;
@@ -508,6 +509,26 @@ impl ArithmeticOpWithCtx for DecimalDivide {
                     .map(|_| None)?,
             },
             None => ctx.handle_division_by_zero().map(|_| None)?,
+        })
+    }
+}
+
+pub struct RealDivide;
+
+impl ArithmeticOpWithCtx for RealDivide {
+    type T = Real;
+
+    fn calc(ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+        Ok(if rhs.is_zero() {
+            ctx.handle_division_by_zero().map(|_| None)?
+        } else {
+            let result = *lhs / *rhs;
+            if result.is_infinite() {
+                ctx.handle_overflow(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
+                    .map(|_| None)?
+            } else {
+                Some(result)
+            }
         })
     }
 }
@@ -1196,6 +1217,36 @@ mod tests {
     }
 
     #[test]
+    fn test_real_divide() {
+        let normal = vec![
+            (Some(2.2), Some(1.1), Real::new(2.0).ok()),
+            (Some(2.33), Some(-0.01), Real::new(-233.0).ok()),
+            (Some(2.33), Some(0.01), Real::new(233.0).ok()),
+            (None, Some(2.0), None),
+            (Some(123.0), None, None),
+        ];
+
+        for (lhs, rhs, expected) in normal {
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::DivideReal)
+                .unwrap();
+
+            assert_eq!(actual, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+
+        let overflow = vec![(std::f64::MAX, 0.0001)];
+        for (lhs, rhs) in overflow {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::DivideReal)
+                .is_err())
+        }
+    }
+
+    #[test]
     fn test_divide_by_zero() {
         let cases: Vec<(ScalarFuncSig, FieldTypeTp, ScalarValue, ScalarValue)> = vec![
             (
@@ -1209,6 +1260,12 @@ mod tests {
                 FieldTypeTp::NewDecimal,
                 Decimal::from_str("2.33").unwrap().into(),
                 Decimal::from_str("-0.0").unwrap().into(),
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                FieldTypeTp::Double,
+                2.33.into(),
+                0.0.into(),
             ),
         ];
 
