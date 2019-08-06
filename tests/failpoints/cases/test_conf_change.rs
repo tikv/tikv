@@ -2,11 +2,11 @@
 
 use fail;
 use futures::Future;
+use pd::PdClient;
 use raft::eraftpb::ConfChangeType;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
-use tikv::pd::PdClient;
 use tikv_util::HandyRwLock;
 
 #[test]

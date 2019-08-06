@@ -6,9 +6,9 @@ use std::sync::Arc;
 use kvproto::import_sstpb::SSTMeta;
 
 use crate::import::SSTImporter;
-use crate::pd::PdClient;
 use crate::raftstore::store::util::is_epoch_stale;
 use crate::raftstore::store::{StoreMsg, StoreRouter};
+use pd::PdClient;
 use tikv_util::worker::Runnable;
 
 pub enum Task {

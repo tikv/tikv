@@ -6,6 +6,7 @@ extern crate slog;
 extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
+extern crate pd as tikv_pd;
 
 mod cluster;
 mod node;

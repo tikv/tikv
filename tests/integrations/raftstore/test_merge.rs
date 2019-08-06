@@ -11,8 +11,8 @@ use raft::eraftpb::MessageType;
 
 use engine::Peekable;
 use engine::{CF_RAFT, CF_WRITE};
+use pd::PdClient;
 use test_raftstore::*;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;

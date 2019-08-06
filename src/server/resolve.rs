@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use kvproto::metapb;
 
-use crate::pd::PdClient;
+use pd::PdClient;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -141,9 +141,9 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use crate::pd::{PdClient, PdFuture, RegionStat, Result};
     use kvproto::metapb;
     use kvproto::pdpb;
+    use pd::{PdClient, PdFuture, RegionStat, Result};
     use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;

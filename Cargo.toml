@@ -125,6 +125,7 @@ tikv_util = { path = "components/tikv_util" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
+pd = { path = "components/pd" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -187,6 +188,7 @@ members = [
   "components/tidb_query",
   "components/tidb_query_datatype",
   "components/tidb_query_codegen",
+  "components/pd",
 ]
 
 [profile.dev]

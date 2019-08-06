@@ -8,8 +8,8 @@ use std::result;
 use crossbeam::TrySendError;
 use protobuf::ProtobufError;
 
-use crate::pd;
 use kvproto::{errorpb, metapb};
+use pd;
 use raft;
 use tikv_util::codec;
 
