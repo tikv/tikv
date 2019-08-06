@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{DeadlockFuture, Error, Result};
-use crate::tikv_util::security::SecurityManager;
 use futures::unsync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
 use grpcio::{ChannelBuilder, EnvBuilder, WriteFlags};
@@ -9,6 +8,7 @@ use kvproto::deadlock::*;
 use kvproto::deadlock_grpc::DeadlockClient;
 use std::sync::Arc;
 use std::time::Duration;
+use tikv_util::security::SecurityManager;
 
 pub type Callback = Box<dyn Fn(DeadlockResponse)>;
 
