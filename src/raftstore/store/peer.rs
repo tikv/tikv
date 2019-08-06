@@ -49,7 +49,7 @@ use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
+use super::util::{self, check_region_epoch, is_initial_msg, timespec_to_u64, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -110,6 +110,13 @@ struct ReadIndexQueue {
 }
 
 impl ReadIndexQueue {
+    pub fn new(first_id: u64) -> Self {
+        ReadIndexQueue {
+            id_allocator: first_id,
+            ..Default::default()
+        }
+    }
+
     fn next_id(&mut self) -> u64 {
         self.id_allocator += 1;
         self.id_allocator
@@ -385,13 +392,14 @@ impl Peer {
         };
 
         let raft_group = RawNode::new(&raft_cfg, ps)?;
+        let first_read_id = timespec_to_u64(monotonic_raw_now());
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
             raft_group,
             proposals: Default::default(),
             apply_proposals: vec![],
-            pending_reads: Default::default(),
+            pending_reads: ReadIndexQueue::new(first_read_id),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -1953,7 +1961,7 @@ impl Peer {
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
         let id = self.pending_reads.next_id();
-        let ctx = id.to_ne_bytes();
+        let ctx = (((id as u128) << 64) | self.peer.get_id() as u128).to_ne_bytes();
         self.raft_group.read_index(ctx.to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();

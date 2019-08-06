@@ -508,7 +508,7 @@ const TIMESPEC_NSEC_MASK: u64 = (1 << TIMESPEC_SEC_SHIFT) - 1;
 ///
 /// If Timespecs have negative sec.
 #[inline]
-fn timespec_to_u64(ts: Timespec) -> u64 {
+pub fn timespec_to_u64(ts: Timespec) -> u64 {
     // > Darwin's and Linux's struct timespec functions handle pre-
     // > epoch timestamps using a "two steps back, one step forward" representation,
     // > though the man pages do not actually document this. For example, the time
