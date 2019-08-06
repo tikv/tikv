@@ -86,7 +86,7 @@ mod tests {
     use std::{str, u64};
 
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use tipb::expression::FieldType;
+    use tipb::FieldType;
 
     use crate::codec::mysql::{Decimal, Duration, Json, Time};
     use crate::codec::Datum;
