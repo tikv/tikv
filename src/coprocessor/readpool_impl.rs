@@ -4,11 +4,12 @@ use std::cell::RefCell;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
+use crate::config::CoprocessorReadPoolConfig;
 use crate::pd::PdTask;
-use crate::server::readpool::{self, Builder, Config, ReadPool};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{Engine, FlowStatistics, Statistics};
 use tikv_util::collections::HashMap;
+use tikv_util::future_pool::{Builder, Config, TaskLimitedFuturePool};
 use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;
@@ -49,31 +50,51 @@ thread_local! {
 }
 
 pub fn build_read_pool<E: Engine>(
-    config: &readpool::Config,
+    config: &CoprocessorReadPoolConfig,
     pd_sender: FutureScheduler<PdTask>,
     engine: E,
-) -> ReadPool {
-    let pd_sender2 = pd_sender.clone();
-    let engine = Arc::new(Mutex::new(engine));
+) -> Vec<TaskLimitedFuturePool> {
+    let names = vec!["cop-low", "cop-normal", "cop-high"];
+    let configs: Vec<Config> = config.to_future_pool_configs();
+    assert_eq!(configs.len(), 3);
 
-    Builder::from_config(config)
-        .name_prefix("cop")
-        .on_tick(move || tls_flush(&pd_sender))
-        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-        .before_stop(move || {
-            destroy_tls_engine::<E>();
-            tls_flush(&pd_sender2)
+    configs
+        .into_iter()
+        .zip(names)
+        .map(|(config, name)| {
+            let sender = pd_sender.clone();
+            let sender2 = pd_sender.clone();
+            let engine = Arc::new(Mutex::new(engine.clone()));
+            Builder::from_config(config)
+                .name_prefix(name)
+                .on_tick(move || tls_flush(&sender))
+                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .before_stop(move || {
+                    destroy_tls_engine::<E>();
+                    tls_flush(&sender2)
+                })
+                .build_with_task_limit()
         })
-        .build()
+        .collect()
 }
 
-pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
-    let engine = Arc::new(Mutex::new(engine));
+pub fn build_read_pool_for_test<E: Engine>(
+    config: &CoprocessorReadPoolConfig,
+    engine: E,
+) -> Vec<TaskLimitedFuturePool> {
+    let configs: Vec<Config> = config.to_future_pool_configs();
+    assert_eq!(configs.len(), 3);
 
-    Builder::from_config(&Config::default_for_test())
-        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-        .before_stop(|| destroy_tls_engine::<E>())
-        .build()
+    configs
+        .into_iter()
+        .map(|config| {
+            let engine = Arc::new(Mutex::new(engine.clone()));
+            Builder::from_config(config)
+                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .before_stop(|| destroy_tls_engine::<E>())
+                .build_with_task_limit()
+        })
+        .collect()
 }
 
 #[inline]

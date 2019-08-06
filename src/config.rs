@@ -45,6 +45,7 @@ use engine::rocks::util::{
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
 
@@ -1022,7 +1023,7 @@ pub mod log_level_serde {
 
 macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
-        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+        #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $struct_name {
@@ -1036,15 +1037,36 @@ macro_rules! readpool_config {
         }
 
         impl $struct_name {
-            pub fn build_config(&self) -> readpool::Config {
-                readpool::Config {
-                    high_concurrency: self.high_concurrency,
-                    normal_concurrency: self.normal_concurrency,
-                    low_concurrency: self.low_concurrency,
-                    max_tasks_per_worker_high: self.max_tasks_per_worker_high,
-                    max_tasks_per_worker_normal: self.max_tasks_per_worker_normal,
-                    max_tasks_per_worker_low: self.max_tasks_per_worker_low,
-                    stack_size: self.stack_size,
+            /// Builds configurations for low, normal and high priority pools.
+            pub fn to_future_pool_configs(&self) -> Vec<future_pool::Config> {
+                vec![
+                    future_pool::Config {
+                        workers: self.low_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_low,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                    future_pool::Config {
+                        workers: self.normal_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_normal,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                    future_pool::Config {
+                        workers: self.high_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_high,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                ]
+            }
+
+            pub fn default_for_test() -> Self {
+                Self {
+                    high_concurrency: 2,
+                    normal_concurrency: 2,
+                    low_concurrency: 2,
+                    max_tasks_per_worker_high: 2000,
+                    max_tasks_per_worker_normal: 2000,
+                    max_tasks_per_worker_low: 2000,
+                    stack_size: ReadableSize::mb(1),
                 }
             }
 

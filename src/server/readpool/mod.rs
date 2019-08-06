@@ -55,7 +55,7 @@ impl ReadPool {
     where
         F: FnOnce(&FuturePool) -> R,
     {
-        fail_point!("read_pool_spawn_full", |_| Err(Full {
+        fail_point!("future_pool_spawn_full", |_| Err(Full {
             current_tasks: 100,
             max_tasks: 100,
         }));

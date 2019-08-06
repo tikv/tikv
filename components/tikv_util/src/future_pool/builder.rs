@@ -6,10 +6,28 @@ use tokio_threadpool::Builder as TokioBuilder;
 
 use super::metrics::*;
 
+#[derive(Debug, Clone, Copy)]
+pub struct Config {
+    pub workers: usize,
+    pub max_tasks_per_worker: usize,
+    pub stack_size: usize,
+}
+
+impl Config {
+    pub fn default_for_test() -> Self {
+        Self {
+            workers: 2,
+            max_tasks_per_worker: 2000,
+            stack_size: 2_000_000,
+        }
+    }
+}
+
 pub struct Builder {
     inner_builder: TokioBuilder,
     name_prefix: Option<String>,
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
+    max_tasks: Option<usize>,
 }
 
 impl Builder {
@@ -18,7 +36,17 @@ impl Builder {
             inner_builder: TokioBuilder::new(),
             name_prefix: None,
             on_tick: None,
+            max_tasks: None,
         }
+    }
+
+    pub fn from_config(config: Config) -> Self {
+        let mut builder = Self::new();
+        builder
+            .pool_size(config.workers)
+            .stack_size(config.stack_size)
+            .max_tasks(config.workers * config.max_tasks_per_worker);
+        builder
     }
 
     pub fn pool_size(&mut self, val: usize) -> &mut Self {
@@ -62,6 +90,13 @@ impl Builder {
         self
     }
 
+    /// Sets max pending task limit. Only effective when calling `build_with_task_limit`.
+    pub fn max_tasks(&mut self, val: usize) -> &mut Self {
+        self.max_tasks = Some(val);
+        self
+    }
+
+    /// Builds the FuturePool which DOES NOT limit max tasks.
     pub fn build(&mut self) -> super::FuturePool {
         let name = if let Some(name) = &self.name_prefix {
             name.as_str()
@@ -75,5 +110,15 @@ impl Builder {
         });
         let pool = Arc::new(self.inner_builder.build());
         super::FuturePool { pool, env }
+    }
+
+    /// Builds the FuturePool which limits max tasks.
+    pub fn build_with_task_limit(&mut self) -> super::TaskLimitedFuturePool {
+        assert!(self.max_tasks.is_some());
+        let pool = self.build();
+        super::TaskLimitedFuturePool {
+            pool,
+            max_tasks: self.max_tasks.unwrap(),
+        }
     }
 }
