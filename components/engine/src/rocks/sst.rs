@@ -49,7 +49,7 @@ impl SstWriterBuilder {
             env = db.env();
             let handle = db
                 .cf_handle(self.cf.unwrap_or(CF_DEFAULT))
-                .map_or_else(|| Err(format!("CF {:?} is not found", self.cf)), Ok)?;
+                .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
             db.get_options_cf(handle).clone()
         } else {
             ColumnFamilyOptions::new()
