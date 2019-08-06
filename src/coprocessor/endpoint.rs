@@ -739,16 +739,28 @@ mod tests {
 
     #[test]
     fn test_full() {
+        use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
+        use std::sync::Mutex;
+        use tikv_util::future_pool::Builder;
+
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        let read_pool = build_read_pool_for_test(
-            &CoprocessorReadPoolConfig {
-                normal_concurrency: 1,
-                max_tasks_per_worker_normal: 2,
-                ..CoprocessorReadPoolConfig::default_for_test()
-            },
-            engine,
-        );
+        let read_pool = CoprocessorReadPoolConfig {
+            normal_concurrency: 1,
+            max_tasks_per_worker_normal: 2,
+            ..CoprocessorReadPoolConfig::default_for_test()
+        }
+        .to_future_pool_configs()
+        .into_iter()
+        .map(|config| {
+            let engine = Arc::new(Mutex::new(engine.clone()));
+            Builder::from_config(config)
+                .name_prefix("coprocessor_endpoint_test_full")
+                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .before_stop(|| destroy_tls_engine::<RocksEngine>())
+                .build_with_task_limit()
+        })
+        .collect();
 
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 

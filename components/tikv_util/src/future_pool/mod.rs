@@ -414,9 +414,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         let read_pool = Builder::new()
+            .name_prefix("future_pool_test_full")
             .pool_size(2)
-            .name_prefix("future-pool-full-test")
-            .max_tasks(2)
+            .max_tasks(4)
             .build_with_task_limit();
 
         wait_on_new_thread(
