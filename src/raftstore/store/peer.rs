@@ -2436,7 +2436,7 @@ pub trait RequestInspector {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap | CmdType::ReadIndex => has_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSst => {
                     has_write = true
                 }
                 CmdType::Prewrite | CmdType::Invalid => {
@@ -2644,7 +2644,7 @@ impl ReadExecutor {
                 | CmdType::Put
                 | CmdType::Delete
                 | CmdType::DeleteRange
-                | CmdType::IngestSST
+                | CmdType::IngestSst
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
@@ -2844,7 +2844,7 @@ mod tests {
             (CmdType::Put, RequestPolicy::ProposeNormal),
             (CmdType::Delete, RequestPolicy::ProposeNormal),
             (CmdType::DeleteRange, RequestPolicy::ProposeNormal),
-            (CmdType::IngestSST, RequestPolicy::ProposeNormal),
+            (CmdType::IngestSst, RequestPolicy::ProposeNormal),
         ] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);

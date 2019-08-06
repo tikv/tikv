@@ -1203,7 +1203,7 @@ fn test_where() {
 
         let mut cond = Expr::default();
         cond.set_tp(ExprType::ScalarFunc);
-        cond.set_sig(ScalarFuncSig::LTInt);
+        cond.set_sig(ScalarFuncSig::LtInt);
         cond.mut_field_type()
             .as_mut_accessor()
             .set_tp(FieldTypeTp::LongLong);
@@ -1256,7 +1256,7 @@ fn test_handle_truncate() {
 
             let mut cond = Expr::default();
             cond.set_tp(ExprType::ScalarFunc);
-            cond.set_sig(ScalarFuncSig::LTInt);
+            cond.set_sig(ScalarFuncSig::LtInt);
             cond.mut_children().push(col);
             cond.mut_children().push(right);
             cond
@@ -1294,7 +1294,7 @@ fn test_handle_truncate() {
             // id = "3x" + count
             let mut cond = Expr::default();
             cond.set_tp(ExprType::ScalarFunc);
-            cond.set_sig(ScalarFuncSig::EQInt);
+            cond.set_sig(ScalarFuncSig::EqInt);
             cond.mut_children().push(col_id);
             cond.mut_children().push(plus);
             cond
