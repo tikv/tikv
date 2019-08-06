@@ -7,6 +7,7 @@ use super::{ColumnFamilyOptions, DBCompressionType, Env, EnvOptions, ExternalSst
 use crate::{CfName, CF_DEFAULT};
 use engine_rocksdb::SstFileWriter;
 
+/// A builder builds a SstWriter.
 pub struct SstWriterBuilder {
     cf: Option<CfName>,
     db: Option<Arc<DB>>,
@@ -14,6 +15,7 @@ pub struct SstWriterBuilder {
 }
 
 impl SstWriterBuilder {
+    /// Create a new SstWriterBuilder.
     pub fn new() -> SstWriterBuilder {
         SstWriterBuilder {
             cf: None,
@@ -22,21 +24,25 @@ impl SstWriterBuilder {
         }
     }
 
+    /// Set DB for the builder. The builder may need some config from the DB.
     pub fn set_db(mut self, db: Arc<DB>) -> Self {
         self.db = Some(db);
         self
     }
 
-    pub fn set_in_memory(mut self, in_memory: bool) -> Self {
-        self.in_memory = in_memory;
-        self
-    }
-
+    /// Set CF for the builder. The builder may need some config from the CF.
     pub fn set_cf(mut self, cf: CfName) -> Self {
         self.cf = Some(cf);
         self
     }
 
+    /// Set it to true, the builder builds a in-memory SST builder.
+    pub fn set_in_memory(mut self, in_memory: bool) -> Self {
+        self.in_memory = in_memory;
+        self
+    }
+
+    /// Builder a SstWriter.
     pub fn build(self, path: &str) -> Result<SstWriter, String> {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {
@@ -68,6 +74,7 @@ impl SstWriterBuilder {
     }
 }
 
+/// SstWriter is used to create sst files that can be added to database later.
 pub struct SstWriter {
     writer: SstFileWriter,
     env: Option<Arc<Env>>,
@@ -80,14 +87,13 @@ impl SstWriter {
         self.writer.put(key, val)
     }
 
+    /// Add a deletion key to currently opened file
+    /// REQUIRES: key is after any previously added key according to comparator.
     pub fn delete(&mut self, key: &[u8]) -> Result<(), String> {
         self.writer.delete(key)
     }
 
-    pub fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<(), String> {
-        self.writer.delete_range(begin_key, end_key)
-    }
-
+    /// Return the current file size.
     pub fn file_size(&mut self) -> u64 {
         self.writer.file_size()
     }
@@ -97,6 +103,7 @@ impl SstWriter {
         self.writer.finish()
     }
 
+    /// Finalize writing to sst file and read the contents into the buffer.
     pub fn finish_into(mut self, buf: &mut Vec<u8>) -> Result<ExternalSstFileInfo, String> {
         use std::io::Read;
         if let Some(env) = self.env.take() {
