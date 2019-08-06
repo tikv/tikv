@@ -141,7 +141,7 @@ mod tests {
     use tempfile::Builder;
 
     #[test]
-    fn test_somke() {
+    fn test_smoke() {
         let path = Builder::new().tempdir().unwrap();
         let engine = Arc::new(
             util::new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap(),
