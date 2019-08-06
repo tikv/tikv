@@ -40,7 +40,7 @@ use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use tikv_util::collections::HashMap;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::time::{duration_to_sec, monotonic_now, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 use tikv_util::MustConsumeVec;
 
@@ -392,7 +392,7 @@ impl Peer {
         };
 
         let raft_group = RawNode::new(&raft_cfg, ps)?;
-        let first_read_id = timespec_to_u64(monotonic_raw_now());
+        let first_read_id = timespec_to_u64(monotonic_now());
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -1961,7 +1961,7 @@ impl Peer {
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
         let id = self.pending_reads.next_id();
-        let ctx = (((id as u128) << 64) | self.peer.get_id() as u128).to_ne_bytes();
+        let ctx = (((id as u128) << 64) | self.peer.get_id() as u128).to_le_bytes();
         self.raft_group.read_index(ctx.to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
