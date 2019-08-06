@@ -1029,7 +1029,6 @@ mod tests {
         schema.resize(columns_is_pk.len(), FieldTypeTp::LongLong.into());
 
         let key = table::encode_row_key(TABLE_ID, 1);
-        // col_ids is from 2 to schema.len() because the pk takes 1
         let col_ids = (10..10 + schema.len() as i64).collect::<Vec<_>>();
         let row = col_ids.iter().map(|i| Datum::I64(*i)).collect();
         let value = table::encode_row(row, &col_ids).unwrap();
