@@ -187,6 +187,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_fn_meta::<DecimalMod>(),
         ScalarFuncSig::DivideDecimal => arithmetic_with_ctx_fn_meta::<DecimalDivide>(),
+        ScalarFuncSig::DivideReal => arithmetic_with_ctx_fn_meta::<RealDivide>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
         ScalarFuncSig::LikeSig => like_fn_meta(),
         ScalarFuncSig::IfNullInt => if_null_fn_meta::<Int>(),
