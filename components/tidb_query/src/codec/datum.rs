@@ -801,7 +801,7 @@ pub fn decode_datum(data: &mut BytesSlice<'_>) -> Result<Datum> {
             VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64)?,
             VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64)?,
             JSON_FLAG => Json::decode(data).map(Datum::Json)?,
-            f => Err(invalid_type!("unsupported data type `{}`", f))?,
+            f => return Err(invalid_type!("unsupported data type `{}`", f)),
         };
         Ok(datum)
     } else {

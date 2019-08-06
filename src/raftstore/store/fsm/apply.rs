@@ -1526,9 +1526,7 @@ impl ApplyDelegate {
                     "region" => ?&self.region,
                 );
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
-            }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
         }
 
         let state = if self.pending_remove {
