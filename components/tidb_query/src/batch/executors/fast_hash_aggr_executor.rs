@@ -72,7 +72,7 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         let def = &group_by_definitions[0];
 
         // Only a subset of all eval types are supported.
-        let eval_type = box_try!(EvalType::try_from(def.get_field_type().tp()));
+        let eval_type = box_try!(EvalType::try_from(def.get_field_type().as_accessor().tp()));
         match eval_type {
             EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
             _ => return Err(other_err!("Eval type {} is not supported", eval_type)),
@@ -139,7 +139,8 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
         let group_by_field_type = group_by_exp.ret_field_type(src.schema()).clone();
-        let group_by_eval_type = EvalType::try_from(group_by_field_type.tp()).unwrap();
+        let group_by_eval_type =
+            EvalType::try_from(group_by_field_type.as_accessor().tp()).unwrap();
         let groups = match_template_hashable! {
             TT, match group_by_eval_type {
                 EvalType::TT => Groups::TT(HashMap::default()),

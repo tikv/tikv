@@ -303,16 +303,6 @@ impl Time {
         }
     }
 
-    /// Returns the `Decimal` representation of the `DateTime/Date`
-    #[inline]
-    pub fn to_decimal(&self) -> Result<Decimal> {
-        if self.is_zero() {
-            return Ok(0.into());
-        }
-
-        self.to_numeric_string().parse()
-    }
-
     fn parse_datetime_format(s: &str) -> Vec<&str> {
         let trimmed = s.trim();
         if trimmed.is_empty() {
@@ -823,6 +813,17 @@ impl ConvertTo<f64> for Time {
     }
 }
 
+impl ConvertTo<Decimal> for Time {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
+        if self.is_zero() {
+            return Ok(0.into());
+        }
+
+        self.to_numeric_string().parse()
+    }
+}
+
 impl PartialOrd for Time {
     fn partial_cmp(&self, right: &Time) -> Option<Ordering> {
         Some(self.cmp(right))
@@ -976,7 +977,6 @@ mod tests {
 
     use chrono::{Duration, Local};
 
-    use crate::codec::convert::convert_bytes_to_decimal;
     use crate::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
     use crate::expr::EvalContext;
 
@@ -1307,10 +1307,10 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
-            let get = t.to_decimal().unwrap();
+            let get: Decimal = t.convert(&mut ctx).unwrap();
             assert_eq!(
                 get,
-                convert_bytes_to_decimal(&mut ctx, expect.as_bytes()).unwrap(),
+                expect.as_bytes().convert(&mut ctx).unwrap(),
                 "convert datetime {} to decimal",
                 s
             );
@@ -1358,13 +1358,16 @@ mod tests {
 
         for (t_str, fsp, datetime_dec, date_dec) in cases {
             for_each_tz(move |tz, _offset| {
+                let mut ctx = EvalContext::default();
                 let mut t = Time::parse_datetime(t_str, fsp, &tz).unwrap();
-                let mut res = format!("{}", t.to_decimal().unwrap());
+                let dec: Result<Decimal> = t.convert(&mut ctx);
+                let mut res = format!("{}", dec.unwrap());
                 assert_eq!(res, datetime_dec);
 
                 t = Time::parse_datetime(t_str, 0, &tz).unwrap();
                 t.set_time_type(TimeType::Date).unwrap();
-                res = format!("{}", t.to_decimal().unwrap());
+                let dec: Result<Decimal> = t.convert(&mut ctx);
+                res = format!("{}", dec.unwrap());
                 assert_eq!(res, date_dec);
             });
         }

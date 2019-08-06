@@ -143,7 +143,7 @@ impl AdminObserver for SplitObserver {
                             .to_owned()
                     ));
                 }
-                let mut requests = req.mut_splits().take_requests().into_vec();
+                let mut requests = req.mut_splits().take_requests().into();
                 if let Err(e) = self.on_split(ctx, &mut requests) {
                     error!(
                         "failed to handle split req";
