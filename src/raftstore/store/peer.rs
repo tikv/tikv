@@ -377,7 +377,7 @@ impl Peer {
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
-            check_quorum: true,
+            check_quorum: true, // It's required by some transfer-leader checks.
             tag: tag.clone(),
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
@@ -1843,6 +1843,10 @@ impl Peer {
         let progress = status.progress.unwrap();
 
         if !progress.voter_ids().contains(&peer_id) {
+            return false;
+        }
+
+        if !progress.get(peer_id).map_or(false, |pr| pr.recent_active) {
             return false;
         }
 
