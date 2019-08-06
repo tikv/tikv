@@ -129,7 +129,7 @@ impl SstWriter {
                 Ok(sst_info)
             }
         } else {
-            Err(format!("failed to read sequential file no env provided"))
+            Err("failed to read sequential file no env provided".to_owned())
         }
     }
 }
