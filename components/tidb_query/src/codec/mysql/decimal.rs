@@ -18,7 +18,7 @@ use tikv_util::escape;
 use crate::codec::convert::{self, ConvertTo};
 use crate::codec::data_type::*;
 use crate::codec::{Error, Result, TEN_POW};
-use crate::expr::{EvalContext, Flag};
+use crate::expr::EvalContext;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -1068,37 +1068,29 @@ impl Decimal {
         self.word_buf[buf_from] /= TEN_POW[shift];
     }
 
+    // TODO, remove this after merge the `refactor ScalarFunc::builtin_cast`
+    //
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
-    /// # panic
-    /// - flen should >=decimal, so panic when flen < decimal
     pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
-        assert!(flen >= decimal);
         let (prec, frac) = self.prec_and_frac();
         if !self.is_zero() && prec - frac > flen - decimal {
-            // select (cast 111 as decimal(1)) causes a warning in MySQL.
-            ctx.handle_overflow(Error::overflow(
-                "Decimal",
-                &format!("({}, {})", flen, decimal),
-            ))?;
-            Ok(max_or_min_dec(self.negative, flen, decimal))
-        } else if frac != decimal {
-            let old = self.clone();
-            // TODO, is unwrap ok?
-            let rounded = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
-            if !rounded.is_zero() && frac > decimal && rounded != old {
-                if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
-                    || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
-                {
-                    ctx.warnings.append_warning(Error::truncated());
-                } else {
-                    ctx.handle_truncate(true)?;
-                }
-            }
-            Ok(rounded)
-        } else {
-            Ok(self)
+            return Ok(max_or_min_dec(self.negative, flen, decimal));
+            // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
         }
+
+        if frac == decimal {
+            return Ok(self);
+        }
+
+        let tmp = self.clone();
+        let ret = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
+        // TODO: process over_flow
+        if !ret.is_zero() && frac > decimal && ret != tmp {
+            // TODO handle InInsertStmt in ctx
+            ctx.handle_truncate(true)?;
+        }
+        Ok(ret)
     }
 
     /// Round rounds the decimal to "frac" digits.
@@ -2831,25 +2823,25 @@ mod tests {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
-            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
-            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e -1", Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001", Res::Ok("10")),
             (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
             (WORD_BUF_LEN, b"1e1073741823",
-            Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+             Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
             (WORD_BUF_LEN, b"-1e1073741823",
-            Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
-            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+             Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN, b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
              Res::Overflow("0")),
-            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
-            Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
+            (WORD_BUF_LEN, b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+             Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
             // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
-            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
-            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
+            (WORD_BUF_LEN, b"1eabc", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e 1ddd", Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e - 1", Res::Ok("1")),
             // with word_buf_len 1
-            (1,b"123450000098765",Res::Overflow("98765")),
-            (1,b"123450.000098765", Res::Truncated("123450")),
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {

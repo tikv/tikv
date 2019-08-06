@@ -4,14 +4,12 @@ use std::borrow::Cow;
 use std::convert::TryFrom;
 
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::UNSPECIFIED_LENGTH;
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeTp};
+use tidb_query_datatype::*;
 use tipb::expression::FieldType;
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
-use crate::codec::mysql::charset;
-use crate::expr::{Error, EvalContext};
+use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
 use crate::Result;
 
@@ -123,97 +121,6 @@ pub fn get_cast_fn_rpn_node(
         field_type: to_field_type,
         implicit_args: Vec::new(),
     })
-}
-
-fn produce_dec_with_specified_tp(
-    ctx: &mut EvalContext,
-    mut dec: Decimal,
-    ft: &FieldType,
-) -> Result<Decimal> {
-    let (flen, decimal) = (ft.flen(), ft.decimal());
-    if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
-        dec = dec.convert_to(ctx, flen as u8, decimal as u8)?;
-    }
-    if ft.is_unsigned() && dec.is_negative() {
-        Ok(Decimal::zero())
-    } else {
-        Ok(dec)
-    }
-}
-
-/// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
-/// a new string according to `flen` and `chs`.
-/// # panic
-/// The s must represent a valid str, otherwise, panic!
-fn produce_str_with_specified_tp<'a>(
-    ctx: &mut EvalContext,
-    s: Cow<'a, [u8]>,
-    ft: &FieldType,
-    pad_zero: bool,
-) -> Result<Cow<'a, [u8]>> {
-    let (flen, chs) = (ft.flen(), ft.get_charset());
-    if flen < 0 {
-        return Ok(s);
-    }
-    let flen = flen as usize;
-    // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
-    // char count and truncate to flen chars if it is too long.
-    if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
-        let truncate_info = {
-            let s: &str = std::str::from_utf8(s.as_ref()).unwrap();
-            let mut indices = s.char_indices().skip(flen);
-            if let Some((truncate_pos, _)) = indices.next() {
-                let char_count = flen + 1 + indices.count();
-                Some((char_count, truncate_pos))
-            } else {
-                None
-            }
-        };
-        if truncate_info.is_none() {
-            return Ok(s);
-        }
-        let (char_count, truncate_pos) = truncate_info.unwrap();
-        ctx.handle_truncate_err(Error::data_too_long(format!(
-            "Data Too Long, field len {}, data len {}",
-            flen, char_count
-        )))?;
-
-        let mut res = s.into_owned();
-        truncate_binary(&mut res, truncate_pos as isize);
-        Ok(Cow::Owned(res))
-    } else if s.len() > flen {
-        ctx.handle_truncate_err(Error::data_too_long(format!(
-            "Data Too Long, field len {}, data len {}",
-            flen,
-            s.len()
-        )))?;
-        let mut res = s.into_owned();
-        truncate_binary(&mut res, flen as isize);
-        Ok(Cow::Owned(res))
-    } else if ft.tp() == FieldTypeTp::String && s.len() < flen && is_binary_str(ft) && pad_zero {
-        let mut s = s.into_owned();
-        s.resize(flen, 0);
-        Ok(Cow::Owned(s))
-    } else {
-        Ok(s)
-    }
-}
-
-#[inline]
-fn is_binary_str(ft: &FieldType) -> bool {
-    ft.collation() == Collation::Binary && ft.is_string_like()
-}
-
-fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
-    let flen = ft.flen();
-    if flen < 0 {
-        return;
-    }
-    let flen = flen as usize;
-    if ft.tp() == FieldTypeTp::String && is_binary_str(ft) && s.len() < flen {
-        // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
-        s.resize(flen, 0);
-    }
 }
 
 /// Indicates whether the current expression is evaluated in union statement

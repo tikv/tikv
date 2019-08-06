@@ -178,6 +178,11 @@ pub trait FieldTypeAccessor {
             || self.tp() == FieldTypeTp::Unspecified
     }
 
+    #[inline]
+    fn is_binary_str(&self) -> bool {
+        self.collation() == Collation::Binary && self.is_string_like()
+    }
+
     /// Whether this type is a binary-string-like type.
     ///
     /// Please refer to `IsBinaryStr` in TiDB.

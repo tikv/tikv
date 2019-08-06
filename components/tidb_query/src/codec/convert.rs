@@ -3,12 +3,16 @@
 use std::borrow::Cow;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
-use tidb_query_datatype::{self, FieldTypeTp};
+use crate::expr::Flag;
+use tidb_query_datatype::{self, prelude::FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH};
+use tipb::expression::FieldType;
 
 use super::mysql::{Res, RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
 use crate::codec::data_type::*;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
+use crate::codec::mysql::charset;
+use crate::codec::mysql::decimal::max_or_min_dec;
 use crate::expr::EvalContext;
 
 /// A trait for converting a value to an `Int`.
@@ -143,7 +147,7 @@ pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
     }
 }
 
-/// `truncate_f64` (`TruncateFloat` in tidb) tries to truncate f.
+/// `truncate_f64` (`TruncateFloat` in TiDB) tries to truncate f.
 /// If the result exceeds the max/min float that flen/decimal
 /// allowed, returns the max/min float allowed.
 pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
@@ -531,6 +535,137 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
         }
     }
     r.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", ""))
+}
+
+pub fn produce_dec_with_specified_tp(
+    ctx: &mut EvalContext,
+    mut dec: Decimal,
+    ft: &FieldType,
+) -> Result<Decimal> {
+    let (flen, decimal) = (ft.flen(), ft.decimal());
+    if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
+        if flen < decimal {
+            return Err(Error::m_bigger_than_d(""));
+        }
+        let (prec, frac) = dec.prec_and_frac();
+        let (prec, frac) = (prec as isize, frac as isize);
+        if !dec.is_zero() && prec - frac > flen - decimal {
+            // select (cast 111 as decimal(1)) causes a warning in MySQL.
+            ctx.handle_overflow(Error::overflow(
+                "Decimal",
+                &format!("({}, {})", flen, decimal),
+            ))?;
+            dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
+        } else if frac as isize != decimal {
+            let old = dec.clone();
+            let rounded = match dec.round(decimal as i8, RoundMode::HalfEven) {
+                Res::Ok(d) => d,
+                Res::Truncated(_) => {
+                    return Err(Error::truncated());
+                }
+                Res::Overflow(_) => {
+                    // TODO, is the err msg right
+                    return Err(Error::overflow(
+                        "Decimal",
+                        &format!("({}, {})", flen, decimal),
+                    ));
+                }
+            };
+            if !rounded.is_zero() && frac > decimal && rounded != old {
+                if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
+                    || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
+                {
+                    ctx.warnings.append_warning(Error::truncated());
+                } else {
+                    if let Err(e) = ctx.handle_truncate(true) {
+                        if e.is_overflow() {
+                            ctx.handle_overflow(e)?
+                        }
+                    }
+                }
+            }
+            dec = rounded
+        }
+    };
+    if ft.is_unsigned() && dec.is_negative() {
+        Ok(Decimal::from(0 as u64))
+    } else {
+        Ok(dec)
+    }
+}
+
+/// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in TiDB) produces
+/// a new string according to `flen` and `chs`.
+///
+/// # Panics
+///
+/// The s must represent a valid str, otherwise, panic!
+pub fn produce_str_with_specified_tp<'a>(
+    ctx: &mut EvalContext,
+    s: Cow<'a, [u8]>,
+    ft: &FieldType,
+    pad_zero: bool,
+) -> Result<Cow<'a, [u8]>> {
+    let (flen, chs) = (ft.flen(), ft.get_charset());
+    if flen < 0 {
+        return Ok(s);
+    }
+    let flen = flen as usize;
+    // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
+    // char count and truncate to flen chars if it is too long.
+    if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
+        let truncate_info = {
+            // In TiDB's version, the param `s` is a string,
+            // so we can unwrap directly here because we need the `s` represent a valid str
+            let s: &str = std::str::from_utf8(s.as_ref()).unwrap();
+            let mut indices = s.char_indices().skip(flen);
+            if let Some((truncate_pos, _)) = indices.next() {
+                let char_count = flen + 1 + indices.count();
+                Some((char_count, truncate_pos))
+            } else {
+                None
+            }
+        };
+        if truncate_info.is_none() {
+            return Ok(s);
+        }
+        let (char_count, truncate_pos) = truncate_info.unwrap();
+        ctx.handle_truncate_err(Error::data_too_long(format!(
+            "Data Too Long, field len {}, data len {}",
+            flen, char_count
+        )))?;
+
+        let mut res = s.into_owned();
+        truncate_binary(&mut res, truncate_pos as isize);
+        Ok(Cow::Owned(res))
+    } else if s.len() > flen {
+        ctx.handle_truncate_err(Error::data_too_long(format!(
+            "Data Too Long, field len {}, data len {}",
+            flen,
+            s.len()
+        )))?;
+        let mut res = s.into_owned();
+        truncate_binary(&mut res, flen as isize);
+        Ok(Cow::Owned(res))
+    } else if ft.tp() == FieldTypeTp::String && s.len() < flen && ft.is_binary_str() && pad_zero {
+        let mut s = s.into_owned();
+        s.resize(flen, 0);
+        Ok(Cow::Owned(s))
+    } else {
+        Ok(s)
+    }
+}
+
+pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
+    let flen = ft.flen();
+    if flen < 0 {
+        return;
+    }
+    let flen = flen as usize;
+    if ft.tp() == FieldTypeTp::String && ft.is_binary_str() && s.len() < flen {
+        // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
+        s.resize(flen, 0);
+    }
 }
 
 impl ConvertTo<f64> for i64 {
