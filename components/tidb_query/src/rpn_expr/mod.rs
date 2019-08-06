@@ -37,7 +37,7 @@ where
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",
             value,
             children.len()
-        ))?;
+        ));
     }
     let lhs_is_unsigned = children[0]
         .get_field_type()
@@ -235,6 +235,6 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
-        ))?,
+        )),
     })
 }
