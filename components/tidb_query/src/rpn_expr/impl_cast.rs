@@ -109,13 +109,29 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_any_fn_meta::<Duration, Bytes>(),
         (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
         (EvalType::Int, EvalType::Json) => {
-            if !from_field_type.is_unsigned() {
+            if from_field_type
+                .as_accessor()
+                .flag()
+                .contains(FieldTypeFlag::IS_BOOLEAN)
+            {
+                cast_int_as_json_boolean_fn_meta()
+            } else if !from_field_type.is_unsigned() {
                 cast_any_as_any_fn_meta::<Int, Json>()
             } else {
                 cast_uint_as_json_fn_meta()
             }
         }
-        (EvalType::Real, EvalType::Json) => cast_any_as_any_fn_meta::<Real, Json>(),
+        (EvalType::Real, EvalType::Json) => {
+            if from_field_type
+                .as_accessor()
+                .flag()
+                .contains(FieldTypeFlag::IS_BOOLEAN)
+            {
+                cast_real_as_json_boolean_fn_meta()
+            } else {
+                cast_any_as_any_fn_meta::<Real, Json>()
+            }
+        }
         (EvalType::Bytes, EvalType::Json) => cast_string_as_json_fn_meta(),
         (EvalType::Decimal, EvalType::Json) => cast_any_as_any_fn_meta::<Decimal, Json>(),
         (EvalType::DateTime, EvalType::Json) => cast_any_as_any_fn_meta::<DateTime, Json>(),
@@ -323,6 +339,24 @@ pub fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Some(Json::U64(*val as u64))),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn cast_int_as_json_boolean(val: &Option<Int>) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Some(Json::Boolean(*val != 0))),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn cast_real_as_json_boolean(val: &Option<Real>) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Some(Json::Boolean(val.into_inner() != 0f64))),
     }
 }
 

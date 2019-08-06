@@ -1676,6 +1676,7 @@ impl ConvertTo<f64> for Decimal {
 impl ConvertTo<Json> for Decimal {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
         let val: f64 = self.convert(ctx)?;
         Ok(Json::Double(val))
     }
