@@ -26,6 +26,7 @@ use crate::expr::EvalContext;
 pub use self::extension::*;
 pub use self::tz::Tz;
 pub use self::weekmode::WeekMode;
+use time::Duration;
 
 const ZERO_DATETIME_NUMERIC_STR: &str = "00000000000000";
 const ZERO_DATE_NUMERIC_STR: &str = "00000000";
@@ -352,56 +353,56 @@ impl Time {
         let (parts, frac_str) = Time::split_datetime(s);
         let (mut year, month, day, hour, minute, sec): (i32, u32, u32, u32, u32, u32) = match *parts
             .as_slice()
-        {
-            [s1] => {
-                need_adjust = s1.len() != 14 && s1.len() != 8;
-                has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
-                match s1.len() {
-                    14 | 12 | 11 | 10 | 9 => {
-                        split_ymd_hms_with_frac_as_s(s1.as_bytes(), frac_str.as_bytes())?
-                    }
-                    8 | 6 | 5 => {
-                        split_ymd_with_frac_as_hms(s1.as_bytes(), frac_str.as_bytes(), is_float)?
-                    }
-                    _ => {
-                        return Err(box_err!(
+            {
+                [s1] => {
+                    need_adjust = s1.len() != 14 && s1.len() != 8;
+                    has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
+                    match s1.len() {
+                        14 | 12 | 11 | 10 | 9 => {
+                            split_ymd_hms_with_frac_as_s(s1.as_bytes(), frac_str.as_bytes())?
+                        }
+                        8 | 6 | 5 => {
+                            split_ymd_with_frac_as_hms(s1.as_bytes(), frac_str.as_bytes(), is_float)?
+                        }
+                        _ => {
+                            return Err(box_err!(
                             "invalid datetime: {}, s1: {}, len: {}",
                             s,
                             s1,
                             s1.len()
                         ));
+                        }
                     }
                 }
-            }
-            [year, month, day] => (
-                box_try!(year.parse()),
-                box_try!(month.parse()),
-                box_try!(day.parse()),
-                0,
-                0,
-                0,
-            ),
-            [year, month, day, hour, min] => (
-                box_try!(year.parse()),
-                box_try!(month.parse()),
-                box_try!(day.parse()),
-                box_try!(hour.parse()),
-                box_try!(min.parse()),
-                0,
-            ),
-            [year, month, day, hour, min, sec] => {
-                has_hhmmss = true;
-                (
+                [year, month, day] => (
+                    box_try!(year.parse()),
+                    box_try!(month.parse()),
+                    box_try!(day.parse()),
+                    0,
+                    0,
+                    0,
+                ),
+                [year, month, day, hour, min] => (
                     box_try!(year.parse()),
                     box_try!(month.parse()),
                     box_try!(day.parse()),
                     box_try!(hour.parse()),
                     box_try!(min.parse()),
-                    box_try!(sec.parse()),
-                )
-            }
-            _ => return Err(Error::incorrect_datetime_value(s)),
-        };
+                    0,
+                ),
+                [year, month, day, hour, min, sec] => {
+                    has_hhmmss = true;
+                    (
+                        box_try!(year.parse()),
+                        box_try!(month.parse()),
+                        box_try!(day.parse()),
+                        box_try!(hour.parse()),
+                        box_try!(min.parse()),
+                        box_try!(sec.parse()),
+                    )
+                }
+                _ => return Err(Error::incorrect_datetime_value(s)),
+            };
 
         if need_adjust || parts[0].len() == 2 {
             if year >= 0 && year <= 69 {
@@ -580,7 +581,7 @@ impl Time {
                     self.time.day(),
                     self.time.abbr_day_of_month()
                 )
-                .unwrap();
+                    .unwrap();
             }
             'd' => {
                 write!(output, "{:02}", self.time.day()).unwrap();
@@ -634,7 +635,7 @@ impl Time {
                         self.time.minute(),
                         self.time.second()
                     )
-                    .unwrap();
+                        .unwrap();
                 } else if h == 12 {
                     write!(
                         output,
@@ -643,7 +644,7 @@ impl Time {
                         self.time.minute(),
                         self.time.second()
                     )
-                    .unwrap();
+                        .unwrap();
                 } else if h < 12 {
                     write!(
                         output,
@@ -652,7 +653,7 @@ impl Time {
                         self.time.minute(),
                         self.time.second()
                     )
-                    .unwrap();
+                        .unwrap();
                 } else {
                     write!(
                         output,
@@ -661,7 +662,7 @@ impl Time {
                         self.time.minute(),
                         self.time.second()
                     )
-                    .unwrap();
+                        .unwrap();
                 }
             }
             'T' => {
@@ -672,7 +673,7 @@ impl Time {
                     self.time.minute(),
                     self.time.second()
                 )
-                .unwrap();
+                    .unwrap();
             }
             'S' | 's' => {
                 write!(output, "{:02}", self.time.second()).unwrap();
@@ -800,6 +801,16 @@ impl Time {
         } else {
             None
         }
+    }
+}
+
+impl ConvertTo<Time> for i64 {
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Time> {
+        // FIXME: this impl is not same as TiDB's, refactor it after DateTime had been refactored
+        let s = format!("{}", self);
+        let mut t = Time::parse_datetime(s.as_str(), mysql::DEFAULT_FSP, &ctx.cfg.tz)?;
+        t.set_time_type(self.field_type.as_accessor().tp().try_into()?)?;
+        Ok(t)
     }
 }
 
@@ -1083,7 +1094,7 @@ mod tests {
                         utc_t.time_type,
                         utc_t.fsp as i8,
                     )
-                    .unwrap();
+                        .unwrap();
                     assert_eq!(exp_t, t);
                 }
             });
