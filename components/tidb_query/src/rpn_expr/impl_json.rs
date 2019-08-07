@@ -16,7 +16,6 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::expr::EvalContext;
     use super::*;
 
     use tipb::expression::ScalarFuncSig;
@@ -25,6 +24,8 @@ mod tests {
 
     #[test]
     fn test_json_type() {
+        use std::str::FromStr;
+
         let cases = vec![
             (None, None),
             (Some(r#"true"#), Some("BOOLEAN")),
@@ -35,13 +36,13 @@ mod tests {
             (Some(r#"[1, 2, 3]"#), Some("ARRAY")),
             (Some(r#"{"name": 123}"#), Some("OBJECT")),
         ];
-        let mut ctx = EvalContext::default();
+
         for (arg, expect_output) in cases {
-            let arg = arg.map(|input| Json::from(input));
+            let arg = arg.map(|input| Json::from_str(input).unwrap());
             let expect_output = expect_output.map(|s| Bytes::from(s));
 
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg)
+                .push_param(arg.clone())
                 .evaluate(ScalarFuncSig::JsonTypeSig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
