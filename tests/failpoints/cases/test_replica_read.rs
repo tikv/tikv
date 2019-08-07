@@ -135,6 +135,7 @@ fn test_duplicate_read_index_ctx() {
     }
     fail::cfg("pause_on_peer_collect_message", "off").unwrap();
 
+    // read index response must not be dropped
     assert!(rx2.recv_timeout(Duration::from_millis(500)).is_ok());
     assert!(rx3.recv_timeout(Duration::from_millis(500)).is_ok());
 }

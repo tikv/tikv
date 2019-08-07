@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, slice, u64};
+use std::{cmp, mem, u64};
 
 use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
 use engine::{Engines, Peekable};
@@ -27,6 +27,7 @@ use raft::{
     NO_LIMIT,
 };
 use time::Timespec;
+use uuid::Uuid;
 
 use crate::pd::INVALID_ID;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -40,7 +41,7 @@ use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use tikv_util::collections::HashMap;
-use tikv_util::time::{duration_to_sec, monotonic_now, monotonic_raw_now};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 use tikv_util::MustConsumeVec;
 
@@ -49,13 +50,13 @@ use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, is_initial_msg, timespec_to_u64, Lease, LeaseState};
+use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
-    id: u128,
+    id: Uuid,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
@@ -64,10 +65,7 @@ struct ReadIndexRequest {
 impl ReadIndexRequest {
     // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     fn binary_id(&self) -> &[u8] {
-        unsafe {
-            let id = &self.id as *const u128 as *const u8;
-            slice::from_raw_parts(id, 16)
-        }
+        self.id.as_bytes()
     }
 
     fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
@@ -76,7 +74,7 @@ impl ReadIndexRequest {
     }
 
     fn with_command(
-        id: u128,
+        id: Uuid,
         req: RaftCmdRequest,
         cb: Callback,
         renew_lease_time: Timespec,
@@ -104,24 +102,11 @@ impl Drop for ReadIndexRequest {
 
 #[derive(Default)]
 struct ReadIndexQueue {
-    id_allocator: u64,
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
 }
 
 impl ReadIndexQueue {
-    pub fn new(first_id: u64) -> Self {
-        ReadIndexQueue {
-            id_allocator: first_id,
-            ..Default::default()
-        }
-    }
-
-    fn next_id(&mut self) -> u64 {
-        self.id_allocator += 1;
-        self.id_allocator
-    }
-
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
@@ -392,14 +377,13 @@ impl Peer {
         };
 
         let raft_group = RawNode::new(&raft_cfg, ps)?;
-        let first_read_id = timespec_to_u64(monotonic_now());
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
             raft_group,
             proposals: Default::default(),
             apply_proposals: vec![],
-            pending_reads: ReadIndexQueue::new(first_read_id),
+            pending_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -1960,9 +1944,8 @@ impl Peer {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        let id = (u128::from(self.pending_reads.next_id()) << 64) | u128::from(self.peer.get_id());
-        let ctx = id.to_le_bytes();
-        self.raft_group.read_index(ctx.to_vec());
+        let id = Uuid::new_v4();
+        self.raft_group.read_index(id.as_bytes().to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -1976,7 +1959,7 @@ impl Peer {
             return false;
         }
 
-        let read_proposal = ReadIndexRequest::with_command(id.to_le(), req, cb, renew_lease_time);
+        let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
         self.pending_reads.reads.push_back(read_proposal);
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
