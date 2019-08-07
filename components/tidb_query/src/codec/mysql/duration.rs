@@ -10,6 +10,7 @@ use tikv_util::codec::BytesSlice;
 
 use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
+use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::codec::mysql::MAX_FSP;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
@@ -29,14 +30,13 @@ const MAX_MINUTES: u32 = 59;
 const MAX_SECONDS: u32 = 59;
 const MAX_MICROS: u32 = 999_999;
 
-/// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
-const MAX_TIME_IN_SECS: i64 =
-    (MAX_HOURS * SECS_PER_HOUR + MAX_MINUTES * SECS_PER_MINUTE + MAX_SECONDS) as i64;
-
 #[inline]
 fn check_hour(hour: u32) -> Result<u32> {
     if hour > MAX_HOURS {
-        Err(Error::overflow(hour, MAX_HOURS))
+        Err(Error::Eval(
+            "DURATION OVERFLOW".to_string(),
+            ERR_DATA_OUT_OF_RANGE,
+        ))
     } else {
         Ok(hour)
     }
@@ -435,9 +435,9 @@ impl Duration {
 
     pub fn from_millis(millis: i64, fsp: i8) -> Result<Duration> {
         Duration::from_micros(
-            millis
-                .checked_mul(1000)
-                .ok_or_else(|| Error::overflow(millis, MAX_TIME_IN_SECS * 1000))?,
+            millis.checked_mul(1000).ok_or_else(|| {
+                Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE)
+            })?,
             fsp,
         )
     }
@@ -1055,6 +1055,10 @@ mod tests {
 
     #[test]
     fn test_checked_add_and_sub_duration() {
+        /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
+        const MAX_TIME_IN_SECS: i64 =
+            (MAX_HOURS * SECS_PER_HOUR + MAX_MINUTES * SECS_PER_MINUTE + MAX_SECONDS) as i64;
+
         let cases = vec![
             ("11:30:45.123456", "00:00:14.876545", "11:31:00.000001"),
             ("11:30:45.123456", "00:30:00", "12:00:45.123456"),
