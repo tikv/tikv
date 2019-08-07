@@ -10,6 +10,7 @@ use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv_util::collections::HashMap;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
@@ -196,6 +197,14 @@ pub struct FlowStatistics {
     pub read_bytes: usize,
 }
 
+// Reports flow statistics to outside.
+pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
+    // Reports read flow statistics, the argument `read_stats` is a hash map
+    // saves the flow statistics of different region.
+    // TODO: maybe we need to return a Result later?
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+}
+
 impl FlowStatistics {
     pub fn add(&mut self, other: &Self) {
         self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
@@ -351,6 +360,10 @@ impl<I: Iterator> Cursor<I> {
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        fail_point!("kv_cursor_seek", |_| {
+            return Err(box_err!("kv cursor seek error"));
+        });
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self
             .max_key

@@ -228,7 +228,7 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.take_stores().into_vec())
+        Ok(resp.take_stores().into())
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {

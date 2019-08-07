@@ -8,10 +8,11 @@ use super::transport::RaftStoreRouter;
 use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
-use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
+use crate::pd::{Error as PdError, PdClient, INVALID_ID};
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
 use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
 };
@@ -137,7 +138,7 @@ where
             meta.store_id = Some(store_id);
         }
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
-            debug!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
+            info!("trying to bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
             fail_point!("node_after_prepare_bootstrap_cluster", |_| Err(box_err!(
                 "injected error: node_after_prepare_bootstrap_cluster"
@@ -285,9 +286,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
-                }
+                Err(e) => error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e),
             }
             retry += 1;
             thread::sleep(Duration::from_secs(

@@ -240,8 +240,8 @@ impl Debugger {
                         start_key,
                         end_key,
                         false,
-                        |_, v| {
-                            size += v.len();
+                        |k, v| {
+                            size += k.len() + v.len();
                             Ok(true)
                         }
                     ));
@@ -1735,7 +1735,7 @@ mod tests {
         assert_eq!(sizes.len(), 4);
         for (cf, size) in sizes {
             cfs.iter().find(|&&c| c == cf).unwrap();
-            assert!(size > 0);
+            assert_eq!(size, k.len() + v.len());
         }
     }
 

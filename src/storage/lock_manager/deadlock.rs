@@ -8,10 +8,6 @@ use super::{Error, Lock, Result};
 use crate::pd::{RpcClient, INVALID_ID};
 use crate::raftstore::coprocessor::{Coprocessor, CoprocessorHost, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
-use crate::tikv_util::collections::{HashMap, HashSet};
-use crate::tikv_util::future::paired_future_callback;
-use crate::tikv_util::security::SecurityManager;
-use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, FutureWorker, Stopped};
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*, UnarySink, WriteFlags,
@@ -24,7 +20,11 @@ use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::future::paired_future_callback;
+use tikv_util::security::SecurityManager;
 use tikv_util::time::{Duration, Instant};
+use tikv_util::worker::{FutureRunnable, FutureScheduler, FutureWorker, Stopped};
 use tokio_core::reactor::Handle;
 
 /// The leader of the region containing the LEADER_KEY is the leader of deadlock detector.

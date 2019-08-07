@@ -28,7 +28,6 @@ impl Bucket {
     fn count_repeated(&mut self) {
         self.count += 1;
         self.repeats += 1;
-        return;
     }
 
     // insert a item bigger than current upper_bound,
@@ -155,9 +154,11 @@ impl Histogram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::datum;
-    use crate::coprocessor::codec::datum::Datum;
+
     use std::iter::repeat;
+
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
 
     #[test]
     fn test_histogram() {
