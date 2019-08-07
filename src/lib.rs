@@ -25,7 +25,6 @@
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(mem_take)]
-#![feature(type_alias_enum_variants)]
 
 #[macro_use]
 extern crate bitflags;

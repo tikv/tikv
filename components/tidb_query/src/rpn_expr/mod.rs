@@ -6,6 +6,7 @@ pub mod impl_arithmetic;
 pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_control;
+pub mod impl_json;
 pub mod impl_like;
 pub mod impl_math;
 pub mod impl_op;
@@ -22,6 +23,7 @@ use crate::Result;
 use self::impl_arithmetic::*;
 use self::impl_compare::*;
 use self::impl_control::*;
+use self::impl_json::*;
 use self::impl_like::*;
 use self::impl_math::*;
 use self::impl_op::*;
@@ -37,7 +39,7 @@ where
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",
             value,
             children.len()
-        ))?;
+        ));
     }
     let lhs_is_unsigned = children[0]
         .get_field_type()
@@ -187,6 +189,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_fn_meta::<DecimalMod>(),
         ScalarFuncSig::DivideDecimal => arithmetic_with_ctx_fn_meta::<DecimalDivide>(),
+        ScalarFuncSig::DivideReal => arithmetic_with_ctx_fn_meta::<RealDivide>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
         ScalarFuncSig::LikeSig => like_fn_meta(),
         ScalarFuncSig::IfNullInt => if_null_fn_meta::<Int>(),
@@ -231,9 +234,10 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfString => if_condition_fn_meta::<Bytes>(),
         ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
         ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
+        ScalarFuncSig::JsonTypeSig => json_type_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
-        ))?,
+        )),
     })
 }
