@@ -16,8 +16,8 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::expr::EvalContext;
+    use super::*;
 
     use tipb::expression::ScalarFuncSig;
 
