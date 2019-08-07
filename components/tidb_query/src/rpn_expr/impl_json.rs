@@ -1,3 +1,5 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -15,6 +17,7 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::super::expr::EvalContext;
 
     use tipb::expression::ScalarFuncSig;
 
