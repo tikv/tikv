@@ -1204,12 +1204,12 @@ impl Default for StorageReadPoolConfig {
 const DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY: usize = 8;
 
 readpool_config!(
-    CoprocessorReadPoolConfig,
+    CoprReadPoolConfig,
     coprocessor_read_pool_test,
     "coprocessor"
 );
 
-impl Default for CoprocessorReadPoolConfig {
+impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = sys_info::cpu_num().unwrap();
         let concurrency = if cpu_num > 8 {
@@ -1234,7 +1234,7 @@ impl Default for CoprocessorReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: StorageReadPoolConfig,
-    pub coprocessor: CoprocessorReadPoolConfig,
+    pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {

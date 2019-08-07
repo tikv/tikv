@@ -87,7 +87,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker_low: 2500,
             stack_size: ReadableSize::mb(20),
         },
-        coprocessor: CoprocessorReadPoolConfig {
+        coprocessor: CoprReadPoolConfig {
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,

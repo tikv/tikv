@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use crate::config::CoprocessorReadPoolConfig;
+use crate::config::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{Engine, FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
@@ -48,7 +48,7 @@ thread_local! {
 }
 
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
-    config: &CoprocessorReadPoolConfig,
+    config: &CoprReadPoolConfig,
     reporter: R,
     engine: E,
 ) -> Vec<TaskLimitedFuturePool> {
@@ -77,7 +77,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
 }
 
 pub fn build_read_pool_for_test<E: Engine>(
-    config: &CoprocessorReadPoolConfig,
+    config: &CoprReadPoolConfig,
     engine: E,
 ) -> Vec<TaskLimitedFuturePool> {
     let configs: Vec<Config> = config.to_future_pool_configs();

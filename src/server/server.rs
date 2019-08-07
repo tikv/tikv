@@ -243,7 +243,7 @@ mod tests {
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
-    use crate::config::CoprocessorReadPoolConfig;
+    use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::*;
@@ -333,7 +333,7 @@ mod tests {
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
         let cop_read_pool = readpool_impl::build_read_pool_for_test(
-            &CoprocessorReadPoolConfig::default_for_test(),
+            &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         );
         let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);

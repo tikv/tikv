@@ -11,7 +11,7 @@ use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
 use engine::Engines;
-use tikv::config::{CoprocessorReadPoolConfig, StorageReadPoolConfig, TiKvConfig};
+use tikv::config::{CoprReadPoolConfig, StorageReadPoolConfig, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -162,7 +162,7 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = coprocessor::readpool_impl::build_read_pool_for_test(
-            &CoprocessorReadPoolConfig::default_for_test(),
+            &CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         );
         let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
