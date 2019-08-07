@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use kvproto::pdpb::*;
-use tikv::pd::RECONNECT_INTERVAL_SEC;
+use pd_client::RECONNECT_INTERVAL_SEC;
 
 use super::*;
 
