@@ -34,8 +34,8 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg, expect_output) in cases {
-            let input = input.map(|input| Json::from(input));
-            let exp = exp.map(|s| Bytes::from(s));
+            let arg = arg.map(|input| Json::from(input));
+            let expect_output = expect_output.map(|s| Bytes::from(s));
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
@@ -43,10 +43,5 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
-    }
-
-    #[test]
-    fn test_json_extract() {
-        unimplemented!()
     }
 }
