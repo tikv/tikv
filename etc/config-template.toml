@@ -158,6 +158,15 @@
 ## Otherwise, the OOM problem might occur in TiKV.
 # capacity = "1GB"
 
+## Optional memory allocator to allocate shared block cache.
+## If set jemalloc nodump allocator, block cache will be excluded from core dump, which is useful to
+## reduce core file size. This allocator is available only if "jemalloc" feature is enabled.
+##
+## Default: not set, use default allocator of RocksDB
+## jemalloc nodump allocator: "jemalloc-nodump"
+##
+#  memory-allocator: "jemalloc-nodump"
+
 [pd]
 ## PD endpoints.
 # endpoints = []
