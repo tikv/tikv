@@ -55,7 +55,7 @@ use super::DestroyPeerJob;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
-    id: u64,
+    id: u128,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
@@ -65,8 +65,8 @@ impl ReadIndexRequest {
     // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     fn binary_id(&self) -> &[u8] {
         unsafe {
-            let id = &self.id as *const u64 as *const u8;
-            slice::from_raw_parts(id, 8)
+            let id = &self.id as *const u128 as *const u8;
+            slice::from_raw_parts(id, 16)
         }
     }
 
@@ -76,7 +76,7 @@ impl ReadIndexRequest {
     }
 
     fn with_command(
-        id: u64,
+        id: u128,
         req: RaftCmdRequest,
         cb: Callback,
         renew_lease_time: Timespec,
@@ -1960,8 +1960,8 @@ impl Peer {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        let id = self.pending_reads.next_id();
-        let ctx = (((id as u128) << 64) | self.peer.get_id() as u128).to_le_bytes();
+        let id = (u128::from(self.pending_reads.next_id()) << 64) | u128::from(self.peer.get_id());
+        let ctx = id.to_le_bytes();
         self.raft_group.read_index(ctx.to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
@@ -1976,7 +1976,7 @@ impl Peer {
             return false;
         }
 
-        let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        let read_proposal = ReadIndexRequest::with_command(id.to_le(), req, cb, renew_lease_time);
         self.pending_reads.reads.push_back(read_proposal);
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
