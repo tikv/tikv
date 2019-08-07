@@ -78,7 +78,7 @@ macro_rules! impl_sched {
             #[inline]
             fn schedule(&self, fsm: Box<Self::Fsm>) {
                 match self.sender.send($ty(fsm)) {
-                    Ok(()) => return,
+                    Ok(()) => {}
                     // TODO: use debug instead.
                     Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
                     _ => unreachable!(),
