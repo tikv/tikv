@@ -10,9 +10,8 @@ use tikv_util::codec::BytesSlice;
 
 use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
-use crate::codec::error::Error;
 use crate::codec::mysql::MAX_FSP;
-use crate::codec::{Result, TEN_POW};
+use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
 use bitfield::bitfield;
@@ -438,7 +437,7 @@ impl Duration {
         Duration::from_micros(
             millis
                 .checked_mul(1000)
-                .ok_or(Error::overflow(millis, MAX_TIME_IN_SECS * 1000))?,
+                .ok_or_else(|| Error::overflow(millis, MAX_TIME_IN_SECS * 1000))?,
             fsp,
         )
     }
