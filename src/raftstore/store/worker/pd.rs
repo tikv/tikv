@@ -17,7 +17,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use super::metrics::*;
+use crate::pd::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
@@ -623,7 +623,7 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_destroy_peer(&mut self, region_id: u64) {
         match self.region_peers.remove(&region_id) {
-            None => return,
+            None => {}
             Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
         }
     }
