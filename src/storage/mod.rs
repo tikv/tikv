@@ -59,7 +59,7 @@ pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use tikv_util::future_pool::TaskLimitedFuturePool;
+use tikv_util::future_pool::FuturePool;
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -699,9 +699,9 @@ pub struct Storage<E: Engine> {
     sched: TxnScheduler<E>,
 
     /// The thread pool used to run most read operations.
-    read_pool_low: TaskLimitedFuturePool,
-    read_pool_normal: TaskLimitedFuturePool,
-    read_pool_high: TaskLimitedFuturePool,
+    read_pool_low: FuturePool,
+    read_pool_normal: FuturePool,
+    read_pool_high: FuturePool,
 
     /// Used to handle requests related to GC.
     gc_worker: GCWorker<E>,
@@ -767,7 +767,7 @@ impl<E: Engine> Storage<E> {
     pub fn from_engine(
         engine: E,
         config: &Config,
-        mut read_pool: Vec<TaskLimitedFuturePool>,
+        mut read_pool: Vec<FuturePool>,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
         waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
@@ -846,7 +846,7 @@ impl<E: Engine> Storage<E> {
             .map_err(Error::from)
     }
 
-    fn get_read_pool(&self, priority: CommandPriority) -> &TaskLimitedFuturePool {
+    fn get_read_pool(&self, priority: CommandPriority) -> &FuturePool {
         match priority {
             CommandPriority::high => &self.read_pool_high,
             CommandPriority::normal => &self.read_pool_normal,

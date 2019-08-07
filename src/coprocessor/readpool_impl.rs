@@ -8,7 +8,7 @@ use crate::config::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{Engine, FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
-use tikv_util::future_pool::{Builder, Config, TaskLimitedFuturePool};
+use tikv_util::future_pool::{Builder, Config, FuturePool};
 
 use super::metrics::*;
 use prometheus::local::*;
@@ -51,7 +51,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &CoprReadPoolConfig,
     reporter: R,
     engine: E,
-) -> Vec<TaskLimitedFuturePool> {
+) -> Vec<FuturePool> {
     let names = vec!["cop-low", "cop-normal", "cop-high"];
     let configs: Vec<Config> = config.to_future_pool_configs();
     assert_eq!(configs.len(), 3);
@@ -71,7 +71,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                     destroy_tls_engine::<E>();
                     tls_flush(&reporter2)
                 })
-                .build_with_task_limit()
+                .build()
         })
         .collect()
 }
@@ -79,7 +79,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
 pub fn build_read_pool_for_test<E: Engine>(
     config: &CoprReadPoolConfig,
     engine: E,
-) -> Vec<TaskLimitedFuturePool> {
+) -> Vec<FuturePool> {
     let configs: Vec<Config> = config.to_future_pool_configs();
     assert_eq!(configs.len(), 3);
 
@@ -90,7 +90,7 @@ pub fn build_read_pool_for_test<E: Engine>(
             Builder::from_config(config)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(|| destroy_tls_engine::<E>())
-                .build_with_task_limit()
+                .build()
         })
         .collect()
 }

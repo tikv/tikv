@@ -25,7 +25,7 @@ use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use tikv_util::future_pool::TaskLimitedFuturePool;
+use tikv_util::future_pool::FuturePool;
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -36,7 +36,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pools: Vec<TaskLimitedFuturePool>,
+    read_pools: Vec<FuturePool>,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
     waiter_mgr_scheduler: Option<WaiterMgrScheduler>,

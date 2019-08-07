@@ -16,7 +16,7 @@ use tipb::select::DAGRequest;
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::{self, Engine, SnapshotStore};
-use tikv_util::future_pool::TaskLimitedFuturePool;
+use tikv_util::future_pool::FuturePool;
 use tikv_util::Either;
 
 use crate::coprocessor::metrics::*;
@@ -26,9 +26,9 @@ use crate::coprocessor::*;
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
-    read_pool_high: TaskLimitedFuturePool,
-    read_pool_normal: TaskLimitedFuturePool,
-    read_pool_low: TaskLimitedFuturePool,
+    read_pool_high: FuturePool,
+    read_pool_normal: FuturePool,
+    read_pool_low: FuturePool,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
@@ -58,7 +58,7 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, mut read_pool: Vec<TaskLimitedFuturePool>) -> Self {
+    pub fn new(cfg: &Config, mut read_pool: Vec<FuturePool>) -> Self {
         let read_pool_high = read_pool.remove(2);
         let read_pool_normal = read_pool.remove(1);
         let read_pool_low = read_pool.remove(0);
@@ -77,7 +77,7 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
-    fn get_read_pool(&self, priority: kvrpcpb::CommandPri) -> &TaskLimitedFuturePool {
+    fn get_read_pool(&self, priority: kvrpcpb::CommandPri) -> &FuturePool {
         match priority {
             kvrpcpb::CommandPri::High => &self.read_pool_high,
             kvrpcpb::CommandPri::Normal => &self.read_pool_normal,
@@ -632,8 +632,7 @@ mod tests {
     #[test]
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         // a normal request
@@ -668,8 +667,7 @@ mod tests {
     #[test]
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_recursion_limit: 5,
@@ -705,8 +703,7 @@ mod tests {
     #[test]
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let mut req = coppb::Request::default();
@@ -722,8 +719,7 @@ mod tests {
     #[test]
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let mut req = coppb::Request::default();
@@ -758,7 +754,7 @@ mod tests {
                 .name_prefix("coprocessor_endpoint_test_full")
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(|| destroy_tls_engine::<RocksEngine>())
-                .build_with_task_limit()
+                .build()
         })
         .collect();
 
@@ -807,8 +803,7 @@ mod tests {
     #[test]
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let handler_builder =
@@ -825,8 +820,7 @@ mod tests {
     #[test]
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         // Fail immediately
@@ -869,8 +863,7 @@ mod tests {
     #[test]
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -888,8 +881,7 @@ mod tests {
     #[test]
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         // handler returns `finished == true` should not be called again.
@@ -975,8 +967,7 @@ mod tests {
     #[test]
     fn test_channel_size() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool =
-            build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+        let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
         let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,

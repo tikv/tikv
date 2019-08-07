@@ -34,6 +34,7 @@ struct Env {
 pub struct FuturePool {
     pool: Arc<ThreadPool>,
     env: Arc<Env>,
+    max_tasks: usize,
 }
 
 impl std::fmt::Debug for FuturePool {
@@ -52,6 +53,27 @@ impl FuturePool {
         // As long as different future pool has different name prefix, we can safely use the value
         // in metrics.
         self.env.metrics_running_task_count.get() as usize
+    }
+
+    fn gate_spawn(&self) -> Result<(), Full> {
+        fail_point!("future_pool_spawn_full", |_| Err(Full {
+            current_tasks: 100,
+            max_tasks: 100,
+        }));
+
+        if self.max_tasks == std::usize::MAX {
+            return Ok(());
+        }
+
+        let current_tasks = self.get_running_task_count();
+        if current_tasks >= self.max_tasks {
+            Err(Full {
+                current_tasks,
+                max_tasks: self.max_tasks,
+            })
+        } else {
+            Ok(())
+        }
     }
 
     /// Wraps a user provided future to support features of the `FuturePool`.
@@ -78,30 +100,34 @@ impl FuturePool {
     }
 
     /// Spawns a future in the pool.
-    pub fn spawn<F, R>(&self, future_fn: F)
+    pub fn spawn<F, R>(&self, future_fn: F) -> Result<(), Full>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Future + Send + 'static,
         R::Item: Send + 'static,
         R::Error: Send + 'static,
     {
+        self.gate_spawn()?;
+
         let future = self.wrap_user_future(future_fn);
         self.pool.spawn(future.then(|_| Ok(())));
+        Ok(())
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the future.
     ///
     /// The future will not be executed if the handle is not polled.
     #[must_use]
-    pub fn spawn_handle<F, R>(&self, future_fn: F) -> SpawnHandle<R::Item, R::Error>
+    pub fn spawn_handle<F, R>(&self, future_fn: F) -> Result<SpawnHandle<R::Item, R::Error>, Full>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Future + Send + 'static,
         R::Item: Send + 'static,
         R::Error: Send + 'static,
     {
+        self.gate_spawn()?;
         let future = self.wrap_user_future(future_fn);
-        self.pool.spawn_handle(future)
+        Ok(self.pool.spawn_handle(future))
     }
 }
 
@@ -122,64 +148,6 @@ fn try_tick_thread(env: &Env) {
             f();
         }
     })
-}
-
-// TODO: Make `TaskLimitedFuturePool` as the default one and remove `FuturePool`.
-#[derive(Clone)]
-pub struct TaskLimitedFuturePool {
-    pool: FuturePool,
-    max_tasks: usize,
-}
-
-impl TaskLimitedFuturePool {
-    #[inline]
-    pub fn get_running_task_count(&self) -> usize {
-        self.pool.get_running_task_count()
-    }
-
-    fn gate_spawn(&self) -> Result<(), Full> {
-        fail_point!("future_pool_spawn_full", |_| Err(Full {
-            current_tasks: 100,
-            max_tasks: 100,
-        }));
-
-        let current_tasks = self.pool.get_running_task_count();
-
-        if current_tasks >= self.max_tasks {
-            Err(Full {
-                current_tasks,
-                max_tasks: self.max_tasks,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline]
-    pub fn spawn<F, R>(&self, future_fn: F) -> Result<(), Full>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Future + Send + 'static,
-        R::Item: Send + 'static,
-        R::Error: Send + 'static,
-    {
-        self.gate_spawn()?;
-        self.pool.spawn(future_fn);
-        Ok(())
-    }
-
-    #[must_use]
-    #[inline]
-    pub fn spawn_handle<F, R>(&self, future_fn: F) -> Result<SpawnHandle<R::Item, R::Error>, Full>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Future + Send + 'static,
-        R::Item: Send + 'static,
-        R::Error: Send + 'static,
-    {
-        self.gate_spawn()?;
-        Ok(self.pool.spawn_handle(future_fn))
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -215,6 +183,7 @@ mod tests {
             thread::sleep(duration);
             future::ok::<_, ()>(())
         })
+        .unwrap()
         .wait()
         .unwrap();
     }
@@ -223,7 +192,8 @@ mod tests {
         pool.spawn(move || {
             thread::sleep(duration);
             future::ok::<_, ()>(())
-        });
+        })
+        .unwrap();
     }
 
     #[test]
@@ -333,13 +303,17 @@ mod tests {
             thread::sleep(Duration::from_millis(200));
             tx2.send(11).unwrap();
             future::ok::<_, ()>(())
-        });
+        })
+        .unwrap();
 
         let tx2 = tx.clone();
-        drop(pool.spawn_handle(move || {
-            tx2.send(7).unwrap();
-            future::ok::<_, ()>(())
-        }));
+        drop(
+            pool.spawn_handle(move || {
+                tx2.send(7).unwrap();
+                future::ok::<_, ()>(())
+            })
+            .unwrap(),
+        );
 
         thread::sleep(Duration::from_millis(500));
 
@@ -353,7 +327,7 @@ mod tests {
 
         let handle = pool.spawn_handle(move || future::ok::<_, ()>(42));
 
-        assert_eq!(handle.wait().unwrap(), 42);
+        assert_eq!(handle.unwrap().wait().unwrap(), 42);
     }
 
     #[test]
@@ -385,7 +359,7 @@ mod tests {
     }
 
     fn spawn_long_time_future(
-        pool: &TaskLimitedFuturePool,
+        pool: &FuturePool,
         id: u64,
         future_duration_ms: u64,
     ) -> Result<SpawnHandle<u64, ()>, Full> {
@@ -417,7 +391,7 @@ mod tests {
             .name_prefix("future_pool_test_full")
             .pool_size(2)
             .max_tasks(4)
-            .build_with_task_limit();
+            .build();
 
         wait_on_new_thread(
             tx.clone(),
