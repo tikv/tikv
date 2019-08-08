@@ -4,7 +4,7 @@
 
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::codec::{bytes, number};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use super::data_type::*;
 use crate::codec::datum;
