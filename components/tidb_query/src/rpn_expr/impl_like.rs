@@ -26,7 +26,7 @@ pub fn like(
 
 #[cfg(test)]
 mod tests {
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 

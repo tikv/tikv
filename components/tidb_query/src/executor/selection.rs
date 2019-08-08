@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tipb::executor::Selection;
+use tipb::Selection;
 
 use super::{Executor, ExprColumnRefVisitor, Row};
 use crate::execute_stats::ExecuteStats;
@@ -88,7 +88,7 @@ mod tests {
 
     use tidb_query_datatype::FieldTypeTp;
     use tikv_util::codec::number::NumberEncoder;
-    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
+    use tipb::{Expr, ExprType, ScalarFuncSig};
 
     use super::super::tests::*;
     use super::*;
