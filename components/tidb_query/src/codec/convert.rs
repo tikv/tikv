@@ -3,8 +3,9 @@
 use std::borrow::Cow;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
-use tidb_query_datatype::{self, prelude::FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH};
-use tipb::expression::FieldType;
+use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
+use tipb::FieldType;
 
 use super::mysql::{Res, RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
@@ -551,7 +552,7 @@ pub fn produce_dec_with_specified_tp(
         let (prec, frac) = (prec as isize, frac as isize);
         if !dec.is_zero() && prec - frac > flen - decimal {
             // select (cast 111 as decimal(1)) causes a warning in MySQL.
-            ctx.handle_overflow(Error::overflow(
+            ctx.handle_overflow_err(Error::overflow(
                 "Decimal",
                 &format!("({}, {})", flen, decimal),
             ))?;
@@ -579,7 +580,7 @@ pub fn produce_dec_with_specified_tp(
                 } else {
                     if let Err(e) = ctx.handle_truncate(true) {
                         if e.is_overflow() {
-                            ctx.handle_overflow(e)?
+                            ctx.handle_overflow_err(e)?
                         }
                     }
                 }

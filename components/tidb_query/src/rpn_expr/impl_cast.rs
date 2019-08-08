@@ -5,7 +5,6 @@ use std::convert::TryFrom;
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::*;
-use tipb::expression::FieldType;
 use tipb::FieldType;
 
 use crate::codec::convert::*;
@@ -196,13 +195,9 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [extra])]
 #[inline]
-fn cast_uint_as_int(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Int>,
-) -> Result<Option<i64>> {
+fn cast_uint_as_int(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Option<i64>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -217,13 +212,9 @@ fn cast_uint_as_int(
 }
 
 /// The implementation for push down signature `CastIntAsReal` from unsigned integer.
-#[rpn_fn(capture = [ctx, extra])]
+#[rpn_fn(capture = [extra])]
 #[inline]
-fn cast_uint_as_real(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Int>,
-) -> Result<Option<Real>> {
+fn cast_uint_as_real(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
         Some(val) => {

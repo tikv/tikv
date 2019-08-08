@@ -7,11 +7,10 @@ use std::num::ParseFloatError;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
-use tipb::{self, ScalarFuncSig};
-use tipb::select;
 
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
+use tipb::{self, ScalarFuncSig};
 
 pub const ERR_M_BIGGER_THAN_D: i32 = 1427;
 pub const ERR_UNKNOWN: i32 = 1105;
