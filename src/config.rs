@@ -926,7 +926,7 @@ impl Default for RaftDbConfig {
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
             titan: TitanDBConfig {
-                enabled: false,
+                enabled: true,
                 dirname: "rafttitan".to_owned(),
                 disable_gc: false,
                 max_background_gc: 1,
