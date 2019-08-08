@@ -2,7 +2,55 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
+use crate::expr::EvalContext;
 use crate::Result;
+
+#[rpn_fn(capture = [ctx])]
+pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: &Option<C::Input>) -> Result<Option<C::Output>> {
+    if let Some(arg) = arg {
+        C::ceil(ctx, arg)
+    } else {
+        Ok(None)
+    }
+}
+
+pub trait Ceil {
+    type Input: Evaluable;
+    type Output: Evaluable;
+
+    fn ceil(_ctx: &mut EvalContext, _arg: &Self::Input) -> Result<Option<Self::Output>>;
+}
+
+pub struct CeilReal;
+
+impl Ceil for CeilReal {
+    type Input = Real;
+    type Output = Real;
+
+    fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(Some(Real::from(arg.ceil())))
+    }
+}
+
+pub struct CeilDecToDec;
+
+impl Ceil for CeilDecToDec {
+    type Input = Decimal;
+    type Output = Decimal;
+
+    fn ceil(ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        let result = arg.ceil();
+
+        if result.is_truncated() {
+            ctx.handle_truncate(true)?;
+        } else if result.is_overflow() {
+            ctx.handle_overflow(codec::Error::overflow("DECIMAL", ""))?;
+        }
+
+        let result: codec::Result<Decimal> = result.into();
+        result.map_err(|err| err.into()).map(Some)
+    }
+}
 
 #[rpn_fn]
 #[inline]
