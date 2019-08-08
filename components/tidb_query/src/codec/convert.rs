@@ -930,9 +930,9 @@ mod tests {
     use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
+    use tidb_query_datatype::Collation;
 
     use super::*;
-    use tidb_query_datatype::Collation;
 
     #[test]
     fn test_int_to_int() {
@@ -1892,7 +1892,6 @@ mod tests {
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let mut ft = FieldType::new();
-
         <FieldType as FieldTypeAccessor>::set_tp(&mut ft, FieldTypeTp::String);
         <FieldType as FieldTypeAccessor>::set_collation(&mut ft, Collation::Binary);
 
@@ -1941,9 +1940,7 @@ mod tests {
             ),
         ];
 
-        let mut cfg = EvalConfig::new();
-        cfg.set_flag(Flag::TRUNCATE_AS_WARNING);
-        cfg.set_flag(Flag::OVERFLOW_AS_WARNING);
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let mut ft = FieldType::new();
 
