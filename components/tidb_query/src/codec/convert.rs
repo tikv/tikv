@@ -588,7 +588,7 @@ pub fn produce_dec_with_specified_tp(
         }
     };
     if ft.is_unsigned() && dec.is_negative() {
-        Ok(Decimal::from(0 as u64))
+        Ok(Decimal::zero())
     } else {
         Ok(dec)
     }
@@ -1848,8 +1848,7 @@ mod tests {
             ("世界，中国", 6, charset::CHARSET_ASCII),
         ];
 
-        let mut cfg = EvalConfig::new();
-        cfg.set_flag(Flag::TRUNCATE_AS_WARNING);
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let mut ft = FieldType::new();
 
@@ -1885,8 +1884,7 @@ mod tests {
 
         use tidb_query_datatype::FieldTypeAccessor;
 
-        let mut cfg = EvalConfig::new();
-        cfg.set_flag(Flag::TRUNCATE_AS_WARNING);
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let mut ft = FieldType::new();
 
