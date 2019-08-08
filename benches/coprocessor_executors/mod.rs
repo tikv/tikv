@@ -15,6 +15,8 @@ mod util;
 
 fn main() {
     let mut c = criterion::Criterion::default()
+        .warm_up_time(std::time::Duration::new(15, 0))
+        .measurement_time(std::time::Duration::new(25, 0))
         .configure_from_args()
         .sample_size(10);
 
