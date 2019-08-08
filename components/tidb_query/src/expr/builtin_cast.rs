@@ -474,7 +474,7 @@ impl ScalarFunc {
             Ok(dur) => Ok(Some(dur)),
             Err(e) => {
                 if e.is_overflow() {
-                    ctx.handle_overflow(e)?;
+                    ctx.handle_overflow_err(e)?;
                     Ok(None)
                 } else {
                     Err(e)
