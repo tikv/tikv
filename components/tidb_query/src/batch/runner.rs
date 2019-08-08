@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::{self, ExecType, ExecutorExecutionSummary};
-use tipb::select::{Chunk, DAGRequest, SelectResponse};
+use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{Chunk, DAGRequest, SelectResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -52,7 +52,7 @@ pub struct BatchExecutorsRunner<SS> {
 impl BatchExecutorsRunner<()> {
     /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn check_supported(exec_descriptors: &[executor::Executor]) -> Result<()> {
+    pub fn check_supported(exec_descriptors: &[tipb::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
@@ -105,7 +105,7 @@ impl BatchExecutorsRunner<()> {
 }
 
 pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
-    executor_descriptors: Vec<executor::Executor>,
+    executor_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,

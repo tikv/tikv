@@ -3,7 +3,7 @@
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
 use tikv_util::collections::HashSet;
-use tipb::analyze;
+use tipb;
 
 /// `FMSketch` is used to count the approximate number of distinct
 /// elements in multiset.
@@ -33,8 +33,8 @@ impl FMSketch {
         self.insert_hash_value(hash);
     }
 
-    pub fn into_proto(self) -> analyze::FMSketch {
-        let mut proto = analyze::FMSketch::default();
+    pub fn into_proto(self) -> tipb::FMSketch {
+        let mut proto = tipb::FMSketch::default();
         proto.set_mask(self.mask);
         let hash = self.hash_set.into_iter().collect();
         proto.set_hashset(hash);

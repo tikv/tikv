@@ -228,7 +228,7 @@ mod tests {
     use crate::codec::Datum;
     use crate::expr::tests::{datum_expr, scalar_func_expr};
     use crate::expr::{EvalContext, Expression};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     macro_rules! test_any_value {
         ($cases: expr, $case_type: ty, Datum::$type_of_datum: ident, $maker_for_case_ele: expr, ScalarFuncSig::$sig_of_scalar_func: ident) => {{

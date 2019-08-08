@@ -6,9 +6,9 @@ use std::sync::Arc;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::collections::HashMap;
-use tipb::executor::TableScan;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
+use tipb::TableScan;
 
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
@@ -302,8 +302,8 @@ mod tests {
 
     use kvproto::coprocessor::KeyRange;
     use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
-    use tipb::expression::FieldType;
-    use tipb::schema::ColumnInfo;
+    use tipb::ColumnInfo;
+    use tipb::FieldType;
 
     use crate::codec::batch::LazyBatchColumnVec;
     use crate::codec::data_type::*;

@@ -477,7 +477,7 @@ mod tests {
     use crate::expr::{EvalContext, Expression, Flag, SqlMode};
     use std::sync::Arc;
     use std::{i64, u64};
-    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
+    use tipb::{Expr, ExprType, ScalarFuncSig};
 
     #[test]
     fn test_cmp_i64_with_unsigned_flag() {
