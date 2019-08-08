@@ -30,7 +30,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::expression::{Expr, FieldType};
+use tipb::{Expr, FieldType};
 
 use crate::aggr_fn::*;
 use crate::batch::interface::*;

@@ -3,7 +3,6 @@
 #![cfg_attr(test, feature(test))]
 #![feature(core_intrinsics)]
 #![feature(ptr_offset_from)]
-#![feature(underscore_const_names)]
 
 #[macro_use]
 extern crate static_assertions;

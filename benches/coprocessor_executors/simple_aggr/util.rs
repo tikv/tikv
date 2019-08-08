@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::expression::Expr;
+use tipb::Expr;
 
 use tidb_query::batch::executors::BatchSimpleAggregationExecutor;
 use tidb_query::batch::interface::BatchExecutor;

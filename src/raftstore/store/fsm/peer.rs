@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use crate::pd::PdClient;
 use crate::raftstore::{Error, Result};
 use engine::Engines;
 use engine::CF_RAFT;
@@ -25,6 +24,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
+use pd_client::PdClient;
 use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
@@ -1478,9 +1478,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.peer.remove_peer_from_cache(peer_id);
                 self.fsm.peer.recent_conf_change_time = now;
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
-            }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
         }
 
         // In pattern matching above, if the peer is the leader,

@@ -25,7 +25,6 @@
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(mem_take)]
-#![feature(type_alias_enum_variants)]
 
 #[macro_use]
 extern crate bitflags;
@@ -63,7 +62,6 @@ pub mod binutil;
 pub mod config;
 pub mod coprocessor;
 pub mod import;
-pub mod pd;
 pub mod raftstore;
 pub mod server;
 pub mod storage;

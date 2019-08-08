@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
-use tipb::executor::{self, ExecType, ExecutorExecutionSummary};
-use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
+use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{Chunk, DAGRequest, SelectResponse, StreamResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -29,7 +29,7 @@ pub struct ExecutorsRunner<SS> {
 ///
 /// Normal executors iterate rows one by one.
 pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
-    exec_descriptors: Vec<executor::Executor>,
+    exec_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
@@ -106,7 +106,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
 ///
 /// The inner-most executor must be a table scan executor or an index scan executor.
 fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
-    mut first: executor::Executor,
+    mut first: tipb::Executor,
     storage: S,
     ranges: Vec<KeyRange>,
     is_streaming: bool,

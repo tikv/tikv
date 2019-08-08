@@ -28,7 +28,6 @@ use raft::{
 };
 use time::Timespec;
 
-use crate::pd::INVALID_ID;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
@@ -39,6 +38,7 @@ use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
+use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
@@ -1789,9 +1789,7 @@ impl Peer {
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
-            }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
         }
         let healthy = self.count_healthy_node(progress.voters());
         let quorum_after_change = raft::majority(progress.voter_ids().len());

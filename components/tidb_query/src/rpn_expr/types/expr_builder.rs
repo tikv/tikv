@@ -4,7 +4,7 @@ use std::convert::{TryFrom, TryInto};
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::codec::number;
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
@@ -96,7 +96,7 @@ impl RpnExpressionBuilder {
         max_columns: usize,
     ) -> Result<RpnExpression>
     where
-        F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+        F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
     {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
@@ -250,7 +250,7 @@ fn append_rpn_nodes_recursively<F>(
     // the full schema instead.
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+    F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
     match tree_node.get_tp() {
         ExprType::ScalarFunc => {
@@ -290,7 +290,7 @@ fn handle_node_fn_call<F>(
     max_columns: usize,
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+    F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
     // Map pb func to `RpnFnMeta`.
     let func_meta = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
@@ -470,7 +470,7 @@ mod tests {
 
     use tidb_query_codegen::rpn_fn;
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
     use crate::codec::datum::{self, Datum};
@@ -859,6 +859,7 @@ mod tests {
                 .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong))
                 .push_child(ExprDefBuilder::column_ref(5, FieldTypeTp::LongLong))
                 .build();
+
         for i in 0..=5 {
             assert!(RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
                 node.clone(),
