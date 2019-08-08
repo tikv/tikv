@@ -556,7 +556,7 @@ pub fn produce_dec_with_specified_tp(
                 &format!("({}, {})", flen, decimal),
             ))?;
             dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
-        } else if frac as isize != decimal {
+        } else if frac != decimal {
             let old = dec.clone();
             let rounded = match dec.round(decimal as i8, RoundMode::HalfEven) {
                 Res::Ok(d) => d,
@@ -647,7 +647,11 @@ pub fn produce_str_with_specified_tp<'a>(
         let mut res = s.into_owned();
         truncate_binary(&mut res, flen as isize);
         Ok(Cow::Owned(res))
-    } else if ft.tp() == FieldTypeTp::String && s.len() < flen && ft.is_binary_str() && pad_zero {
+    } else if ft.tp() == FieldTypeTp::String
+        && s.len() < flen
+        && ft.is_binary_string_like()
+        && pad_zero
+    {
         let mut s = s.into_owned();
         s.resize(flen, 0);
         Ok(Cow::Owned(s))
@@ -662,7 +666,7 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
         return;
     }
     let flen = flen as usize;
-    if ft.tp() == FieldTypeTp::String && ft.is_binary_str() && s.len() < flen {
+    if ft.tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
         // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
         s.resize(flen, 0);
     }

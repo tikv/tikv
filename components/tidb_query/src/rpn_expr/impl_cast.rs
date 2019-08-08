@@ -144,17 +144,17 @@ fn cast_uint_as_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            if in_union(extra.implicit_args) && *val < 0 {
-                Ok(Some(Decimal::zero()))
+            let dec = if in_union(extra.implicit_args) && *val < 0 {
+                Decimal::zero()
             } else {
                 // TODO, TiDB use ConvertIntToUint, but I think it is a bug
-                let dec = Decimal::from(*val as u64);
-                Ok(Some(produce_dec_with_specified_tp(
-                    ctx,
-                    dec,
-                    extra.ret_field_type,
-                )?))
-            }
+                Decimal::from(*val as u64)
+            };
+            Ok(Some(produce_dec_with_specified_tp(
+                ctx,
+                dec,
+                extra.ret_field_type,
+            )?))
         }
     }
 }
@@ -208,8 +208,8 @@ fn cast_uint_as_int(
             if in_union(extra.implicit_args) && *val < 0 {
                 Ok(Some(0))
             } else {
-                let val = *val as u64;
-                Ok(Some(<u64 as ConvertTo<i64>>::convert(&val, ctx)?))
+                // needn't to call convert_uint_as_int
+                Ok(Some(*val as i64))
             }
         }
     }
@@ -231,7 +231,6 @@ fn cast_uint_as_real(
             }
             // TODO, TiDB use ConvertIntToUint here, but I think it is a bug
             let val = *val as u64;
-            let val: u64 = <u64 as ConvertTo<u64>>::convert(&val, ctx)?;
             Ok(Real::new(val as f64).ok())
         }
     }
