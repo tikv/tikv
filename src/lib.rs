@@ -27,6 +27,8 @@
 #![feature(mem_take)]
 
 #[macro_use]
+extern crate crossbeam;
+#[macro_use]
 extern crate bitflags;
 #[macro_use(fail_point)]
 extern crate fail;

@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -610,6 +610,10 @@ pub struct ApplyDelegate {
     /// If the delegate should be stopped from polling.
     /// A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
+
+    /// Indicates the peer currently is leader or not.
+    is_leader: Arc<AtomicBool>,
+
     /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -658,6 +662,7 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
+            is_leader: reg.is_leader,
             merged: false,
             ready_source_region_id: 0,
             wait_merge_state: None,
@@ -2154,6 +2159,7 @@ pub struct Registration {
     pub applied_index_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub is_leader: Arc<AtomicBool>,
 }
 
 impl Registration {
@@ -2165,6 +2171,7 @@ impl Registration {
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            is_leader: Arc::clone(&peer.is_leader),
         }
     }
 }
@@ -2685,6 +2692,11 @@ impl Fsm for ApplyFsm {
     }
 
     #[inline]
+    fn is_leader(&self) -> bool {
+        self.delegate.is_leader.load(Ordering::Acquire)
+    }
+
+    #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
@@ -2717,6 +2729,11 @@ impl Fsm for ControlFsm {
     #[inline]
     fn is_stopped(&self) -> bool {
         true
+    }
+
+    #[inline]
+    fn is_leader(&self) -> bool {
+        false
     }
 }
 
@@ -2906,6 +2923,7 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
         cfg.apply_max_batch_size,
         tx,
         Box::new(ControlFsm),
+        true,
     )
 }
 

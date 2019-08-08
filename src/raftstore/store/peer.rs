@@ -276,6 +276,9 @@ pub struct Peer {
     /// The Peer meta information.
     pub peer: metapb::Peer,
 
+    /// To share the leadership information with other threads.
+    pub is_leader: Arc<AtomicBool>,
+
     /// The Raft state machine of this Peer.
     pub raft_group: RawNode<PeerStorage>,
     /// The cache of meta information for Region's other Peers.
@@ -388,6 +391,7 @@ impl Peer {
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
+            is_leader: Arc::new(AtomicBool::new(false)),
             raft_group,
             proposals: Default::default(),
             apply_proposals: vec![],
@@ -970,6 +974,7 @@ impl Peer {
     fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
+            self.is_leader.store(self.is_leader(), Ordering::Release);
             match ss.raft_state {
                 StateRole::Leader => {
                     // The local read can only be performed after a new leader has applied

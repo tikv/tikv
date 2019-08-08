@@ -29,6 +29,8 @@ pub trait Fsm {
 
     fn is_stopped(&self) -> bool;
 
+    fn is_leader(&self) -> bool;
+
     /// Set a mailbox to Fsm, which should be used to send message to itself.
     fn set_mailbox(&mut self, _mailbox: Cow<'_, BasicMailbox<Self>>)
     where
@@ -57,14 +59,16 @@ enum FsmTypes<N, C> {
 macro_rules! impl_sched {
     ($name:ident, $ty:path, Fsm = $fsm:tt) => {
         pub struct $name<N, C> {
-            sender: channel::Sender<FsmTypes<N, C>>,
+            leader_sender: channel::Sender<FsmTypes<N, C>>,
+            follower_sender: channel::Sender<FsmTypes<N, C>>,
         }
 
         impl<N, C> Clone for $name<N, C> {
             #[inline]
             fn clone(&self) -> $name<N, C> {
                 $name {
-                    sender: self.sender.clone(),
+                    leader_sender: self.leader_sender.clone(),
+                    follower_sender: self.follower_sender.clone(),
                 }
             }
         }
@@ -77,7 +81,12 @@ macro_rules! impl_sched {
 
             #[inline]
             fn schedule(&self, fsm: Box<Self::Fsm>) {
-                match self.sender.send($ty(fsm)) {
+                let sender = if fsm.is_leader() {
+                    &self.leader_sender
+                } else {
+                    &self.follower_sender
+                };
+                match sender.send($ty(fsm)) {
                     Ok(()) => {}
                     // TODO: use debug instead.
                     Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
@@ -89,7 +98,7 @@ macro_rules! impl_sched {
                 // TODO: close it explicitly once it's supported.
                 // Magic number, actually any number greater than poll pool size works.
                 for _ in 0..100 {
-                    let _ = self.sender.send(FsmTypes::Empty);
+                    let _ = self.leader_sender.send(FsmTypes::Empty);
                 }
             }
         }
@@ -104,6 +113,9 @@ impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 pub struct Batch<N, C> {
     normals: Vec<Box<N>>,
     control: Option<Box<C>>,
+
+    // normals_leader[i] is true means normals[i] is a leader peer.
+    normals_leader: Vec<bool>,
 }
 
 impl<N: Fsm, C: Fsm> Batch<N, C> {
@@ -112,6 +124,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         Batch {
             normals: Vec::with_capacity(cap),
             control: None,
+            normals_leader: vec![false; cap],
         }
     }
 
@@ -121,7 +134,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
-            FsmTypes::Normal(n) => self.normals.push(n),
+            FsmTypes::Normal(n) => self.push_normal(n),
             FsmTypes::Control(c) => {
                 assert!(self.control.is_none());
                 self.control = Some(c);
@@ -129,6 +142,11 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             FsmTypes::Empty => return false,
         }
         true
+    }
+
+    fn push_normal(&mut self, n: Box<N>) {
+        self.normals_leader[self.normals.len()] = n.is_leader();
+        self.normals.push(n);
     }
 
     #[inline]
@@ -152,22 +170,20 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     /// larger than the given value before FSM is released.
     pub fn release(&mut self, index: usize, checked_len: usize) -> bool {
         let mut fsm = self.normals.swap_remove(index);
+        self.normals_leader[index] = self.normals[index].is_leader();
         let mailbox = fsm.take_mailbox().unwrap();
         mailbox.release(fsm);
-        if mailbox.len() == checked_len {
-            true
-        } else {
-            match mailbox.take_fsm() {
-                None => true,
-                Some(mut s) => {
-                    s.set_mailbox(Cow::Owned(mailbox));
-                    let last_index = self.normals.len();
-                    self.normals.push(s);
-                    self.normals.swap(index, last_index);
-                    false
-                }
+        if mailbox.len() != checked_len {
+            if let Some(mut s) = mailbox.take_fsm() {
+                s.set_mailbox(Cow::Owned(mailbox));
+                let last_index = self.normals.len();
+                self.normals.push(s);
+                self.normals.swap(index, last_index);
+                self.normals_leader[index] = self.normals[index].is_leader();
+                return false;
             }
         }
+        true
     }
 
     /// Remove the normal FSM located at `index`.
@@ -177,6 +193,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     /// the function will return false to let caller to keep polling.
     pub fn remove(&mut self, index: usize) -> bool {
         let mut fsm = self.normals.swap_remove(index);
+        self.normals_leader[index] = self.normals[index].is_leader();
         let mailbox = fsm.take_mailbox().unwrap();
         if mailbox.is_empty() {
             mailbox.release(fsm);
@@ -186,6 +203,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             let last_index = self.normals.len();
             self.normals.push(fsm);
             self.normals.swap(index, last_index);
+            self.normals_leader[index] = self.normals[index].is_leader();
             false
         }
     }
@@ -258,6 +276,7 @@ pub trait PollHandler<N, C> {
 struct Poller<N: Fsm, C: Fsm, Handler> {
     router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    leader_fsm_receiver: Option<channel::Receiver<FsmTypes<N, C>>>,
     handler: Handler,
     max_batch_size: usize,
 }
@@ -270,29 +289,37 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             return;
         }
 
-        let mut pushed = if curr_batch_len == 0 {
-            // Block if the batch is empty.
-            match self.fsm_receiver.recv() {
-                Ok(fsm) => batch.push(fsm),
-                Err(_) => return,
-            }
-        } else {
-            true
-        };
+        let mut pushed = curr_batch_len != 0;
+        if !pushed {
+            let fsm_receiver = &self.fsm_receiver;
+            let head = if let Some(ref leader_fsm_receiver) = self.leader_fsm_receiver {
+                select! {
+                    recv(fsm_receiver) -> fsm => fsm,
+                    recv(leader_fsm_receiver) -> fsm => fsm,
+                }
+            } else {
+                fsm_receiver.recv()
+            };
+            pushed = head.map(|fsm| batch.push(fsm)).unwrap_or(false);
+        }
 
-        while pushed {
-            if batch.len() < max_size {
-                let fsm = match self.fsm_receiver.try_recv() {
+        for receiver in &[self.leader_fsm_receiver.as_ref(), Some(&self.fsm_receiver)] {
+            let receiver = match receiver {
+                Some(r) => r,
+                None => continue,
+            };
+            while pushed && batch.len() < max_size {
+                let fsm = match receiver.try_recv() {
                     Ok(fsm) => fsm,
-                    Err(TryRecvError::Empty) => return,
+                    Err(TryRecvError::Empty) => continue,
                     Err(TryRecvError::Disconnected) => unreachable!(),
                 };
                 pushed = batch.push(fsm);
-            } else {
-                return;
             }
         }
-        batch.clear();
+        if !pushed {
+            batch.clear();
+        }
     }
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
@@ -354,6 +381,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
     receiver: channel::Receiver<FsmTypes<N, C>>,
+    leader_receiver: Option<channel::Receiver<FsmTypes<N, C>>>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
@@ -379,6 +407,7 @@ where
             let mut poller = Poller {
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
+                leader_fsm_receiver: self.leader_receiver.clone(),
                 handler,
                 max_batch_size: self.max_batch_size,
             };
@@ -417,16 +446,32 @@ pub fn create_system<N: Fsm, C: Fsm>(
     max_batch_size: usize,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
+    seperate_leader_follower: bool,
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let control_box = BasicMailbox::new(sender, controller);
-    let (tx, rx) = channel::unbounded();
-    let normal_scheduler = NormalScheduler { sender: tx.clone() };
-    let control_scheduler = ControlScheduler { sender: tx };
+
+    let (sender, receiver) = channel::unbounded();
+    let (leader_sender, leader_receiver) = if seperate_leader_follower {
+        let (sender, receiver) = channel::unbounded();
+        (sender, Some(receiver))
+    } else {
+        (sender.clone(), None)
+    };
+    let normal_scheduler = NormalScheduler {
+        leader_sender,
+        follower_sender: sender.clone(),
+    };
+    let control_scheduler = ControlScheduler {
+        leader_sender: sender.clone(),
+        follower_sender: sender,
+    };
+
     let router = Router::new(control_box, normal_scheduler, control_scheduler);
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),
-        receiver: rx,
+        receiver,
+        leader_receiver,
         pool_size,
         max_batch_size,
         workers: vec![],

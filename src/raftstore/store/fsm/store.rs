@@ -378,6 +378,11 @@ impl Fsm for StoreFsm {
     fn is_stopped(&self) -> bool {
         self.store.stopped
     }
+
+    #[inline]
+    fn is_leader(&self) -> bool {
+        false
+    }
 }
 
 struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
@@ -1160,6 +1165,7 @@ pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
         cfg.store_max_batch_size,
         store_tx,
         store_fsm,
+        true,
     );
     let system = RaftBatchSystem {
         system,

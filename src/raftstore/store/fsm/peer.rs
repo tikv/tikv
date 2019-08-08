@@ -239,6 +239,11 @@ impl Fsm for PeerFsm {
         self.stopped
     }
 
+    #[inline]
+    fn is_leader(&self) -> bool {
+        self.peer.is_leader()
+    }
+
     /// Set a mailbox to Fsm, which should be used to send message to itself.
     #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
