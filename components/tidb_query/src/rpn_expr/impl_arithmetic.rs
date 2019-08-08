@@ -505,7 +505,10 @@ impl ArithmeticOpWithCtx for DecimalDivide {
                 Res::Ok(value) => Some(value),
                 Res::Truncated(_) => ctx.handle_truncate(true).map(|_| None)?,
                 Res::Overflow(_) => ctx
-                    .handle_overflow_err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))
+                    .handle_overflow_err(Error::overflow(
+                        "DECIMAL",
+                        &format!("({} / {})", lhs, rhs),
+                    ))
                     .map(|_| None)?,
             },
             None => ctx.handle_division_by_zero().map(|_| None)?,
