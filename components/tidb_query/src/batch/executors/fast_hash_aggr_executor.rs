@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::collections::HashMap;
-use tipb::executor::Aggregation;
-use tipb::expression::{Expr, FieldType};
+use tipb::Aggregation;
+use tipb::{Expr, FieldType};
 
 use crate::aggr_fn::*;
 use crate::batch::executors::util::aggr_executor::*;
@@ -72,7 +72,7 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         let def = &group_by_definitions[0];
 
         // Only a subset of all eval types are supported.
-        let eval_type = box_try!(EvalType::try_from(def.get_field_type().tp()));
+        let eval_type = box_try!(EvalType::try_from(def.get_field_type().as_accessor().tp()));
         match eval_type {
             EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
             _ => return Err(other_err!("Eval type {} is not supported", eval_type)),
@@ -139,7 +139,8 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
         let group_by_field_type = group_by_exp.ret_field_type(src.schema()).clone();
-        let group_by_eval_type = EvalType::try_from(group_by_field_type.tp()).unwrap();
+        let group_by_eval_type =
+            EvalType::try_from(group_by_field_type.as_accessor().tp()).unwrap();
         let groups = match_template_hashable! {
             TT, match group_by_eval_type {
                 EvalType::TT => Groups::TT(HashMap::default()),
@@ -350,7 +351,7 @@ mod tests {
     use super::*;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::batch::executors::util::aggr_executor::tests::*;
     use crate::batch::executors::util::mock_executor::MockExecutor;
@@ -364,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
-        use tipb::expression::ExprType;
+        use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
         // This test creates a hash aggregation executor with the following aggregate functions:

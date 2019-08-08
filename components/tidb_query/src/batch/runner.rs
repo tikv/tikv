@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::{self, ExecType, ExecutorExecutionSummary};
-use tipb::select::{Chunk, DAGRequest, SelectResponse};
+use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{Chunk, DAGRequest, SelectResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -52,7 +52,7 @@ pub struct BatchExecutorsRunner<SS> {
 impl BatchExecutorsRunner<()> {
     /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn check_supported(exec_descriptors: &[executor::Executor]) -> Result<()> {
+    pub fn check_supported(exec_descriptors: &[tipb::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
@@ -105,7 +105,7 @@ impl BatchExecutorsRunner<()> {
 }
 
 pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
-    executor_descriptors: Vec<executor::Executor>,
+    executor_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
@@ -126,7 +126,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 .inc();
 
             let mut descriptor = first_ed.take_tbl_scan();
-            let columns_info = descriptor.take_columns().into_vec();
+            let columns_info = descriptor.take_columns().into();
             executor = Box::new(
                 BatchTableScanExecutor::new(
                     storage,
@@ -144,7 +144,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 .inc();
 
             let mut descriptor = first_ed.take_idx_scan();
-            let columns_info = descriptor.take_columns().into_vec();
+            let columns_info = descriptor.take_columns().into();
             executor = Box::new(
                 BatchIndexScanExecutor::new(
                     storage,
@@ -178,7 +178,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     BatchSelectionExecutor::new(
                         config.clone(),
                         executor,
-                        ed.take_selection().take_conditions().into_vec(),
+                        ed.take_selection().take_conditions().into(),
                     )?
                     .with_summary_collector(C::new(summary_slot_index)),
                 )
@@ -194,7 +194,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     BatchSimpleAggregationExecutor::new(
                         config.clone(),
                         executor,
-                        ed.mut_aggregation().take_agg_func().into_vec(),
+                        ed.mut_aggregation().take_agg_func().into(),
                     )?
                     .with_summary_collector(C::new(summary_slot_index)),
                 )
@@ -210,8 +210,8 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                         BatchFastHashAggregationExecutor::new(
                             config.clone(),
                             executor,
-                            ed.mut_aggregation().take_group_by().into_vec(),
-                            ed.mut_aggregation().take_agg_func().into_vec(),
+                            ed.mut_aggregation().take_group_by().into(),
+                            ed.mut_aggregation().take_agg_func().into(),
                         )?
                         .with_summary_collector(C::new(summary_slot_index)),
                     )
@@ -224,8 +224,8 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                         BatchSlowHashAggregationExecutor::new(
                             config.clone(),
                             executor,
-                            ed.mut_aggregation().take_group_by().into_vec(),
-                            ed.mut_aggregation().take_agg_func().into_vec(),
+                            ed.mut_aggregation().take_group_by().into(),
+                            ed.mut_aggregation().take_agg_func().into(),
                         )?
                         .with_summary_collector(C::new(summary_slot_index)),
                     )
@@ -240,8 +240,8 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     BatchStreamAggregationExecutor::new(
                         config.clone(),
                         executor,
-                        ed.mut_aggregation().take_group_by().into_vec(),
-                        ed.mut_aggregation().take_agg_func().into_vec(),
+                        ed.mut_aggregation().take_group_by().into(),
+                        ed.mut_aggregation().take_agg_func().into(),
                     )?
                     .with_summary_collector(C::new(summary_slot_index)),
                 )
@@ -307,14 +307,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let out_most_executor = if collect_exec_summary {
             build_executors::<_, ExecSummaryCollectorEnabled>(
-                req.take_executors().into_vec(),
+                req.take_executors().into(),
                 storage,
                 ranges,
                 config.clone(),
             )?
         } else {
             build_executors::<_, ExecSummaryCollectorDisabled>(
-                req.take_executors().into_vec(),
+                req.take_executors().into(),
                 storage,
                 ranges,
                 config.clone(),

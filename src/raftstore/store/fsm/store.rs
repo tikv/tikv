@@ -22,7 +22,6 @@ use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::import::SSTImporter;
-use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::config::Config;
@@ -45,9 +44,10 @@ use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
-    ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
-    SplitCheckRunner, SplitCheckTask,
+    ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner,
+    RegionTask, SplitCheckRunner, SplitCheckTask,
 };
+use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
     SnapshotDeleter, StoreMsg, StoreTick,
@@ -56,6 +56,7 @@ use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
+use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};

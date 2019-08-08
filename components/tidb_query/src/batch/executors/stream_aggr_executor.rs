@@ -4,8 +4,8 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::executor::Aggregation;
-use tipb::expression::{Expr, FieldType};
+use tipb::Aggregation;
+use tipb::{Expr, FieldType};
 
 use crate::aggr_fn::*;
 use crate::batch::executors::util::aggr_executor::*;
@@ -147,7 +147,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
                 // The unwrap is fine because aggregate function parser should never return an
                 // eval type that we cannot process later. If we made a mistake there, then we
                 // should panic.
-                EvalType::try_from(exp.ret_field_type(src.schema()).tp()).unwrap()
+                EvalType::try_from(exp.ret_field_type(src.schema()).as_accessor().tp()).unwrap()
             })
             .collect();
 
@@ -406,7 +406,7 @@ mod tests {
     use super::*;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::expr::EvalWarnings;
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
-        use tipb::expression::ExprType;
+        use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
         // This test creates a stream aggregation executor with the following aggregate functions:

@@ -6,6 +6,7 @@ use std::convert::TryFrom;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::*;
 use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
@@ -21,8 +22,8 @@ pub fn get_cast_fn_rpn_node(
     from_field_type: &FieldType,
     to_field_type: FieldType,
 ) -> Result<RpnExpressionNode> {
-    let from = box_try!(EvalType::try_from(from_field_type.tp()));
-    let to = box_try!(EvalType::try_from(to_field_type.tp()));
+    let from = box_try!(EvalType::try_from(from_field_type.as_accessor().tp()));
+    let to = box_try!(EvalType::try_from(to_field_type.as_accessor().tp()));
     let func_meta = match (from, to) {
         (EvalType::Int, EvalType::Real) => {
             if !from_field_type.is_unsigned() {

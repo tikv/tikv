@@ -47,7 +47,7 @@ fn if_condition<T: Evaluable>(
     .clone())
 }
 
-fn case_when_validator<T: Evaluable>(expr: &tipb::expression::Expr) -> Result<()> {
+fn case_when_validator<T: Evaluable>(expr: &tipb::Expr) -> Result<()> {
     for chunk in expr.get_children().chunks(2) {
         if chunk.len() == 1 {
             super::function::validate_expr_return_type(&chunk[0], T::EVAL_TYPE)?;
@@ -63,7 +63,7 @@ fn case_when_validator<T: Evaluable>(expr: &tipb::expression::Expr) -> Result<()
 mod tests {
     use super::*;
 
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 

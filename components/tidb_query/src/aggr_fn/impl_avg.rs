@@ -3,7 +3,7 @@
 use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::builder::FieldTypeBuilder;
 use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
 use crate::codec::data_type::*;
@@ -49,7 +49,8 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
             RpnExpressionBuilder::build_from_expr_tree(child, time_zone, src_schema.len())?;
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
-        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(src_schema).tp()).unwrap();
+        let rewritten_eval_type =
+            EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
         out_exp.push(exp);
 
         Ok(match rewritten_eval_type {
@@ -229,8 +230,8 @@ mod tests {
             .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 2);
-        assert_eq!(schema[0].tp(), FieldTypeTp::LongLong);
-        assert_eq!(schema[1].tp(), FieldTypeTp::NewDecimal);
+        assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[1].as_accessor().tp(), FieldTypeTp::NewDecimal);
 
         assert_eq!(exp.len(), 1);
 

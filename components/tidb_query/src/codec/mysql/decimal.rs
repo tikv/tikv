@@ -1748,7 +1748,7 @@ impl ConvertTo<Decimal> for &[u8] {
         let dec = match Decimal::from_bytes(self)? {
             Res::Ok(d) => d,
             Res::Overflow(d) => {
-                ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
+                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))?;
                 d
             }
             Res::Truncated(d) => {

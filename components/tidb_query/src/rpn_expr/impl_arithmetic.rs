@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 
 use super::super::expr::EvalContext;
@@ -115,7 +116,7 @@ impl ArithmeticOp for RealPlus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs + *rhs;
         if res.is_infinite() {
-            Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)))?;
+            return Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -159,7 +160,7 @@ impl ArithmeticOp for IntUintMinus {
                 .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
                 .map(|v| Some(v as i64))
         } else {
-            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)))?
+            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
         }
     }
 }
@@ -206,7 +207,7 @@ impl ArithmeticOp for RealMinus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs - *rhs;
         if res.is_infinite() {
-            Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)))?;
+            return Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -312,9 +313,9 @@ impl ArithmeticOp for DecimalMod {
         match lhs % rhs {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(v)),
-                Res::Truncated(_) => Err(Error::truncated())?,
+                Res::Truncated(_) => Err(Error::truncated().into()),
                 Res::Overflow(_) => {
-                    Err(Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs)))?
+                    Err(Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs)).into())
                 }
             },
             None => Ok(None),
@@ -479,11 +480,13 @@ fn int_divide_decimal(
                 Res::Ok(v_i64) => Ok(Some(v_i64)),
                 Res::Truncated(v_i64) => Ok(Some(v_i64)),
                 Res::Overflow(_) => {
-                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
+                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)).into())
                 }
             },
-            Res::Truncated(_) => Err(Error::truncated())?,
-            Res::Overflow(_) => Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))?,
+            Res::Truncated(_) => Err(Error::truncated().into()),
+            Res::Overflow(_) => {
+                Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)).into())
+            }
         },
         None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
     }
@@ -502,10 +505,33 @@ impl ArithmeticOpWithCtx for DecimalDivide {
                 Res::Ok(value) => Some(value),
                 Res::Truncated(_) => ctx.handle_truncate(true).map(|_| None)?,
                 Res::Overflow(_) => ctx
-                    .handle_overflow(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))
+                    .handle_overflow_err(Error::overflow(
+                        "DECIMAL",
+                        &format!("({} / {})", lhs, rhs),
+                    ))
                     .map(|_| None)?,
             },
             None => ctx.handle_division_by_zero().map(|_| None)?,
+        })
+    }
+}
+
+pub struct RealDivide;
+
+impl ArithmeticOpWithCtx for RealDivide {
+    type T = Real;
+
+    fn calc(ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+        Ok(if rhs.is_zero() {
+            ctx.handle_division_by_zero().map(|_| None)?
+        } else {
+            let result = *lhs / *rhs;
+            if result.is_infinite() {
+                ctx.handle_overflow_err(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
+                    .map(|_| None)?
+            } else {
+                Some(result)
+            }
         })
     }
 }
@@ -514,9 +540,11 @@ impl ArithmeticOpWithCtx for DecimalDivide {
 mod tests {
     use super::*;
 
+    use std::str::FromStr;
+
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::codec::error::ERR_DIVISION_BY_ZERO;
     use crate::expr::{EvalConfig, Flag, SqlMode};
@@ -1170,27 +1198,78 @@ mod tests {
 
     #[test]
     fn test_decimal_divide() {
+        let cases = vec![
+            (Some("2.2"), Some("1.1"), Some("2.0")),
+            (Some("2.33"), Some("-0.01"), Some("-233")),
+            (Some("2.33"), Some("0.01"), Some("233")),
+            (None, Some("2"), None),
+            (Some("123"), None, None),
+        ];
+
+        for (lhs, rhs, expected) in cases {
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param(lhs.map(|s| Decimal::from_str(s).unwrap()))
+                .push_param(rhs.map(|s| Decimal::from_str(s).unwrap()))
+                .evaluate(ScalarFuncSig::DivideDecimal)
+                .unwrap();
+
+            let expected = expected.map(|s| Decimal::from_str(s).unwrap());
+
+            assert_eq!(actual, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_real_divide() {
         let normal = vec![
-            (str2dec("2.2"), str2dec("1.1"), str2dec("2.0")),
-            (str2dec("2.33"), str2dec("-0.01"), str2dec("-233")),
-            (str2dec("2.33"), str2dec("0.01"), str2dec("233")),
-            (None, str2dec("2"), None),
-            (str2dec("123"), None, None),
+            (Some(2.2), Some(1.1), Real::new(2.0).ok()),
+            (Some(2.33), Some(-0.01), Real::new(-233.0).ok()),
+            (Some(2.33), Some(0.01), Real::new(233.0).ok()),
+            (None, Some(2.0), None),
+            (Some(123.0), None, None),
         ];
 
         for (lhs, rhs, expected) in normal {
             let actual = RpnFnScalarEvaluator::new()
-                .push_param(lhs.clone())
-                .push_param(rhs.clone())
-                .evaluate(ScalarFuncSig::DivideDecimal)
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::DivideReal)
                 .unwrap();
 
             assert_eq!(actual, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
 
-        let abnormal = vec![
-            (str2dec("2.33"), str2dec("0.0")),
-            (str2dec("2.33"), str2dec("-0.0")),
+        let overflow = vec![(std::f64::MAX, 0.0001)];
+        for (lhs, rhs) in overflow {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::DivideReal)
+                .is_err())
+        }
+    }
+
+    #[test]
+    fn test_divide_by_zero() {
+        let cases: Vec<(ScalarFuncSig, FieldTypeTp, ScalarValue, ScalarValue)> = vec![
+            (
+                ScalarFuncSig::DivideDecimal,
+                FieldTypeTp::NewDecimal,
+                Decimal::from_str("2.33").unwrap().into(),
+                Decimal::from_str("0.0").unwrap().into(),
+            ),
+            (
+                ScalarFuncSig::DivideDecimal,
+                FieldTypeTp::NewDecimal,
+                Decimal::from_str("2.33").unwrap().into(),
+                Decimal::from_str("-0.0").unwrap().into(),
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                FieldTypeTp::Double,
+                2.33.into(),
+                0.0.into(),
+            ),
         ];
 
         // Vec<[(Flag, SqlMode, is_ok(bool), has_warning(bool))]>
@@ -1220,7 +1299,7 @@ mod tests {
             ),
         ];
 
-        for (lhs, rhs) in abnormal {
+        for (sig, ret_field_type, lhs, rhs) in &cases {
             for &(flag, sql_mode, is_ok, has_warning) in &modes {
                 // Construct an `EvalContext`
                 let mut config = EvalConfig::new();
@@ -1228,12 +1307,12 @@ mod tests {
 
                 let (result, mut ctx) = RpnFnScalarEvaluator::new()
                     .context(EvalContext::new(std::sync::Arc::new(config)))
-                    .push_param(lhs.clone())
-                    .push_param(rhs.clone())
-                    .evaluate_ctx::<Decimal>(ScalarFuncSig::DivideDecimal);
+                    .push_param(lhs.to_owned())
+                    .push_param(rhs.to_owned())
+                    .evaluate_raw(*ret_field_type, *sig);
 
                 if is_ok {
-                    assert_eq!(result.unwrap(), None);
+                    assert!(result.unwrap().is_none());
                 } else {
                     assert!(result.is_err());
                 }
@@ -1248,9 +1327,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    fn str2dec(s: &str) -> Option<Decimal> {
-        s.parse().ok()
     }
 }

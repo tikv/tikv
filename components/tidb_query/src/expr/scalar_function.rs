@@ -5,7 +5,7 @@ use std::usize;
 
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
-use tipb::expression::ScalarFuncSig;
+use tipb::ScalarFuncSig;
 
 use super::builtin_compare::CmpOp;
 use super::{Error, EvalContext, Result, ScalarFunc};
@@ -199,7 +199,9 @@ impl ScalarFunc {
             | ScalarFuncSig::WeekDay
             | ScalarFuncSig::WeekOfYear
             | ScalarFuncSig::Year
-            | ScalarFuncSig::UnaryNot
+            | ScalarFuncSig::UnaryNotInt
+            | ScalarFuncSig::UnaryNotDecimal
+            | ScalarFuncSig::UnaryNotReal
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
             | ScalarFuncSig::UnaryMinusDecimal
@@ -619,7 +621,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$i_sig => {
                         match self.$i_func(ctx, row, $($i_arg)*) {
                             Ok(Some(i)) => {
-                                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                                if self.field_type.as_accessor().flag().contains(FieldTypeFlag::UNSIGNED) {
                                     Ok(Datum::U64(i as u64))
                                 } else {
                                     Ok(Datum::I64(i))
@@ -763,7 +765,11 @@ dispatch_call! {
         LogicalOr => logical_or,
         LogicalXor => logical_xor,
 
-        UnaryNot => unary_not,
+        // FIXME(@lonng)
+        UnaryNotInt => unary_not,
+        UnaryNotDecimal => unary_not,
+        UnaryNotReal => unary_not,
+
         UnaryMinusInt => unary_minus_int,
         IntIsNull => int_is_null,
         IntIsFalse => int_is_false,
@@ -1077,7 +1083,7 @@ dispatch_call! {
 mod tests {
     use crate::expr::{Error, ScalarFunc};
     use std::usize;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     #[test]
     fn test_check_args() {
@@ -1267,7 +1273,9 @@ mod tests {
                     ScalarFuncSig::WeekDay,
                     ScalarFuncSig::WeekOfYear,
                     ScalarFuncSig::Year,
-                    ScalarFuncSig::UnaryNot,
+                    ScalarFuncSig::UnaryNotInt,
+                    ScalarFuncSig::UnaryNotDecimal,
+                    ScalarFuncSig::UnaryNotReal,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
                     ScalarFuncSig::UnaryMinusDecimal,

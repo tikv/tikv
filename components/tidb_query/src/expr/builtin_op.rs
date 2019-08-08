@@ -189,7 +189,7 @@ mod tests {
     use crate::expr::tests::{check_overflow, datum_expr, scalar_func_expr, str2dec};
     use crate::expr::{EvalContext, Expression};
     use std::i64;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     #[test]
     fn test_logic_op() {
@@ -358,11 +358,11 @@ mod tests {
     #[test]
     fn test_unary_op() {
         let tests = vec![
-            (ScalarFuncSig::UnaryNot, Datum::I64(1), Some(0)),
-            (ScalarFuncSig::UnaryNot, Datum::I64(0), Some(1)),
-            (ScalarFuncSig::UnaryNot, Datum::I64(123), Some(0)),
-            (ScalarFuncSig::UnaryNot, Datum::I64(-123), Some(0)),
-            (ScalarFuncSig::UnaryNot, Datum::Null, None),
+            (ScalarFuncSig::UnaryNotInt, Datum::I64(1), Some(0)),
+            (ScalarFuncSig::UnaryNotInt, Datum::I64(0), Some(1)),
+            (ScalarFuncSig::UnaryNotInt, Datum::I64(123), Some(0)),
+            (ScalarFuncSig::UnaryNotInt, Datum::I64(-123), Some(0)),
+            (ScalarFuncSig::UnaryNotInt, Datum::Null, None),
             (ScalarFuncSig::RealIsTrue, Datum::F64(0.25), Some(1)),
             (ScalarFuncSig::RealIsTrue, Datum::F64(0.0), Some(0)),
             (ScalarFuncSig::RealIsTrue, Datum::Null, Some(0)),

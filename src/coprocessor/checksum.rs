@@ -4,7 +4,7 @@ use crc::crc64::{self, Digest, Hasher64};
 
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
+use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::Range;

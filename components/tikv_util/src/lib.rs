@@ -505,6 +505,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 logger::convert_log_level_to_slog_level(level),
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
+                vec![],
             );
         }
 
@@ -733,10 +734,7 @@ mod tests {
         assert_eq!(unescape(r"a\\023"), b"a\\023");
         // Escaped three digit octal
         assert_eq!(unescape(r"a\000"), b"a\0");
-        assert_eq!(
-            unescape(r"\342\235\244\360\237\220\267"),
-            "❤🐷".as_bytes()
-        );
+        assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
         // Whitespace
         assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
         // Hex Octals

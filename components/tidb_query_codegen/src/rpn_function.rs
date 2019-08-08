@@ -189,7 +189,7 @@ impl ValidatorFnGenerator {
         let inners = self.tokens;
         quote! {
             fn validate #impl_generics (
-                expr: &tipb::expression::Expr
+                expr: &tipb::Expr
             ) -> crate::Result<()> #where_clause {
                 use crate::codec::data_type::Evaluable;
                 use crate::rpn_expr::function;
@@ -279,13 +279,13 @@ impl parse::Parse for RpnFnSignatureReturnType {
                     eval_type: et.eval_type,
                 })
             } else {
-                return Err(Error::new_spanned(
+                Err(Error::new_spanned(
                     tp,
                     "expect angle bracketed path arguments",
-                ));
+                ))
             }
         } else {
-            return Err(Error::new_spanned(tp, "expect path"));
+            Err(Error::new_spanned(tp, "expect path"))
         }
     }
 }
@@ -892,7 +892,7 @@ mod tests_normal {
                     )
                     .eval(Null, ctx, output_rows, args, extra)
                 }
-                fn validate(expr: &tipb::expression::Expr) -> crate::Result<()> {
+                fn validate(expr: &tipb::Expr) -> crate::Result<()> {
                     use crate::codec::data_type::Evaluable;
                     use crate::rpn_expr::function;
                     function::validate_expr_return_type(expr, Decimal::EVAL_TYPE)?;
@@ -1061,7 +1061,7 @@ mod tests_normal {
                         extra
                     )
                 }
-                fn validate<A: M, B>(expr: &tipb::expression::Expr) -> crate::Result<()>
+                fn validate<A: M, B>(expr: &tipb::Expr) -> crate::Result<()>
                 where
                     B: N<M>
                 {

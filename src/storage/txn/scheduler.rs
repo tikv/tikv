@@ -372,7 +372,7 @@ impl<E: Engine> Scheduler<E> {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
-                error!("engine async_snapshot failed"; "err" => ?e);
+                info!("engine async_snapshot failed"; "err" => ?e);
                 self.finish_with_err(cid, e.into());
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();

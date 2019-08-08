@@ -46,7 +46,7 @@ impl Column {
         }
 
         if !ctx.cfg.flag.contains(Flag::PAD_CHAR_TO_FULL_LENGTH)
-            || self.field_type.tp() != FieldTypeTp::String
+            || self.field_type.as_accessor().tp() != FieldTypeTp::String
         {
             return row[self.offset].as_string();
         }
@@ -86,7 +86,7 @@ mod tests {
     use std::{str, u64};
 
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use tipb::expression::FieldType;
+    use tipb::FieldType;
 
     use crate::codec::mysql::{Decimal, Duration, Json, Time};
     use crate::codec::Datum;
