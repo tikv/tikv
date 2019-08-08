@@ -813,6 +813,7 @@ pub fn convert_int_as_time(ctx: &mut EvalContext, num: i64, fsp: i8) -> Result<T
 
 // port from part of TiDB's builtinCastDecimalAsTimeSig::evalTime
 pub fn convert_decimal_as_time(ctx: &mut EvalContext, dec: &Decimal, fsp: i8) -> Result<Time> {
+    // FIXME, this impl is not same as TiDB's impl
     let s = dec.to_string();
     Time::parse_datetime_from_float_string(s.as_str(), fsp, &ctx.cfg.tz)
 }
@@ -826,6 +827,9 @@ pub fn convert_duration_as_time(
     // TODO, there may be some difference between TiDB's and this one
     let now = Utc::now();
     let local = now.with_timezone(&ctx.cfg.tz);
+    let local = local.with_hour(0).unwrap();
+    let local = local.with_minute(0).unwrap();
+    let local = local.with_second(0).unwrap();
     let t = Time::new(local, tp, dur.fsp() as i8)?;
     match Time::checked_add(t, dur) {
         None => Err(Error::overflow("Time", "")),
@@ -1884,7 +1888,7 @@ mod tests {
         }
     }
 
-    // duration_as_time is hard to test, because its result depend on utc::now();
+    // duration_as_time is hard to test, because its result depend on the date of utc::now();
     //    #[test]
     //    fn test_convert_duration_as_time() {
     //        let fsp = mysql::MAX_FSP;
