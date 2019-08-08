@@ -5,7 +5,6 @@ use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
-use crate::pd::{RpcClient, INVALID_ID};
 use crate::raftstore::coprocessor::{Coprocessor, CoprocessorHost, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
 use futures::{Future, Sink, Stream};
@@ -15,6 +14,7 @@ use grpcio::{
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
 use kvproto::metapb::Region;
+use pd_client::{RpcClient, INVALID_ID};
 use raft::StateRole;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
@@ -270,7 +270,7 @@ impl Scheduler {
     }
 
     fn notify_scheduler(&self, task: Task) {
-        // Only when the deadlock detector is stopped, an error will return.
+        // Only when the deadlock detector is stopped, an error will be returned.
         // So there is no need to handle the error.
         if let Err(Stopped(task)) = self.0.schedule(task) {
             error!("failed to send task to deadlock_detector"; "task" => %task);
