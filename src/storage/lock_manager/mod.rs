@@ -16,9 +16,9 @@ pub use self::waiter_manager::{
     store_wait_table_is_empty, wait_table_is_empty, Scheduler as WaiterMgrScheduler,
     Task as WaiterTask, WaiterManager,
 };
-use crate::pd::Error as PdError;
 use futures::future::Future;
 use futures::Canceled;
+use pd_client::Error as PdError;
 use std::error;
 use std::result;
 

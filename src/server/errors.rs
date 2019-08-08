@@ -11,10 +11,10 @@ use hyper::Error as HttpError;
 use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
-use crate::pd::Error as PdError;
 use crate::raftstore::Error as RaftServerError;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::Error as StorageError;
+use pd_client::Error as PdError;
 use tikv_util::codec::Error as CodecError;
 use tikv_util::worker::ScheduleError;
 
