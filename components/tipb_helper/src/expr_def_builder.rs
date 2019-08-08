@@ -2,9 +2,9 @@
 
 use codec::prelude::NumberEncoder;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
-use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-/// A helper utility to build `tipb::expression::Expr` (a.k.a. expression definition) easily.
+/// A helper utility to build `tipb::Expr` (a.k.a. expression definition) easily.
 pub struct ExprDefBuilder(Expr);
 
 impl ExprDefBuilder {
