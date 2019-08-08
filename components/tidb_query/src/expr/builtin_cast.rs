@@ -44,8 +44,22 @@ impl ScalarFunc {
 
     // TODO
     pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val: Cow<Decimal> = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let val: Decimal = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
+        let val: Decimal = try_opt!(self.children[0].eval_decimal(ctx, row)).into_owned();
+        // TODO, this is not same as what TiDB does, TiDB return all err directly.
+        let val = match val.round(0, RoundMode::HalfEven) {
+            Res::Ok(v) => {
+                v
+            }
+            Res::Truncated(v) => {
+                ctx.handle_truncate(true)?;
+                v
+            }
+            Res::Overflow(v) => {
+                // FIXME, the err msg
+                ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
+                v
+            }
+        };
         let (overflow, res): (bool, Result<i64>) = if !self.is_unsigned() {
             let r: Result<i64> = <Decimal as ConvertTo<i64>>::convert(&val, ctx);
             (r.is_err() && r.err().unwrap().is_overflow(), r)
