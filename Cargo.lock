@@ -352,7 +352,7 @@ dependencies = [
 [[package]]
 name = "criterion"
 version = "0.2.11"
-source = "git+https://github.com/YangKeao/criterion.rs.git?branch=add_more_arguments#79b97751405f9403afd6924282effa987850bfd0"
+source = "git+https://github.com/YangKeao/criterion.rs.git?branch=add_more_arguments#30a758cdd59f869b97e0601308b2eb0dfb98cc3f"
 dependencies = [
  "atty 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "cast 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -379,7 +379,7 @@ dependencies = [
 [[package]]
 name = "criterion-plot"
 version = "0.3.1"
-source = "git+https://github.com/YangKeao/criterion.rs.git?branch=add_more_arguments#79b97751405f9403afd6924282effa987850bfd0"
+source = "git+https://github.com/YangKeao/criterion.rs.git?branch=add_more_arguments#30a758cdd59f869b97e0601308b2eb0dfb98cc3f"
 dependencies = [
  "byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "cast 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1885,7 +1885,7 @@ name = "rand_chacha"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "rand_core 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand_core 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc_version 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1933,7 +1933,7 @@ name = "rand_hc"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "rand_core 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand_core 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1989,7 +1989,7 @@ name = "rand_xorshift"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "rand_core 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand_core 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
