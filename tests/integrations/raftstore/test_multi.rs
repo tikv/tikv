@@ -532,11 +532,14 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 2)
-            .msg_type(MessageType::MsgHeartbeat)
-            .direction(Direction::Recv),
-    ));
+    cluster.add_send_filter(CloneFilterFactory(MessageCorruptFilter::new(
+        |m: &mut RaftMessage| {
+            let msg = m.mut_message();
+            if msg.get_msg_type() == MessageType::MsgHeartbeat && msg.get_to() == 2 {
+                msg.set_commit(0);
+            }
+        },
+    )));
 
     let (k, v) = (b"k", b"v");
     cluster.must_put(k, v);
