@@ -6,14 +6,12 @@ use protobuf::Message;
 
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::Context;
-use tipb::executor::{
-    Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN,
-};
-use tipb::expression::{ByItem, Expr, ExprType};
-use tipb::schema::ColumnInfo;
-use tipb::select::{Chunk, DAGRequest};
+use tipb::ColumnInfo;
+use tipb::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
+use tipb::{ByItem, Expr, ExprType};
+use tipb::{Chunk, DAGRequest};
 
-use tikv::coprocessor::codec::{datum, Datum};
+use tidb_query::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv_util::codec::number::NumberEncoder;
 

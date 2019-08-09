@@ -6,16 +6,16 @@ use std::sync::Arc;
 use criterion::black_box;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::TableScan;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::TableScan;
 
 use test_coprocessor::*;
-use tikv::coprocessor::dag::batch::executors::BatchTableScanExecutor;
-use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::executor::Executor;
-use tikv::coprocessor::dag::executor::TableScanExecutor;
-use tikv::coprocessor::dag::expr::EvalConfig;
-use tikv::coprocessor::dag::storage_impl::TiKVStorage;
+use tidb_query::batch::executors::BatchTableScanExecutor;
+use tidb_query::batch::interface::*;
+use tidb_query::executor::Executor;
+use tidb_query::executor::TableScanExecutor;
+use tidb_query::expr::EvalConfig;
+use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
 

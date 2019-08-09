@@ -7,20 +7,20 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
 
-use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
 use test_coprocessor::*;
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::collections::HashMap;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
-use tikv::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tikv::coprocessor::codec::data_type::Decimal;
-use tikv::coprocessor::codec::datum::{Datum, DatumEncoder};
-use tikv::coprocessor::codec::table::RowColsDict;
-use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::executor::{Executor, Row};
-use tikv::coprocessor::dag::expr::EvalWarnings;
-use tikv::coprocessor::dag::storage::IntervalRange;
+use tidb_query::batch::interface::*;
+use tidb_query::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use tidb_query::codec::data_type::Decimal;
+use tidb_query::codec::datum::{Datum, DatumEncoder};
+use tidb_query::codec::table::RowColsDict;
+use tidb_query::executor::{Executor, Row};
+use tidb_query::expr::EvalWarnings;
+use tidb_query::storage::IntervalRange;
 use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;
@@ -278,6 +278,7 @@ impl FixtureBuilder {
             .map(|(index, ft)| {
                 let mut ci = ColumnInfo::default();
                 ci.set_column_id(index as i64);
+                let ft = ft.as_accessor();
                 ci.as_mut_accessor()
                     .set_tp(ft.tp())
                     .set_flag(ft.flag())
@@ -371,7 +372,7 @@ impl Executor for NormalFixtureExecutor {
     type StorageStats = Statistics;
 
     #[inline]
-    fn next(&mut self) -> tikv::coprocessor::Result<Option<Row>> {
+    fn next(&mut self) -> tidb_query::Result<Option<Row>> {
         Ok(self.rows.next())
     }
 

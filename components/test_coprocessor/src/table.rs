@@ -5,10 +5,9 @@ use super::*;
 use std::collections::BTreeMap;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::schema::{self, ColumnInfo};
+use tipb::{self, ColumnInfo};
 
-use tikv::coprocessor;
-use tikv::coprocessor::codec::table;
+use tidb_query::codec::table;
 use tikv_util::codec::number::NumberEncoder;
 
 #[derive(Clone)]
@@ -39,9 +38,9 @@ impl Table {
         idx.map(|idx| &self.columns[*idx].1)
     }
 
-    /// Create `schema::TableInfo` from current table.
-    pub fn table_info(&self) -> schema::TableInfo {
-        let mut info = schema::TableInfo::default();
+    /// Create `tipb::TableInfo` from current table.
+    pub fn table_info(&self) -> tipb::TableInfo {
+        let mut info = tipb::TableInfo::default();
         info.set_table_id(self.id);
         info.set_columns(self.columns_info().into());
         info
@@ -55,9 +54,9 @@ impl Table {
             .collect()
     }
 
-    /// Create `schema::IndexInfo` from current table.
-    pub fn index_info(&self, index: i64, store_handle: bool) -> schema::IndexInfo {
-        let mut idx_info = schema::IndexInfo::default();
+    /// Create `tipb::IndexInfo` from current table.
+    pub fn index_info(&self, index: i64, store_handle: bool) -> tipb::IndexInfo {
+        let mut idx_info = tipb::IndexInfo::default();
         idx_info.set_table_id(self.id);
         idx_info.set_index_id(index);
         let mut has_pk = false;
@@ -94,7 +93,7 @@ impl Table {
     pub fn get_record_range_one(&self, handle_id: i64) -> KeyRange {
         let start_key = table::encode_row_key(self.id, handle_id);
         let mut end_key = start_key.clone();
-        coprocessor::util::convert_to_prefix_next(&mut end_key);
+        tidb_query::util::convert_to_prefix_next(&mut end_key);
         let mut range = KeyRange::default();
         range.set_start(start_key);
         range.set_end(end_key);

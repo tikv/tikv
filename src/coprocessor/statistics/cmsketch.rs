@@ -2,7 +2,7 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
-use tipb::analyze;
+use tipb;
 
 /// `CMSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
@@ -50,9 +50,9 @@ impl CMSketch {
         }
     }
 
-    pub fn into_proto(self) -> analyze::CMSketch {
-        let mut proto = analyze::CMSketch::default();
-        let mut rows = vec![analyze::CMSketchRow::default(); self.depth];
+    pub fn into_proto(self) -> tipb::CMSketch {
+        let mut proto = tipb::CMSketch::default();
+        let mut rows = vec![tipb::CMSketchRow::default(); self.depth];
         for (i, row) in self.table.iter().enumerate() {
             rows[i].set_counters(row.to_vec());
         }
@@ -64,15 +64,18 @@ impl CMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::datum;
-    use crate::coprocessor::codec::datum::Datum;
+
+    use std::cmp::min;
+
     use rand::distributions::Distribution;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
-    use std::cmp::min;
+    use zipf::ZipfDistribution;
+
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
     use tikv_util::as_slice;
     use tikv_util::collections::HashMap;
-    use zipf::ZipfDistribution;
 
     impl CMSketch {
         fn query(&self, bytes: &[u8]) -> u32 {

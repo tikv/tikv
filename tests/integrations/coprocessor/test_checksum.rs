@@ -7,12 +7,12 @@ use crc::crc64::{self, Digest, Hasher64};
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
-use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
+use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
 use test_coprocessor::*;
-use tikv::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tikv::coprocessor::dag::storage::Range;
-use tikv::coprocessor::dag::storage_impl::TiKVStorage;
+use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query::storage::Range;
+use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
 

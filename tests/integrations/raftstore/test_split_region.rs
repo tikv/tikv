@@ -12,8 +12,8 @@ use raft::eraftpb::MessageType;
 
 use engine::Iterable;
 use engine::CF_WRITE;
+use pd_client::PdClient;
 use test_raftstore::*;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
 use tikv::raftstore::Result;
@@ -122,7 +122,7 @@ fn test_server_split_region_twice() {
         let mut resp = write_resp.response;
         let admin_resp = resp.mut_admin_response();
         let split_resp = admin_resp.mut_splits();
-        let mut regions = split_resp.take_regions().into_vec();
+        let mut regions: Vec<_> = split_resp.take_regions().into();
         let mut d = regions.drain(..);
         let (left, right) = (d.next().unwrap(), d.next().unwrap());
         assert_eq!(left.get_end_key(), key.as_slice());

@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::expression::Expr;
+use tipb::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchSimpleAggregationExecutor;
-use tikv::coprocessor::dag::batch::interface::BatchExecutor;
-use tikv::coprocessor::dag::executor::{Executor, StreamAggExecutor};
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_query::batch::executors::BatchSimpleAggregationExecutor;
+use tidb_query::batch::interface::BatchExecutor;
+use tidb_query::executor::{Executor, StreamAggExecutor};
+use tidb_query::expr::EvalConfig;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

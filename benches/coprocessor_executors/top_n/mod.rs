@@ -2,8 +2,8 @@
 
 mod util;
 
-use cop_datatype::FieldTypeTp;
-use tipb::expression::ScalarFuncSig;
+use tidb_query_datatype::FieldTypeTp;
+use tipb::ScalarFuncSig;
 use tipb_helper::ExprDefBuilder;
 
 use crate::util::{BenchCase, FixtureBuilder};

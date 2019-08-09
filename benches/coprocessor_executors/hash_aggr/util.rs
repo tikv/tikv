@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::executor::Aggregation;
-use tipb::expression::Expr;
+use tipb::Aggregation;
+use tipb::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchFastHashAggregationExecutor;
-use tikv::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
-use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::executor::{Executor, HashAggExecutor};
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_query::batch::executors::BatchFastHashAggregationExecutor;
+use tidb_query::batch::executors::BatchSlowHashAggregationExecutor;
+use tidb_query::batch::interface::*;
+use tidb_query::executor::{Executor, HashAggExecutor};
+use tidb_query::expr::EvalConfig;
 use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;

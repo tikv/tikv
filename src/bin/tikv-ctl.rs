@@ -33,10 +33,10 @@ use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
+use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::binutil as util;
 use tikv::config::TiKvConfig;
-use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::Key;
@@ -304,10 +304,9 @@ trait DebugExecutor {
         v1!("db2 apply state: {:?}", r2.raft_apply_state);
 
         match (r1.region_local_state, r2.region_local_state) {
-            (None, None) => return,
+            (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
                 v1!("db1 and db2 don't have same region local_state");
-                return;
             }
             (Some(region_local_1), Some(region_local_2)) => {
                 let region1 = region_local_1.get_region();

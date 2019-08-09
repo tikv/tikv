@@ -2,8 +2,8 @@
 
 mod util;
 
-use cop_datatype::FieldTypeTp;
-use tipb::expression::ExprType;
+use tidb_query_datatype::FieldTypeTp;
+use tipb::ExprType;
 use tipb_helper::ExprDefBuilder;
 
 use crate::util::{BenchCase, FixtureBuilder};
