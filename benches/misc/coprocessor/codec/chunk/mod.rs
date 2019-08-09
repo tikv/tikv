@@ -5,7 +5,7 @@ mod arrow;
 use test::Bencher;
 
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use tidb_query::codec::chunk::{Chunk, ChunkEncoder};
 use tidb_query::codec::datum::Datum;

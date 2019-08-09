@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::usize;
 use std::vec::IntoIter;
 
-use tipb::executor::TopN;
-use tipb::expression::ByItem;
+use tipb::ByItem;
+use tipb::TopN;
 
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExprColumnRefVisitor, Row};
@@ -56,7 +56,7 @@ pub struct TopNExecutor<Src: Executor> {
 
 impl<Src: Executor> TopNExecutor<Src> {
     pub fn new(mut meta: TopN, eval_cfg: Arc<EvalConfig>, src: Src) -> Result<Self> {
-        let order_by = meta.take_order_by().into_vec();
+        let order_by: Vec<_> = meta.take_order_by().into();
 
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         for by_item in &order_by {
@@ -155,7 +155,7 @@ pub mod tests {
     use tidb_query_datatype::FieldTypeTp;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::collections::HashMap;
-    use tipb::expression::{Expr, ExprType};
+    use tipb::{Expr, ExprType};
 
     use crate::codec::table::RowColsDict;
     use crate::codec::Datum;

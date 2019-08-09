@@ -125,6 +125,7 @@ tikv_util = { path = "components/tikv_util" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
+pd_client = { path = "components/pd_client" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -187,11 +188,12 @@ members = [
   "components/tidb_query",
   "components/tidb_query_datatype",
   "components/tidb_query_codegen",
+  "components/pd_client",
 ]
 
 [profile.dev]
 opt-level = 0
-debug = false
+debug = 1 # required for line numbers in tests, see tikv #5049
 codegen-units = 4
 lto = false
 incremental = true

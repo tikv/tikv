@@ -93,7 +93,7 @@
 use std::convert::TryFrom;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::expression::{Expr, FieldType};
+use tipb::{Expr, FieldType};
 
 use super::RpnStackNode;
 use crate::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};
@@ -291,7 +291,7 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
 
 /// Validates whether the return type of an expression node meets expectation.
 pub fn validate_expr_return_type(expr: &Expr, et: EvalType) -> Result<()> {
-    let received_et = box_try!(EvalType::try_from(expr.get_field_type().tp()));
+    let received_et = box_try!(EvalType::try_from(expr.get_field_type().as_accessor().tp()));
     if et == received_et {
         Ok(())
     } else {

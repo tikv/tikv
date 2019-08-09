@@ -7,7 +7,7 @@ pub use self::storage_impl::TiKVStorage;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query::storage::IntervalRange;
-use tipb::select::{DAGRequest, SelectResponse, StreamResponse};
+use tipb::{DAGRequest, SelectResponse, StreamResponse};
 
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::{Deadline, RequestHandler, Result};

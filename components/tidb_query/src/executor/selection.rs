@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tipb::executor::Selection;
+use tipb::Selection;
 
 use super::{Executor, ExprColumnRefVisitor, Row};
 use crate::execute_stats::ExecuteStats;
@@ -20,7 +20,7 @@ pub struct SelectionExecutor<Src: Executor> {
 
 impl<Src: Executor> SelectionExecutor<Src> {
     pub fn new(mut meta: Selection, eval_cfg: Arc<EvalConfig>, src: Src) -> Result<Self> {
-        let conditions = meta.take_conditions().into_vec();
+        let conditions: Vec<_> = meta.take_conditions().into();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
         let ctx = EvalContext::new(eval_cfg);
@@ -88,7 +88,7 @@ mod tests {
 
     use tidb_query_datatype::FieldTypeTp;
     use tikv_util::codec::number::NumberEncoder;
-    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
+    use tipb::{Expr, ExprType, ScalarFuncSig};
 
     use super::super::tests::*;
     use super::*;

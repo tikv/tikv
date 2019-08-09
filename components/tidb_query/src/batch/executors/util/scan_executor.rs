@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor::KeyRange;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
 use crate::batch::interface::*;
 use crate::codec::batch::LazyBatchColumnVec;
@@ -145,7 +145,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
 
     for column in columns_info {
         if column.has_pk_handle() {
-            box_try!(EvalType::try_from(column.tp()));
+            box_try!(EvalType::try_from(column.as_accessor().tp()));
         }
     }
     Ok(())

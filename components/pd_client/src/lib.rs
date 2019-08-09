@@ -1,16 +1,33 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+extern crate futures;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate quick_error;
+#[macro_use]
+extern crate serde_derive;
+#[macro_use(slog_error, slog_warn, slog_info, slog_debug)]
+extern crate slog;
+#[macro_use]
+extern crate slog_global;
+extern crate hex;
+extern crate kvproto;
+
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+#[macro_use]
+extern crate tikv_util;
+
 mod client;
-mod metrics;
+pub mod metrics;
 mod util;
 
 mod config;
 pub mod errors;
-pub mod pd;
 pub use self::client::RpcClient;
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
-pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 

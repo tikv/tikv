@@ -10,8 +10,8 @@ use rand_xorshift::XorShiftRng;
 use test_coprocessor::*;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::collections::HashMap;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
 use tidb_query::batch::interface::*;
 use tidb_query::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
@@ -278,6 +278,7 @@ impl FixtureBuilder {
             .map(|(index, ft)| {
                 let mut ci = ColumnInfo::default();
                 ci.set_column_id(index as i64);
+                let ft = ft.as_accessor();
                 ci.as_mut_accessor()
                     .set_tp(ft.tp())
                     .set_flag(ft.flag())

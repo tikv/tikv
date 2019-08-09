@@ -4,7 +4,7 @@
 
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::codec::{bytes, number};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use super::data_type::*;
 use crate::codec::datum;
@@ -75,7 +75,7 @@ fn decode_date_time_from_uint(v: u64, time_zone: &Tz, field_type: &FieldType) ->
     use std::convert::TryInto;
 
     let fsp = field_type.decimal() as i8;
-    let time_type = field_type.tp().try_into()?;
+    let time_type = field_type.as_accessor().tp().try_into()?;
     DateTime::from_packed_u64(v, time_type, fsp, time_zone)
 }
 
@@ -114,7 +114,7 @@ pub fn decode_real_datum(mut raw_datum: &[u8], field_type: &FieldType) -> Result
         // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
         datum::FLOAT_FLAG => {
             let mut v = decode_float(&mut raw_datum)?;
-            if field_type.tp() == FieldTypeTp::Float {
+            if field_type.as_accessor().tp() == FieldTypeTp::Float {
                 v = (v as f32) as f64;
             }
             Ok(Real::new(v).ok()) // NaN to None

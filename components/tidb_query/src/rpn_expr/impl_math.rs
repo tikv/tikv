@@ -10,7 +10,7 @@ fn abs_int(arg: &Option<Int>) -> Result<Option<Int>> {
     match arg {
         None => Ok(None),
         Some(arg) => match (*arg).checked_abs() {
-            None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)))?,
+            None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
             Some(arg_abs) => Ok(Some(arg_abs)),
         },
     }
@@ -47,7 +47,7 @@ fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
 mod tests {
     use super::*;
 
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 

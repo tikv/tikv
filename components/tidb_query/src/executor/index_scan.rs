@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::IndexScan;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::IndexScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::codec::table;
@@ -47,7 +47,11 @@ impl InnerExecutor for IndexInnerExecutor {
         };
 
         if let Some(ref pk_col) = self.pk_col {
-            let handle_datum = if pk_col.flag().contains(FieldTypeFlag::UNSIGNED) {
+            let handle_datum = if pk_col
+                .as_accessor()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED)
+            {
                 // PK column is unsigned
                 datum::Datum::U64(handle as u64)
             } else {
@@ -114,7 +118,7 @@ pub mod tests {
     use std::i64;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::schema::ColumnInfo;
+    use tipb::ColumnInfo;
 
     use super::super::tests::*;
     use super::super::Executor;

@@ -5,7 +5,7 @@ use std::convert::TryFrom;
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::Tz;
@@ -65,7 +65,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         out_schema.push(aggr_def.take_field_type());
 
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let eval_type = EvalType::try_from(child.get_field_type().tp()).unwrap();
+        let eval_type = EvalType::try_from(child.get_field_type().as_accessor().tp()).unwrap();
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
@@ -310,14 +310,14 @@ mod tests {
             .parse(max, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 1);
-        assert_eq!(schema[0].tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 1);
 
         let min_fn = min_parser
             .parse(min, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 2);
-        assert_eq!(schema[1].tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[1].as_accessor().tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 2);
 
         let mut ctx = EvalContext::default();

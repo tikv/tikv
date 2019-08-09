@@ -26,8 +26,8 @@ use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
 use tikv_util::codec::number;
 use tikv_util::collections::HashSet;
-use tipb::expression::{Expr, ExprType};
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::{Expr, ExprType};
 
 use crate::codec::datum::{self, Datum, DatumEncoder};
 use crate::codec::table::{self, RowColsDict};
@@ -157,7 +157,7 @@ impl OriginCols {
             let col_id = col.get_column_id();
             let value = match self.data.get(col_id) {
                 None if col.has_default_val() => col.get_default_val().to_vec(),
-                None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
+                None if col.as_accessor().flag().contains(FieldTypeFlag::NOT_NULL) => {
                     return Err(other_err!(
                         "column {} of {} is missing",
                         col_id,
@@ -187,7 +187,7 @@ impl OriginCols {
                 None if col.has_default_val() => {
                     values.extend_from_slice(col.get_default_val());
                 }
-                None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
+                None if col.as_accessor().flag().contains(FieldTypeFlag::NOT_NULL) => {
                     return Err(other_err!(
                         "column {} of {} is missing",
                         col_id,
@@ -228,7 +228,7 @@ impl OriginCols {
                             col
                         ))
                     }
-                    None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
+                    None if col.as_accessor().flag().contains(FieldTypeFlag::NOT_NULL) => {
                         return Err(other_err!(
                             "column {} of {} is missing",
                             col_id,
@@ -358,9 +358,9 @@ pub mod tests {
     use std::collections::HashMap;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tikv_util::codec::number::NumberEncoder;
-    use tipb::executor::TableScan;
-    use tipb::expression::{Expr, ExprType};
-    use tipb::schema::ColumnInfo;
+    use tipb::ColumnInfo;
+    use tipb::TableScan;
+    use tipb::{Expr, ExprType};
 
     pub fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
         let mut expr = Expr::default();

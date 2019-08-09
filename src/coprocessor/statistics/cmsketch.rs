@@ -2,7 +2,7 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
-use tipb::analyze;
+use tipb;
 
 /// `CMSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
@@ -50,9 +50,9 @@ impl CMSketch {
         }
     }
 
-    pub fn into_proto(self) -> analyze::CMSketch {
-        let mut proto = analyze::CMSketch::default();
-        let mut rows = vec![analyze::CMSketchRow::default(); self.depth];
+    pub fn into_proto(self) -> tipb::CMSketch {
+        let mut proto = tipb::CMSketch::default();
+        let mut rows = vec![tipb::CMSketchRow::default(); self.depth];
         for (i, row) in self.table.iter().enumerate() {
             rows[i].set_counters(row.to_vec());
         }
