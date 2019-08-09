@@ -840,6 +840,7 @@ pub fn convert_duration_as_time(
 // port from part of TiDB's builtinCastRealAsTimeSig::evalTime
 pub fn convert_float_as_time(ctx: &mut EvalContext, num: f64, fsp: i8) -> Result<Time> {
     let fs = format!("{}", num);
+    // FIXME, parse_datetime_from_float_string may not same as TiDB's types/time.go::ParseTime
     Time::parse_datetime_from_float_string(fs.as_str(), fsp, &ctx.cfg.tz)
 }
 
@@ -849,6 +850,7 @@ pub fn convert_real_as_time(ctx: &mut EvalContext, num: Real, fsp: i8) -> Result
 
 // port from part of TiDB's builtinCastStringAsTimeSig::evalTime
 pub fn convert_str_as_time(ctx: &mut EvalContext, time: &str, fsp: i8) -> Result<Time> {
+    // FIXME, parse_datetime_from_float_string may not same as TiDB's types/time.go::ParseTime
     Time::parse_datetime(time, fsp, &ctx.cfg.tz)
 }
 
