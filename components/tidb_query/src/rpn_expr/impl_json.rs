@@ -89,7 +89,7 @@ mod tests {
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
-                .evaluate(ScalarFuncSig::JsonTypeSig)
+                .evaluate(ScalarFuncSig::JsonUnquoteSig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
