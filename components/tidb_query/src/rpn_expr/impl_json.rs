@@ -20,7 +20,7 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
     match arg {
         None => Ok(None),
         Some(json_arg) => match json_arg.unquote() {
-            Err(e) => Err(e)?,
+            Err(e) => Err(e.into()),
             Ok(v) => Ok(Some(Bytes::from(v))),
         },
     }
