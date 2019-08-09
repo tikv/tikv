@@ -4451,7 +4451,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git?branch=release-3.1#e3fa30d76f02de374b00dcb3f6288a4fccb9e0ca"
+source = "git+https://github.com/pingcap/tipb.git?branch=release-3.1#cc8b75c5338321c30389273dd32874e525f8c7ee"
 dependencies = [
  "protobuf",
 ]
