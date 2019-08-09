@@ -766,7 +766,9 @@ fn exp_float_str_to_int_str<'a>(
     if int_cnt <= digits.len() {
         let int_str = String::from_utf8_lossy(&digits[..int_cnt]);
         if int_cnt < digits.len() {
-            Ok(Cow::Owned(round_int_str(digits[int_cnt] as char, &int_str).into_owned()))
+            Ok(Cow::Owned(
+                round_int_str(digits[int_cnt] as char, &int_str).into_owned(),
+            ))
         } else {
             Ok(Cow::Owned(int_str.into_owned()))
         }
