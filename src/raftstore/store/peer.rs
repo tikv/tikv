@@ -387,7 +387,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = RawNode::new(&raft_cfg, ps)?;
+        let raft_group = RawNode::with_logger(&raft_cfg, ps, &slog_global::get_global())?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
