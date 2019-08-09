@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tikv_util::collections::HashSet;
-use tipb::executor::TableScan;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::TableScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::codec::table;
@@ -75,7 +75,7 @@ mod tests {
     use std::i64;
 
     use kvproto::coprocessor::KeyRange;
-    use tipb::{executor::TableScan, schema::ColumnInfo};
+    use tipb::{ColumnInfo, TableScan};
 
     use super::super::tests::*;
     use super::super::Executor;

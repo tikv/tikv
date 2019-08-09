@@ -6,8 +6,7 @@ use std::ptr::NonNull;
 
 use servo_arc::Arc;
 
-use tipb::executor::TopN;
-use tipb::expression::{Expr, FieldType};
+use tipb::{Expr, FieldType, TopN};
 
 use crate::batch::executors::util::*;
 use crate::batch::interface::*;

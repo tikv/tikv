@@ -3,7 +3,7 @@
 use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::builder::FieldTypeBuilder;
 use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::Tz;

@@ -9,8 +9,7 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query::codec::datum;
 use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
-use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use tipb::executor::TableScan;
+use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
@@ -55,11 +54,11 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let (collectors, pk_builder) = builder.collect_columns_stats()?;
 
         let pk_hist = pk_builder.into_proto();
-        let cols: Vec<analyze::SampleCollector> =
+        let cols: Vec<tipb::SampleCollector> =
             collectors.into_iter().map(|col| col.into_proto()).collect();
 
         let res_data = {
-            let mut res = analyze::AnalyzeColumnsResp::default();
+            let mut res = tipb::AnalyzeColumnsResp::default();
             res.set_collectors(cols.into());
             res.set_pk_hist(pk_hist);
             box_try!(res.write_to_bytes())
@@ -88,7 +87,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
         }
-        let mut res = analyze::AnalyzeIndexResp::default();
+        let mut res = tipb::AnalyzeIndexResp::default();
         res.set_hist(hist.into_proto());
         if let Some(c) = cms {
             res.set_cms(c.into_proto());
@@ -254,8 +253,8 @@ impl SampleCollector {
         }
     }
 
-    fn into_proto(self) -> analyze::SampleCollector {
-        let mut s = analyze::SampleCollector::default();
+    fn into_proto(self) -> tipb::SampleCollector {
+        let mut s = tipb::SampleCollector::default();
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
         s.set_fm_sketch(self.fm_sketch.into_proto());

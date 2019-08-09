@@ -295,7 +295,7 @@ mod tests {
     use std::{f64, i64, u64};
 
     use tidb_query_datatype::FieldTypeFlag;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::codec::error::ERR_DIVISION_BY_ZERO;
     use crate::codec::mysql::Decimal;

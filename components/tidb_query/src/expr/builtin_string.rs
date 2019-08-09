@@ -1063,7 +1063,7 @@ mod tests {
     use crate::codec::mysql::charset::CHARSET_BIN;
     use std::{f64, i64};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
-    use tipb::expression::{Expr, ScalarFuncSig};
+    use tipb::{Expr, ScalarFuncSig};
 
     use crate::codec::Datum;
     use crate::expr::tests::{
