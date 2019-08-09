@@ -147,7 +147,6 @@ fn cast_uint_as_decimal(
             let dec = if in_union(extra.implicit_args) && *val < 0 {
                 Decimal::zero()
             } else {
-                // TODO, TiDB use ConvertIntToUint, but I think it is a bug
                 Decimal::from(*val as u64)
             };
             Ok(Some(produce_dec_with_specified_tp(
@@ -221,7 +220,6 @@ fn cast_uint_as_real(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Op
             if in_union(extra.implicit_args) && *val < 0 {
                 return Ok(Some(Real::new(0f64).unwrap()));
             }
-            // TODO, TiDB use ConvertIntToUint here, but I think it is a bug
             let val = *val as u64;
             Ok(Real::new(val as f64).ok())
         }
@@ -239,7 +237,6 @@ fn cast_uint_as_string(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO, tidb use ConvertIntToUint here, I think it is a bug.
             let p = (*val as u64).to_string().into_bytes();
             let res = produce_str_with_specified_tp(
                 ctx,
