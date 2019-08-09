@@ -275,13 +275,13 @@ impl Snapshot for RocksSnapshot {
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
-        let v = box_try!(self.get_value(key.as_encoded()));
+        let v = self.get_value(key.as_encoded())?;
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        let v = self.get_value_cf(cf, key.as_encoded())?;
         Ok(v.map(|v| v.to_vec()))
     }
 
