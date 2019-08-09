@@ -170,7 +170,10 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     /// larger than the given value before FSM is released.
     pub fn release(&mut self, index: usize, checked_len: usize) -> bool {
         let mut fsm = self.normals.swap_remove(index);
-        self.normals_leader[index] = self.normals[index].is_leader();
+        if index > self.normals.len() {
+            self.normals_leader[index] = self.normals[index].is_leader();
+        }
+
         let mailbox = fsm.take_mailbox().unwrap();
         mailbox.release(fsm);
         if mailbox.len() != checked_len {
@@ -193,7 +196,10 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     /// the function will return false to let caller to keep polling.
     pub fn remove(&mut self, index: usize) -> bool {
         let mut fsm = self.normals.swap_remove(index);
-        self.normals_leader[index] = self.normals[index].is_leader();
+        if index < self.normals.len() {
+            self.normals_leader[index] = self.normals[index].is_leader();
+        }
+
         let mailbox = fsm.take_mailbox().unwrap();
         if mailbox.is_empty() {
             mailbox.release(fsm);
@@ -311,7 +317,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             while pushed && batch.len() < max_size {
                 let fsm = match receiver.try_recv() {
                     Ok(fsm) => fsm,
-                    Err(TryRecvError::Empty) => continue,
+                    Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => unreachable!(),
                 };
                 pushed = batch.push(fsm);
