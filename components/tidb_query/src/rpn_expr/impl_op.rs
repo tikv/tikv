@@ -78,7 +78,7 @@ fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::codec::mysql::{time, Tz};
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
@@ -135,7 +135,7 @@ mod tests {
         for (arg, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::UnaryNot)
+                .evaluate(ScalarFuncSig::UnaryNotInt)
                 .unwrap();
             assert_eq!(output, expect_output);
         }

@@ -172,7 +172,7 @@ mod tests {
     use crate::expr::tests::{datum_expr, eval_func, scalar_func_expr};
     use crate::expr::{EvalContext, Expression};
     use hex;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     #[test]
     fn test_md5() {

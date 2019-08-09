@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::executor::Limit;
+use tipb::Limit;
 
 use crate::execute_stats::ExecuteStats;
 use crate::executor::{Executor, Row};
