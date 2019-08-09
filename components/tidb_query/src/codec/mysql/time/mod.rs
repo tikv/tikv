@@ -1822,7 +1822,7 @@ mod tests {
         let t = t.with_minute(minute as u32).unwrap();
         let t = t.with_second(second as u32).unwrap();
         let t = t.with_timezone(tz);
-        let t = t.with_nanosecond(x as u32).unwrap();
+        let t = t.with_nanosecond(nano as u32).unwrap();
         Time::new(t, time_type, fsp).unwrap()
     }
 
