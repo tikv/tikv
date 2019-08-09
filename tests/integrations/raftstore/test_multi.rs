@@ -352,7 +352,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     ));
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
-    cluster.add_send_filter(CloneFilterFactory(MessageCorruptFilter::new(
+    cluster.add_send_filter(CloneFilterFactory(MessageCorruptFilter(
         |m: &mut RaftMessage| {
             let msg = m.mut_message();
             if msg.get_msg_type() == MessageType::MsgHeartbeat && msg.get_to() == 2 {
@@ -532,7 +532,7 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
-    cluster.add_send_filter(CloneFilterFactory(MessageCorruptFilter::new(
+    cluster.add_send_filter(CloneFilterFactory(MessageCorruptFilter(
         |m: &mut RaftMessage| {
             let msg = m.mut_message();
             if msg.get_msg_type() == MessageType::MsgHeartbeat && msg.get_to() == 2 {

@@ -755,20 +755,15 @@ impl Filter for DropMessageFilter {
 }
 
 #[derive(Clone)]
-pub struct MessageCorruptFilter<F: Fn(&mut RaftMessage) + Clone> {
-    f: F,
-}
+pub struct MessageCorruptFilter<F: Fn(&mut RaftMessage) + Clone>(pub F);
 
-impl<F: Fn(&mut RaftMessage) + Clone> MessageCorruptFilter<F> {
-    pub fn new(f: F) -> Self {
-        MessageCorruptFilter { f }
-    }
-}
-
-impl<F: Fn(&mut RaftMessage) + Clone + Send + Sync> Filter for MessageCorruptFilter<F> {
+impl<F> Filter for MessageCorruptFilter<F>
+where
+    F: Fn(&mut RaftMessage) + Clone + Send + Sync,
+{
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         for msg in msgs {
-            (self.f)(msg);
+            (self.0)(msg);
         }
         Ok(())
     }
