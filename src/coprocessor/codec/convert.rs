@@ -701,12 +701,10 @@ fn float_str_to_int_string<'a>(
         }
     }
 
-    if dot_idx.is_none() && e_idx.is_none() {
-        Ok(Cow::Borrowed(valid_float))
-    } else if e_idx.is_none() {
-        no_exp_float_str_to_int_str(valid_float, dot_idx.unwrap())
-    } else {
-        exp_float_str_to_int_str(ctx, valid_float, e_idx.unwrap(), dot_idx)
+    match (dot_idx, e_idx) {
+        (None, None) => Ok(Cow::Borrowed(valid_float)),
+        (Some(di), None) => no_exp_float_str_to_int_str(valid_float, dot_idx.unwrap()),
+        (_, Some(ei)) => exp_float_str_to_int_str(ctx, valid_float, e_idx.unwrap(), dot_idx),
     }
 }
 
@@ -716,7 +714,7 @@ fn exp_float_str_to_int_str<'a>(
     e_idx: usize,
     dot_idx: Option<usize>,
 ) -> Result<Cow<'a, str>> {
-    // intCnt and digits contain the prefix `+/-` if validFloat[0] is `+/-`
+    // int_cnt and digits contain the prefix `+/-` if valid_float[0] is `+/-`
     let mut digits: Vec<u8> = Vec::with_capacity(valid_float.len());
     let int_cnt: i64;
     match dot_idx {
@@ -728,10 +726,10 @@ fn exp_float_str_to_int_str<'a>(
             // so cast it to i64 is safe.
             int_cnt = digits.len() as i64;
         }
-        Some(dog_idx) => {
-            digits.extend_from_slice(&valid_float[..dog_idx].as_bytes());
+        Some(dot_idx) => {
+            digits.extend_from_slice(&valid_float[..dot_idx].as_bytes());
             int_cnt = digits.len() as i64;
-            digits.extend_from_slice(&valid_float[((dog_idx + 1)..e_idx)].as_bytes());
+            digits.extend_from_slice(&valid_float[((dot_idx + 1)..e_idx)].as_bytes());
         }
     }
     // make `digits` immutable
@@ -756,13 +754,12 @@ fn exp_float_str_to_int_str<'a>(
         }
     }
     if int_cnt == 1 && (digits[0] == b'-' || digits[0] == b'+') {
-        let int_str = if digits[0] == b'+' {
-            "+0"
-        } else if digits[0] == b'-' {
-            "-0"
-        } else {
-            "0"
+        let int_str = match digits[0] {
+            b'+' => "+0",
+            b'-' => "-0",
+            _ => "0",
         };
+
         let res = if digits.len() > 1 {
             round_int_str(digits[1] as char, int_str)
         } else {
@@ -779,18 +776,16 @@ fn exp_float_str_to_int_str<'a>(
     if int_cnt <= digits.len() {
         let int_str = String::from_utf8_lossy(&digits[..int_cnt]);
         if int_cnt < digits.len() {
-            Ok(Cow::Owned(
-                round_int_str(digits[int_cnt] as char, &int_str).into_owned(),
-            ))
+            Ok(round_int_str(digits[int_cnt] as char, &int_str))
         } else {
-            Ok(Cow::Owned((*int_str).to_owned()))
+            Ok(int_str)
         }
     } else {
         let mut res = String::with_capacity(int_cnt);
         for d in digits.iter() {
             res.push(*d as char);
         }
-        for _ in digits.len()..(int_cnt) {
+        for _ in digits.len()..int_cnt {
             res.push('0');
         }
         Ok(Cow::Owned(res))
@@ -836,9 +831,9 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<
     // so we need to remove `-` of `-0`.
     let res_bytes = res.as_bytes();
     if res_bytes == b"-0" {
-        Ok(Cow::Owned(String::from(&res[1..])))
+        Ok(Cow::Borrowed(&res[1..]))
     } else {
-        Ok(res.to_owned())
+        Ok(res)
     }
 }
 
