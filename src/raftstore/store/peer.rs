@@ -380,7 +380,7 @@ impl Peer {
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
-            check_quorum: true,
+            check_quorum: true, // It's required by some transfer-leader checks.
             tag: tag.clone(),
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
@@ -1847,6 +1847,13 @@ impl Peer {
 
         if !progress.voter_ids().contains(&peer_id) {
             return false;
+        }
+
+        match progress.get(peer_id) {
+            // After the target store is reported as unreachable,
+            // the state will become ProgressState::Probe.
+            Some(pr) if pr.recent_active && pr.state == ProgressState::Replicate => {}
+            _ => return false,
         }
 
         for (_, progress) in progress.voters() {

@@ -70,6 +70,7 @@ impl Conn {
         let rx1 = Arc::new(Mutex::new(rx));
         let rx2 = Arc::clone(&rx1);
 
+        let addr1 = addr.to_owned();
         let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
         let batch_send_or_fallback = batch_sink
             .send_all(Reusable(rx1).map(move |v| {
@@ -81,7 +82,7 @@ impl Conn {
                 drop(batch_receiver);
                 match r {
                     Ok(_) => {
-                        info!("batch_raft RPC finished success");
+                        info!("batch_raft RPC finished success"; "to_addr" => &addr1);
                         Box::new(future::ok(()))
                             as Box<dyn Future<Item = (), Error = GrpcError> + Send>
                     }
@@ -89,7 +90,7 @@ impl Conn {
                         if status == GRPC_STATUS_UNIMPLEMENTED =>
                     {
                         // Fallback to raft RPC.
-                        warn!("batch_raft fail, fallback to raft");
+                        warn!("batch_raft fail, fallback to raft"; "to_addr" => &addr1);
                         let (sink, receiver) = client2.raft().unwrap();
                         let msgs = Reusable(rx2)
                             .map(|msgs| {
@@ -107,20 +108,20 @@ impl Conn {
                         Box::new(sink.send_all(msgs).map(|_| ()).then(move |r| {
                             drop(receiver);
                             match r {
-                                Ok(_) => info!("raft RPC finished success"),
-                                Err(ref e) => warn!("raft RPC finished fail"; "err" => ?e),
+                                Ok(_) => info!("raft RPC finished success"; "to_addr" => &addr1),
+                                Err(ref e) => warn!("raft RPC finished fail"; "to_addr" => &addr1, "err" => ?e),
                             };
                             r
                         }))
                     }
                     Err(e) => {
-                        warn!("batch_raft RPC finished fail"; "err" => ?e);
+                        warn!("batch_raft RPC finished fail"; "to_addr" => &addr1, "err" => ?e);
                         Box::new(future::err(e))
                     }
                 }
             });
 
-        let addr = addr.to_owned();
+        let addr2 = addr.to_owned();
         client1.spawn(
             batch_send_or_fallback
                 .map_err(move |e| {
@@ -128,7 +129,7 @@ impl Conn {
                         .with_label_values(&["unreachable", &*store_id.to_string()])
                         .inc();
                     router.broadcast_unreachable(store_id);
-                    warn!("batch_raft/raft RPC finally fail"; "to_addr" => addr, "err" => ?e);
+                    warn!("batch_raft/raft RPC finally fail"; "to_addr" => &addr2, "err" => ?e);
                 })
                 .map(|_| ()),
         );
