@@ -1841,14 +1841,28 @@ impl Peer {
         let progress = status.progress.unwrap();
 
         if !progress.voter_ids().contains(&peer_id) {
+            debug!(
+                "reject transfer leader due to the target is not in the voter list";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "peer" => ?peer,
+            );
             return false;
         }
 
-        match progress.get(peer_id) {
+        let pr = progress.get(peer_id).unwrap();
+        if !pr.recent_active || pr.state != ProgressState::Replicate {
             // After the target store is reported as unreachable,
             // the state will become ProgressState::Probe.
-            Some(pr) if pr.recent_active && pr.state == ProgressState::Replicate => {}
-            _ => return false,
+            debug!(
+                "reject transfer leader due to the target is not active";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "peer" => ?peer,
+                "recent_active" => pr.recent_active,
+                "state" => ?pr.state,
+            );
+            return false;
         }
 
         for (_, progress) in progress.voters() {

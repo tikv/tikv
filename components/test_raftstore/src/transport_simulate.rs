@@ -753,3 +753,23 @@ impl Filter for DropMessageFilter {
         Ok(())
     }
 }
+
+#[derive(Clone)]
+pub struct MessageCorruptFilter<F: Fn(&mut RaftMessage) + Clone> {
+    f: F,
+}
+
+impl<F: Fn(&mut RaftMessage) + Clone> MessageCorruptFilter<F> {
+    pub fn new(f: F) -> Self {
+        MessageCorruptFilter { f }
+    }
+}
+
+impl<F: Fn(&mut RaftMessage) + Clone + Send + Sync> Filter for MessageCorruptFilter<F> {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            (self.f)(msg);
+        }
+        Ok(())
+    }
+}

@@ -9,6 +9,7 @@ use rand;
 use rand::Rng;
 
 use kvproto::raft_cmdpb::RaftCmdResponse;
+use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use engine::Peekable;
@@ -351,11 +352,14 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     ));
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 2)
-            .msg_type(MessageType::MsgHeartbeat)
-            .direction(Direction::Recv),
-    ));
+    cluster.add_send_filter(CloneFilterFactory(MessageCorruptFilter::new(
+        |m: &mut RaftMessage| {
+            let msg = m.mut_message();
+            if msg.get_msg_type() == MessageType::MsgHeartbeat && msg.get_to() == 2 {
+                msg.set_commit(0);
+            }
+        },
+    )));
     debug!("putting k2");
     cluster.must_put(b"k2", b"v2");
 
