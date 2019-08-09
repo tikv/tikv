@@ -8,7 +8,7 @@ publish = false
 [features]
 default = ["tikv/default"]
 tcmalloc = ["tikv/tcmalloc"]
-jemalloc = ["tikv/jemalloc", "tikv/jemalloc"]
+jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
