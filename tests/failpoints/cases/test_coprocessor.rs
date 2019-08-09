@@ -2,7 +2,7 @@
 
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
-use tipb::select::SelectResponse;
+use tipb::SelectResponse;
 
 use test_coprocessor::*;
 use test_storage::*;

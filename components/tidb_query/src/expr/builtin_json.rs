@@ -192,7 +192,7 @@ mod tests {
     use crate::codec::Datum;
     use crate::expr::tests::{datum_expr, make_null_datums, scalar_func_expr};
     use crate::expr::{EvalContext, Expression};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     #[test]
     fn test_json_type() {

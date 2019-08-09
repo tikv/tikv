@@ -239,7 +239,7 @@ mod tests {
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 

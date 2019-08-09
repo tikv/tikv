@@ -558,7 +558,7 @@ mod tests {
     use std::{f64, i64, u64};
 
     use tidb_query_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::codec::Datum;
     use crate::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
