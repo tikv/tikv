@@ -693,8 +693,8 @@ fn float_str_to_int_string<'a>(
 
     match (dot_idx, e_idx) {
         (None, None) => Ok(Cow::Borrowed(valid_float)),
-        (Some(di), None) => no_exp_float_str_to_int_str(valid_float, dot_idx.unwrap()),
-        (_, Some(ei)) => exp_float_str_to_int_str(ctx, valid_float, e_idx.unwrap(), dot_idx),
+        (Some(di), None) => no_exp_float_str_to_int_str(valid_float, di),
+        (_, Some(ei)) => exp_float_str_to_int_str(ctx, valid_float, ei, dot_idx),
     }
 }
 
@@ -766,9 +766,9 @@ fn exp_float_str_to_int_str<'a>(
     if int_cnt <= digits.len() {
         let int_str = String::from_utf8_lossy(&digits[..int_cnt]);
         if int_cnt < digits.len() {
-            Ok(round_int_str(digits[int_cnt] as char, &int_str))
+            Ok(Cow::Owned(round_int_str(digits[int_cnt] as char, &int_str).into_owned()))
         } else {
-            Ok(int_str)
+            Ok(Cow::Owned(int_str.into_owned()))
         }
     } else {
         let mut res = String::with_capacity(int_cnt);
@@ -821,7 +821,7 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<
     // so we need to remove `-` of `-0`.
     let res_bytes = res.as_bytes();
     if res_bytes == b"-0" {
-        Ok(Cow::Borrowed(&res[1..]))
+        Ok(Cow::Owned(String::from(&res[1..])))
     } else {
         Ok(res)
     }
