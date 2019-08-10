@@ -26,7 +26,7 @@ name = "tikv-server"
 name = "tikv-ctl"
 
 [dependencies]
-tikv = { path = "../../" }
+tikv = { path = "../" }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
@@ -49,17 +49,9 @@ hex = "0.3"
 vlog = "0.1.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
-tikv_util = { path = "../tikv_util" }
-engine = { path = "../engine" }
-pd_client = { path = "../pd_client" }
-
-[dependencies.prometheus]
-version = "0.4.2"
-default-features = false
-features = ["nightly", "push", "process"]
-
-[dev-dependencies]
-panic_hook = { path = "../panic_hook" }
+tikv_util = { path = "../components/tikv_util" }
+engine = { path = "../components/engine" }
+pd_client = { path = "../components/pd_client" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

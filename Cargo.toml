@@ -182,7 +182,7 @@ members = [
   "components/tidb_query_datatype",
   "components/tidb_query_codegen",
   "components/pd_client",
-  "components/cmd",
+  "cmd",
 ]
 
 [profile.dev]
