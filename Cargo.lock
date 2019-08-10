@@ -1828,14 +1828,14 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/pingcap/raft-rs#777b9a6bf95dd6beb5b94fa890490a88f2d4cb69"
 dependencies = [
  "getset 0.0.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "hashbrown 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "raft-proto 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
+ "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)",
  "rand 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-envlogger 2.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1843,13 +1843,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "raft-proto"
+name = "raft"
 version = "0.6.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+replace = "raft 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
+
+[[package]]
+name = "raft-proto"
+version = "0.6.0-alpha"
+source = "git+https://github.com/pingcap/raft-rs#777b9a6bf95dd6beb5b94fa890490a88f2d4cb69"
 dependencies = [
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-build 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "raft-proto"
+version = "0.6.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+replace = "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
 
 [[package]]
 name = "rand"
@@ -1916,7 +1928,7 @@ name = "rand_chacha"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "rand_core 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand_core 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc_version 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1964,7 +1976,7 @@ name = "rand_hc"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "rand_core 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand_core 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2020,7 +2032,7 @@ name = "rand_xorshift"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "rand_core 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand_core 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3521,7 +3533,9 @@ dependencies = [
 "checksum quote 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)" = "7a6e920b65c65f10b2ae65c831a81a073a89edd28c7cce89475bff467ab4167a"
 "checksum quote 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "9949cfe66888ffe1d53e6ec9d9f3b70714083854be20fd5e271b232a017401e8"
 "checksum quote 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)" = "53fa22a1994bd0f9372d7a816207d8a2677ad0325b073f5c5332760f0fb62b5c"
+"checksum raft 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)" = "<none>"
 "checksum raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)" = "4b246d7eb1d53af6915946f3c70d8503171664f8fa4c0efa092e9897275a19dc"
+"checksum raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)" = "<none>"
 "checksum raft-proto 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)" = "8892d0cb5e5f3b7d213ab9c7de44217d52b2751982654c69cdfbfa393940a42a"
 "checksum rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)" = "2791d88c6defac799c3f20d74f094ca33b9332612d9aef9078519c82e4fe04a5"
 "checksum rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "eba5f8cb59cc50ed56be8880a5c7b496bfd9bd26394e176bc67884094145c2c5"
