@@ -305,11 +305,7 @@ impl ArithmeticOpWithCtx for DecimalMod {
     type T = Decimal;
 
     fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        if rhs.is_zero() {
-            return Ok(None);
-        }
-
-        if let Some(value) = lhs % rhs {
+        Ok(if let Some(value) = lhs % rhs {
             value
                 .into_result_with_overflow_err(
                     ctx,
@@ -318,8 +314,7 @@ impl ArithmeticOpWithCtx for DecimalMod {
                 .map(Some)
         } else {
             ctx.handle_division_by_zero().map(|_| None)
-        }
-        .map_err(|err| err.into())
+        }?)
     }
 }
 
@@ -467,17 +462,16 @@ fn int_divide_decimal(
     rhs: &Option<Decimal>,
 ) -> Result<Option<Int>> {
     let result = try_opt!(arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs));
-    result
+    Ok(result
         .as_i64()
         .into_result_with_overflow_err(
             ctx,
             Error::overflow(
-                "DECIMAL",
+                "BIGINT",
                 format!("({} / {})", lhs.as_ref().unwrap(), rhs.as_ref().unwrap()),
             ),
         )
-        .map(Some)
-        .map_err(|err| err.into())
+        .map(Some)?)
 }
 
 pub struct DecimalDivide;
@@ -486,7 +480,7 @@ impl ArithmeticOpWithCtx for DecimalDivide {
     type T = Decimal;
 
     fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        if let Some(value) = lhs / rhs {
+        Ok(if let Some(value) = lhs / rhs {
             value
                 .into_result_with_overflow_err(
                     ctx,
@@ -495,8 +489,7 @@ impl ArithmeticOpWithCtx for DecimalDivide {
                 .map(Some)
         } else {
             ctx.handle_division_by_zero().map(|_| None)
-        }
-        .map_err(|err| err.into())
+        }?)
     }
 }
 
@@ -989,10 +982,9 @@ mod tests {
         ];
 
         for (lhs, rhs, expected) in test_cases {
-            let mut config = EvalConfig::new();
-            config.set_flag(Flag::TRUNCATE_AS_WARNING);
-            let evaluator =
-                RpnFnScalarEvaluator::new().context(EvalContext::new(std::sync::Arc::new(config)));
+            let evaluator = RpnFnScalarEvaluator::new().context(EvalContext::new(
+                std::sync::Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)),
+            ));
 
             let output = evaluator
                 .push_param(lhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
