@@ -633,6 +633,7 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
     }
 }
 
+/// the `s` must be a valid int_str
 fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
     if num_next_dot < '5' {
         return Cow::Borrowed(s);
@@ -642,11 +643,14 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
     match s.rfind(|c| c != '9' && c != '+' && c != '-') {
         Some(idx) => {
             int_str.push_str(&s[..idx]);
-            let next_char = char::from_u32(s.chars().nth(idx).unwrap() as u32 + 1).unwrap();
+            // because the `s` must be valid int_str, so it is ok to do this.
+            let next_char = (s.as_bytes()[idx] + 1) as char;
             int_str.push(next_char);
             let zero_count = s.len() - (idx + 1);
             if zero_count > 0 {
-                int_str.extend((0..zero_count).map(|_| '0'));
+                for _i in 0..zero_count {
+                    int_str.push('0');
+                }
             }
         }
         None => {
@@ -668,116 +672,164 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
 /// because precision will be lost.
 ///
 /// When the float string indicating a value that is overflowing the i64,
-/// the original float string is returned and an overflow warning is attached
+/// the original float string is returned and an overflow warning is attached.
+///
+/// This func will find serious overflow such as the len of result > 20 (without prefix `+/-`)
+/// however, it will not check whether the result overflow BIGINT.
 fn float_str_to_int_string<'a>(
     ctx: &mut EvalContext,
     valid_float: &'a str,
 ) -> Result<Cow<'a, str>> {
+    // this func is complex, to make it same as TiDB's version,
+    // we impl it like TiDB's version(https://github.com/pingcap/tidb/blob/9b521342bf/types/convert.go#L400)
     let mut dot_idx = None;
     let mut e_idx = None;
-    let mut int_cnt: i64 = 0;
-    let mut digits_cnt: i64 = 0;
 
     for (i, c) in valid_float.chars().enumerate() {
         match c {
             '.' => dot_idx = Some(i),
             'e' | 'E' => e_idx = Some(i),
-            '0'..='9' => {
-                if e_idx.is_none() {
-                    if dot_idx.is_none() {
-                        int_cnt += 1;
-                    }
-                    digits_cnt += 1;
-                }
-            }
             _ => (),
         }
     }
 
-    if dot_idx.is_none() && e_idx.is_none() {
-        return Ok(Cow::Borrowed(valid_float));
+    match (dot_idx, e_idx) {
+        (None, None) => Ok(Cow::Borrowed(valid_float)),
+        (Some(di), None) => no_exp_float_str_to_int_str(valid_float, di),
+        (_, Some(ei)) => exp_float_str_to_int_str(ctx, valid_float, ei, dot_idx),
     }
-
-    if e_idx.is_none() {
-        let dot_idx = dot_idx.unwrap();
-        // NOTE: to make compatible with TiDB, +0.5 -> 1, -0.5 -> -1
-        let int_str = if int_cnt == 0 && valid_float.starts_with('-') {
-            &"-0"
-        } else if int_cnt == 0 {
-            &"0"
-        } else {
-            &valid_float[..dot_idx]
-        };
-        if digits_cnt - int_cnt > 0 {
-            // It's OK to unwrap here because the `dot_idx + 1` will less than the length of `valid_float`
-            let digit_char = valid_float.chars().nth(dot_idx + 1).unwrap();
-            return Ok(round_int_str(digit_char, int_str));
-        }
-        return Ok(Cow::Borrowed(int_str));
-    }
-
-    let e_idx = e_idx.unwrap();
-    let exp = box_try!((&valid_float[e_idx + 1..]).parse::<i64>());
-    if exp > 0 && int_cnt > (i64::MAX - exp) {
-        // (exp + int_cnt) overflows MaxInt64. Add warning and return original float string
-        ctx.warnings
-            .append_warning(Error::overflow("BIGINT", &valid_float));
-        return Ok(Cow::Owned(valid_float.to_owned()));
-    }
-    if int_cnt + exp <= 0 {
-        if int_cnt == 0 && digits_cnt > 0 {
-            // NOTE: to make compatible with TiDB (different with +0.5 -> 1), +0.5e0 -> +1, -0.5e0 -> -1
-            let int_str = if valid_float.starts_with('+') {
-                &"+0"
-            } else if valid_float.starts_with('-') {
-                &"-0"
-            } else {
-                &"0"
-            };
-            let digit_char = valid_float.chars().nth(dot_idx.unwrap() + 1).unwrap();
-            return Ok(round_int_str(digit_char, int_str));
-        }
-        return Ok(Cow::Borrowed("0"));
-    }
-
-    let mut valid_int = String::from(&valid_float[..e_idx]);
-    if let Some(idx) = dot_idx {
-        valid_int.remove(idx);
-    }
-
-    let extra_zero_count = exp + int_cnt - digits_cnt;
-    if extra_zero_count > MAX_ZERO_COUNT {
-        // Overflows MaxInt64. Add warning and return original float string
-        ctx.warnings
-            .append_warning(Error::overflow("BIGINT", &valid_float));
-        return Ok(Cow::Owned(valid_float.to_owned()));
-    }
-
-    if extra_zero_count >= 0 {
-        valid_int.extend((0..extra_zero_count).map(|_| '0'));
-    } else {
-        let len = valid_int.len();
-        if extra_zero_count >= len as i64 {
-            return Ok(Cow::Borrowed("0"));
-        }
-        let require = if valid_float.starts_with('-') || valid_float.starts_with('+') {
-            (int_cnt + exp) as usize + 1
-        } else {
-            (int_cnt + exp) as usize
-        };
-        if require < valid_int.len() {
-            let digit_char = valid_float.chars().nth(require + 1).unwrap();
-            if digit_char >= '5' {
-                valid_int = round_int_str(digit_char, &valid_int[..require]).into_owned();
-            }
-        }
-        valid_int.truncate((exp + int_cnt) as usize);
-    }
-
-    Ok(Cow::Owned(valid_int))
 }
 
-const MAX_ZERO_COUNT: i64 = 20;
+fn exp_float_str_to_int_str<'a>(
+    ctx: &mut EvalContext,
+    valid_float: &'a str,
+    e_idx: usize,
+    dot_idx: Option<usize>,
+) -> Result<Cow<'a, str>> {
+    // int_cnt and digits contain the prefix `+/-` if valid_float[0] is `+/-`
+    let mut digits: Vec<u8> = Vec::with_capacity(valid_float.len());
+    let int_cnt: i64;
+    match dot_idx {
+        None => {
+            digits.extend_from_slice(&valid_float[..e_idx].as_bytes());
+            // if digits.len() > i64::MAX,
+            // then the input str has at least 9223372036854775808 chars,
+            // which make the str >= 8388608.0 TB,
+            // so cast it to i64 is safe.
+            int_cnt = digits.len() as i64;
+        }
+        Some(dot_idx) => {
+            digits.extend_from_slice(&valid_float[..dot_idx].as_bytes());
+            int_cnt = digits.len() as i64;
+            digits.extend_from_slice(&valid_float[(dot_idx + 1)..e_idx].as_bytes());
+        }
+    }
+    // make `digits` immutable
+    let digits = digits;
+    let exp: i64 = box_try!((&valid_float[(e_idx + 1)..]).parse::<i64>());
+    let (int_cnt, is_overflow): (i64, bool) = int_cnt.overflowing_add(exp);
+    if int_cnt > 21 || is_overflow {
+        // MaxInt64 has 19 decimal digits.
+        // MaxUint64 has 20 decimal digits.
+        // And the intCnt may contain the len of `+/-`,
+        // so here we use 21 here as the early detection.
+        ctx.warnings
+            .append_warning(Error::overflow("BIGINT", &valid_float));
+        return Ok(Cow::Borrowed(valid_float));
+    }
+    if int_cnt <= 0 {
+        let int_str = "0";
+        if int_cnt == 0 && !digits.is_empty() && digits[0].is_ascii_digit() {
+            return Ok(round_int_str(digits[0] as char, int_str));
+        } else {
+            return Ok(Cow::Borrowed(int_str));
+        }
+    }
+    if int_cnt == 1 && (digits[0] == b'-' || digits[0] == b'+') {
+        let int_str = match digits[0] {
+            b'+' => "+0",
+            b'-' => "-0",
+            _ => "0",
+        };
+
+        let res = if digits.len() > 1 {
+            round_int_str(digits[1] as char, int_str)
+        } else {
+            Cow::Borrowed(int_str)
+        };
+        let tmp = &res.as_bytes()[0..2];
+        if tmp == b"+0" || tmp == b"-0" {
+            return Ok(Cow::Borrowed("0"));
+        } else {
+            return Ok(res);
+        }
+    }
+    let int_cnt = int_cnt as usize;
+    if int_cnt <= digits.len() {
+        let int_str = String::from_utf8_lossy(&digits[..int_cnt]);
+        if int_cnt < digits.len() {
+            Ok(Cow::Owned(
+                round_int_str(digits[int_cnt] as char, &int_str).into_owned(),
+            ))
+        } else {
+            Ok(Cow::Owned(int_str.into_owned()))
+        }
+    } else {
+        let mut res = String::with_capacity(int_cnt);
+        for d in digits.iter() {
+            res.push(*d as char);
+        }
+        for _ in digits.len()..int_cnt {
+            res.push('0');
+        }
+        Ok(Cow::Owned(res))
+    }
+}
+
+fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<Cow<'_, str>> {
+    // According to TiDB's impl
+    // 1. If there is digit after dot, round.
+    // 2. Only when the final result <0, add '-' in the front of it.
+    // 3. The result has no '+'.
+
+    let digits = if valid_float.starts_with('+') || valid_float.starts_with('-') {
+        dot_idx -= 1;
+        &valid_float[1..]
+    } else {
+        valid_float
+    };
+    // TODO, may here we can use Cow to avoid some copy below
+    let int_str = if valid_float.starts_with('-') {
+        if dot_idx == 0 {
+            "-0"
+        } else {
+            // the valid_float[0] is '-', so there is `dot_idx-=1` above,
+            // so we need valid_float[..(dot_idx+1)] here.
+            &valid_float[..=dot_idx]
+        }
+    } else {
+        if dot_idx == 0 {
+            "0"
+        } else {
+            &digits[..dot_idx]
+        }
+    };
+
+    let res = if digits.len() > dot_idx + 1 {
+        round_int_str(digits.as_bytes()[dot_idx + 1] as char, int_str)
+    } else {
+        Cow::Borrowed(int_str)
+    };
+    // in the TiDB version, after round, except '0',
+    // others(even if `00`) will be prefix with `-` if valid_float[0]=='-'.
+    // so we need to remove `-` of `-0`.
+    let res_bytes = res.as_bytes();
+    if res_bytes == b"-0" {
+        Ok(Cow::Owned(String::from(&res[1..])))
+    } else {
+        Ok(res)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1629,6 +1681,10 @@ mod tests {
     fn test_valid_get_valid_int_prefix() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
+            ("+0.0", "0"),
+            ("+000.0", "000"),
+            ("-0.0", "0"),
+            ("-000.0", "-000"),
             (".1", "0"),
             (".0", "0"),
             (".5", "1"),
@@ -1637,6 +1693,7 @@ mod tests {
             (".5e0", "1"),
             ("+.5e0", "+1"),
             ("-.5e0", "-1"),
+            ("6.01e-1", "1"),
             ("123", "123"),
             ("255.5", "256"),
             ("123e1", "1230"),
@@ -1651,8 +1708,7 @@ mod tests {
             ("123.456999e5", "12345700"),
             ("-123.45678e5", "-12345678"),
             ("+123.45678e5", "+12345678"),
-            ("9e20", "900000000000000000000"), // TODO: check code validity again on function float_str_to_int_string(),
-                                               // as "900000000000000000000" is already larger than i64::MAX
+            ("9e20", "900000000000000000000"),
         ];
 
         for (i, e) in cases {
