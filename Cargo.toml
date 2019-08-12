@@ -25,12 +25,6 @@ failpoints = ["fail/failpoints"]
 [lib]
 name = "tikv"
 
-[[bin]]
-name = "tikv-server"
-
-[[bin]]
-name = "tikv-ctl"
-
 [[test]]
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
@@ -81,13 +75,12 @@ libc = "0.2"
 crc = "1.8"
 fs2 = "0.4"
 spin = "0.5"
-protobuf = "2"
+protobuf = "2.8"
 nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
 lazy_static = "1.3"
 backtrace = "0.2.3"
-clap = "2.32"
 url = "1.7.2"
 sys-info = "0.5.7"
 futures = "0.1"
@@ -148,6 +141,8 @@ default-features = false
 # TODO: remove this when new raft-rs is published.
 "raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
 "raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
+"protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
+"protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
@@ -192,6 +187,7 @@ members = [
   "components/tidb_query_datatype",
   "components/tidb_query_codegen",
   "components/pd_client",
+  "cmd",
 ]
 
 [profile.dev]

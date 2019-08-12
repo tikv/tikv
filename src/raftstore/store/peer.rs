@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, slice, u64};
+use std::{cmp, mem, u64};
 
 use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
 use engine::{Engines, Peekable};
@@ -27,6 +27,7 @@ use raft::{
     NO_LIMIT,
 };
 use time::Timespec;
+use uuid::Uuid;
 
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
@@ -55,7 +56,7 @@ use super::DestroyPeerJob;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
-    id: u64,
+    id: Uuid,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
@@ -64,10 +65,7 @@ struct ReadIndexRequest {
 impl ReadIndexRequest {
     // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     fn binary_id(&self) -> &[u8] {
-        unsafe {
-            let id = &self.id as *const u64 as *const u8;
-            slice::from_raw_parts(id, 8)
-        }
+        self.id.as_bytes()
     }
 
     fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
@@ -76,7 +74,7 @@ impl ReadIndexRequest {
     }
 
     fn with_command(
-        id: u64,
+        id: Uuid,
         req: RaftCmdRequest,
         cb: Callback,
         renew_lease_time: Timespec,
@@ -104,17 +102,11 @@ impl Drop for ReadIndexRequest {
 
 #[derive(Default)]
 struct ReadIndexQueue {
-    id_allocator: u64,
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
 }
 
 impl ReadIndexQueue {
-    fn next_id(&mut self) -> u64 {
-        self.id_allocator += 1;
-        self.id_allocator
-    }
-
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
@@ -1950,9 +1942,8 @@ impl Peer {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        let id = self.pending_reads.next_id();
-        let ctx = id.to_ne_bytes();
-        self.raft_group.read_index(ctx.to_vec());
+        let id = Uuid::new_v4();
+        self.raft_group.read_index(id.as_bytes().to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -2436,7 +2427,7 @@ pub trait RequestInspector {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap | CmdType::ReadIndex => has_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSst => {
                     has_write = true
                 }
                 CmdType::Prewrite | CmdType::Invalid => {
@@ -2644,7 +2635,7 @@ impl ReadExecutor {
                 | CmdType::Put
                 | CmdType::Delete
                 | CmdType::DeleteRange
-                | CmdType::IngestSST
+                | CmdType::IngestSst
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
@@ -2844,7 +2835,7 @@ mod tests {
             (CmdType::Put, RequestPolicy::ProposeNormal),
             (CmdType::Delete, RequestPolicy::ProposeNormal),
             (CmdType::DeleteRange, RequestPolicy::ProposeNormal),
-            (CmdType::IngestSST, RequestPolicy::ProposeNormal),
+            (CmdType::IngestSst, RequestPolicy::ProposeNormal),
         ] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
