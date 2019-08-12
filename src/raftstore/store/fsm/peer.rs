@@ -2208,6 +2208,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     // TODO: clean user properties?
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
+                ExecResult::MvccGc {
+                    safe_point,
+                    start_key,
+                    end_key,
+                } => self.on_mvcc_gc(safe_point, start_key, end_key),
             }
         }
 
@@ -2911,6 +2916,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "err" => %e,
             );
         }
+    }
+
+    fn on_mvcc_gc(&mut self, safe_point: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
+        info!(
+            "handle mvcc-gc task";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "safe_point" => safe_point,
+            "start_key" => ?&start_key,
+            "end_key" => ?&end_key,
+        );
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.

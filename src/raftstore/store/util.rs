@@ -158,7 +158,8 @@ pub fn check_region_epoch(
             AdminCmdType::CompactLog
             | AdminCmdType::InvalidAdmin
             | AdminCmdType::ComputeHash
-            | AdminCmdType::VerifyHash => {}
+            | AdminCmdType::VerifyHash
+            | AdminCmdType::MvccGc => {}
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::Split
             | AdminCmdType::BatchSplit

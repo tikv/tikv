@@ -15,6 +15,7 @@ use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
+use kvproto::raft_cmdpb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 
@@ -22,10 +23,10 @@ use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Stat
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
-use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
-use crate::server::transport::ServerRaftStoreRouter;
+use crate::raftstore::store::{keys, Callback as RaftCallback};
+use crate::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use pd_client::PdClient;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
@@ -264,6 +265,34 @@ impl<E: Engine> GCRunner<E> {
             "region_id" => ctx.get_region_id(),
             "safe_point" => safe_point
         );
+
+        let mut raft_cmd = raft_cmdpb::RaftCmdRequest::new();
+        raft_cmd.mut_header().set_region_id(ctx.region_id);
+        raft_cmd
+            .mut_header()
+            .set_region_epoch(ctx.get_region_epoch().clone());
+        raft_cmd.mut_header().set_peer(ctx.get_peer().clone());
+
+        let mut request = raft_cmdpb::AdminRequest::new();
+        request.set_cmd_type(raft_cmdpb::AdminCmdType::MvccGc);
+        request.mut_mvcc_gc().set_safe_point(safe_point);
+        raft_cmd.set_admin_request(request);
+
+        let router = self.raft_store_router.as_ref().unwrap();
+        if let Err(e) = router.send_command(raft_cmd, RaftCallback::None) {
+            warn!(
+                "send MvccGc command to raftstore fail";
+                "region_id" => ctx.region_id,
+                "error" => ?e,
+            );
+        } else {
+            // TODO: handle errors better.
+            info!(
+                "send MvccGc command to raftstore success";
+                "region_id" => ctx.region_id,
+            );
+            return Ok(());
+        }
 
         let mut next_key = None;
         loop {

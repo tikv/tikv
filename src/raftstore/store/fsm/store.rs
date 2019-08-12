@@ -44,8 +44,9 @@ use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
-    ReadDelegate, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
+    ConsistencyCheckRunner, ConsistencyCheckTask, MvccGcRunner, MvccGcTask, PdRunner,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckRunner,
+    SplitCheckTask,
 };
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
@@ -926,6 +927,7 @@ struct Workers {
     cleanup_worker: Worker<CleanupTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     region_worker: Worker<RegionTask>,
+    mvcc_gc_worker: Worker<MvccGcTask>,
     coprocessor_host: Arc<CoprocessorHost>,
     future_poller: ThreadPool,
 }
@@ -972,6 +974,7 @@ impl RaftBatchSystem {
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_worker: Worker::new("cleanup-worker"),
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
+            mvcc_gc_worker: Worker::new("mvcc_gc"),
             coprocessor_host: Arc::new(coprocessor_host),
             future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
@@ -1111,6 +1114,9 @@ impl RaftBatchSystem {
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
+
+        let mvcc_gc_runner = MvccGcRunner::new();
+        box_try!(workers.mvcc_gc_worker.start(mvcc_gc_runner));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
