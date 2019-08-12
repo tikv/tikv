@@ -6,7 +6,7 @@ use std::{i64, mem, u64};
 use super::{Error, Result};
 use crate::codec::mysql::Tz;
 use tipb;
-use tipb::DAGRequest;
+use tipb::DagRequest;
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
@@ -21,7 +21,7 @@ bitflags! {
 }
 
 bitflags! {
-    /// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
+    /// Flags are used by `DagRequest.flags` to handle execution mode, like how to handle
     /// truncate error.
     pub struct Flag: u64 {
         /// `IGNORE_TRUNCATE` indicates if truncate error should be ignored.
@@ -79,7 +79,7 @@ impl Default for EvalConfig {
 }
 
 impl EvalConfig {
-    pub fn from_request(req: &DAGRequest) -> Result<Self> {
+    pub fn from_request(req: &DagRequest) -> Result<Self> {
         let mut eval_cfg = Self::from_flag(Flag::from_bits_truncate(req.get_flags()));
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
