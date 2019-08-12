@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_pi() {
-        let got = eval_func(ScalarFuncSig::PI, &[]).unwrap();
+        let got = eval_func(ScalarFuncSig::Pi, &[]).unwrap();
         assert_eq!(got, Datum::F64(f64::consts::PI));
     }
 
@@ -916,7 +916,7 @@ mod tests {
 
         for (arg, exp) in cases {
             let arg = Datum::Bytes(arg.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::CRC32, &[arg]).unwrap();
+            let got = eval_func(ScalarFuncSig::Crc32, &[arg]).unwrap();
             let exp = Datum::I64(exp);
             assert_eq!(got, exp);
         }

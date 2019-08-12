@@ -468,13 +468,13 @@ mod tests {
     fn test_compare_real() {
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
-                TestCaseCmpOp::GT => ScalarFuncSig::GTReal,
-                TestCaseCmpOp::GE => ScalarFuncSig::GEReal,
-                TestCaseCmpOp::LT => ScalarFuncSig::LTReal,
-                TestCaseCmpOp::LE => ScalarFuncSig::LEReal,
-                TestCaseCmpOp::EQ => ScalarFuncSig::EQReal,
-                TestCaseCmpOp::NE => ScalarFuncSig::NEReal,
-                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQReal,
+                TestCaseCmpOp::GT => ScalarFuncSig::GtReal,
+                TestCaseCmpOp::GE => ScalarFuncSig::GeReal,
+                TestCaseCmpOp::LT => ScalarFuncSig::LtReal,
+                TestCaseCmpOp::LE => ScalarFuncSig::LeReal,
+                TestCaseCmpOp::EQ => ScalarFuncSig::EqReal,
+                TestCaseCmpOp::NE => ScalarFuncSig::NeReal,
+                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEqReal,
             };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
@@ -493,13 +493,13 @@ mod tests {
 
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
-                TestCaseCmpOp::GT => ScalarFuncSig::GTDuration,
-                TestCaseCmpOp::GE => ScalarFuncSig::GEDuration,
-                TestCaseCmpOp::LT => ScalarFuncSig::LTDuration,
-                TestCaseCmpOp::LE => ScalarFuncSig::LEDuration,
-                TestCaseCmpOp::EQ => ScalarFuncSig::EQDuration,
-                TestCaseCmpOp::NE => ScalarFuncSig::NEDuration,
-                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQDuration,
+                TestCaseCmpOp::GT => ScalarFuncSig::GtDuration,
+                TestCaseCmpOp::GE => ScalarFuncSig::GeDuration,
+                TestCaseCmpOp::LT => ScalarFuncSig::LtDuration,
+                TestCaseCmpOp::LE => ScalarFuncSig::LeDuration,
+                TestCaseCmpOp::EQ => ScalarFuncSig::EqDuration,
+                TestCaseCmpOp::NE => ScalarFuncSig::NeDuration,
+                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEqDuration,
             };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0.map(map_double_to_duration))
@@ -521,13 +521,13 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
-                TestCaseCmpOp::GT => ScalarFuncSig::GTDecimal,
-                TestCaseCmpOp::GE => ScalarFuncSig::GEDecimal,
-                TestCaseCmpOp::LT => ScalarFuncSig::LTDecimal,
-                TestCaseCmpOp::LE => ScalarFuncSig::LEDecimal,
-                TestCaseCmpOp::EQ => ScalarFuncSig::EQDecimal,
-                TestCaseCmpOp::NE => ScalarFuncSig::NEDecimal,
-                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQDecimal,
+                TestCaseCmpOp::GT => ScalarFuncSig::GtDecimal,
+                TestCaseCmpOp::GE => ScalarFuncSig::GeDecimal,
+                TestCaseCmpOp::LT => ScalarFuncSig::LtDecimal,
+                TestCaseCmpOp::LE => ScalarFuncSig::LeDecimal,
+                TestCaseCmpOp::EQ => ScalarFuncSig::EqDecimal,
+                TestCaseCmpOp::NE => ScalarFuncSig::NeDecimal,
+                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEqDecimal,
             };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0.map(|v| f64_to_decimal(&mut ctx, v.into_inner()).unwrap()))
@@ -542,13 +542,13 @@ mod tests {
     fn test_compare_signed_int() {
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
-                TestCaseCmpOp::GT => ScalarFuncSig::GTInt,
-                TestCaseCmpOp::GE => ScalarFuncSig::GEInt,
-                TestCaseCmpOp::LT => ScalarFuncSig::LTInt,
-                TestCaseCmpOp::LE => ScalarFuncSig::LEInt,
-                TestCaseCmpOp::EQ => ScalarFuncSig::EQInt,
-                TestCaseCmpOp::NE => ScalarFuncSig::NEInt,
-                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQInt,
+                TestCaseCmpOp::GT => ScalarFuncSig::GtInt,
+                TestCaseCmpOp::GE => ScalarFuncSig::GeInt,
+                TestCaseCmpOp::LT => ScalarFuncSig::LtInt,
+                TestCaseCmpOp::LE => ScalarFuncSig::LeInt,
+                TestCaseCmpOp::EQ => ScalarFuncSig::EqInt,
+                TestCaseCmpOp::NE => ScalarFuncSig::NeInt,
+                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEqInt,
             };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0.map(|v| v.into_inner() as i64))
@@ -622,18 +622,18 @@ mod tests {
                 .build();
 
             for (sig, accept_orderings) in &[
-                (ScalarFuncSig::EQInt, vec![Ordering::Equal]),
+                (ScalarFuncSig::EqInt, vec![Ordering::Equal]),
                 (
-                    ScalarFuncSig::NEInt,
+                    ScalarFuncSig::NeInt,
                     vec![Ordering::Greater, Ordering::Less],
                 ),
-                (ScalarFuncSig::GTInt, vec![Ordering::Greater]),
+                (ScalarFuncSig::GtInt, vec![Ordering::Greater]),
                 (
-                    ScalarFuncSig::GEInt,
+                    ScalarFuncSig::GeInt,
                     vec![Ordering::Greater, Ordering::Equal],
                 ),
-                (ScalarFuncSig::LTInt, vec![Ordering::Less]),
-                (ScalarFuncSig::LEInt, vec![Ordering::Less, Ordering::Equal]),
+                (ScalarFuncSig::LtInt, vec![Ordering::Less]),
+                (ScalarFuncSig::LeInt, vec![Ordering::Less, Ordering::Equal]),
             ] {
                 let output = RpnFnScalarEvaluator::new()
                     .push_param_with_field_type(lhs, lhs_field_type.clone())

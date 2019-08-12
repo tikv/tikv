@@ -177,7 +177,7 @@ fn test_region_error_in_scan() {
 
     let product = ProductTable::new();
     let (_cluster, raft_engine, mut ctx) = new_raft_engine(1, "");
-    ctx.set_isolation_level(IsolationLevel::SI);
+    ctx.set_isolation_level(IsolationLevel::Si);
 
     let (_, endpoint) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
