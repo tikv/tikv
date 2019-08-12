@@ -6,6 +6,8 @@ use crate::codec::data_type::*;
 use crate::codec::mysql::json::*;
 use crate::Result;
 
+use std::collections::BTreeMap;
+
 #[rpn_fn]
 #[inline]
 fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
@@ -27,13 +29,42 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
     )))
 }
 
-/// TODO: add error handling in this function
-/// TODO: make clear can we use validator here
-/// `&[&(Option<Json>, Option<Bytes>)]`
-#[rpn_fn(raw_varg)]
+/// `&[&(Option<Byte>, Option<Json>)]`
+/// TODO: if we need to capture Expression to handle the error here?
+/// TODO: add errors for key is None
+#[rpn_fn(raw_varg, extra_validator = json_object_validator)]
 #[inline]
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
-    unimplemented!()
+    let mut pairs = BTreeMap::new();
+    for chunk in raw_args.chunks(2) {
+        let key: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
+        let key = match key {
+            // json_object should raise an error if key is None(NULL)
+            None => unimplemented!(),
+            Some(v) => String::from_utf8(v.to_owned()).map_err(|e| crate::codec::Error::from(e))?,
+        };
+
+        let value: &Option<Json> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
+        let value = match value {
+            None => Json::None,
+            Some(v) => v.to_owned(),
+        };
+        pairs.insert(key, value);
+    }
+    Ok(Some(Json::Object(pairs)))
+}
+
+/// TODO: raise error when arguments doesn't match our requirements.
+fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
+    for chunk in expr.get_children().chunks(2) {
+        if chunk.len() == 1 {
+            unimplemented!()
+        } else {
+            super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
+            super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
+        }
+    }
+    Ok(())
 }
 
 macro_rules! parse_opt {
@@ -158,6 +189,39 @@ mod tests {
 
     #[test]
     fn test_json_object() {
-        unimplemented!()
+        let cases = vec![
+            (vec![], r#"{}"#),
+            (vec![("1", None)], r#"{"1":null}"#),
+            (
+                vec![
+                    ("1", None),
+                    ("2", Some(r#""sdf""#)),
+                    ("k1", Some(r#""v1""#)),
+                ],
+                r#"{"1":null,"2":"sdf","k1":"v1"}"#,
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs = vargs
+                .into_iter()
+                .map(|(key, value)| (Bytes::from(key), value.map(|s| Json::from_str(s).unwrap())))
+                .collect::<Vec<_>>();
+
+            let mut new_vargs: Vec<ScalarValue> = vec![];
+            for (key, value) in vargs.into_iter() {
+                new_vargs.push(ScalarValue::from(key.clone()));
+                new_vargs.push(ScalarValue::from(value.clone()));
+            }
+
+            let expected = Json::from_str(expected).unwrap();
+
+            let output: Json = RpnFnScalarEvaluator::new()
+                .push_params(new_vargs)
+                .evaluate(ScalarFuncSig::JsonObjectSig)
+                .unwrap()
+                .unwrap();
+            assert_eq!(output, expected);
+        }
     }
 }
