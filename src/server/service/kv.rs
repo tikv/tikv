@@ -1284,7 +1284,7 @@ fn future_get<E: Engine>(
             } else {
                 match v {
                     Ok(Some(val)) => resp.set_value(val),
-                    Ok(None) => (),
+                    Ok(None) => resp.set_not_found(true),
                     Err(e) => resp.set_error(extract_key_error(&e)),
                 }
             }
@@ -1650,7 +1650,7 @@ fn future_raw_get<E: Engine>(
             } else {
                 match v {
                     Ok(Some(val)) => resp.set_value(val),
-                    Ok(None) => {}
+                    Ok(None) => resp.set_not_found(true),
                     Err(e) => resp.set_error(format!("{}", e)),
                 }
             }
