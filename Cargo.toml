@@ -138,6 +138,9 @@ default-features = false
 # TODO: remove this when slog is compatible with the log 0.4
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
+# TODO: remove this when new raft-rs is published.
+"raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
+"raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
