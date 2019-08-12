@@ -26,7 +26,7 @@ where
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_f64_random()
         .push_column_f64_random();
-    let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
+    let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GtReal, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
         .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
         .build();
@@ -39,7 +39,7 @@ where
     M: criterion::measurement::Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_f64_random();
-    let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
+    let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GtReal, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
         .push_child(ExprDefBuilder::constant_real(0.42))
         .build();
@@ -55,11 +55,11 @@ where
         .push_column_i64_random()
         .push_column_f64_random();
     let exprs = [
-        ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
+        ExprDefBuilder::scalar_func(ScalarFuncSig::GtReal, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
             .push_child(ExprDefBuilder::constant_real(0.63))
             .build(),
-        ExprDefBuilder::scalar_func(ScalarFuncSig::LEInt, FieldTypeTp::LongLong)
+        ExprDefBuilder::scalar_func(ScalarFuncSig::LeInt, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .push_child(ExprDefBuilder::constant_int(0x10FF10))
             .build(),

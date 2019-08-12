@@ -26,7 +26,7 @@ impl SSTImporter {
         })
     }
 
-    pub fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
+    pub fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
         match self.dir.create(meta) {
             Ok(f) => {
                 info!("create"; "file" => ?f);
@@ -39,7 +39,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
+    pub fn delete(&self, meta: &SstMeta) -> Result<()> {
         match self.dir.delete(meta) {
             Ok(path) => {
                 info!("delete"; "path" => ?path);
@@ -52,7 +52,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
+    pub fn ingest(&self, meta: &SstMeta, db: &DB) -> Result<()> {
         match self.dir.ingest(meta, db) {
             Ok(_) => {
                 info!("ingest"; "meta" => ?meta);
@@ -65,7 +65,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
+    pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         self.dir.list_ssts()
     }
 }
@@ -107,7 +107,7 @@ impl ImportDir {
         })
     }
 
-    fn join(&self, meta: &SSTMeta) -> Result<ImportPath> {
+    fn join(&self, meta: &SstMeta) -> Result<ImportPath> {
         let file_name = sst_meta_to_path(meta)?;
         let save_path = self.root_dir.join(&file_name);
         let temp_path = self.temp_dir.join(&file_name);
@@ -119,7 +119,7 @@ impl ImportDir {
         })
     }
 
-    fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
+    fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
         let path = self.join(meta)?;
         if path.save.exists() {
             return Err(Error::FileExists(path.save));
@@ -127,7 +127,7 @@ impl ImportDir {
         ImportFile::create(meta.clone(), path)
     }
 
-    fn delete(&self, meta: &SSTMeta) -> Result<ImportPath> {
+    fn delete(&self, meta: &SstMeta) -> Result<ImportPath> {
         let path = self.join(meta)?;
         if path.save.exists() {
             fs::remove_file(&path.save)?;
@@ -141,7 +141,7 @@ impl ImportDir {
         Ok(path)
     }
 
-    fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
+    fn ingest(&self, meta: &SstMeta, db: &DB) -> Result<()> {
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
         prepare_sst_for_ingestion(&path.save, &path.clone)?;
@@ -154,7 +154,7 @@ impl ImportDir {
         Ok(())
     }
 
-    fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
+    fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         let mut ssts = Vec::new();
         for e in fs::read_dir(&self.root_dir)? {
             let e = e?;
@@ -193,14 +193,14 @@ impl fmt::Debug for ImportPath {
 
 /// ImportFile is used to handle the writing and verification of SST files.
 pub struct ImportFile {
-    meta: SSTMeta,
+    meta: SstMeta,
     path: ImportPath,
     file: Option<File>,
     digest: crc32::Digest,
 }
 
 impl ImportFile {
-    fn create(meta: SSTMeta, path: ImportPath) -> Result<ImportFile> {
+    fn create(meta: SstMeta, path: ImportPath) -> Result<ImportFile> {
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -275,7 +275,7 @@ impl fmt::Debug for ImportFile {
 
 const SST_SUFFIX: &str = ".sst";
 
-fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
+fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}{}",
         Uuid::from_bytes(meta.get_uuid())?,
@@ -286,7 +286,7 @@ fn sst_meta_to_path(meta: &SSTMeta) -> Result<PathBuf> {
     )))
 }
 
-fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
+fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
@@ -303,7 +303,7 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
 
-    let mut meta = SSTMeta::default();
+    let mut meta = SstMeta::default();
     let uuid = Uuid::parse_str(elems[0])?;
     meta.set_uuid(uuid.as_bytes().to_vec());
     meta.set_region_id(elems[1].parse()?);
@@ -325,7 +325,7 @@ mod tests {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
         let dir = ImportDir::new(temp_dir.path()).unwrap();
 
-        let mut meta = SSTMeta::default();
+        let mut meta = SstMeta::default();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
         let path = dir.join(&meta).unwrap();
@@ -399,7 +399,7 @@ mod tests {
         let data = b"test_data";
         let crc32 = calc_data_crc32(data);
 
-        let mut meta = SSTMeta::default();
+        let mut meta = SstMeta::default();
 
         {
             let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn test_sst_meta_to_path() {
-        let mut meta = SSTMeta::default();
+        let mut meta = SstMeta::default();
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
         meta.set_region_id(1);
