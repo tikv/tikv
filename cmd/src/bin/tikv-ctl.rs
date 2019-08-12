@@ -2047,10 +2047,8 @@ fn main() {
         }
     } else if let Some(_) = matches.subcommand_matches("store") {
         debug_executor.dump_store_info();
-        return;
     } else if let Some(_) = matches.subcommand_matches("cluster") {
         debug_executor.dump_cluster_info();
-        return;
     } else {
         let _ = app.print_help();
     }
