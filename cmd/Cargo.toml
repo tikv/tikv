@@ -48,7 +48,6 @@ raft = "0.6.0-alpha"
 hex = "0.3"
 vlog = "0.1.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-
 tikv_util = { path = "../components/tikv_util" }
 engine = { path = "../components/engine" }
 pd_client = { path = "../components/pd_client" }
