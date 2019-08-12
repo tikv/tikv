@@ -77,7 +77,7 @@ fn test_analyze_column_with_lock() {
     ];
 
     let product = ProductTable::new();
-    for &iso_level in &[IsolationLevel::SI, IsolationLevel::RC] {
+    for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
         let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_column_req(&product, 3, 3, 3, 4, 32);
@@ -87,11 +87,11 @@ fn test_analyze_column_with_lock() {
 
         let resp = handle_request(&endpoint, req);
         match iso_level {
-            IsolationLevel::SI => {
+            IsolationLevel::Si => {
                 assert!(resp.get_data().is_empty(), "{:?}", resp);
                 assert!(resp.has_locked(), "{:?}", resp);
             }
-            IsolationLevel::RC => {
+            IsolationLevel::Rc => {
                 let mut analyze_resp = AnalyzeColumnsResp::default();
                 analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
                 let hist = analyze_resp.get_pk_hist();
@@ -142,7 +142,7 @@ fn test_analyze_index_with_lock() {
     ];
 
     let product = ProductTable::new();
-    for &iso_level in &[IsolationLevel::SI, IsolationLevel::RC] {
+    for &iso_level in &[IsolationLevel::Si, IsolationLevel::Rc] {
         let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
         let mut req = new_analyze_index_req(&product, 3, product["name"].index, 4, 32);
@@ -152,11 +152,11 @@ fn test_analyze_index_with_lock() {
 
         let resp = handle_request(&endpoint, req);
         match iso_level {
-            IsolationLevel::SI => {
+            IsolationLevel::Si => {
                 assert!(resp.get_data().is_empty(), "{:?}", resp);
                 assert!(resp.has_locked(), "{:?}", resp);
             }
-            IsolationLevel::RC => {
+            IsolationLevel::Rc => {
                 let mut analyze_resp = AnalyzeIndexResp::default();
                 analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
                 let hist = analyze_resp.get_hist();

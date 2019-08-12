@@ -11,11 +11,11 @@ use super::super::expr::{eval_arith, EvalContext};
 
 pub fn build_aggr_func(tp: ExprType) -> Result<Box<dyn AggrFunc>> {
     match tp {
-        ExprType::Agg_BitAnd => Ok(Box::new(AggBitAnd {
+        ExprType::AggBitAnd => Ok(Box::new(AggBitAnd {
             c: 0xffffffffffffffff,
         })),
-        ExprType::Agg_BitOr => Ok(Box::new(AggBitOr { c: 0 })),
-        ExprType::Agg_BitXor => Ok(Box::new(AggBitXor { c: 0 })),
+        ExprType::AggBitOr => Ok(Box::new(AggBitOr { c: 0 })),
+        ExprType::AggBitXor => Ok(Box::new(AggBitXor { c: 0 })),
         ExprType::Count => Ok(Box::new(Count { c: 0 })),
         ExprType::First => Ok(Box::new(First { e: None })),
         ExprType::Sum => Ok(Box::new(Sum { res: None })),

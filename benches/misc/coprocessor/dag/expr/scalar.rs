@@ -6,7 +6,7 @@ use tipb::ScalarFuncSig;
 fn get_scalar_args_with_match(sig: ScalarFuncSig) -> (usize, usize) {
     // Only select some functions to benchmark
     let (min_args, max_args) = match sig {
-        ScalarFuncSig::LTInt => (2, 2),
+        ScalarFuncSig::LtInt => (2, 2),
         ScalarFuncSig::CastIntAsInt => (1, 1),
         ScalarFuncSig::IfInt => (3, 3),
         ScalarFuncSig::JsonArraySig => (0, usize::MAX),
@@ -23,7 +23,7 @@ fn init_scalar_args_map() -> HashMap<ScalarFuncSig, (usize, usize)> {
     let mut m: HashMap<ScalarFuncSig, (usize, usize)> = HashMap::default();
 
     let tbls = vec![
-        (ScalarFuncSig::LTInt, (2, 2)),
+        (ScalarFuncSig::LtInt, (2, 2)),
         (ScalarFuncSig::CastIntAsInt, (1, 1)),
         (ScalarFuncSig::IfInt, (3, 3)),
         (ScalarFuncSig::JsonArraySig, (0, usize::MAX)),

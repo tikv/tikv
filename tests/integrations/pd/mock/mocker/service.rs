@@ -79,7 +79,7 @@ impl PdMocker for Service {
 
         if self.is_bootstrapped.load(Ordering::SeqCst) {
             let mut err = Error::default();
-            err.set_field_type(ErrorType::UNKNOWN);
+            err.set_type(ErrorType::Unknown);
             err.set_message("cluster is already bootstrapped".to_owned());
             header.set_error(err);
             resp.set_header(header);
@@ -106,8 +106,8 @@ impl PdMocker for Service {
         Some(Ok(resp))
     }
 
-    fn alloc_id(&self, _: &AllocIDRequest) -> Option<Result<AllocIDResponse>> {
-        let mut resp = AllocIDResponse::default();
+    fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
+        let mut resp = AllocIdResponse::default();
         resp.set_header(Service::header());
 
         let id = self.id_allocator.fetch_add(1, Ordering::SeqCst);
@@ -128,7 +128,7 @@ impl PdMocker for Service {
             None => {
                 let mut header = Service::header();
                 let mut err = Error::default();
-                err.set_field_type(ErrorType::UNKNOWN);
+                err.set_type(ErrorType::Unknown);
                 err.set_message(format!("store not found {}", req.get_store_id()));
                 header.set_error(err);
                 resp.set_header(header);
@@ -172,14 +172,14 @@ impl PdMocker for Service {
 
         let mut header = Service::header();
         let mut err = Error::default();
-        err.set_field_type(ErrorType::UNKNOWN);
+        err.set_type(ErrorType::Unknown);
         err.set_message(format!("region not found {:?}", key));
         header.set_error(err);
         resp.set_header(header);
         Some(Ok(resp))
     }
 
-    fn get_region_by_id(&self, req: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+    fn get_region_by_id(&self, req: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
         let mut resp = GetRegionResponse::default();
         let regions = self.regions.lock().unwrap();
         let leaders = self.leaders.lock().unwrap();
@@ -196,7 +196,7 @@ impl PdMocker for Service {
             None => {
                 let mut header = Service::header();
                 let mut err = Error::default();
-                err.set_field_type(ErrorType::UNKNOWN);
+                err.set_type(ErrorType::Unknown);
                 err.set_message(format!("region not found {}", req.region_id));
                 header.set_error(err);
                 resp.set_header(header);
