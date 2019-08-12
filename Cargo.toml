@@ -81,7 +81,7 @@ libc = "0.2"
 crc = "1.8"
 fs2 = "0.4"
 spin = "0.5"
-protobuf = "2"
+protobuf = "2.8"
 nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
@@ -148,6 +148,8 @@ default-features = false
 # TODO: remove this when new raft-rs is published.
 "raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
 "raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
+"protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
+"protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage

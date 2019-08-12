@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use kvproto::import_sstpb::SSTMeta;
+use kvproto::import_sstpb::SstMeta;
 
 use crate::import::SSTImporter;
 use crate::raftstore::store::util::is_epoch_stale;
@@ -12,8 +12,8 @@ use pd_client::PdClient;
 use tikv_util::worker::Runnable;
 
 pub enum Task {
-    DeleteSST { ssts: Vec<SSTMeta> },
-    ValidateSST { ssts: Vec<SSTMeta> },
+    DeleteSST { ssts: Vec<SstMeta> },
+    ValidateSST { ssts: Vec<SstMeta> },
 }
 
 impl fmt::Display for Task {
@@ -48,14 +48,14 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
     }
 
     /// Deletes SST files from the importer.
-    fn handle_delete_sst(&self, ssts: Vec<SSTMeta>) {
+    fn handle_delete_sst(&self, ssts: Vec<SstMeta>) {
         for sst in &ssts {
             let _ = self.importer.delete(sst);
         }
     }
 
     /// Validates whether the SST is stale or not.
-    fn handle_validate_sst(&self, ssts: Vec<SSTMeta>) {
+    fn handle_validate_sst(&self, ssts: Vec<SstMeta>) {
         let store_id = self.store_id;
         let mut invalid_ssts = Vec::new();
         for sst in ssts {

@@ -97,7 +97,7 @@ mod tests {
     fn new_const_expr() -> Expr {
         let mut expr = Expr::default();
         expr.set_tp(ExprType::ScalarFunc);
-        expr.set_sig(ScalarFuncSig::NullEQInt);
+        expr.set_sig(ScalarFuncSig::NullEqInt);
         expr.mut_children().push({
             let mut lhs = Expr::default();
             lhs.set_tp(ExprType::Null);
@@ -114,7 +114,7 @@ mod tests {
     fn new_col_gt_u64_expr(offset: i64, val: u64) -> Expr {
         let mut expr = Expr::default();
         expr.set_tp(ExprType::ScalarFunc);
-        expr.set_sig(ScalarFuncSig::GTInt);
+        expr.set_sig(ScalarFuncSig::GtInt);
         expr.mut_children().push({
             let mut lhs = Expr::default();
             lhs.set_tp(ExprType::ColumnRef);
