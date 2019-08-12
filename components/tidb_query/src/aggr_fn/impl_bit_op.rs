@@ -44,9 +44,9 @@ macro_rules! bit_op {
     };
 }
 
-bit_op!(BitAnd, ExprType::Agg_BitAnd, 0xffff_ffff_ffff_ffff, &=);
-bit_op!(BitOr, ExprType::Agg_BitOr, 0, |=);
-bit_op!(BitXor, ExprType::Agg_BitXor, 0, ^=);
+bit_op!(BitAnd, ExprType::AggBitAnd, 0xffff_ffff_ffff_ffff, &=);
+bit_op!(BitOr, ExprType::AggBitOr, 0, |=);
+bit_op!(BitXor, ExprType::AggBitXor, 0, ^=);
 
 /// The parser for bit operation aggregate functions.
 pub struct AggrFnDefinitionParserBitOp<T: BitOp>(std::marker::PhantomData<T>);
@@ -355,17 +355,17 @@ mod tests {
         let bit_or_parser = AggrFnDefinitionParserBitOp::<BitOr>::new();
         let bit_xor_parser = AggrFnDefinitionParserBitOp::<BitXor>::new();
 
-        let bit_and = ExprDefBuilder::aggr_func(ExprType::Agg_BitAnd, FieldTypeTp::LongLong)
+        let bit_and = ExprDefBuilder::aggr_func(ExprType::AggBitAnd, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .build();
         bit_and_parser.check_supported(&bit_and).unwrap();
 
-        let bit_or = ExprDefBuilder::aggr_func(ExprType::Agg_BitOr, FieldTypeTp::LongLong)
+        let bit_or = ExprDefBuilder::aggr_func(ExprType::AggBitOr, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .build();
         bit_or_parser.check_supported(&bit_or).unwrap();
 
-        let bit_xor = ExprDefBuilder::aggr_func(ExprType::Agg_BitXor, FieldTypeTp::LongLong)
+        let bit_xor = ExprDefBuilder::aggr_func(ExprType::AggBitXor, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .build();
         bit_xor_parser.check_supported(&bit_xor).unwrap();

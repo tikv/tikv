@@ -10,7 +10,7 @@ pub struct Incompatible;
 impl PdMocker for Incompatible {
     fn ask_batch_split(&self, _: &AskBatchSplitRequest) -> Option<Result<AskBatchSplitResponse>> {
         let mut err = Error::default();
-        err.set_field_type(ErrorType::INCOMPATIBLE_VERSION);
+        err.set_type(ErrorType::IncompatibleVersion);
 
         let mut header = ResponseHeader::default();
         header.set_error(err);

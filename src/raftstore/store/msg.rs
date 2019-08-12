@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use kvproto::import_sstpb::SSTMeta;
+use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -334,7 +334,7 @@ pub enum StoreMsg {
     SnapshotStats,
 
     ValidateSSTResult {
-        invalid_ssts: Vec<SSTMeta>,
+        invalid_ssts: Vec<SstMeta>,
     },
 
     // Clear region size and keys for all regions in the range, so we can force them to re-calculate
