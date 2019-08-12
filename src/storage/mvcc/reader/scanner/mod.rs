@@ -61,7 +61,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
 
     /// Set the isolation level.
     ///
-    /// Defaults to `IsolationLevel::SI`.
+    /// Defaults to `IsolationLevel::Si`.
     #[inline]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.isolation_level = isolation_level;
@@ -142,7 +142,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             snapshot,
             fill_cache: true,
             omit_value: false,
-            isolation_level: IsolationLevel::SI,
+            isolation_level: IsolationLevel::Si,
             lower_bound: None,
             upper_bound: None,
             ts,

@@ -154,7 +154,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         // Make ingest command.
         let mut ingest = Request::default();
-        ingest.set_cmd_type(CmdType::IngestSST);
+        ingest.set_cmd_type(CmdType::IngestSst);
         ingest.mut_ingest_sst().set_sst(req.take_sst());
         let mut context = req.take_context();
         let mut header = RaftRequestHeader::default();
