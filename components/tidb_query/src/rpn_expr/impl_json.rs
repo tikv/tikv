@@ -98,9 +98,7 @@ mod tests {
         for (vargs, expected) in cases {
             let vargs = vargs
                 .into_iter()
-                .map(|input| input.map(|s| {
-                    let js = Json::from_str(s).unwrap()
-                }))
+                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
                 .collect::<Vec<_>>();
             let expected = expected.map(|s| Json::from_str(s).unwrap());
 
