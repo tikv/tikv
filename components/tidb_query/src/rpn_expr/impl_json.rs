@@ -16,9 +16,9 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 #[rpn_fn(varg)]
 #[inline]
-fn json_array(varg: &[&Option<Json>]) -> Result<Option<Json>> {
+fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
     Ok(Some(Json::Array(
-        varg.iter()
+        args.iter()
             .map(|json| match json {
                 None => Json::None,
                 Some(json) => json.to_owned(),
@@ -32,14 +32,30 @@ fn json_array(varg: &[&Option<Json>]) -> Result<Option<Json>> {
 /// `&[&(Option<Json>, Option<Bytes>)]`
 #[rpn_fn(raw_varg)]
 #[inline]
-fn json_object(raw_varg: &[ScalarValueRef]) -> Result<Option<Json>> {
+fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     unimplemented!()
 }
 
-#[rpn_fn(varg)]
+macro_rules! parse_opt {
+    ($expr:expr) => {{
+        match $expr {
+            Some(ref v) => v.to_owned().clone(),
+            None => return Ok(None),
+        }
+    }};
+}
+
+// According to mysql 5.7,
+// arguments of json_merge should not be less than 2.
+#[rpn_fn(varg, min_args = 2)]
 #[inline]
-pub fn json_merge(varg: &[&Option<Json>]) -> Result<Option<Json>> {
-    unimplemented!()
+pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
+    // min_args = 2, so it's ok to call args[0]
+    let mut base_json = parse_opt!(args[0]);
+    for json_to_merge in &args[1..] {
+        base_json = base_json.merge(parse_opt!(json_to_merge));
+    }
+    Ok(Some(base_json))
 }
 
 #[cfg(test)]
@@ -112,7 +128,32 @@ mod tests {
 
     #[test]
     fn test_json_merge() {
-        unimplemented!()
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some("{}"), Some("[]")], Some("[{}]")),
+            (
+                vec![Some(r#"{}"#), Some(r#"[]"#), Some(r#"3"#), Some(r#""4""#)],
+                Some(r#"[{}, 3, "4"]"#),
+            ),
+            (
+                vec![Some("[1, 2]"), Some("[3, 4]")],
+                Some(r#"[1, 2, 3, 4]"#),
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs = vargs
+                .into_iter()
+                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
+                .collect::<Vec<_>>();
+            let expected = expected.map(|s| Json::from_str(s).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonMergeSig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
+        }
     }
 
     #[test]
