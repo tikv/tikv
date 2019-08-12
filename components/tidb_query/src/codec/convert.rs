@@ -726,7 +726,7 @@ fn exp_float_str_to_int_str<'a>(
     }
     // make `digits` immutable
     let digits = digits;
-    let exp: i64 = box_try!(&valid_float[(e_idx + 1)..].parse::<i64>());
+    let exp: i64 = box_try!((&valid_float[(e_idx + 1)..]).parse::<i64>());
     let (int_cnt, is_overflow): (i64, bool) = int_cnt.overflowing_add(exp);
     if int_cnt > 21 || is_overflow {
         // MaxInt64 has 19 decimal digits.
