@@ -2045,9 +2045,9 @@ fn main() {
             let resp = client.list_fail_points_opt(&list_req, option).unwrap();
             v1!("{:?}", resp.get_entries());
         }
-    } else if let Some(_) = matches.subcommand_matches("store") {
+    } else if matches.subcommand_matches("store").is_some() {
         debug_executor.dump_store_info();
-    } else if let Some(_) = matches.subcommand_matches("cluster") {
+    } else if matches.subcommand_matches("cluster").is_some() {
         debug_executor.dump_cluster_info();
     } else {
         let _ = app.print_help();
