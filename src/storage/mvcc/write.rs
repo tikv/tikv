@@ -138,7 +138,7 @@ mod tests {
             (None, WriteType::Rollback, FLAG_ROLLBACK),
         ];
         for (i, (lock_type, write_type, flag)) in tests.drain(..).enumerate() {
-            if let Some(lock_type) = lock_type  {
+            if let Some(lock_type) = lock_type {
                 let wt = WriteType::from_lock_type(lock_type).unwrap();
                 assert_eq!(
                     wt, write_type,

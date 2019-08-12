@@ -588,9 +588,7 @@ mod tests {
             let col_expr = col_expr(0);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
             if let Some(flag) = flag {
-                ex.mut_field_type()
-                    .as_mut_accessor()
-                    .set_flag(flag);
+                ex.mut_field_type().as_mut_accessor().set_flag(flag);
             }
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval(&mut ctx, &cols).unwrap();

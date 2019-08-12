@@ -501,7 +501,9 @@ fn notify_waiter_mgr_if_needed(
     key_hashes: Option<Vec<u64>>,
     commit_ts: u64,
 ) {
-    if let (Some(waiter_mgr_scheduler), Some(key_hashes)) = (waiter_mgr_scheduler.as_ref(), key_hashes) {
+    if let (Some(waiter_mgr_scheduler), Some(key_hashes)) =
+        (waiter_mgr_scheduler.as_ref(), key_hashes)
+    {
         waiter_mgr_scheduler.wake_up(lock_ts, key_hashes, commit_ts);
     }
 }
