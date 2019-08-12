@@ -14,6 +14,41 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
         .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
+/// TODO: add error handling in this function
+/// TODO: make clear can we use validator here
+#[rpn_fn(varg)]
+#[inline]
+fn json_array(varg: &[&Option<Json>]) -> Result<Option<Json>> {
+    let length = varg.len();
+    if length == 0 {
+        Ok(None)
+    } else if length % 2 != 0 {
+        unimplemented!()
+    } else {
+        Ok(Some(Json::Array(
+            varg.iter()
+                .map(|json| match json {
+                    None => Json::None,
+                    Some(json) => json.to_owned(),
+                })
+                .collect(),
+        )))
+    }
+}
+
+/// `&[&(Option<Json>, Option<Bytes>)]`
+#[rpn_fn(raw_varg)]
+#[inline]
+fn json_object(varg: &[ScalarValueRef]) -> Result<Option<Json>> {
+    unimplemented!()
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn json_merge(varg: &[&Option<Json>]) -> Result<Option<Json>> {
+    unimplemented!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -22,10 +57,10 @@ mod tests {
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
+    use std::str::FromStr;
+
     #[test]
     fn test_json_type() {
-        use std::str::FromStr;
-
         let cases = vec![
             (None, None),
             (Some(r#"true"#), Some("BOOLEAN")),
@@ -47,5 +82,48 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
+    }
+
+    #[test]
+    fn test_json_array() {
+        let cases = vec![
+            (vec![], Some(r#"[]"#)),
+            (vec![Some("1"), None], Some(r#"[1, null]"#)),
+            (
+                vec![
+                    Some("1"),
+                    None,
+                    Some("2"),
+                    Some("sdf"),
+                    Some("k1"),
+                    Some("v1"),
+                ],
+                Some(r#"[1, null, 2, "sdf", "k1", "v1"]"#),
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs: Vec<Option<Json>> = vargs
+                .iter()
+                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
+                .collect();
+            let expected = expected.map(|s| Bytes::from(s));
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonArraySig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
+        }
+    }
+
+    #[test]
+    fn test_json_merge() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn test_json_object() {
+        unimplemented!()
     }
 }
