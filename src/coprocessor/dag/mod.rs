@@ -7,14 +7,14 @@ pub use self::storage_impl::TiKVStorage;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query::storage::IntervalRange;
-use tipb::{DAGRequest, SelectResponse, StreamResponse};
+use tipb::{DagRequest, SelectResponse, StreamResponse};
 
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::{Deadline, RequestHandler, Result};
 use crate::storage::{Statistics, Store};
 
 pub fn build_handler<S: Store + 'static>(
-    req: DAGRequest,
+    req: DagRequest,
     ranges: Vec<KeyRange>,
     store: S,
     deadline: Deadline,
@@ -51,7 +51,7 @@ pub struct DAGHandler(tidb_query::executor::ExecutorsRunner<Statistics>);
 
 impl DAGHandler {
     pub fn new<S: Store + 'static>(
-        req: DAGRequest,
+        req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
         deadline: Deadline,
@@ -87,7 +87,7 @@ pub struct BatchDAGHandler(tidb_query::batch::runner::BatchExecutorsRunner<Stati
 
 impl BatchDAGHandler {
     pub fn new<S: Store + 'static>(
-        req: DAGRequest,
+        req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
         deadline: Deadline,

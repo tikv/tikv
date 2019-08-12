@@ -70,7 +70,7 @@ fn bench_select_col_where_fn_impl(selectivity: f64, b: &mut criterion::Bencher, 
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
         selection(&[
-            ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
+            ExprDefBuilder::scalar_func(ScalarFuncSig::GtInt, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
                 .push_child(ExprDefBuilder::constant_int(
                     (input.rows as f64 * selectivity) as i64,
@@ -105,7 +105,7 @@ fn bench_select_count_1_where_fn_impl(selectivity: f64, b: &mut criterion::Bench
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
         selection(&[
-            ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
+            ExprDefBuilder::scalar_func(ScalarFuncSig::GtInt, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
                 .push_child(ExprDefBuilder::constant_int(
                     (input.rows as f64 * selectivity) as i64,
@@ -350,7 +350,7 @@ fn bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l(
     let executors = &[
         table_scan(&[table["id"].as_column_info(), table["foo"].as_column_info()]),
         selection(&[
-            ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
+            ExprDefBuilder::scalar_func(ScalarFuncSig::GtInt, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
                 .push_child(ExprDefBuilder::constant_int(
                     (input.rows as f64 * 0.05) as i64,
@@ -383,7 +383,7 @@ fn bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l_stream(
     let executors = &[
         table_scan(&[table["id"].as_column_info(), table["foo"].as_column_info()]),
         selection(&[
-            ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
+            ExprDefBuilder::scalar_func(ScalarFuncSig::GtInt, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
                 .push_child(ExprDefBuilder::constant_int(
                     (input.rows as f64 * 0.05) as i64,
@@ -461,7 +461,7 @@ fn bench_select_where_fn_order_by_3_col_impl(
             table["col2"].as_column_info(),
         ]),
         selection(&[
-            ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
+            ExprDefBuilder::scalar_func(ScalarFuncSig::GtInt, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
                 .push_child(ExprDefBuilder::constant_int(0))
                 .build(),
