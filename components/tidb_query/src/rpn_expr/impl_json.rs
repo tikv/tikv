@@ -30,8 +30,7 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
 }
 
 /// Required args like `&[&(Option<Byte>, Option<Json>)]`.
-/// TODO: Use extra_validator to validate arguments.
-#[rpn_fn(raw_varg, extra_validator = json_object_validator)]
+#[rpn_fn(raw_varg)]
 #[inline]
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
@@ -45,7 +44,7 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
         let key = match key {
             // json_object should raise an error if key is None(NULL)
             None => Err(other_err!(
-                "JSON documents may not contain NULL member names."
+                "Data truncation: JSON documents may not contain NULL member names."
             )),
             Some(v) => {
                 String::from_utf8(v.to_owned()).map_err(|e| crate::codec::Error::from(e).into())
@@ -60,20 +59,6 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
         pairs.insert(key, value);
     }
     Ok(Some(Json::Object(pairs)))
-}
-
-fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
-    for chunk in expr.get_children().chunks(2) {
-        if chunk.len() == 1 {
-            return Err(other_err!(
-                "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
-            ));
-        } else {
-            super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
-            super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
-        }
-    }
-    Ok(())
 }
 
 macro_rules! parse_opt {
