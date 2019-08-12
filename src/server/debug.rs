@@ -701,6 +701,16 @@ impl Debugger {
             })
     }
 
+    pub fn get_cluster_id(&self) -> Result<u64> {
+        let db = &self.engines.kv;
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+            .map_err(|e| box_err!(e))
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(ident.get_cluster_id()),
+                None => Err(Error::NotFound("No cluster ident key".to_owned())),
+            })
+    }
+
     fn modify_block_cache_size(&self, db: DBType, cf_name: &str, config_value: &str) -> Result<()> {
         use super::CONFIG_ROCKSDB_GAUGE;
         let rocksdb = self.get_db_from_type(db)?;

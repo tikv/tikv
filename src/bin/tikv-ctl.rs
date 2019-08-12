@@ -559,6 +559,10 @@ trait DebugExecutor {
     fn dump_metrics(&self, tags: Vec<&str>);
 
     fn dump_region_properties(&self, region_id: u64);
+
+    fn dump_store_info(&self);
+
+    fn dump_cluster_info(&self);
 }
 
 impl DebugExecutor for DebugClient {
@@ -745,6 +749,10 @@ impl DebugExecutor for DebugClient {
             v1!("{}: {}", prop.get_name(), prop.get_value());
         }
     }
+
+    fn dump_store_info(&self) {}
+
+    fn dump_cluster_info(&self) {}
 }
 
 impl DebugExecutor for Debugger {
@@ -943,6 +951,20 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
         for (name, value) in props {
             v1!("{}: {}", name, value);
+        }
+    }
+
+    fn dump_store_info(&self) {
+        let store_id = self.get_store_id();
+        if let Ok(id) = store_id {
+            v1!("store id: {}", id);
+        }
+    }
+
+    fn dump_cluster_info(&self) {
+        let cluster_id = self.get_cluster_id();
+        if let Ok(id) = cluster_id {
+            v1!("cluster id: {}", id);
         }
     }
 }
@@ -1696,6 +1718,14 @@ fn main() {
                         .default_value("1024")
                         .help("the length"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("store")
+                .about("Print the store id"),
+        )
+        .subcommand(
+            SubCommand::with_name("cluster")
+                .about("Print the cluster id"),
         );
 
     let matches = app.clone().get_matches();
@@ -2016,6 +2046,12 @@ fn main() {
             let resp = client.list_fail_points_opt(&list_req, option).unwrap();
             v1!("{:?}", resp.get_entries());
         }
+    } else if let Some(_) = matches.subcommand_matches("store") {
+        debug_executor.dump_store_info();
+        return;
+    } else if let Some(_) = matches.subcommand_matches("cluster") {
+        debug_executor.dump_cluster_info();
+        return;
     } else {
         let _ = app.print_help();
     }
