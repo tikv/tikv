@@ -3546,7 +3546,7 @@ mod tests {
         assert!(
             val.is_err(),
             "expected error, but got {:?}",
-            val.unwrap().to_string()
+            val
         );
         assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
 

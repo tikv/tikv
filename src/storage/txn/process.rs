@@ -280,8 +280,8 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if lock_info.is_some() {
-                    let (lock, is_first_lock) = lock_info.unwrap();
+                if let Some(lock_info) = lock_info {
+                    let (lock, is_first_lock) = lock_info;
                     Msg::WaitForLock {
                         cid,
                         start_ts: ts,
@@ -501,11 +501,8 @@ fn notify_waiter_mgr_if_needed(
     key_hashes: Option<Vec<u64>>,
     commit_ts: u64,
 ) {
-    if waiter_mgr_scheduler.is_some() && key_hashes.is_some() {
-        waiter_mgr_scheduler
-            .as_ref()
-            .unwrap()
-            .wake_up(lock_ts, key_hashes.unwrap(), commit_ts);
+    if let (Some(waiter_mgr_scheduler), Some(key_hashes)) = (waiter_mgr_scheduler.as_ref(), key_hashes) {
+        waiter_mgr_scheduler.wake_up(lock_ts, key_hashes, commit_ts);
     }
 }
 
@@ -515,8 +512,8 @@ fn notify_deadlock_detector_if_needed(
     is_pessimistic_txn: bool,
     txn_ts: u64,
 ) {
-    if detector_scheduler.is_some() && is_pessimistic_txn {
-        detector_scheduler.as_ref().unwrap().clean_up(txn_ts);
+    if let (Some(detector_scheduler), false) = (detector_scheduler.as_ref(), is_pessimistic_txn) {
+        detector_scheduler.clean_up(txn_ts);
     }
 }
 
