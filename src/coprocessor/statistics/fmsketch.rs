@@ -5,19 +5,19 @@ use murmur3::murmur3_x64_128;
 use tikv_util::collections::HashSet;
 use tipb;
 
-/// `FMSketch` is used to count the approximate number of distinct
+/// `FmSketch` is used to count the approximate number of distinct
 /// elements in multiset.
 /// Refer:[Flajolet-Martin](https://en.wikipedia.org/wiki/Flajolet%E2%80%93Martin_algorithm)
 #[derive(Clone)]
-pub struct FMSketch {
+pub struct FmSketch {
     mask: u64,
     max_size: usize,
     hash_set: HashSet<u64>,
 }
 
-impl FMSketch {
-    pub fn new(max_size: usize) -> FMSketch {
-        FMSketch {
+impl FmSketch {
+    pub fn new(max_size: usize) -> FmSketch {
+        FmSketch {
             mask: 0,
             max_size,
             hash_set: HashSet::with_capacity_and_hasher(max_size + 1, Default::default()),
@@ -33,8 +33,8 @@ impl FMSketch {
         self.insert_hash_value(hash);
     }
 
-    pub fn into_proto(self) -> tipb::FMSketch {
-        let mut proto = tipb::FMSketch::default();
+    pub fn into_proto(self) -> tipb::FmSketch {
+        let mut proto = tipb::FmSketch::default();
         proto.set_mask(self.mask);
         let hash = self.hash_set.into_iter().collect();
         proto.set_hashset(hash);
@@ -104,8 +104,8 @@ mod tests {
         }
     }
 
-    pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FMSketch> {
-        let mut s = FMSketch::new(max_size);
+    pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FmSketch> {
+        let mut s = FmSketch::new(max_size);
         for value in values {
             let bytes = datum::encode_value(as_slice(value))?;
             s.insert(&bytes);
@@ -113,7 +113,7 @@ mod tests {
         Ok(s)
     }
 
-    impl FMSketch {
+    impl FmSketch {
         // ndv returns the approximate number of distinct elements
         pub fn ndv(&self) -> u64 {
             (self.mask + 1) * (self.hash_set.len() as u64)
@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(pk.ndv(), 100480);
 
         let max_size = 2;
-        let mut sketch = FMSketch::new(max_size);
+        let mut sketch = FmSketch::new(max_size);
         sketch.insert_hash_value(1);
         sketch.insert_hash_value(2);
         assert_eq!(sketch.hash_set.len(), max_size);
