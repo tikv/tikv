@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::expression::{Expr, FieldType, ScalarFuncSig};
+use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{Evaluable, ScalarValue};

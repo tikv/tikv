@@ -116,7 +116,7 @@ impl ArithmeticOp for RealPlus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs + *rhs;
         if res.is_infinite() {
-            Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)))?;
+            return Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -160,7 +160,7 @@ impl ArithmeticOp for IntUintMinus {
                 .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
                 .map(|v| Some(v as i64))
         } else {
-            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)))?
+            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
         }
     }
 }
@@ -207,7 +207,7 @@ impl ArithmeticOp for RealMinus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs - *rhs;
         if res.is_infinite() {
-            Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)))?;
+            return Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -313,9 +313,9 @@ impl ArithmeticOp for DecimalMod {
         match lhs % rhs {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(v)),
-                Res::Truncated(_) => Err(Error::truncated())?,
+                Res::Truncated(_) => Err(Error::truncated().into()),
                 Res::Overflow(_) => {
-                    Err(Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs)))?
+                    Err(Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs)).into())
                 }
             },
             None => Ok(None),
@@ -480,11 +480,13 @@ fn int_divide_decimal(
                 Res::Ok(v_i64) => Ok(Some(v_i64)),
                 Res::Truncated(v_i64) => Ok(Some(v_i64)),
                 Res::Overflow(_) => {
-                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
+                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)).into())
                 }
             },
-            Res::Truncated(_) => Err(Error::truncated())?,
-            Res::Overflow(_) => Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))?,
+            Res::Truncated(_) => Err(Error::truncated().into()),
+            Res::Overflow(_) => {
+                Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)).into())
+            }
         },
         None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
     }
@@ -503,7 +505,10 @@ impl ArithmeticOpWithCtx for DecimalDivide {
                 Res::Ok(value) => Some(value),
                 Res::Truncated(_) => ctx.handle_truncate(true).map(|_| None)?,
                 Res::Overflow(_) => ctx
-                    .handle_overflow(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))
+                    .handle_overflow_err(Error::overflow(
+                        "DECIMAL",
+                        &format!("({} / {})", lhs, rhs),
+                    ))
                     .map(|_| None)?,
             },
             None => ctx.handle_division_by_zero().map(|_| None)?,
@@ -522,7 +527,7 @@ impl ArithmeticOpWithCtx for RealDivide {
         } else {
             let result = *lhs / *rhs;
             if result.is_infinite() {
-                ctx.handle_overflow(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
+                ctx.handle_overflow_err(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
                     .map(|_| None)?
             } else {
                 Some(result)
@@ -539,7 +544,7 @@ mod tests {
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::codec::error::ERR_DIVISION_BY_ZERO;
     use crate::expr::{EvalConfig, Flag, SqlMode};

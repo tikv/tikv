@@ -11,6 +11,7 @@ use grpcio::{
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct SecurityConfig {
     pub ca_path: String,

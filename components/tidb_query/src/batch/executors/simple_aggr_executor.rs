@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use tipb::executor::Aggregation;
-use tipb::expression::{Expr, FieldType};
+use tipb::Aggregation;
+use tipb::{Expr, FieldType};
 
 use crate::aggr_fn::*;
 use crate::batch::executors::util::aggr_executor::*;
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
-        use tipb::expression::ExprType;
+        use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
         // This test creates a simple aggregation executor with the following aggregate functions:

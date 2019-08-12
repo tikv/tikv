@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use tipb::executor::Selection;
-use tipb::expression::Expr;
-use tipb::expression::FieldType;
+use tipb::Expr;
+use tipb::FieldType;
+use tipb::Selection;
 
 use super::super::interface::*;
 use crate::codec::data_type::*;

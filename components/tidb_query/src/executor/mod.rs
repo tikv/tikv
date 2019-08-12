@@ -26,8 +26,8 @@ use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
 use tikv_util::codec::number;
 use tikv_util::collections::HashSet;
-use tipb::expression::{Expr, ExprType};
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::{Expr, ExprType};
 
 use crate::codec::datum::{self, Datum, DatumEncoder};
 use crate::codec::table::{self, RowColsDict};
@@ -358,9 +358,9 @@ pub mod tests {
     use std::collections::HashMap;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tikv_util::codec::number::NumberEncoder;
-    use tipb::executor::TableScan;
-    use tipb::expression::{Expr, ExprType};
-    use tipb::schema::ColumnInfo;
+    use tipb::ColumnInfo;
+    use tipb::TableScan;
+    use tipb::{Expr, ExprType};
 
     pub fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
         let mut expr = Expr::default();

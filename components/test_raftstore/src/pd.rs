@@ -15,7 +15,7 @@ use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
-use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
+use pd_client::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
@@ -1105,7 +1105,7 @@ impl PdClient for TestPdClient {
 
         let mut resp = pdpb::AskBatchSplitResponse::default();
         for _ in 0..count {
-            let mut id = pdpb::SplitID::new();
+            let mut id = pdpb::SplitId::new();
             id.set_new_region_id(self.alloc_id().unwrap());
             for _ in region.get_peers() {
                 id.mut_new_peer_ids().push(self.alloc_id().unwrap());

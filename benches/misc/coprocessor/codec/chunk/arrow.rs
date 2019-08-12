@@ -9,7 +9,7 @@ use arrow::record_batch::RecordBatch;
 use tidb_query::codec::Datum;
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 pub struct Chunk {
     pub data: RecordBatch,

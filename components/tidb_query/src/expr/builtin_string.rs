@@ -576,7 +576,7 @@ impl ScalarFunc {
         if let Some(start) = start {
             Ok(Some(Cow::Owned(s[start..].as_bytes().to_vec())))
         } else {
-            return Ok(Some(Cow::Borrowed(b"")));
+            Ok(Some(Cow::Borrowed(b"")))
         }
     }
 
@@ -631,9 +631,9 @@ impl ScalarFunc {
             positions[0]
         };
         if let Some(start) = start {
-            return Ok(Some(Cow::Owned(s[start..end].as_bytes().to_vec())));
+            Ok(Some(Cow::Owned(s[start..end].as_bytes().to_vec())))
         } else {
-            return Ok(Some(Cow::Borrowed(b"")));
+            Ok(Some(Cow::Borrowed(b"")))
         }
     }
 
@@ -1063,7 +1063,7 @@ mod tests {
     use crate::codec::mysql::charset::CHARSET_BIN;
     use std::{f64, i64};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
-    use tipb::expression::{Expr, ScalarFuncSig};
+    use tipb::{Expr, ScalarFuncSig};
 
     use crate::codec::Datum;
     use crate::expr::tests::{
@@ -1371,14 +1371,8 @@ mod tests {
             ("", ""),
             ("  你好", "你好"),
             ("  你  好", "你  好"),
-            (
-                "  분산 데이터베이스    ",
-                "분산 데이터베이스    ",
-            ),
-            (
-                "   あなたのことが好きです   ",
-                "あなたのことが好きです   ",
-            ),
+            ("  분산 데이터베이스    ", "분산 데이터베이스    "),
+            ("   あなたのことが好きです   ", "あなたのことが好きです   "),
         ];
 
         let mut ctx = EvalContext::default();
@@ -1414,14 +1408,8 @@ mod tests {
             ("", ""),
             ("  你好  ", "  你好"),
             ("  你  好  ", "  你  好"),
-            (
-                "  분산 데이터베이스    ",
-                "  분산 데이터베이스",
-            ),
-            (
-                "   あなたのことが好きです   ",
-                "   あなたのことが好きです",
-            ),
+            ("  분산 데이터베이스    ", "  분산 데이터베이스"),
+            ("   あなたのことが好きです   ", "   あなたのことが好きです"),
         ];
 
         let mut ctx = EvalContext::default();
@@ -1629,24 +1617,18 @@ mod tests {
             (Datum::Bytes("Grüße".as_bytes().to_vec()), Datum::I64(71)),
             (Datum::Bytes("München".as_bytes().to_vec()), Datum::I64(77)),
             (Datum::Null, Datum::Null),
-            (
-                Datum::Bytes("数据库".as_bytes().to_vec()),
-                Datum::I64(230),
-            ),
+            (Datum::Bytes("数据库".as_bytes().to_vec()), Datum::I64(230)),
             (
                 Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
                 Datum::I64(229),
             ),
-            (
-                Datum::Bytes("Αθήνα".as_bytes().to_vec()),
-                Datum::I64(206),
-            ),
+            (Datum::Bytes("Αθήνα".as_bytes().to_vec()), Datum::I64(206)),
         ];
 
         let mut ctx = EvalContext::default();
         for (input, exp) in cases {
             let input = datum_expr(input);
-            let op = scalar_func_expr(ScalarFuncSig::ASCII, &[input]);
+            let op = scalar_func_expr(ScalarFuncSig::Ascii, &[input]);
             let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -1671,16 +1653,8 @@ mod tests {
                 Datum::Bytes("数据库".as_bytes().to_vec()),
             ),
             (
-                Datum::Bytes(
-                    "ночь на окраине москвы"
-                        .as_bytes()
-                        .to_vec(),
-                ),
-                Datum::Bytes(
-                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
-                        .as_bytes()
-                        .to_vec(),
-                ),
+                Datum::Bytes("ночь на окраине москвы".as_bytes().to_vec()),
+                Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
             ),
             (
                 Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
@@ -1714,16 +1688,8 @@ mod tests {
                 Datum::Bytes("数据库".as_bytes().to_vec()),
             ),
             (
-                Datum::Bytes(
-                    "ночь на окраине москвы"
-                        .as_bytes()
-                        .to_vec(),
-                ),
-                Datum::Bytes(
-                    "ночь на окраине москвы"
-                        .as_bytes()
-                        .to_vec(),
-                ),
+                Datum::Bytes("ночь на окраине москвы".as_bytes().to_vec()),
+                Datum::Bytes("ночь на окраине москвы".as_bytes().to_vec()),
             ),
             (
                 Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
@@ -1767,16 +1733,8 @@ mod tests {
                 Datum::Bytes("数据库".as_bytes().to_vec()),
             ),
             (
-                Datum::Bytes(
-                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
-                        .as_bytes()
-                        .to_vec(),
-                ),
-                Datum::Bytes(
-                    "ночь на окраине москвы"
-                        .as_bytes()
-                        .to_vec(),
-                ),
+                Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                Datum::Bytes("ночь на окраине москвы".as_bytes().to_vec()),
             ),
             (
                 Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
@@ -1809,16 +1767,8 @@ mod tests {
                 Datum::Bytes("数据库".as_bytes().to_vec()),
             ),
             (
-                Datum::Bytes(
-                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
-                        .as_bytes()
-                        .to_vec(),
-                ),
-                Datum::Bytes(
-                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
-                        .as_bytes()
-                        .to_vec(),
-                ),
+                Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
             ),
             (
                 Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
@@ -1860,11 +1810,7 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
-                    Datum::Bytes(
-                        "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
-                            .as_bytes()
-                            .to_vec(),
-                    ),
+                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公CAFÉ数据库قاعدة البياناتНОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -1918,11 +1864,7 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
-                    Datum::Bytes(
-                        "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
-                            .as_bytes()
-                            .to_vec(),
-                    ),
+                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -1953,7 +1895,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let expr = scalar_func_expr(ScalarFuncSig::ConcatWs, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
@@ -2056,11 +1998,7 @@ mod tests {
             (Datum::Bytes("CAFÉ".as_bytes().to_vec()), Datum::I64(4)),
             (Datum::Bytes("数据库".as_bytes().to_vec()), Datum::I64(3)),
             (
-                Datum::Bytes(
-                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
-                        .as_bytes()
-                        .to_vec(),
-                ),
+                Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
                 Datum::I64(22),
             ),
             (
@@ -2087,11 +2025,7 @@ mod tests {
             (Datum::Bytes("CAFÉ".as_bytes().to_vec()), Datum::I64(5)),
             (Datum::Bytes("数据库".as_bytes().to_vec()), Datum::I64(9)),
             (
-                Datum::Bytes(
-                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
-                        .as_bytes()
-                        .to_vec(),
-                ),
+                Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
                 Datum::I64(41),
             ),
             (
@@ -2862,12 +2796,7 @@ mod tests {
 
         // multibytes & unsigned position test
         let corner_case_tests = vec![
-            (
-                "中文a测试",
-                Datum::I64(-2),
-                Datum::I64(2),
-                vec![175, 149],
-            ),
+            ("中文a测试", Datum::I64(-2), Datum::I64(2), vec![175, 149]),
             (
                 "Sakila",
                 Datum::U64(u64::max_value()),

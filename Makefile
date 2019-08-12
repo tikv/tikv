@@ -103,10 +103,10 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build:
-	cargo build  --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" -p cmd
 
 run:
-	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
+	cargo run --no-default-features --features  "${ENABLE_FEATURES}" -p cmd --bin tikv-server
 
 
 ## Release builds (optimized dev builds)
@@ -120,7 +120,7 @@ run:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -p cmd
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -184,7 +184,7 @@ test:
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} -p cmd --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
@@ -234,7 +234,7 @@ audit: pre-audit
 # A special target for building just the tikv-ctl binary and release mode and copying it
 # into BIN_PATH. It's not clear who uses this for what. If you know please document it.
 ctl:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -p cmd --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
@@ -269,5 +269,6 @@ x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
 x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
+x-build-dist: export X_PACKAGE=cmd
 x-build-dist:
 	bash scripts/run-cargo.sh
