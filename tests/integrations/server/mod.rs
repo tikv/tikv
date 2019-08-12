@@ -86,6 +86,7 @@ macro_rules! bstream_call_dispatch {
 struct MockKv<T>(pub T);
 
 trait MockKvService {
+    unary_call!(kv_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse);
     unary_call!(kv_get, GetRequest, GetResponse);
     unary_call!(kv_scan, ScanRequest, ScanResponse);
     unary_call!(kv_prewrite, PrewriteRequest, PrewriteResponse);
@@ -151,6 +152,7 @@ trait MockKvService {
 }
 
 impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
+    unary_call_dispatch!(kv_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse);
     unary_call_dispatch!(kv_get, GetRequest, GetResponse);
     unary_call_dispatch!(kv_scan, ScanRequest, ScanResponse);
     unary_call_dispatch!(kv_prewrite, PrewriteRequest, PrewriteResponse);

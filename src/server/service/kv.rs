@@ -86,6 +86,14 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E> {
+    fn kv_txn_heart_beat(
+        &mut self,
+        _: RpcContext<'_>,
+        _: TxnHeartBeatRequest,
+        _: UnarySink<TxnHeartBeatResponse>,
+    ) {
+        unimplemented!()
+    }
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
         let future = future_get(&self.storage, req)
@@ -1263,6 +1271,7 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
+        _ => unimplemented!(),
     }
 }
 
