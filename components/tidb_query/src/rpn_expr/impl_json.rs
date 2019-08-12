@@ -29,20 +29,28 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
     )))
 }
 
-/// `&[&(Option<Byte>, Option<Json>)]`
-/// TODO: if we need to capture Expression to handle the error here?
-/// TODO: add errors for key is None
+/// Required args like `&[&(Option<Byte>, Option<Json>)]`.
+/// TODO: Use extra_validator to validate arguments.
 #[rpn_fn(raw_varg, extra_validator = json_object_validator)]
 #[inline]
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
     for chunk in raw_args.chunks(2) {
+        if chunk.len() == 1 {
+            return Err(other_err!(
+                "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
+            ));
+        }
         let key: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
         let key = match key {
             // json_object should raise an error if key is None(NULL)
-            None => unimplemented!(),
-            Some(v) => String::from_utf8(v.to_owned()).map_err(|e| crate::codec::Error::from(e))?,
-        };
+            None => Err(other_err!(
+                "JSON documents may not contain NULL member names."
+            )),
+            Some(v) => {
+                String::from_utf8(v.to_owned()).map_err(|e| crate::codec::Error::from(e).into())
+            }
+        }?;
 
         let value: &Option<Json> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
         let value = match value {
@@ -54,11 +62,12 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     Ok(Some(Json::Object(pairs)))
 }
 
-/// TODO: raise error when arguments doesn't match our requirements.
 fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
     for chunk in expr.get_children().chunks(2) {
         if chunk.len() == 1 {
-            unimplemented!()
+            return Err(other_err!(
+                "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
+            ));
         } else {
             super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
             super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
@@ -222,6 +231,26 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(output, expected);
+        }
+
+        let err_cases = vec![
+            vec![
+                ScalarValue::from(Bytes::from("1")),
+                ScalarValue::from(None::<Json>),
+                ScalarValue::from(Bytes::from("1")),
+            ],
+            vec![
+                ScalarValue::from(None::<Bytes>),
+                ScalarValue::from(Bytes::from("1")),
+            ],
+        ];
+
+        for err_args in err_cases {
+            let output: Result<Option<Json>> = RpnFnScalarEvaluator::new()
+                .push_params(err_args)
+                .evaluate(ScalarFuncSig::JsonObjectSig);
+
+            assert!(output.is_err());
         }
     }
 }
