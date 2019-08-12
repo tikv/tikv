@@ -648,7 +648,7 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
             int_str.push(next_char);
             let zero_count = s.len() - (idx + 1);
             if zero_count > 0 {
-                for i in 0..zero_count {
+                for _i in 0..zero_count {
                     int_str.push('0');
                 }
             }
