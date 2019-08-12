@@ -79,6 +79,6 @@ pub fn top_n(order_by_expr: &[Expr], order_is_desc: &[bool], n: usize) -> PbExec
     );
     let mut exec = PbExecutor::default();
     exec.set_tp(ExecType::TypeTopN);
-    exec.set_topN(meta);
+    exec.set_top_n(meta);
     exec
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
-use tipb::{Chunk, DAGRequest, SelectResponse, StreamResponse};
+use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -77,7 +77,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
 
                 Box::new(
-                    super::TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?
+                    super::TopNExecutor::new(exec.take_top_n(), Arc::clone(&ctx), src)?
                         .with_summary_collector(C::new(summary_slot_index)),
                 )
             }
@@ -148,7 +148,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
 
 impl<SS: 'static> ExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static>(
-        mut req: DAGRequest,
+        mut req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,

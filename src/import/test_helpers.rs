@@ -23,7 +23,7 @@ pub fn check_db_range(db: &DB, range: (u8, u8)) {
     }
 }
 
-pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u8>) {
+pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
     let mut w = SstWriterBuilder::new()
         .build(path.as_ref().to_str().unwrap())
         .unwrap();
@@ -36,11 +36,11 @@ pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u
     read_sst_file(path, range)
 }
 
-pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u8>) {
+pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
     let data = fs::read(path).unwrap();
     let crc32 = calc_data_crc32(&data);
 
-    let mut meta = SSTMeta::default();
+    let mut meta = SstMeta::default();
     meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
     meta.mut_range().set_start(vec![range.0]);
     meta.mut_range().set_end(vec![range.1]);
