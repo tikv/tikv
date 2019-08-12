@@ -648,7 +648,9 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
             int_str.push(next_char);
             let zero_count = s.len() - (idx + 1);
             if zero_count > 0 {
-                int_str.extend((0..zero_count).map(|_| '0'));
+                for i in 0..zero_count {
+                    int_str.push('0');
+                }
             }
         }
         None => {
@@ -709,7 +711,7 @@ fn exp_float_str_to_int_str<'a>(
     let int_cnt: i64;
     match dot_idx {
         None => {
-            digits.extend_from_slice((&valid_float[..e_idx]).as_bytes());
+            digits.extend_from_slice(&valid_float[..e_idx].as_bytes());
             // if digits.len() > i64::MAX,
             // then the input str has at least 9223372036854775808 chars,
             // which make the str >= 8388608.0 TB,
@@ -719,18 +721,18 @@ fn exp_float_str_to_int_str<'a>(
         Some(dot_idx) => {
             digits.extend_from_slice(&valid_float[..dot_idx].as_bytes());
             int_cnt = digits.len() as i64;
-            digits.extend_from_slice(&valid_float[((dot_idx + 1)..e_idx)].as_bytes());
+            digits.extend_from_slice(&valid_float[(dot_idx + 1)..e_idx].as_bytes());
         }
     }
     // make `digits` immutable
     let digits = digits;
-    let exp: i64 = box_try!((&valid_float[(e_idx + 1)..]).parse::<i64>());
+    let exp: i64 = box_try!(&valid_float[(e_idx + 1)..].parse::<i64>());
     let (int_cnt, is_overflow): (i64, bool) = int_cnt.overflowing_add(exp);
     if int_cnt > 21 || is_overflow {
         // MaxInt64 has 19 decimal digits.
         // MaxUint64 has 20 decimal digits.
         // And the intCnt may contain the len of `+/-`,
-        // so I use 21 here as the early detection.
+        // so here we use 21 here as the early detection.
         ctx.warnings
             .append_warning(Error::overflow("BIGINT", &valid_float));
         return Ok(Cow::Borrowed(valid_float));
