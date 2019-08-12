@@ -14,32 +14,25 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
         .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
-/// TODO: add error handling in this function
-/// TODO: make clear can we use validator here
 #[rpn_fn(varg)]
 #[inline]
 fn json_array(varg: &[&Option<Json>]) -> Result<Option<Json>> {
-    let length = varg.len();
-    if length == 0 {
-        Ok(None)
-    } else if length % 2 != 0 {
-        unimplemented!()
-    } else {
-        Ok(Some(Json::Array(
-            varg.iter()
-                .map(|json| match json {
-                    None => Json::None,
-                    Some(json) => json.to_owned(),
-                })
-                .collect(),
-        )))
-    }
+    Ok(Some(Json::Array(
+        varg.iter()
+            .map(|json| match json {
+                None => Json::None,
+                Some(json) => json.to_owned(),
+            })
+            .collect(),
+    )))
 }
 
+/// TODO: add error handling in this function
+/// TODO: make clear can we use validator here
 /// `&[&(Option<Json>, Option<Bytes>)]`
 #[rpn_fn(raw_varg)]
 #[inline]
-fn json_object(varg: &[ScalarValueRef]) -> Result<Option<Json>> {
+fn json_object(raw_varg: &[ScalarValueRef]) -> Result<Option<Json>> {
     unimplemented!()
 }
 
@@ -88,26 +81,28 @@ mod tests {
     fn test_json_array() {
         let cases = vec![
             (vec![], Some(r#"[]"#)),
-            (vec![Some("1"), None], Some(r#"[1, null]"#)),
+            (vec![Some(r#"1"#), None], Some(r#"[1, null]"#)),
             (
                 vec![
-                    Some("1"),
+                    Some(r#"1"#),
                     None,
-                    Some("2"),
-                    Some("sdf"),
-                    Some("k1"),
-                    Some("v1"),
+                    Some(r#"2"#),
+                    Some(r#""sdf""#),
+                    Some(r#""k1""#),
+                    Some(r#""v1""#),
                 ],
                 Some(r#"[1, null, 2, "sdf", "k1", "v1"]"#),
             ),
         ];
 
         for (vargs, expected) in cases {
-            let vargs: Vec<Option<Json>> = vargs
-                .iter()
-                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
-                .collect();
-            let expected = expected.map(|s| Bytes::from(s));
+            let vargs = vargs
+                .into_iter()
+                .map(|input| input.map(|s| {
+                    let js = Json::from_str(s).unwrap()
+                }))
+                .collect::<Vec<_>>();
+            let expected = expected.map(|s| Json::from_str(s).unwrap());
 
             let output = RpnFnScalarEvaluator::new()
                 .push_params(vargs.clone())
