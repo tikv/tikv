@@ -62,6 +62,59 @@ impl<T> Res<T> {
             _ => false,
         }
     }
+
+    fn into_result_impl(
+        self,
+        ctx: &mut EvalContext,
+        truncated_err: Option<Error>,
+        overflow_err: Option<Error>,
+    ) -> Result<T> {
+        match self {
+            Res::Ok(t) => Ok(t),
+            Res::Truncated(t) => if let Some(error) = truncated_err {
+                ctx.handle_truncate_err(error)
+            } else {
+                ctx.handle_truncate(true)
+            }
+            .map(|()| t),
+
+            Res::Overflow(t) => if let Some(error) = overflow_err {
+                ctx.handle_overflow_err(error)
+            } else {
+                ctx.handle_overflow(true)
+            }
+            .map(|()| t),
+        }
+    }
+
+    pub fn into_result_with_truncated_err(
+        self,
+        ctx: &mut EvalContext,
+        truncated_err: Error,
+    ) -> Result<T> {
+        self.into_result_impl(ctx, Some(truncated_err), None)
+    }
+
+    pub fn into_result_with_overflow_err(
+        self,
+        ctx: &mut EvalContext,
+        overflow_err: Error,
+    ) -> Result<T> {
+        self.into_result_impl(ctx, None, Some(overflow_err))
+    }
+
+    pub fn into_result_with_truncated_overflow_err(
+        self,
+        ctx: &mut EvalContext,
+        truncated_err: Error,
+        overflow_err: Error,
+    ) -> Result<T> {
+        self.into_result_impl(ctx, Some(truncated_err), Some(overflow_err))
+    }
+
+    pub fn into_result(self, ctx: &mut EvalContext) -> Result<T> {
+        self.into_result_impl(ctx, None, None)
+    }
 }
 
 impl<T> Into<Result<T>> for Res<T> {
@@ -2766,6 +2819,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn test_string() {
         let cases = vec![
             (WORD_BUF_LEN, b"12345" as &'static [u8], Res::Ok("12345")),

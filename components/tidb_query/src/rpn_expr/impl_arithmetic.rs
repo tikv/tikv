@@ -301,25 +301,25 @@ impl ArithmeticOp for RealMod {
 #[derive(Debug)]
 pub struct DecimalMod;
 
-impl ArithmeticOp for DecimalMod {
+impl ArithmeticOpWithCtx for DecimalMod {
     type T = Decimal;
 
-    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        use crate::codec::mysql::Res;
-
+    fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
         if rhs.is_zero() {
             return Ok(None);
         }
-        match lhs % rhs {
-            Some(v) => match v {
-                Res::Ok(v) => Ok(Some(v)),
-                Res::Truncated(_) => Err(Error::truncated().into()),
-                Res::Overflow(_) => {
-                    Err(Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs)).into())
-                }
-            },
-            None => Ok(None),
+
+        if let Some(value) = lhs % rhs {
+            value
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("DECIMAL", format!("({} % {})", lhs, rhs)),
+                )
+                .map(Some)
+        } else {
+            ctx.handle_division_by_zero().map(|_| None)
         }
+        .map_err(|err| err.into())
     }
 }
 
@@ -466,30 +466,18 @@ fn int_divide_decimal(
     lhs: &Option<Decimal>,
     rhs: &Option<Decimal>,
 ) -> Result<Option<Int>> {
-    use crate::codec::mysql::Res;
-
-    if lhs.is_none() || rhs.is_none() {
-        return Ok(None);
-    }
-    let lhs = lhs.as_ref().unwrap();
-    let rhs = rhs.as_ref().unwrap();
-
-    match lhs / rhs {
-        Some(v) => match v {
-            Res::Ok(v) => match v.as_i64() {
-                Res::Ok(v_i64) => Ok(Some(v_i64)),
-                Res::Truncated(v_i64) => Ok(Some(v_i64)),
-                Res::Overflow(_) => {
-                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)).into())
-                }
-            },
-            Res::Truncated(_) => Err(Error::truncated().into()),
-            Res::Overflow(_) => {
-                Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)).into())
-            }
-        },
-        None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
-    }
+    let result = try_opt!(arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs));
+    result
+        .as_i64()
+        .into_result_with_overflow_err(
+            ctx,
+            Error::overflow(
+                "DECIMAL",
+                format!("({} / {})", lhs.as_ref().unwrap(), rhs.as_ref().unwrap()),
+            ),
+        )
+        .map(Some)
+        .map_err(|err| err.into())
 }
 
 pub struct DecimalDivide;
@@ -498,21 +486,17 @@ impl ArithmeticOpWithCtx for DecimalDivide {
     type T = Decimal;
 
     fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        use crate::codec::mysql::Res;
-
-        Ok(match lhs / rhs {
-            Some(value) => match value {
-                Res::Ok(value) => Some(value),
-                Res::Truncated(_) => ctx.handle_truncate(true).map(|_| None)?,
-                Res::Overflow(_) => ctx
-                    .handle_overflow_err(Error::overflow(
-                        "DECIMAL",
-                        &format!("({} / {})", lhs, rhs),
-                    ))
-                    .map(|_| None)?,
-            },
-            None => ctx.handle_division_by_zero().map(|_| None)?,
-        })
+        if let Some(value) = lhs / rhs {
+            value
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("DECIMAL", format!("({} / {})", lhs, rhs)),
+                )
+                .map(Some)
+        } else {
+            ctx.handle_division_by_zero().map(|_| None)
+        }
+        .map_err(|err| err.into())
     }
 }
 
@@ -1005,7 +989,12 @@ mod tests {
         ];
 
         for (lhs, rhs, expected) in test_cases {
-            let output = RpnFnScalarEvaluator::new()
+            let mut config = EvalConfig::new();
+            config.set_flag(Flag::TRUNCATE_AS_WARNING);
+            let evaluator =
+                RpnFnScalarEvaluator::new().context(EvalContext::new(std::sync::Arc::new(config)));
+
+            let output = evaluator
                 .push_param(lhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
                 .push_param(rhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
                 .evaluate(ScalarFuncSig::IntDivideDecimal)
