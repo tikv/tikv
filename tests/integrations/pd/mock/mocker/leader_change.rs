@@ -4,7 +4,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use kvproto::pdpb::*;
-use protobuf::RepeatedField;
 
 use super::*;
 
@@ -66,7 +65,7 @@ impl PdMocker for LeaderChange {
         Some(Ok(inner.resps[inner.r.idx % inner.resps.len()].clone()))
     }
 
-    fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+    fn get_region_by_id(&self, _: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
         let mut inner = self.inner.lock().unwrap();
         let now = Instant::now();
         if now.duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
@@ -84,30 +83,30 @@ impl PdMocker for LeaderChange {
     fn set_endpoints(&self, eps: Vec<String>) {
         let mut members = Vec::with_capacity(eps.len());
         for (i, ep) in (&eps).iter().enumerate() {
-            let mut m = Member::new();
+            let mut m = Member::default();
             m.set_name(format!("pd{}", i));
             m.set_member_id(100 + i as u64);
-            m.set_client_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
-            m.set_peer_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
+            m.set_client_urls(vec![ep.to_owned()].into());
+            m.set_peer_urls(vec![ep.to_owned()].into());
             members.push(m);
         }
 
         // A dead PD
-        let mut m = Member::new();
+        let mut m = Member::default();
         m.set_member_id(DEAD_ID);
         m.set_name(DEAD_NAME.to_owned());
-        m.set_client_urls(RepeatedField::from_vec(vec![DEAD_URL.to_owned()]));
-        m.set_peer_urls(RepeatedField::from_vec(vec![DEAD_URL.to_owned()]));
+        m.set_client_urls(vec![DEAD_URL.to_owned()].into());
+        m.set_peer_urls(vec![DEAD_URL.to_owned()].into());
         members.push(m);
 
-        let mut header = ResponseHeader::new();
+        let mut header = ResponseHeader::default();
         header.set_cluster_id(1);
 
         let mut resps = Vec::with_capacity(eps.len());
         for (i, _) in (&eps).iter().enumerate() {
-            let mut resp = GetMembersResponse::new();
+            let mut resp = GetMembersResponse::default();
             resp.set_header(header.clone());
-            resp.set_members(RepeatedField::from_vec(members.clone()));
+            resp.set_members(members.clone().into());
             resp.set_leader(members[i].clone());
             resps.push(resp);
         }

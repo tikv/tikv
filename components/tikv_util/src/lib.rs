@@ -2,6 +2,8 @@
 
 #![cfg_attr(test, feature(test))]
 
+#[macro_use(fail_point)]
+extern crate fail;
 #[macro_use]
 extern crate futures;
 #[macro_use]
@@ -10,27 +12,12 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(
-    kv,
-    slog_o,
-    slog_kv,
-    slog_error,
-    slog_warn,
-    slog_info,
-    slog_debug,
-    slog_crit,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
+#[macro_use(slog_o, slog_error, slog_warn, slog_info, slog_debug, slog_crit)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
 #[cfg(test)]
 extern crate test;
-#[macro_use]
-extern crate fail;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
@@ -54,6 +41,7 @@ pub mod future;
 pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
@@ -517,6 +505,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 logger::convert_log_level_to_slog_level(level),
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
+                vec![],
             );
         }
 
@@ -663,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_limit_size() {
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_data(b"0123456789".to_vec());
         let size = u64::from(e.compute_size());
 
@@ -745,10 +734,7 @@ mod tests {
         assert_eq!(unescape(r"a\\023"), b"a\\023");
         // Escaped three digit octal
         assert_eq!(unescape(r"a\000"), b"a\0");
-        assert_eq!(
-            unescape(r"\342\235\244\360\237\220\267"),
-            "❤🐷".as_bytes()
-        );
+        assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
         // Whitespace
         assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
         // Hex Octals

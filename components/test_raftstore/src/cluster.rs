@@ -18,8 +18,8 @@ use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
 use engine::CF_DEFAULT;
+use pd_client::PdClient;
 use tikv::config::TiKvConfig;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
@@ -79,7 +79,7 @@ pub trait Simulator {
         match self.async_command_on_node(node_id, request, cb) {
             Ok(()) => {}
             Err(e) => {
-                let mut resp = RaftCmdResponse::new();
+                let mut resp = RaftCmdResponse::default();
                 resp.mut_header().set_error(e.into());
                 return Ok(resp);
             }
@@ -400,7 +400,7 @@ impl<T: Simulator> Cluster<T> {
     // But another node may request bootstrap at same time and get is_bootstrap false
     // Add Region but not set bootstrap to true
     pub fn add_first_region(&self) -> Result<()> {
-        let mut region = metapb::Region::new();
+        let mut region = metapb::Region::default();
         let region_id = self.pd_client.alloc_id().unwrap();
         let peer_id = self.pd_client.alloc_id().unwrap();
         region.set_id(region_id);
@@ -423,7 +423,7 @@ impl<T: Simulator> Cluster<T> {
             self.engines.insert(id, engines.clone());
         }
 
-        let mut region = metapb::Region::new();
+        let mut region = metapb::Region::default();
         region.set_id(1);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());

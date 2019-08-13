@@ -5,12 +5,13 @@ use std::thread;
 use std::time::Duration;
 
 use super::transport::RaftStoreRouter;
+use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
-use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
 use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
 };
@@ -18,13 +19,13 @@ use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
 use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
-use crate::storage::{Config as StorageConfig, RaftKv, Storage};
+use crate::storage::{Config as StorageConfig, Storage};
 use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use protobuf::RepeatedField;
+use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -62,8 +63,8 @@ pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
-    store_handle: Option<thread::JoinHandle<()>>,
     system: RaftBatchSystem,
+    has_started: bool,
 
     pd_client: Arc<C>,
 }
@@ -79,7 +80,7 @@ where
         store_cfg: &StoreConfig,
         pd_client: Arc<C>,
     ) -> Node<C> {
-        let mut store = metapb::Store::new();
+        let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
@@ -90,20 +91,20 @@ where
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
-            let mut label = metapb::StoreLabel::new();
+            let mut label = metapb::StoreLabel::default();
             label.set_key(k.to_owned());
             label.set_value(v.to_owned());
             labels.push(label);
         }
-        store.set_labels(RepeatedField::from_vec(labels));
+        store.set_labels(labels.into());
 
         Node {
             cluster_id: cfg.cluster_id,
             store,
             store_cfg: store_cfg.clone(),
-            store_handle: None,
             pd_client,
             system,
+            has_started: false,
         }
     }
 
@@ -137,7 +138,7 @@ where
             meta.store_id = Some(store_id);
         }
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
-            info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
+            info!("trying to bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
             fail_point!("node_after_prepare_bootstrap_cluster", |_| Err(box_err!(
                 "injected error: node_after_prepare_bootstrap_cluster"
@@ -204,7 +205,7 @@ where
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = self.alloc_id()?;
-        info!("alloc store id"; "store_id" => store_id);
+        debug!("alloc store id"; "store_id" => store_id);
 
         store::bootstrap_store(engines, self.cluster_id, store_id)?;
 
@@ -219,14 +220,14 @@ where
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
-        info!(
+        debug!(
             "alloc first region id";
             "region_id" => region_id,
             "cluster_id" => self.cluster_id,
             "store_id" => store_id
         );
         let peer_id = self.alloc_id()?;
-        info!(
+        debug!(
             "alloc first peer id for first region";
             "peer_id" => peer_id,
             "region_id" => region_id,
@@ -285,9 +286,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
-                }
+                Err(e) => error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e),
             }
             retry += 1;
             thread::sleep(Duration::from_secs(
@@ -329,10 +328,10 @@ where
     {
         info!("start raft store thread"; "store_id" => store_id);
 
-        if self.store_handle.is_some() {
+        if self.has_started {
             return Err(box_err!("{} is already started", store_id));
         }
-
+        self.has_started = true;
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();

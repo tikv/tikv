@@ -19,11 +19,7 @@
 //!
 //! Please refer to `Endpoint` for more details.
 
-#[macro_use]
-mod macros;
-
 mod checksum;
-pub mod codec;
 pub mod dag;
 mod endpoint;
 mod error;
@@ -32,20 +28,20 @@ mod metrics;
 pub mod readpool_impl;
 mod statistics;
 mod tracker;
-pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use tikv_util::time::{Duration, Instant};
+use tikv_util::deadline::Deadline;
+use tikv_util::time::Duration;
+
+use crate::storage::Statistics;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
-
-const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
@@ -61,8 +57,8 @@ pub trait RequestHandler: Send {
         panic!("streaming request is not supported for this handler");
     }
 
-    /// Collects metrics generated in this request handler so far.
-    fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
+    /// Collects scan statistics generated in this request handler so far.
+    fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {
         // Do nothing by default
     }
 
@@ -71,46 +67,6 @@ pub trait RequestHandler: Send {
         Self: 'static + Sized,
     {
         Box::new(self)
-    }
-}
-
-/// Request process dead line.
-///
-/// When dead line exceeded, the request handling should be stopped.
-// TODO: This struct can be removed.
-#[derive(Debug, Clone, Copy)]
-pub struct Deadline {
-    /// Used to construct the Error when deadline exceeded
-    tag: &'static str,
-
-    start_time: Instant,
-    deadline: Instant,
-}
-
-impl Deadline {
-    /// Initializes a deadline that counting from current.
-    pub fn from_now(tag: &'static str, after_duration: Duration) -> Self {
-        let start_time = Instant::now_coarse();
-        let deadline = start_time + after_duration;
-        Self {
-            tag,
-            start_time,
-            deadline,
-        }
-    }
-
-    /// Returns error if the deadline is exceeded.
-    pub fn check_if_exceeded(&self) -> Result<()> {
-        fail_point!("coprocessor_deadline_check_exceeded", |_| Err(
-            Error::Outdated(Duration::from_secs(60), self.tag)
-        ));
-
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.tag));
-        }
-        Ok(())
     }
 }
 
@@ -155,7 +111,7 @@ impl ReqContext {
         is_desc_scan: Option<bool>,
         txn_start_ts: Option<u64>,
     ) -> Self {
-        let deadline = Deadline::from_now(tag, max_handle_duration);
+        let deadline = Deadline::from_now(max_handle_duration);
         Self {
             tag,
             context,
@@ -172,7 +128,7 @@ impl ReqContext {
     pub fn default_for_test() -> Self {
         Self::new(
             "test",
-            kvrpcpb::Context::new(),
+            kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),
             None,

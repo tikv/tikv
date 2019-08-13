@@ -4,7 +4,7 @@ use super::*;
 
 use kvproto::kvrpcpb::Context;
 
-use tikv::coprocessor::codec::Datum;
+use tidb_query::codec::Datum;
 use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
@@ -89,7 +89,7 @@ pub fn init_data_with_commit(
     commit: bool,
 ) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
     let engine = TestEngineBuilder::new().build().unwrap();
-    init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
+    init_data_with_engine_and_commit(Context::default(), engine, tbl, vals, commit)
 }
 
 // This function will create a Product table and initialize with the specified data.

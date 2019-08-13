@@ -3,13 +3,13 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
 use std::{fs, usize};
 
+use engine::rocks::util::get_cf_handle;
 use engine::rocks::util::io_limiter::IOLimiter;
-use engine::rocks::util::{get_cf_handle, get_fastest_supported_compression_type};
 use engine::rocks::{
-    DBCompressionType, EnvOptions, IngestExternalFileOptions, Snapshot as DbSnapshot,
-    SstFileWriter, Writable, WriteBatch, DB,
+    IngestExternalFileOptions, Snapshot as DbSnapshot, SstWriter, SstWriterBuilder, Writable,
+    WriteBatch, DB,
 };
-use engine::Iterable;
+use engine::{CfName, Iterable};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;
@@ -61,7 +61,7 @@ pub fn build_plain_cf_file(
 pub fn build_sst_cf_file(
     path: &str,
     snap: &DbSnapshot,
-    cf: &str,
+    cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
     io_limiter: Option<&IOLimiter>,
@@ -108,7 +108,7 @@ pub fn apply_plain_cf_file(
 ) -> Result<(), Error> {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
     let cf_handle = box_try!(get_cf_handle(&db, cf));
-    let wb = WriteBatch::new();
+    let wb = WriteBatch::default();
     loop {
         if stale_detector.is_stale() {
             return Err(Error::Abort);
@@ -137,20 +137,10 @@ pub fn apply_sst_cf_file(path: &str, db: &DB, cf: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn create_sst_file_writer(snap: &DbSnapshot, cf: &str, path: &str) -> Result<SstFileWriter, Error> {
-    let handle = box_try!(snap.cf_handle(cf));
-    let mut io_options = snap.get_db().get_options_cf(handle).clone();
-    io_options.compression(get_fastest_supported_compression_type());
-    // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
-    // compression_per_level first, so to make sure our specified compression type
-    // being used, we must set them empty or disabled.
-    io_options.compression_per_level(&[]);
-    io_options.bottommost_compression(DBCompressionType::Disable);
-    if let Some(env) = snap.get_db().env() {
-        io_options.set_env(env);
-    }
-    let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
-    box_try!(writer.open(path));
+fn create_sst_file_writer(snap: &DbSnapshot, cf: CfName, path: &str) -> Result<SstWriter, Error> {
+    let db = snap.get_db();
+    let builder = SstWriterBuilder::new().set_db(db).set_cf(cf);
+    let writer = box_try!(builder.build(path));
     Ok(writer)
 }
 

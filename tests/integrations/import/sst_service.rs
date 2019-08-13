@@ -14,9 +14,9 @@ use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
 
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::import::test_helpers::*;
-use tikv::pd::PdClient;
 use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
@@ -31,7 +31,7 @@ fn new_cluster() -> (Cluster<ServerCluster>, Context) {
     let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region_id);
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(epoch);
@@ -92,7 +92,7 @@ fn test_ingest_sst() {
     // No region id and epoch.
     send_upload_sst(&import, &meta, &data).unwrap();
 
-    let mut ingest = IngestRequest::new();
+    let mut ingest = IngestRequest::default();
     ingest.set_context(ctx.clone());
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
@@ -111,7 +111,7 @@ fn test_ingest_sst() {
 
     // Check ingested kvs
     for i in sst_range.0..sst_range.1 {
-        let mut m = RawGetRequest::new();
+        let mut m = RawGetRequest::default();
         m.set_context(ctx.clone());
         m.set_key(vec![i]);
         let resp = tikv.raw_get(&m).unwrap();
@@ -166,8 +166,8 @@ fn test_cleanup_sst() {
     check_sst_deleted(&import, &meta, &data);
 }
 
-fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
-    let mut m = SSTMeta::new();
+fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {
+    let mut m = SstMeta::default();
     m.set_uuid(Uuid::new_v4().as_bytes().to_vec());
     m.set_crc32(crc32);
     m.set_length(length);
@@ -176,12 +176,12 @@ fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
 
 fn send_upload_sst(
     client: &ImportSstClient,
-    meta: &SSTMeta,
+    meta: &SstMeta,
     data: &[u8],
 ) -> Result<UploadResponse> {
-    let mut r1 = UploadRequest::new();
+    let mut r1 = UploadRequest::default();
     r1.set_meta(meta.clone());
-    let mut r2 = UploadRequest::new();
+    let mut r2 = UploadRequest::default();
     r2.set_data(data.to_vec());
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()
@@ -192,7 +192,7 @@ fn send_upload_sst(
     stream.forward(tx).and_then(|_| rx).wait()
 }
 
-fn check_sst_deleted(client: &ImportSstClient, meta: &SSTMeta, data: &[u8]) {
+fn check_sst_deleted(client: &ImportSstClient, meta: &SstMeta, data: &[u8]) {
     for _ in 0..10 {
         if send_upload_sst(client, meta, data).is_ok() {
             // If we can upload the file, it means the previous file has been deleted.

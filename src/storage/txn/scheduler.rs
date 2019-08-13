@@ -28,7 +28,7 @@ use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
-use tikv_util::collections::HashMap;
+use tikv_util::{collections::HashMap, time::SlowTimer};
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{
@@ -85,7 +85,7 @@ impl Debug for Msg {
 impl Display for Msg {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
+            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {}", cmd),
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
@@ -114,7 +114,7 @@ impl TaskContext {
         let lock = gen_command_lock(latches, task.cmd());
         // Write command should acquire write lock.
         if !task.cmd().readonly() && !lock.is_write_lock() {
-            panic!("write lock is expected for command {:?}", task.cmd());
+            panic!("write lock is expected for command {}", task.cmd());
         }
         let write_bytes = if lock.is_write_lock() {
             task.cmd().write_bytes()
@@ -256,7 +256,7 @@ impl<E: Engine> Scheduler<E> {
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
-        info!("Scheduler::new is called to initialize the transaction scheduler");
+        let t = SlowTimer::new();
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
             task_contexts.push(Mutex::new(Default::default()));
@@ -278,7 +278,7 @@ impl<E: Engine> Scheduler<E> {
             detector_scheduler,
         });
 
-        info!("Scheduler::new is finished, the transaction scheduler is initialized");
+        slow_log!(t, "initialized the transaction scheduler");
         Scheduler {
             engine: Some(engine),
             inner,
@@ -372,7 +372,7 @@ impl<E: Engine> Scheduler<E> {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
-                error!("engine async_snapshot failed"; "err" => ?e);
+                info!("engine async_snapshot failed"; "err" => ?e);
                 self.finish_with_err(cid, e.into());
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
@@ -542,65 +542,65 @@ mod tests {
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
             Command::ScanLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 max_ts: 5,
                 start_key: None,
                 limit: 0,
             },
             Command::ResolveLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![],
             },
             Command::MvccByKey {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 key: Key::from_raw(b"k"),
             },
             Command::MvccByStartTs {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 start_ts: 25,
             },
         ];
         let write_cmds = vec![
             Command::Prewrite {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),
             },
             Command::AcquirePessimisticLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![(Key::from_raw(b"k"), false)],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),
             },
             Command::Commit {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 lock_ts: 10,
                 commit_ts: 20,
             },
             Command::Cleanup {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 key: Key::from_raw(b"k"),
                 start_ts: 10,
             },
             Command::Rollback {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
             },
             Command::PessimisticRollback {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
                 for_update_ts: 20,
             },
             Command::ResolveLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![(
@@ -609,7 +609,7 @@ mod tests {
                 )],
             },
             Command::ResolveLockLite {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 start_ts: 10,
                 commit_ts: 0,
                 resolve_keys: vec![Key::from_raw(b"k")],

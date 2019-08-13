@@ -15,7 +15,7 @@ use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
-use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
+use pd_client::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
@@ -113,7 +113,7 @@ impl Operator {
                     };
                     new_pd_change_peer(conf_change_type, peer.clone())
                 } else {
-                    pdpb::RegionHeartbeatResponse::new()
+                    pdpb::RegionHeartbeatResponse::default()
                 }
             }
             Operator::RemovePeer { ref peer, .. } => {
@@ -124,7 +124,7 @@ impl Operator {
                 target_region_id, ..
             } => {
                 if target_region_id == region_id {
-                    pdpb::RegionHeartbeatResponse::new()
+                    pdpb::RegionHeartbeatResponse::default()
                 } else {
                     let region = cluster
                         .get_region_by_id(target_region_id)
@@ -227,7 +227,7 @@ struct Cluster {
 
 impl Cluster {
     fn new(cluster_id: u64) -> Cluster {
-        let mut meta = metapb::Cluster::new();
+        let mut meta = metapb::Cluster::default();
         meta.set_id(cluster_id);
         meta.set_max_peer_count(5);
 
@@ -460,7 +460,7 @@ impl Cluster {
         let resp = self
             .poll_heartbeat_responses(region.clone(), leader.clone())
             .unwrap_or_else(|| {
-                let mut resp = pdpb::RegionHeartbeatResponse::new();
+                let mut resp = pdpb::RegionHeartbeatResponse::default();
                 resp.set_region_id(region.get_id());
                 resp.set_region_epoch(region.take_region_epoch());
                 resp.set_target_peer(leader);
@@ -631,7 +631,7 @@ fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::P
 
 // For test when a node is already bootstraped the cluster with the first region
 pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(1);
     region.set_start_key(keys::EMPTY_KEY.to_vec());
     region.set_end_key(keys::EMPTY_KEY.to_vec());
@@ -1068,7 +1068,7 @@ impl PdClient for TestPdClient {
             return Box::new(err(e));
         }
 
-        let mut resp = pdpb::AskSplitResponse::new();
+        let mut resp = pdpb::AskSplitResponse::default();
         resp.set_new_region_id(self.alloc_id().unwrap());
         let mut peer_ids = vec![];
         for _ in region.get_peers() {
@@ -1103,9 +1103,9 @@ impl PdClient for TestPdClient {
             return Box::new(err(e));
         }
 
-        let mut resp = pdpb::AskBatchSplitResponse::new();
+        let mut resp = pdpb::AskBatchSplitResponse::default();
         for _ in 0..count {
-            let mut id = pdpb::SplitID::new();
+            let mut id = pdpb::SplitId::new();
             id.set_new_region_id(self.alloc_id().unwrap());
             for _ in region.get_peers() {
                 id.mut_new_peer_ids().push(self.alloc_id().unwrap());
@@ -1156,9 +1156,9 @@ impl PdClient for TestPdClient {
     }
 
     fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {
-        let mut header = pdpb::ResponseHeader::new();
+        let mut header = pdpb::ResponseHeader::default();
         header.set_cluster_id(self.cluster_id);
-        let mut resp = pdpb::GetOperatorResponse::new();
+        let mut resp = pdpb::GetOperatorResponse::default();
         resp.set_header(header);
         resp.set_region_id(region_id);
         Ok(resp)

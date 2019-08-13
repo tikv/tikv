@@ -172,7 +172,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_err.inc();
 
-                error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool().pool.spawn(move || {
                     notify_scheduler(
                         self.take_scheduler(),
@@ -315,7 +315,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
-                        error!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                        info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else {
@@ -413,7 +413,7 @@ fn process_read_impl<E: Engine>(
             let (kv_pairs, _) = result?;
             let mut locks = Vec::with_capacity(kv_pairs.len());
             for (key, lock) in kv_pairs {
-                let mut lock_info = LockInfo::new();
+                let mut lock_info = LockInfo::default();
                 lock_info.set_primary_lock(lock.primary);
                 lock_info.set_lock_version(lock.ts);
                 lock_info.set_key(key.into_raw()?);

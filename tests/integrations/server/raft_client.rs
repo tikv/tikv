@@ -60,7 +60,7 @@ fn test_batch_raft_fallback() {
             _stream: RequestStream<BatchRaftMessage>,
             sink: ClientStreamingSink<Done>,
         ) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -74,7 +74,7 @@ fn test_batch_raft_fallback() {
 
     let addr = format!("localhost:{}", port);
     (0..100).for_each(|_| {
-        raft_client.send(1, &addr, RaftMessage::new()).unwrap();
+        raft_client.send(1, &addr, RaftMessage::default()).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         raft_client.flush();
     });
@@ -119,7 +119,7 @@ fn test_raft_client_reconnect() {
     let addr = format!("localhost:{}", port);
 
     // `send` should success.
-    (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::new()).unwrap());
+    (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::default()).unwrap());
     raft_client.flush();
 
     check_f(300, || counter.load(Ordering::SeqCst) == 50);
@@ -129,14 +129,14 @@ fn test_raft_client_reconnect() {
 
     let send = |_| {
         thread::sleep(time::Duration::from_millis(10));
-        raft_client.send(1, &addr, RaftMessage::new())
+        raft_client.send(1, &addr, RaftMessage::default())
     };
     assert!((0..100).map(send).collect::<Result<(), _>>().is_err());
 
     // `send` should success after the mock server restarted.
     let service = MockKvForRaft(Arc::clone(&counter));
     let mock_server = create_mock_server_on(service, port);
-    (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::new()).unwrap());
+    (0..50).for_each(|_| raft_client.send(1, &addr, RaftMessage::default()).unwrap());
     raft_client.flush();
 
     check_f(300, || counter.load(Ordering::SeqCst) == 100);

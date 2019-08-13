@@ -13,7 +13,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     bencher.iter_batched(
         || {
             let test_kvs: Vec<(Key, Value)> = KvGenerator::with_seed(
@@ -41,7 +41,7 @@ fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     bencher.iter(|| black_box(&engine).snapshot(black_box(&ctx)).unwrap());
 }
 
@@ -51,7 +51,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     let test_kvs: Vec<Key> = KvGenerator::with_seed(
         config.key_length,
         config.value_length,

@@ -258,6 +258,10 @@ impl RegionIterator {
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        fail_point!("region_snapshot_seek", |_| {
+            return Err(box_err!("region seek error"));
+        });
+
         self.should_seekable(key)?;
         let key = keys::data_key(key);
         if key == self.end_key {
@@ -360,7 +364,7 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{EnvOptions, IngestExternalFileOptions, Snapshot, SstFileWriter, Writable};
+    use engine::rocks::{IngestExternalFileOptions, Snapshot, SstWriterBuilder, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
     use engine::Engines;
     use engine::*;
@@ -394,8 +398,8 @@ mod tests {
     }
 
     fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_id(10);
         r.set_start_key(b"a2".to_vec());
         r.set_end_key(b"a7".to_vec());
@@ -416,8 +420,8 @@ mod tests {
     }
 
     fn load_multiple_levels_dataset(engines: Engines) -> (PeerStorage, DataSet) {
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_id(10);
         r.set_start_key(b"a04".to_vec());
         r.set_end_key(b"a15".to_vec());
@@ -463,7 +467,7 @@ mod tests {
     fn test_peekable() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let mut r = Region::new();
+        let mut r = Region::default();
         r.set_id(10);
         r.set_start_key(b"key0".to_vec());
         r.set_end_key(b"key4".to_vec());
@@ -633,8 +637,8 @@ mod tests {
         assert_eq!(res, base_data[1..3].to_vec());
 
         // test last region
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         data.clear();
@@ -734,8 +738,8 @@ mod tests {
         assert_eq!(res, expect);
 
         // test last region
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
         let it = snap.iter(IterOption::default());
@@ -814,6 +818,7 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         let cache = cfg.storage.block_cache.build_shared_cache();
         cfg.rocksdb.titan.enabled = true;
+        cfg.rocksdb.titan.disable_gc = true;
         cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
         cfg.rocksdb.defaultcf.disable_auto_compactions = true;
         // Disable dynamic_level_bytes, otherwise SST files would be ingested to L0.
@@ -889,8 +894,9 @@ mod tests {
         // Delete one mvcc kvs we have written above.
         // Here we make the kvs on the L5 by ingesting SST.
         let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
-        let mut writer = SstFileWriter::new(EnvOptions::new(), db.get_options());
-        writer.open(&sst_file_path.to_str().unwrap()).unwrap();
+        let mut writer = SstWriterBuilder::new()
+            .build(&sst_file_path.to_str().unwrap())
+            .unwrap();
         writer
             .delete(&data_key(
                 Key::from_raw(b"a").append_ts(start_ts).as_encoded(),
@@ -1037,8 +1043,8 @@ mod tests {
         .unwrap();
 
         // Do scan on other DB.
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_start_key(b"a".to_vec());
         r.set_end_key(b"z".to_vec());
         let snapshot = RegionSnapshot::from_raw(Arc::clone(&engines1.kv), r);

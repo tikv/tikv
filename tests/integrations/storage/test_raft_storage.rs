@@ -172,7 +172,7 @@ fn test_engine_leader_change_twice() {
         .get_header()
         .get_current_term();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peers[0].clone());
@@ -288,9 +288,6 @@ fn test_auto_gc() {
 
     assert_eq!(storages.len(), count);
 
-    // Initialize gc workers
-    pd_client.set_gc_safe_point(1);
-
     // test_data will be wrote with ts < 50
     let test_data: Vec<_> = [
         (b"k1", b"v1"),
@@ -349,4 +346,9 @@ fn test_auto_gc() {
     check_data(&mut cluster, &storages, &test_data, 50, false);
     check_data(&mut cluster, &storages, &test_data2, 150, true);
     check_data(&mut cluster, &storages, &test_data3, 250, true);
+
+    // No more signals.
+    finish_signal_rx
+        .recv_timeout(Duration::from_millis(300))
+        .unwrap_err();
 }

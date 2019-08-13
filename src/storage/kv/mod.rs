@@ -6,11 +6,14 @@ use std::time::Duration;
 use std::{error, ptr, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
+use crate::raftstore::store::PdTask;
 use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv_util::collections::HashMap;
 use tikv_util::metrics::CRITICAL_ERROR;
+use tikv_util::worker::FutureScheduler;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 use kvproto::errorpb::Error as ErrorHeader;
@@ -19,9 +22,7 @@ use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 mod btree_engine;
 mod compact_listener;
 mod cursor_builder;
-mod metrics;
 mod perf_context;
-pub mod raftkv;
 mod rocksdb_engine;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
@@ -198,6 +199,22 @@ pub struct FlowStatistics {
     pub read_bytes: usize,
 }
 
+// Reports flow statistics to outside.
+pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
+    // Reports read flow statistics, the argument `read_stats` is a hash map
+    // saves the flow statistics of different region.
+    // TODO: maybe we need to return a Result later?
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+}
+
+impl FlowStatsReporter for FutureScheduler<PdTask> {
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
+        if let Err(e) = self.schedule(PdTask::ReadStats { read_stats }) {
+            error!("Failed to send read flow statistics"; "err" => ?e);
+        }
+    }
+}
+
 impl FlowStatistics {
     pub fn add(&mut self, other: &Self) {
         self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
@@ -236,7 +253,7 @@ impl CFStatistics {
     }
 
     pub fn scan_info(&self) -> ScanInfo {
-        let mut info = ScanInfo::new();
+        let mut info = ScanInfo::default();
         info.set_processed(self.processed as i64);
         info.set_total(self.total_op_count() as i64);
         info
@@ -274,7 +291,7 @@ impl Statistics {
     }
 
     pub fn scan_detail(&self) -> ScanDetail {
-        let mut detail = ScanDetail::new();
+        let mut detail = ScanDetail::default();
         detail.set_data(self.data.scan_info());
         detail.set_lock(self.lock.scan_info());
         detail.set_write(self.write.scan_info());
@@ -353,6 +370,10 @@ impl<I: Iterator> Cursor<I> {
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        fail_point!("kv_cursor_seek", |_| {
+            return Err(box_err!("kv cursor seek error"));
+        });
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self
             .max_key
@@ -726,33 +747,35 @@ pub mod tests {
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         engine
-            .put(&Context::new(), Key::from_raw(key), value.to_vec())
+            .put(&Context::default(), Key::from_raw(key), value.to_vec())
             .unwrap();
     }
 
     pub fn must_put_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
         engine
-            .put_cf(&Context::new(), cf, Key::from_raw(key), value.to_vec())
+            .put_cf(&Context::default(), cf, Key::from_raw(key), value.to_vec())
             .unwrap();
     }
 
     pub fn must_delete<E: Engine>(engine: &E, key: &[u8]) {
-        engine.delete(&Context::new(), Key::from_raw(key)).unwrap();
+        engine
+            .delete(&Context::default(), Key::from_raw(key))
+            .unwrap();
     }
 
     pub fn must_delete_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
         engine
-            .delete_cf(&Context::new(), cf, Key::from_raw(key))
+            .delete_cf(&Context::default(), cf, Key::from_raw(key))
             .unwrap();
     }
 
     pub fn assert_has<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
     }
 
     pub fn assert_has_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         assert_eq!(
             snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
             value
@@ -760,17 +783,17 @@ pub mod tests {
     }
 
     pub fn assert_none<E: Engine>(engine: &E, key: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
     }
 
     pub fn assert_none_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
     }
 
     fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
@@ -781,7 +804,7 @@ pub mod tests {
     }
 
     fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
@@ -842,7 +865,7 @@ pub mod tests {
     fn test_batch<E: Engine>(engine: &E) {
         engine
             .write(
-                &Context::new(),
+                &Context::default(),
                 vec![
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
@@ -854,7 +877,7 @@ pub mod tests {
 
         engine
             .write(
-                &Context::new(),
+                &Context::default(),
                 vec![
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
@@ -875,7 +898,7 @@ pub mod tests {
         assert_seek(engine, b"x\x00", (b"z", b"2"));
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
@@ -893,7 +916,7 @@ pub mod tests {
     fn test_near_seek<E: Engine>(engine: &E) {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
@@ -912,7 +935,7 @@ pub mod tests {
             let key = format!("y{}", i);
             must_put(engine, key.as_bytes(), b"3");
         }
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
@@ -928,7 +951,7 @@ pub mod tests {
     }
 
     fn test_empty_seek<E: Engine>(engine: &E) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
@@ -1055,7 +1078,7 @@ pub mod tests {
             let value = format!("value_{}", i);
             must_put(engine, key.as_bytes(), value.as_bytes());
         }
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         for step in 1..SEEK_BOUND as usize * 3 {
             for start in 0..10 {
@@ -1106,7 +1129,7 @@ pub mod tests {
     }
 
     fn test_empty_write<E: Engine>(engine: &E) {
-        engine.write(&Context::new(), vec![]).unwrap_err();
+        engine.write(&Context::default(), vec![]).unwrap_err();
     }
 
     pub fn test_cfs_statistics<E: Engine>(engine: &E) {
@@ -1121,7 +1144,7 @@ pub mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();

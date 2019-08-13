@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Storage configuration.
+
 use std::error::Error;
 
 use sys_info;
@@ -25,6 +27,7 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
@@ -64,6 +67,7 @@ impl Config {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct BlockCacheConfig {
     pub shared: bool,

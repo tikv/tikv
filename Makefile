@@ -61,8 +61,8 @@ ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
-ifneq ($(FAIL_POINT),1)
-ENABLE_FEATURES += no-fail
+ifeq ($(FAIL_POINT),1)
+ENABLE_FEATURES += failpoints
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -103,10 +103,10 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build:
-	cargo build  --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" -p cmd
 
 run:
-	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
+	cargo run --no-default-features --features  "${ENABLE_FEATURES}" -p cmd --bin tikv-server
 
 
 ## Release builds (optimized dev builds)
@@ -120,7 +120,7 @@ run:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -p cmd
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -150,7 +150,7 @@ fail_release:
 dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
-	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
 
 # Build with release flag as if it were for distribution, but without
@@ -184,7 +184,7 @@ test:
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} -p cmd --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
@@ -213,8 +213,8 @@ clippy: pre-clippy
 		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
 		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
 		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
-		-A clippy::needless_range_loop -D rust-2018-idioms -A clippy::redundant_closure \
-		-A clippy::match_wild_err_arm -A clippy::blacklisted_name
+		-A clippy::needless_range_loop -A clippy::redundant_closure \
+		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
@@ -234,14 +234,14 @@ audit: pre-audit
 # A special target for building just the tikv-ctl binary and release mode and copying it
 # into BIN_PATH. It's not clear who uses this for what. If you know please document it.
 ctl:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -p cmd --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
 # A special target for testing only "coprocessor::dag::expr"
 # per https://github.com/tikv/tikv/pull/3280
 expression: format clippy
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" --no-default-features -- --nocapture
+	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
 
 
 ## The driver for script/run-cargo.sh
@@ -269,5 +269,6 @@ x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
 x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
+x-build-dist: export X_PACKAGE=cmd
 x-build-dist:
 	bash scripts/run-cargo.sh

@@ -185,20 +185,20 @@ impl<S: Snapshot> MvccReader<S> {
         }
 
         // There is a pending lock. Client should wait or clean it.
-        Err(Error::KeyIsLocked {
-            key: key.to_raw()?,
-            primary: lock.primary,
-            ts: lock.ts,
-            ttl: lock.ttl,
-            txn_size: lock.txn_size,
-        })
+        let mut info = kvproto::kvrpcpb::LockInfo::default();
+        info.set_primary_lock(lock.primary);
+        info.set_lock_version(lock.ts);
+        info.set_key(key.to_raw()?);
+        info.set_lock_ttl(lock.ttl);
+        info.set_txn_size(lock.txn_size);
+        Err(Error::KeyIsLocked(info))
     }
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
-            IsolationLevel::SI => ts = self.check_lock(key, ts)?,
-            IsolationLevel::RC => {}
+            IsolationLevel::Si => ts = self.check_lock(key, ts)?,
+            IsolationLevel::Rc => {}
         }
         if let Some(mut write) = self.get_write(key, ts)? {
             if write.short_value.is_some() {
@@ -305,7 +305,7 @@ impl<S: Snapshot> MvccReader<S> {
         IterOption::new(l_bound, u_bound, true)
     }
 
-    // Return the first committed key which start_ts equals to ts
+    /// Return the first committed key for which `start_ts` equals to `ts`
     pub fn seek_ts(&mut self, ts: u64) -> Result<Option<Key>> {
         assert!(self.scan_mode.is_some());
         self.create_write_cursor()?;
@@ -584,7 +584,7 @@ mod tests {
 
         fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let wb = WriteBatch::new();
+            let wb = WriteBatch::default();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
@@ -643,10 +643,10 @@ mod tests {
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_id(id);
         peer.set_store_id(id);
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(id);
         region.set_start_key(start_key);
         region.set_end_key(end_key);
@@ -661,7 +661,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }
@@ -799,7 +799,7 @@ mod tests {
         engine.commit(k, 45, 50);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
 
         // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
         // is 50.
@@ -862,7 +862,7 @@ mod tests {
         engine.commit(k, 1, 4);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 2).unwrap().unwrap();
         assert_eq!(commit_ts, 3);
         assert_eq!(write_type, WriteType::Put);
@@ -907,7 +907,7 @@ mod tests {
         engine.prewrite(m, k, 14);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
