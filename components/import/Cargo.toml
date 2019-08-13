@@ -1,0 +1,10 @@
+[package]
+name = "import"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+serde = "1.0"
+serde_derive = "1.0"
+quick-error = "1.2.2"
