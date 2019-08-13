@@ -6,8 +6,7 @@ use std::{thread, time};
 
 use futures::{Future, Stream};
 use grpcio::{
-    ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*,
-    Server,
+    ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
 };
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
@@ -61,7 +60,7 @@ fn test_batch_raft_fallback() {
             _stream: RequestStream<BatchRaftMessage>,
             sink: ClientStreamingSink<Done>,
         ) {
-            let status = RpcStatus::new(GRPC_STATUS_UNIMPLEMENTED, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
