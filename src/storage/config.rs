@@ -6,7 +6,7 @@ use std::error::Error;
 
 use sys_info;
 
-use tikv_util::config::{self, ReadableSize, KB};
+use tikv_util::config::{self, ReadableSize, KB, MB};
 
 use engine::rocks::{Cache, LRUCacheOptions};
 
@@ -112,7 +112,7 @@ impl BlockCacheConfig {
 
 pub const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_SIZE: usize = 512;
-const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 5 * 1024 * 1024;
+const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 5 * MB;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
