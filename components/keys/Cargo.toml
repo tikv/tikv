@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 byteorder = "1.2"
+derive_more = "0.15.0"
 hex = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
