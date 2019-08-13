@@ -237,6 +237,9 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
         ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
         ScalarFuncSig::JsonTypeSig => json_type_fn_meta(),
+        ScalarFuncSig::JsonSetSig => json_set_fn_meta(),
+        ScalarFuncSig::JsonReplaceSig => json_replace_fn_meta(),
+        ScalarFuncSig::JsonInsertSig => json_insert_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

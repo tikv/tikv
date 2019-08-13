@@ -14,6 +14,29 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
         .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
+#[rpn_fn(varg)]
+#[inline]
+fn json_set(args: &[&Option<Json>]) -> Result<Option<Json>> {
+    json_modify(args, ModifyType::Set)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+fn json_insert(args: &[&Option<Json>]) -> Result<Option<Json>> {
+    json_modify(args, ModifyType::Insert)
+}
+
+#[rpn_fn(varg, min_args=1)]
+#[inline]
+fn json_replace(args: &[&Option<Json>]) -> Result<Option<Json>> {
+    json_modify(args, ModifyType::Replace)
+}
+
+#[inline]
+fn json_modify(args: &[&Option<Json>], mt: ModifyType) -> Result<Option<Json>> {
+    unimplemented!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,5 +70,10 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
+    }
+
+    #[test]
+    fn test_json_modify() {
+        unimplemented!()
     }
 }
