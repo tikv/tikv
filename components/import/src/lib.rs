@@ -6,7 +6,7 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(slog_warn)]
+#[macro_use(slog_error, slog_warn, slog_info)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
@@ -17,8 +17,10 @@ pub mod metrics;
 #[macro_use]
 pub mod service;
 pub mod import_mode;
+pub mod sst_importer;
 
 pub mod test_helpers;
 
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
+pub use self::sst_importer::SSTImporter;

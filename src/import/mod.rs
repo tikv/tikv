@@ -15,12 +15,11 @@
 use import2::metrics;
 use import2::service;
 use import2::import_mode;
-mod sst_importer;
 mod sst_service;
 
 pub use import2::test_helpers;
 
 pub use import2::Config;
 pub use import2::{Error, Result};
-pub use self::sst_importer::SSTImporter;
+pub use import2::SSTImporter;
 pub use self::sst_service::ImportSSTService;
