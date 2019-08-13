@@ -17,13 +17,12 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
-    match arg {
-        None => Ok(None),
-        Some(json_arg) => match json_arg.unquote() {
-            Err(e) => Err(e.into()),
-            Ok(v) => Ok(Some(Bytes::from(v))),
-        },
-    }
+    arg.as_ref().map_or(Ok(None), |json_arg| {
+        json_arg
+            .unquote()
+            .map_err(|e| e.into())
+            .map(|v| Some(Bytes::from(v)))
+    })
 }
 
 #[cfg(test)]
@@ -85,7 +84,7 @@ mod tests {
                     Json::String(input.to_string())
                 }
             });
-            let expect_output = expect_output.map(|s| Bytes::from(s));
+            let expect_output = expect_output.map(Bytes::from);
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
