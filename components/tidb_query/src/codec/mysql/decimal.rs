@@ -497,7 +497,7 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     if res.is_overflow() {
         return Res::Overflow(max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0));
     }
-    let (int_word_to, frac_word_to) = res.clone().unwrap();
+    let (int_word_to, frac_word_to) = res.unwrap();
     let mut idx_to = (int_word_to + frac_word_to) as usize;
     let mut res = res.map(|_| {
         Decimal::new(
