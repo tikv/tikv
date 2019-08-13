@@ -10,8 +10,6 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 #[cfg(test)]
 use std::thread;
-#[cfg(test)]
-use std::time::Duration;
 use std::{cmp, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -2654,7 +2652,7 @@ impl ApplyFsm {
     /// Used to test imitation message processing  
     #[cfg(test)]
     fn handle_testmsg(&self, tx: Sender<i32>) {
-        thread::sleep(Duration::from_millis(10));
+        //thread::sleep(Duration::from_millis(10));
         match thread::current().name() {
             Some("apply-1") => tx.send(1).unwrap(),
             _ => tx.send(0).unwrap(),
@@ -3979,15 +3977,15 @@ mod tests {
         let (send, rec) = channel();
 
         let mut apply0_handle = 0;
-        let mut apply1_handle = 1;
+        let mut apply1_handle = 0;
 
         thread::spawn(move || {
-            for _i in 0..10000 {
+            for _i in 0..1000000 {
                 router.schedule_task(1, Msg::Testmsg(send.clone()));
             }
         });
 
-        for _i in 0..10000 {
+        for _i in 0..1000000 {
             match rec.recv().unwrap() {
                 0 => apply0_handle += 1,
                 1 => apply1_handle += 1,
@@ -4000,9 +3998,9 @@ mod tests {
             apply1_handle - apply0_handle
         };
 
-        assert!(sub > 2000);
+        assert!(sub > 500000);
         println!(
-            "apply0_handle {} \n apply1_handle {}",
+            "apply0_handle {} \napply1_handle {}",
             apply0_handle, apply1_handle
         );
     }
