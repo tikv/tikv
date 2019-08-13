@@ -1,5 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! TiKV key building
+
+#[macro_use]
+extern crate derive_more;
+
 use byteorder::{BigEndian, ByteOrder};
 
 use std::error::Error as StdError;
