@@ -166,8 +166,8 @@ fn test_cleanup_sst() {
     check_sst_deleted(&import, &meta, &data);
 }
 
-fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
-    let mut m = SSTMeta::default();
+fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {
+    let mut m = SstMeta::default();
     m.set_uuid(Uuid::new_v4().as_bytes().to_vec());
     m.set_crc32(crc32);
     m.set_length(length);
@@ -176,7 +176,7 @@ fn new_sst_meta(crc32: u32, length: u64) -> SSTMeta {
 
 fn send_upload_sst(
     client: &ImportSstClient,
-    meta: &SSTMeta,
+    meta: &SstMeta,
     data: &[u8],
 ) -> Result<UploadResponse> {
     let mut r1 = UploadRequest::default();
@@ -192,7 +192,7 @@ fn send_upload_sst(
     stream.forward(tx).and_then(|_| rx).wait()
 }
 
-fn check_sst_deleted(client: &ImportSstClient, meta: &SSTMeta, data: &[u8]) {
+fn check_sst_deleted(client: &ImportSstClient, meta: &SstMeta, data: &[u8]) {
     for _ in 0..10 {
         if send_upload_sst(client, meta, data).is_ok() {
             // If we can upload the file, it means the previous file has been deleted.
