@@ -6,7 +6,7 @@ use std::error::Error;
 
 use sys_info;
 
-use tikv_util::config::{self, ReadableSize, KB, MB};
+use tikv_util::config::{self, ReadableSize, KB};
 
 use engine::rocks::{Cache, LRUCacheOptions};
 
@@ -30,7 +30,7 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
-    // Replaced by GCConfig.ratio_threshold. Keep it for backward compatibility.
+    // Replaced by `GCConfig.ratio_threshold`. Keep it for backward compatibility.
     pub gc_ratio_threshold: f64,
     pub max_key_size: usize,
     pub scheduler_notify_capacity: usize,
@@ -115,7 +115,8 @@ impl BlockCacheConfig {
 
 pub const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
-const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 5 * MB;
+// No limit
+const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
