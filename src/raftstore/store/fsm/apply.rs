@@ -8,6 +8,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+#[cfg(test)]
+use std::thread;
+#[cfg(test)]
+use std::time::Duration;
 use std::{cmp, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -2288,6 +2292,8 @@ pub enum Msg {
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     #[cfg(test)]
+    Testmsg(Sender<i32>),
+    #[cfg(test)]
     Validate(u64, Box<dyn FnOnce(&ApplyDelegate) + Send>),
 }
 
@@ -2322,6 +2328,8 @@ impl Debug for Msg {
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
+            #[cfg(test)]
+            Msg::Testmsg(_tx) => write!(f, "test msg"),
             #[cfg(test)]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -2643,6 +2651,16 @@ impl ApplyFsm {
         );
     }
 
+    /// Used to test imitation message processing  
+    #[cfg(test)]
+    fn handle_testmsg(&self, tx: Sender<i32>) {
+        thread::sleep(Duration::from_millis(10));
+        match thread::current().name() {
+            Some("apply-1") => tx.send(1).unwrap(),
+            _ => tx.send(0).unwrap(),
+        };
+    }
+
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -2666,6 +2684,8 @@ impl ApplyFsm {
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f(&self.delegate),
+                #[cfg(test)]
+                Some(Msg::Testmsg(tx)) => self.handle_testmsg(tx),
                 None => break,
             }
         }
@@ -2872,6 +2892,8 @@ impl ApplyRouter {
                 ),
                 #[cfg(test)]
                 Msg::Validate(_, _) => return,
+                #[cfg(test)]
+                Msg::Testmsg(_) => return,
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -2914,6 +2936,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::atomic::*;
+    use std::sync::mpsc::channel;
     use std::sync::*;
     use std::time::*;
 
@@ -3916,5 +3939,71 @@ mod tests {
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_apply_tilt() {
+        let (tx, _rx) = mpsc::channel();
+        let sender = Notifier::Sender(tx);
+        let (_tmp, engines) = create_tmp_engine("test-apply");
+        let host = Arc::new(CoprocessorHost::default());
+        let (_dir, importer) = create_tmp_importer("apply-apply");
+        let (region_scheduler, _snapshot_rx) = dummy_scheduler();
+        let mut cfg = Config::default();
+        cfg.messages_per_tick = 8;
+        let cfg = Arc::new(cfg);
+        let (router, mut system) = create_apply_batch_system(&cfg);
+        let builder = super::Builder {
+            tag: "test-store".to_owned(),
+            cfg,
+            coprocessor_host: host,
+            importer,
+            region_scheduler,
+            sender,
+            engines: engines.clone(),
+            router: router.clone(),
+        };
+        system.spawn("apply".to_owned(), builder);
+        let mut reg = Registration::default();
+        reg.id = 1;
+        reg.term = 1;
+        reg.region.set_id(1);
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.apply_state.set_applied_index(3);
+        reg.region.mut_peers().push(new_peer(1, 2));
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let (send, rec) = channel();
+
+        let mut apply0_handle = 0;
+        let mut apply1_handle = 1;
+
+        thread::spawn(move || {
+            for _i in 0..10000 {
+                router.schedule_task(1, Msg::Testmsg(send.clone()));
+            }
+        });
+
+        for _i in 0..10000 {
+            match rec.recv().unwrap() {
+                0 => apply0_handle += 1,
+                1 => apply1_handle += 1,
+                _ => println!(" recv error"),
+            };
+        }
+        let sub = if apply0_handle > apply1_handle {
+            apply0_handle - apply1_handle
+        } else {
+            apply1_handle - apply0_handle
+        };
+
+        assert!(sub > 2000);
+        println!(
+            "apply0_handle {} \n apply1_handle {}",
+            apply0_handle, apply1_handle
+        );
     }
 }
