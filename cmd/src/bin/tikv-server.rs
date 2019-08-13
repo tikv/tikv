@@ -6,7 +6,6 @@
 use std::process;
 
 use clap::{crate_authors, crate_version, App, Arg};
-use tikv::binutil::{self, server, setup};
 use tikv::config::TiKvConfig;
 
 fn main() {
@@ -14,7 +13,7 @@ fn main() {
         .about("A distributed transactional key-value database powered by Rust and Raft")
         .author(crate_authors!())
         .version(crate_version!())
-        .long_version(binutil::tikv_version_info().as_ref())
+        .long_version(tikv::tikv_version_info().as_ref())
         .arg(
             Arg::with_name("config")
                 .short("C")
@@ -139,7 +138,7 @@ fn main() {
         .value_of("config")
         .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));
 
-    setup::overwrite_config_with_cmd_args(&mut config, &matches);
+    cmd::setup::overwrite_config_with_cmd_args(&mut config, &matches);
 
-    server::run_tikv(config);
+    cmd::server::run_tikv(config);
 }
