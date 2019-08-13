@@ -18,7 +18,7 @@ use import2::import_mode;
 mod sst_importer;
 mod sst_service;
 
-pub mod test_helpers;
+pub use import2::test_helpers;
 
 pub use import2::Config;
 pub use import2::{Error, Result};

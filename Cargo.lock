@@ -1103,9 +1103,11 @@ dependencies = [
 name = "import"
 version = "0.1.0"
 dependencies = [
+ "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "engine 0.0.1",
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.5.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "keys 0.1.0",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "lazy_static 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
