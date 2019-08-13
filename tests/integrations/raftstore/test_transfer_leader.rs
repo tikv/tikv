@@ -175,3 +175,37 @@ fn test_node_transfer_leader_during_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     test_transfer_leader_during_snapshot(&mut cluster);
 }
+
+#[test]
+fn test_transfer_leader_to_inactive() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .msg_type(MessageType::MsgHeartbeatResponse)
+            .direction(Direction::Send),
+    ));
+
+    let tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.as_millis();
+    let election_timeout =
+        tick_interval * cluster.cfg.raft_store.raft_election_timeout_ticks as u64;
+
+    // Sleep a while to make sure that peer 2 becomes inactive on the leader.
+    sleep_ms(election_timeout * 2);
+
+    // check if transfer leader is fast enough.
+    let region = cluster.get_region(b"k");
+    let leader = cluster.leader_of_region(1).unwrap();
+    let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
+    let mut req = new_admin_request(1, region.get_region_epoch(), admin_req);
+    req.mut_header().set_peer(leader);
+    cluster.call_command(req, Duration::from_secs(3)).unwrap();
+
+    sleep_ms(election_timeout);
+    assert_eq!(
+        cluster.query_leader(3, 1, Duration::from_secs(5)),
+        Some(new_peer(1, 1))
+    );
+}
