@@ -32,6 +32,9 @@ fn json_replace(args: &[&Option<Json>]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Replace)
 }
 
+/// TODO: set min_args for json functions.
+/// TODO: think about can macros be used in this function.
+/// TODO: implement the functions.
 #[inline]
 fn json_modify(args: &[&Option<Json>], mt: ModifyType) -> Result<Option<Json>> {
     unimplemented!()
