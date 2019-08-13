@@ -2653,7 +2653,7 @@ impl ApplyFsm {
     #[cfg(test)]
     fn handle_testmsg(&self, tx: Sender<i32>) {
         match thread::current().name() {
-            Some("apply-1") => tx.send(1).unwrap(),
+            Some("apply-1::test-apply-tilt") => tx.send(1).unwrap(),
             _ => tx.send(0).unwrap(),
         };
     }
@@ -2935,6 +2935,7 @@ mod tests {
     use std::sync::atomic::*;
     use std::sync::mpsc::channel;
     use std::sync::*;
+    use std::thread::{self, JoinHandle};
     use std::time::*;
 
     use crate::raftstore::coprocessor::*;
@@ -3978,11 +3979,21 @@ mod tests {
         let mut apply0_handle = 0;
         let mut apply1_handle = 0;
 
-        thread::spawn(move || {
-            for _i in 0..1000000 {
-                router.schedule_task(1, Msg::Testmsg(send.clone()));
-            }
-        });
+        let mut worker: Vec<JoinHandle<()>> = Vec::new();
+        for _i in 0..100 {
+            let tx1 = send.clone();
+            let router = router.clone();
+            let t = thread::spawn(move || {
+                for _i in 0..10000 {
+                    router.schedule_task(1, Msg::Testmsg(tx1.clone()));
+                }
+            });
+            worker.push(t);
+        }
+
+        for w in worker {
+            w.join().unwrap();
+        }
 
         for _i in 0..1000000 {
             match rec.recv().unwrap() {
