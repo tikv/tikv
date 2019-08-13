@@ -3999,7 +3999,7 @@ mod tests {
             match rec.recv().unwrap() {
                 0 => apply0_handle += 1,
                 1 => apply1_handle += 1,
-                _ => println!(" recv error"),
+                _ => {}
             };
         }
         let sub = if apply0_handle > apply1_handle {
@@ -4009,9 +4009,5 @@ mod tests {
         };
 
         assert!(sub > 500000);
-        println!(
-            "apply0_handle {} \napply1_handle {}",
-            apply0_handle, apply1_handle
-        );
     }
 }
