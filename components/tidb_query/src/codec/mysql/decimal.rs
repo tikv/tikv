@@ -20,7 +20,7 @@ use crate::codec::data_type::*;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Res<T> {
     Ok(T),
     Truncated(T),
@@ -63,9 +63,9 @@ impl<T> Res<T> {
         }
     }
 
-    /// Convert `Res` into `Result` with a `EvalContext` that handling the errors
+    /// Convert `Res` into `Result` with an `EvalContext` that handling the errors
     /// If `truncated_err` is None, `ctx` will try to handle the default truncated error: `Error::truncated()`,
-    /// or handle the specified error inside `truncated_err`.
+    /// otherwise handle the specified error inside `truncated_err`.
     /// Same does `overflow_err` means.
     fn into_result_impl(
         self,
@@ -91,29 +91,12 @@ impl<T> Res<T> {
         }
     }
 
-    pub fn into_result_with_truncated_err(
-        self,
-        ctx: &mut EvalContext,
-        truncated_err: Error,
-    ) -> Result<T> {
-        self.into_result_impl(ctx, Some(truncated_err), None)
-    }
-
     pub fn into_result_with_overflow_err(
         self,
         ctx: &mut EvalContext,
         overflow_err: Error,
     ) -> Result<T> {
         self.into_result_impl(ctx, None, Some(overflow_err))
-    }
-
-    pub fn into_result_with_truncated_overflow_err(
-        self,
-        ctx: &mut EvalContext,
-        truncated_err: Error,
-        overflow_err: Error,
-    ) -> Result<T> {
-        self.into_result_impl(ctx, Some(truncated_err), Some(overflow_err))
     }
 
     pub fn into_result(self, ctx: &mut EvalContext) -> Result<T> {
@@ -3556,5 +3539,54 @@ mod tests {
         );
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+    }
+
+    #[test]
+    fn test_into_result_impl() {
+        // Truncated cases
+        let mut ctx = EvalContext::default();
+        let truncated_res = Res::Truncated(2333);
+        let truncated_err_cases = vec![Error::truncated(), Error::truncated_wrong_val("", "")];
+
+        for error in truncated_err_cases {
+            assert_eq!(
+                error.code(),
+                truncated_res
+                    .into_result_impl(&mut ctx, Some(error), None)
+                    .unwrap_err()
+                    .code()
+            );
+        }
+
+        // TRUNCATE_AS_WARNING
+        let mut ctx = EvalContext::new(std::sync::Arc::new(EvalConfig::from_flag(
+            Flag::TRUNCATE_AS_WARNING,
+        )));
+        let truncated_res = Res::Truncated(2333);
+
+        assert!(truncated_res
+            .into_result_impl(&mut ctx, Some(Error::truncated()), None)
+            .is_ok());
+
+        // Overflow cases
+        let mut ctx = EvalContext::default();
+        let overflow_res = Res::Overflow(666);
+        let error = Error::overflow("", "");
+        assert_eq!(
+            error.code(),
+            overflow_res
+                .into_result_impl(&mut ctx, None, Some(error))
+                .unwrap_err()
+                .code(),
+        );
+
+        // OVERFLOW_AS_WARNING
+        let mut ctx = EvalContext::new(std::sync::Arc::new(EvalConfig::from_flag(
+            Flag::OVERFLOW_AS_WARNING,
+        )));
+        let error = Error::overflow("", "");
+        assert!(overflow_res
+            .into_result_impl(&mut ctx, None, Some(error))
+            .is_ok());
     }
 }
