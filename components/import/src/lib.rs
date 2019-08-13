@@ -16,6 +16,7 @@ mod errors;
 pub mod metrics;
 #[macro_use]
 pub mod service;
+pub mod import_mode;
 
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
