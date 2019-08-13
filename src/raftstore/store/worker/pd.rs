@@ -765,7 +765,7 @@ fn new_split_region_request(
 
 fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
-    ids: Vec<pdpb::SplitID>,
+    ids: Vec<pdpb::SplitId>,
     right_derive: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();

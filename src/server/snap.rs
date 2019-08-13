@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use futures::{future, Async, Future, Poll, Stream};
 use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use grpcio::{
-    ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode::*,
+    ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
 use kvproto::raft_serverpb::RaftMessage;
@@ -283,7 +283,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
     f.then(move |res| match res {
         Ok(()) => sink.success(Done::default()),
         Err(e) => {
-            let status = RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(format!("{:?}", e)));
+            let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", e)));
             sink.fail(status)
         }
     })
@@ -333,7 +333,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
                     let status = RpcStatus::new(
-                        GRPC_STATUS_RESOURCE_EXHAUSTED,
+                        RpcStatusCode::RESOURCE_EXHAUSTED,
                         Some(format!(
                             "the number of received snapshot tasks {} exceeded the limitation {}",
                             task_num, self.cfg.concurrent_recv_snap_limit
