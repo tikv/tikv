@@ -154,7 +154,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     // For meta data in the default CF.
     //
     //  1. store_ident_key: 0x01 0x01
-    //  2. prepare_boostrap_key: 0x01 0x02
+    //  2. prepare_bootstrap_key: 0x01 0x02
     let store_ident = write_store_ident(&kv_engine, CF_DEFAULT, keys::STORE_IDENT_KEY);
     let region = write_region(&kv_engine, CF_DEFAULT, keys::PREPARE_BOOTSTRAP_KEY);
 
