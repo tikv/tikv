@@ -7,7 +7,7 @@ use kvproto::{metapb, raft_serverpb};
 use test_raftstore::*;
 use tikv::raftstore::store::keys;
 
-fn test_boostrap_half_way_failure(fp: &str) {
+fn test_bootstrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = Cluster::new(0, 5, sim.clone(), pd_client.clone());
@@ -46,25 +46,25 @@ fn test_boostrap_half_way_failure(fp: &str) {
 }
 
 #[test]
-fn test_boostrap_half_way_failure_after_bootstrap_store() {
+fn test_bootstrap_half_way_failure_after_bootstrap_store() {
     let _guard = crate::setup();
 
     let fp = "node_after_bootstrap_store";
-    test_boostrap_half_way_failure(fp);
+    test_bootstrap_half_way_failure(fp);
 }
 
 #[test]
-fn test_boostrap_half_way_failure_after_prepare_bootstrap_cluster() {
+fn test_bootstrap_half_way_failure_after_prepare_bootstrap_cluster() {
     let _guard = crate::setup();
 
     let fp = "node_after_prepare_bootstrap_cluster";
-    test_boostrap_half_way_failure(fp);
+    test_bootstrap_half_way_failure(fp);
 }
 
 #[test]
-fn test_boostrap_half_way_failure_after_bootstrap_cluster() {
+fn test_bootstrap_half_way_failure_after_bootstrap_cluster() {
     let _guard = crate::setup();
 
     let fp = "node_after_bootstrap_cluster";
-    test_boostrap_half_way_failure(fp);
+    test_bootstrap_half_way_failure(fp);
 }
