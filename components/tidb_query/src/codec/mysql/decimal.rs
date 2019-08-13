@@ -63,6 +63,10 @@ impl<T> Res<T> {
         }
     }
 
+    /// Convert `Res` into `Result` with a `EvalContext` that handling the errors
+    /// If `truncated_err` is None, `ctx` will try to handle the default truncated error: `Error::truncated()`,
+    /// or handle the specified error inside `truncated_err`.
+    /// Same does `overflow_err` means.
     fn into_result_impl(
         self,
         ctx: &mut EvalContext,

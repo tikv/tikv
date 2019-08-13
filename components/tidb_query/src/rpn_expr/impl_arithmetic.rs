@@ -461,17 +461,21 @@ fn int_divide_decimal(
     lhs: &Option<Decimal>,
     rhs: &Option<Decimal>,
 ) -> Result<Option<Int>> {
-    let result = try_opt!(arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs));
-    Ok(result
-        .as_i64()
-        .into_result_with_overflow_err(
-            ctx,
-            Error::overflow(
-                "BIGINT",
-                format!("({} / {})", lhs.as_ref().unwrap(), rhs.as_ref().unwrap()),
-            ),
-        )
-        .map(Some)?)
+    let result = try_opt!(arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)).as_i64();
+
+    Ok(if result.is_truncated() {
+        Some(result.unwrap())
+    } else {
+        result
+            .into_result_with_overflow_err(
+                ctx,
+                Error::overflow(
+                    "BIGINT",
+                    format!("({} / {})", lhs.as_ref().unwrap(), rhs.as_ref().unwrap()),
+                ),
+            )
+            .map(Some)?
+    })
 }
 
 pub struct DecimalDivide;
