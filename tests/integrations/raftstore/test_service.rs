@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::*;
 
 use futures::{future, Future, Stream};
-use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode::*};
+use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;
@@ -414,7 +414,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     // GC `k` at the latest ts.
     ts += 1;
     let gc_safe_ponit = ts;
-    let mut gc_req = GCRequest::default();
+    let mut gc_req = GcRequest::default();
     gc_req.set_context(ctx.clone());
     gc_req.safe_point = gc_safe_ponit;
     let gc_resp = client.kv_gc(&gc_req).unwrap();
@@ -549,7 +549,7 @@ fn test_debug_get() {
     // Debug get
     let mut req = debugpb::GetRequest::default();
     req.set_cf(CF_DEFAULT.to_owned());
-    req.set_db(debugpb::DB::KV);
+    req.set_db(debugpb::Db::Kv);
     req.set_key(key);
     let mut resp = debug_client.get(&req.clone()).unwrap();
     assert_eq!(resp.take_value(), v);
@@ -557,7 +557,7 @@ fn test_debug_get() {
     req.set_key(b"foo".to_vec());
     match debug_client.get(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, GRPC_STATUS_NOT_FOUND);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -594,7 +594,7 @@ fn test_debug_raft_log() {
     req.set_log_index(region_id + 1);
     match debug_client.raft_log(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, GRPC_STATUS_NOT_FOUND);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -660,7 +660,7 @@ fn test_debug_region_info() {
     req.set_region_id(region_id + 1);
     match debug_client.region_info(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, GRPC_STATUS_NOT_FOUND);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -710,7 +710,7 @@ fn test_debug_region_size() {
     req.set_region_id(region_id + 1);
     match debug_client.region_size(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, GRPC_STATUS_NOT_FOUND);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }

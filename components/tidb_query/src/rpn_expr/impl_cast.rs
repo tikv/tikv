@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;

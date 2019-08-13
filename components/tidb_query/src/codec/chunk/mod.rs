@@ -11,7 +11,7 @@ pub use self::chunk::{Chunk, ChunkEncoder};
 mod tests {
     use tidb_query_datatype::FieldTypeAccessor;
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::expression::FieldType;
+    use tipb::FieldType;
 
     pub fn field_type(tp: FieldTypeTp) -> FieldType {
         let mut fp = FieldType::default();
