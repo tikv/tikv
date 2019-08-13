@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures::{Future, Sink, Stream};
 use grpcio::{
-    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*,
+    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use pd_client::Error as PdError;
@@ -123,15 +123,17 @@ fn hijack_unary<F, R, C: PdMocker>(
                 .map_err(move |err| error!("failed to reply: {:?}", err)),
         ),
         Some(Err(err)) => {
-            let status = RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(format!("{:?}", err)));
+            let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
             ctx.spawn(
                 sink.fail(status)
                     .map_err(move |err| error!("failed to reply: {:?}", err)),
             );
         }
         _ => {
-            let status =
-                RpcStatus::new(GRPC_STATUS_UNIMPLEMENTED, Some("Unimplemented".to_owned()));
+            let status = RpcStatus::new(
+                RpcStatusCode::UNIMPLEMENTED,
+                Some("Unimplemented".to_owned()),
+            );
             ctx.spawn(
                 sink.fail(status)
                     .map_err(move |err| error!("failed to reply: {:?}", err)),

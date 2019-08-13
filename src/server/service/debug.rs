@@ -7,7 +7,7 @@ use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{Error as GrpcError, WriteFlags};
-use grpcio::{RpcContext, RpcStatus, RpcStatusCode::*, ServerStreamingSink, UnarySink};
+use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::*;
 use kvproto::debugpb_grpc;
 use kvproto::raft_cmdpb::{
@@ -24,9 +24,9 @@ use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
-        Error::NotFound(msg) => (GRPC_STATUS_NOT_FOUND, Some(msg)),
-        Error::InvalidArgument(msg) => (GRPC_STATUS_INVALID_ARGUMENT, Some(msg)),
-        Error::Other(e) => (GRPC_STATUS_UNKNOWN, Some(format!("{:?}", e))),
+        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, Some(msg)),
+        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, Some(msg)),
+        Error::Other(e) => (RpcStatusCode::UNKNOWN, Some(format!("{:?}", e))),
     };
     RpcStatus::new(code, msg)
 }
