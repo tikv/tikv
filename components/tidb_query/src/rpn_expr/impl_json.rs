@@ -18,10 +18,7 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
 #[inline]
 fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
     arg.as_ref().map_or(Ok(None), |json_arg| {
-        json_arg
-            .unquote()
-            .map_err(|e| e.into())
-            .map(|v| Some(Bytes::from(v)))
+        Ok(Some(Bytes::from(json_arg.unquote()?)))
     })
 }
 
