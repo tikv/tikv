@@ -18,5 +18,7 @@ pub mod metrics;
 pub mod service;
 pub mod import_mode;
 
+pub mod test_helpers;
+
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
