@@ -18,10 +18,10 @@ use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
 use sst_importer::send_rpc_response;
 
-use super::import_mode::*;
-use super::metrics::*;
-use super::service::*;
-use super::{Config, Error, SSTImporter};
+use sst_importer::import_mode::*;
+use sst_importer::metrics::*;
+use sst_importer::service::*;
+use sst_importer::{Config, Error, SSTImporter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///

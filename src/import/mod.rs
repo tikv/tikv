@@ -12,9 +12,6 @@
 //! thread to notify it of the ingesting operation.  This service is running
 //! inside TiKV because it needs to interact with raftstore.
 
-use sst_importer::metrics;
-use sst_importer::service;
-use sst_importer::import_mode;
 mod sst_service;
 
 pub use sst_importer::test_helpers;
