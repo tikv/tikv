@@ -2652,7 +2652,6 @@ impl ApplyFsm {
     /// Used to test imitation message processing  
     #[cfg(test)]
     fn handle_testmsg(&self, tx: Sender<i32>) {
-        //thread::sleep(Duration::from_millis(10));
         match thread::current().name() {
             Some("apply-1") => tx.send(1).unwrap(),
             _ => tx.send(0).unwrap(),
