@@ -164,7 +164,7 @@
 # ratio-threshold = 1.1
 
 ## The number of keys to GC in one batch.
-# batch-size = 512
+# batch-keys = 512
 
 ## Max bytes that GC worker can write to rocksdb in one second.
 ## If it is set to 0, there is no limit.

@@ -30,6 +30,8 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
+    // Replaced by GCConfig.ratio_threshold. Keep it for backward compatibility.
+    pub gc_ratio_threshold: f64,
     pub max_key_size: usize,
     pub scheduler_notify_capacity: usize,
     pub scheduler_concurrency: usize,
@@ -44,6 +46,7 @@ impl Default for Config {
         let total_cpu = sys_info::cpu_num().unwrap();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
+            gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_notify_capacity: DEFAULT_SCHED_CAPACITY,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
@@ -111,7 +114,7 @@ impl BlockCacheConfig {
 }
 
 pub const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
-pub const DEFAULT_GC_BATCH_SIZE: usize = 512;
+pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 5 * MB;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -120,7 +123,7 @@ const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 5 * MB;
 #[serde(rename_all = "kebab-case")]
 pub struct GCConfig {
     pub ratio_threshold: f64,
-    pub batch_size: usize,
+    pub batch_keys: usize,
     pub max_write_bytes_per_sec: ReadableSize,
 }
 
@@ -128,7 +131,7 @@ impl Default for GCConfig {
     fn default() -> GCConfig {
         GCConfig {
             ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
-            batch_size: DEFAULT_GC_BATCH_SIZE,
+            batch_keys: DEFAULT_GC_BATCH_KEYS,
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
         }
     }
@@ -136,8 +139,8 @@ impl Default for GCConfig {
 
 impl GCConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.batch_size == 0 {
-            return Err(("storage.gc.batch_size should not be 0.").into());
+        if self.batch_keys == 0 {
+            return Err(("storage.gc.batch_keys should not be 0.").into());
         }
         Ok(())
     }
@@ -153,7 +156,7 @@ mod tests {
         cfg.validate().unwrap();
 
         let mut invalid_cfg = GCConfig::default();
-        invalid_cfg.batch_size = 0;
+        invalid_cfg.batch_keys = 0;
         assert!(invalid_cfg.validate().is_err());
     }
 }
