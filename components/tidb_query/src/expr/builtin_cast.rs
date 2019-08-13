@@ -44,111 +44,79 @@ impl ScalarFunc {
 
     // TODO
     pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val: Decimal = try_opt!(self.children[0].eval_decimal(ctx, row)).into_owned();
-        // TODO, this is not same as what TiDB does, TiDB return all err directly.
-        let val = match val.round(0, RoundMode::HalfEven) {
-            Res::Ok(v) => {
-                v
-            }
-            Res::Truncated(v) => {
-                ctx.handle_truncate(true)?;
-                v
-            }
-            Res::Overflow(v) => {
-                // FIXME, the err msg
-                ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
-                v
-            }
-        };
-        let (overflow, res): (bool, Result<i64>) = if !self.is_unsigned() {
-            let r: Result<i64> = <Decimal as ConvertTo<i64>>::convert(&val, ctx);
-            (r.is_err() && r.err().unwrap().is_overflow(), r)
-        } else if self.in_union() && val.is_negative() {
-            (false, Ok(0))
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
+        let (overflow, res) = if self
+            .field_type
+            .as_accessor()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
+            let uint = val.as_u64();
+            (uint.is_overflow(), uint.unwrap() as i64)
         } else {
-            let r: Result<u64> = <Decimal as ConvertTo<u64>>::convert(&val, ctx);
-            (r.is_err() && r.err().unwrap().is_overflow(),
-             match r {
-                 Ok(x) => Ok(x as i64),
-                 _ => Err(r.err().unwrap())
-             }
-            )
+            let val = val.as_i64();
+            (val.is_overflow(), val.unwrap())
         };
 
         if overflow {
-            let warn_err = Error::truncated_wrong_val("DECIMAL", &format!("{}", val));
-            if ctx.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING) {
-                ctx.warnings.append_warning(warn_err);
-                // FIXME: The TiDB version can return err and res at the same time
-                //  however, the convert can't. So what is the res when the err is overflow
-                //  and we handle overflow as warning.
-                Ok(Some(0))
-            } else {
-                Err(res.err().unwrap())
+            if !ctx.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING) {
+                return Err(Error::overflow("CastDecimalAsInt", &format!("{}", val)));
             }
-        } else {
-            Ok(Some(res.unwrap()))
+            ctx.warnings
+                .append_warning(Error::truncated_wrong_val("DECIMAL", &format!("{}", val)));
         }
+        Ok(Some(res))
     }
 
     // TODO
     pub fn cast_str_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        // according to https://github.com/pingcap/tidb/blob/9b0eb1a0066e1541a28d6a02b98970aed14cecd7/util/codec/codec.go#L125-L130,
-        // so we needn't to handle IsBinaryLiteral as builtinCastStringAsIntSig::evalInt does
         if self.children[0].field_type().is_hybrid() {
             return self.children[0].eval_int(ctx, row);
         }
-        let val: Cow<[u8]> = try_opt!(self.children[0].eval_string(ctx, row));
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
         let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
             Some(&b'-') => true,
             _ => false,
         };
-        let (res, err): (i64, Result<()>) = if !is_negative {
-            let u: Result<u64> = <&[u8] as ConvertTo<u64>>::convert(&val.as_ref(), ctx);
-            if u.is_ok() && !self.is_unsigned() && u.unwrap() > i64::MAX as u64 {
-                ctx.warnings.append_warning(Error::cast_as_signed_overflow());
-            }
-            if u.is_ok() {
-                (u.unwrap() as i64, Ok(()))
-            } else {
-                (0, Err(u.err().unwrap()))
-            }
-        } else if self.in_union() && self.is_unsigned() {
-            (0, Ok(()))
+        let res = if is_negative {
+            val.to_int(ctx, FieldTypeTp::LongLong).map(|v| {
+                // TODO: handle inUion flag
+                if self
+                    .field_type
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
+                    ctx.warnings
+                        .append_warning(Error::cast_neg_int_as_unsigned());
+                }
+                v
+            })
         } else {
-            let u: Result<i64> = <&[u8] as ConvertTo<i64>>::convert(&val.as_ref(), ctx);
-            if u.is_ok() && !self.is_unsigned() {
-                ctx.warnings.append_warning(Error::cast_neg_int_as_unsigned());
-            }
-            if u.is_ok() {
-                (u.unwrap(), Ok(()))
-            } else {
-                (0, Err(u.err().unwrap()))
-            }
+            val.to_uint(ctx, FieldTypeTp::LongLong).map(|urs| {
+                if !self
+                    .field_type
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                    && urs > (i64::MAX as u64)
+                {
+                    ctx.warnings
+                        .append_warning(Error::cast_as_signed_overflow());
+                }
+                urs as i64
+            })
         };
 
-        match err {
-            Ok(_) => {
-                Ok(Some(res))
-            }
+        match res {
+            Ok(v) => Ok(Some(v)),
             Err(e) => {
-                let res: Result<Option<i64>> = if ctx.cfg.flag.contains(Flag::IN_SELECT_STMT) && e.is_overflow() {
-                    if is_negative {
-                        Ok(Some(i64::MIN))
-                    } else {
-                        Ok(Some(u64::MAX as i64))
-                    }
+                if e.is_overflow() {
+                    ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
+                        .map(Some)
                 } else {
-                    Ok(Some(res))
-                };
-                let warn_err = Error::truncated_wrong_val("INTEGER", &format!("{}", e));
-                match ctx.handle_overflow(warn_err) {
-                    Ok(_) => {
-                        res
-                    }
-                    Err(e) => {
-                        Err(e)
-                    }
+                    Err(e)
                 }
             }
         }
@@ -339,9 +307,19 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let dec: Cow<Decimal> = try_opt!(self.children[0].eval_decimal(ctx, row));
-        // TODO, TiDB version has bug
-        Ok(Some(dec))
+        let dec = if self.children[0].field_type().is_hybrid() {
+            try_opt!(self.children[0].eval_decimal(ctx, row))
+        } else {
+            let val = try_opt!(self.children[0].eval_string(ctx, row));
+            match Decimal::from_bytes(&val)? {
+                Res::Ok(d) => Cow::Owned(d),
+                Res::Truncated(d) | Res::Overflow(d) => {
+                    ctx.handle_truncate(true)?;
+                    Cow::Owned(d)
+                }
+            }
+        };
+        self.produce_dec_with_specified_tp(ctx, dec).map(Some)
     }
 
     // Ok
@@ -509,13 +487,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val: i64 = try_opt!(self.children[0].eval_int(ctx, row));
-        // TODO
-        let mut n: Time = <i64 as ConvertTo<Time>>::convert(&val, ctx)?;
-        if self.field_type.tp() == FieldTypeTp::Date {
-            n.set_time_type(TimeType::Date)?
-        }
-        Ok(Some(Cow::Owned(n)))
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let s = format!("{}", val);
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_real_as_time<'a, 'b: 'a>(
@@ -523,22 +497,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
-        let n: String = <f64 as ConvertTo<String>>::convert(&val, ctx)?;
-        match self.produce_time_with_float_str(ctx, n.as_str()) {
-            Ok(t) => {
-                if self.field_type.tp() == FieldTypeTp::Date {
-                    let mut t: Time = t.into_owned();
-                    t.set_time_type(TimeType::Date)?;
-                    Ok(Some(Cow::Owned(t)))
-                } else {
-                    Ok(Some(t))
-                }
-            }
-            Err(e) => {
-                Err(Error::invalid_time_format(&format!("{}", e)))
-            }
-        }
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let s = format!("{}", val);
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_decimal_as_time<'a, 'b: 'a>(
@@ -546,21 +507,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val: Cow<Decimal> = try_opt!(self.children[0].eval_decimal(ctx, row));
-        match self.produce_time_with_float_str(ctx, &val.to_string()) {
-            Ok(t) => {
-                if self.field_type.tp() == FieldTypeTp::Date {
-                    let mut t: Time = t.into_owned();
-                    t.set_time_type(TimeType::Date)?;
-                    Ok(Some(Cow::Owned(t)))
-                } else {
-                    Ok(Some(t))
-                }
-            }
-            Err(e) => {
-                Err(Error::invalid_time_format(&format!("{}", e)))
-            }
-        }
+        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let s = val.to_string();
+        Ok(Some(self.produce_time_with_float_str(ctx, &s)?))
     }
 
     pub fn cast_str_as_time<'a, 'b: 'a>(
@@ -568,7 +517,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val: Cow<str> = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         Ok(Some(self.produce_time_with_str(ctx, &val)?))
     }
 
@@ -577,13 +526,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
-        let mut val: Time = val.into_owned();
-        val.set_time_type(self.field_type.tp().try_into()?)?;
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let mut val = val.into_owned();
         val.round_frac(self.field_type.decimal() as i8)?;
-        if self.field_type.tp() == FieldTypeTp::Date {
-            val.set_time_type(TimeType::Date)?;
-        }
+        // TODO: tidb only update tp when tp is Date
+        val.set_time_type(self.field_type.as_accessor().tp().try_into()?)?;
         Ok(Some(Cow::Owned(val)))
     }
 
@@ -592,17 +539,14 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val: Duration = try_opt!(self.children[0].eval_duration(ctx, row));
-        let t: Result<Time> = <Duration as ConvertTo<Time>>::convert(&val, ctx);
-        match t {
-            Err(e) => {
-                Err(Error::invalid_time_format(&format!("{}", e)))
-            }
-            Ok(mut t) => {
-                t.round_frac(self.field_type.decimal() as i8)?;
-                Ok(Some(Cow::Owned(t)))
-            }
-        }
+        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let mut val = Time::from_duration(
+            &ctx.cfg.tz,
+            self.field_type.as_accessor().tp().try_into()?,
+            val,
+        )?;
+        val.round_frac(self.field_type.decimal() as i8)?;
+        Ok(Some(Cow::Owned(val)))
     }
 
     pub fn cast_json_as_time<'a, 'b: 'a>(
@@ -610,20 +554,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val: Cow<Json> = try_opt!(self.children[0].eval_json(ctx, row));
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
-        let t: Result<Time> = Time::parse_utc_datetime_from_float_string(s.as_str(), MAX_FSP);
-        match t {
-            Err(e) => {
-                Err(Error::invalid_time_format(&format!("{}", e)))
-            }
-            Ok(mut t) => {
-                if self.field_type.tp() == FieldTypeTp::Date {
-                    t.set_time_type(TimeType::Date)?;
-                }
-                Ok(Some(Cow::Owned(t)))
-            }
-        }
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_int_as_duration<'a, 'b: 'a>(
@@ -631,20 +564,20 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
-        let _val: i64 = try_opt!(self.children[0].eval_int(ctx, row));
-        // TODO
-//        match <i64 as ConvertTo<Duration>>::convert(&val, ctx) {
-//            Ok(dur) => Ok(Some(dur)),
-//            Err(e) => {
-//                if e.is_overflow() {
-//                    ctx.handle_overflow(e)?;
-//                    Ok(None)
-//                } else {
-//                    Err(e)
-//                }
-//            }
-//        }
-        Ok(Some(Duration::zero()))
+        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let s = format!("{}", val);
+        // TODO: port NumberToDuration from tidb.
+        match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
+            Ok(dur) => Ok(Some(dur)),
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.handle_overflow_err(e)?;
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     pub fn cast_real_as_duration<'a, 'b: 'a>(
@@ -652,7 +585,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
-        let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
+        let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
         let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(dur))
@@ -674,7 +607,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
-        let val: Cow<[u8]> = try_opt!(self.children[0].eval_string(ctx, row));
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
         let dur = Duration::parse(val.as_ref(), self.field_type.decimal() as i8)?;
         Ok(Some(dur))
     }
@@ -685,11 +618,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
-        let _val: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
-        // TODO
-//        let n: Duration = <Time as ConvertTo<Duration>>::convert(val.as_ref(), ctx)?;
-//        Ok(Some(n.round_frac(self.field_type.decimal() as i8)?))
-        Ok(Some(Duration::zero()))
+        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let res = val
+            .to_duration()?
+            .round_frac(self.field_type.decimal() as i8)?;
+        Ok(Some(res))
     }
 
     // Ok
@@ -709,22 +642,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
-        let val: Cow<Json> = try_opt!(self.children[0].eval_json(ctx, row));
+        let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
-        match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
-            Err(e) => {
-                if e.code() == error::ERR_TRUNCATE_WRONG_VALUE {
-                    ctx.handle_truncate(true)?;
-                    // TODO, in tidb, when parse return err, what is the duration
-                    Ok(Some(Duration::zero()))
-                } else {
-                    Err(e)
-                }
-            }
-            Ok(d) => {
-                Ok(Some(d))
-            }
-        }
+        // TODO: tidb would handle truncate here
+        let d = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
+        Ok(Some(d))
     }
 
     // Ok
@@ -855,11 +777,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
-    fn is_binary_str(ft: &FieldType) -> bool {
-        ft.collation() == Collation::Binary && ft.is_string_like()
-    }
-
     /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
     /// a new string according to `flen` and `chs`.
     /// # panic
@@ -910,7 +827,7 @@ impl ScalarFunc {
             let mut res = s.into_owned();
             truncate_binary(&mut res, flen as isize);
             Ok(Cow::Owned(res))
-        } else if ft.tp() == FieldTypeTp::String && s.len() < flen && Self::is_binary_str(ft) && pad_zero {
+        } else if ft.tp() == FieldTypeTp::String && s.len() < flen && ft.is_binary_string_like() && pad_zero {
             let mut s = s.into_owned();
             s.resize(flen, 0);
             Ok(Cow::Owned(s))
@@ -956,7 +873,7 @@ impl ScalarFunc {
             return;
         }
         let flen = flen as usize;
-        if ft.tp() == FieldTypeTp::String && Self::is_binary_str(ft) && s.len() < flen {
+        if ft.tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
             // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
             s.resize(flen, 0);
         }
