@@ -164,7 +164,7 @@ impl PdClient for RpcClient {
             .with_label_values(&["alloc_id"])
             .start_coarse_timer();
 
-        let mut req = pdpb::AllocIDRequest::default();
+        let mut req = pdpb::AllocIdRequest::default();
         req.set_header(self.header());
 
         let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
@@ -259,11 +259,11 @@ impl PdClient for RpcClient {
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         let timer = Instant::now();
 
-        let mut req = pdpb::GetRegionByIDRequest::default();
+        let mut req = pdpb::GetRegionByIdRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIdRequest| {
             let handler = client
                 .rl()
                 .client
@@ -499,10 +499,10 @@ impl PdClient for RpcClient {
     fn get_gc_safe_point(&self) -> PdFuture<u64> {
         let timer = Instant::now();
 
-        let mut req = pdpb::GetGCSafePointRequest::default();
+        let mut req = pdpb::GetGcSafePointRequest::default();
         req.set_header(self.header());
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::GetGCSafePointRequest| {
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetGcSafePointRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
                 .rl()

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
-use tipb::{Chunk, DAGRequest, SelectResponse};
+use tipb::{Chunk, DagRequest, SelectResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -93,7 +93,7 @@ impl BatchExecutorsRunner<()> {
                 }
                 ExecType::TypeLimit => {}
                 ExecType::TypeTopN => {
-                    let descriptor = ed.get_topN();
+                    let descriptor = ed.get_top_n();
                     BatchTopNExecutor::check_supported(&descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
@@ -261,7 +261,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     .with_label_values(&["batch_top_n"])
                     .inc();
 
-                let mut d = ed.take_topN();
+                let mut d = ed.take_top_n();
                 let order_bys = d.get_order_by().len();
                 let mut order_exprs_def = Vec::with_capacity(order_bys);
                 let mut order_is_desc = Vec::with_capacity(order_bys);
@@ -296,7 +296,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
 
 impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static>(
-        mut req: DAGRequest,
+        mut req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,

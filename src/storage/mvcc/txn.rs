@@ -51,7 +51,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 fill_cache,
                 None,
                 None,
-                IsolationLevel::SI,
+                IsolationLevel::Si,
             ),
             gc_reader: MvccReader::new(
                 snapshot,
@@ -59,7 +59,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 fill_cache,
                 None,
                 None,
-                IsolationLevel::SI,
+                IsolationLevel::Si,
             ),
             start_ts,
             writes: vec![],
@@ -1166,7 +1166,7 @@ mod tests {
             true,
             None,
             None,
-            IsolationLevel::SI,
+            IsolationLevel::Si,
         );
 
         let v = reader.scan_values_in_default(&Key::from_raw(&[3])).unwrap();
@@ -1210,7 +1210,7 @@ mod tests {
             true,
             None,
             None,
-            IsolationLevel::SI,
+            IsolationLevel::Si,
         );
 
         assert_eq!(reader.seek_ts(3).unwrap().unwrap(), Key::from_raw(&[2]));

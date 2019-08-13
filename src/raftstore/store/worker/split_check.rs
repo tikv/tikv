@@ -188,7 +188,7 @@ impl<S: CasualRouter> Runner<S> {
         }
 
         let split_keys = match host.policy() {
-            CheckPolicy::SCAN => {
+            CheckPolicy::Scan => {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
@@ -197,7 +197,7 @@ impl<S: CasualRouter> Runner<S> {
                     }
                 }
             }
-            CheckPolicy::APPROXIMATE => match host.approximate_split_keys(region, &self.engine) {
+            CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine) {
                 Ok(keys) => keys
                     .into_iter()
                     .map(|k| keys::origin_key(&k).to_vec())

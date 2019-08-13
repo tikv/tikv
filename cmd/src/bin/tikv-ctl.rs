@@ -26,7 +26,7 @@ use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::debugpb::{DB as DBType, *};
+use kvproto::debugpb::{Db as DBType, *};
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
@@ -35,7 +35,6 @@ use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
-use tikv::binutil as util;
 use tikv::config::TiKvConfig;
 use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
@@ -554,7 +553,7 @@ trait DebugExecutor {
 
     fn recover_all(&self, threads: usize, read_only: bool);
 
-    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
+    fn modify_tikv_config(&self, module: Module, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
 
@@ -573,7 +572,7 @@ impl DebugExecutor for DebugClient {
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
         let mut req = GetRequest::default();
-        req.set_db(DBType::KV);
+        req.set_db(DBType::Kv);
         req.set_cf(cf.to_owned());
         req.set_key(key);
         self.get(&req)
@@ -694,7 +693,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
@@ -725,7 +724,7 @@ impl DebugExecutor for DebugClient {
         v1!("success!");
     }
 
-    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str) {
+    fn modify_tikv_config(&self, module: Module, config_name: &str, config_value: &str) {
         let mut req = ModifyTikvConfigRequest::default();
         req.set_module(module);
         req.set_config_name(config_name.to_owned());
@@ -756,7 +755,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
-        self.get(DBType::KV, cf, &key)
+        self.get(DBType::Kv, cf, &key)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get", e))
     }
 
@@ -874,7 +873,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
-        v1!("removing stores {:?} from configrations...", store_ids);
+        v1!("removing stores {:?} from configurations...", store_ids);
         self.remove_failed_stores(store_ids, region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         v1!("success");
@@ -932,7 +931,7 @@ impl DebugExecutor for Debugger {
         process::exit(-1);
     }
 
-    fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
+    fn modify_tikv_config(&self, _: Module, _: &str, _: &str) {
         ve1!("only support remote mode");
         process::exit(-1);
     }
@@ -951,7 +950,7 @@ fn main() {
     vlog::set_verbosity_level(1);
 
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
-    let version_info = util::tikv_version_info();
+    let version_info = tikv::tikv_version_info();
 
     let mut app = App::new("TiKV Control (tikv-ctl)")
         .about("A tool for interacting with TiKV deployments.")
@@ -1755,7 +1754,7 @@ fn main() {
         let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
         if let Some(matches) = matches.subcommand_matches("compact-cluster") {
             let db = matches.value_of("db").unwrap();
-            let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+            let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
             let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
             let from_key = matches.value_of("from").map(|k| unescape(k));
             let to_key = matches.value_of("to").map(|k| unescape(k));
@@ -1856,7 +1855,7 @@ fn main() {
         debug_executor.diff_region(region, to_db, None, to_host, &cfg, mgr);
     } else if let Some(matches) = matches.subcommand_matches("compact") {
         let db = matches.value_of("db").unwrap();
-        let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+        let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
@@ -2025,19 +2024,19 @@ fn gen_random_bytes(len: usize) -> Vec<u8> {
     (0..len).map(|_| rand::random::<u8>()).collect()
 }
 
-fn get_module_type(module: &str) -> MODULE {
+fn get_module_type(module: &str) -> Module {
     match module {
-        "kvdb" => MODULE::KVDB,
-        "raftdb" => MODULE::RAFTDB,
-        "readpool" => MODULE::READPOOL,
-        "server" => MODULE::SERVER,
-        "storage" => MODULE::STORAGE,
-        "ps" => MODULE::PD,
-        "metric" => MODULE::METRIC,
-        "coprocessor" => MODULE::COPROCESSOR,
-        "security" => MODULE::SECURITY,
-        "import" => MODULE::IMPORT,
-        _ => MODULE::UNUSED,
+        "kvdb" => Module::Kvdb,
+        "raftdb" => Module::Raftdb,
+        "readpool" => Module::Readpool,
+        "server" => Module::Server,
+        "storage" => Module::Storage,
+        "ps" => Module::Pd,
+        "metric" => Module::Metric,
+        "coprocessor" => Module::Coprocessor,
+        "security" => Module::Security,
+        "import" => Module::Import,
+        _ => Module::Unused,
     }
 }
 
