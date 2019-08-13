@@ -986,11 +986,7 @@ mod tests {
         ];
 
         for (lhs, rhs, expected) in test_cases {
-            let evaluator = RpnFnScalarEvaluator::new().context(EvalContext::new(
-                std::sync::Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)),
-            ));
-
-            let output = evaluator
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
                 .push_param(rhs.map(|f| Decimal::from_bytes(f.as_bytes()).unwrap().unwrap()))
                 .evaluate(ScalarFuncSig::IntDivideDecimal)
