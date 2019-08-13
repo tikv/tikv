@@ -1,5 +1,5 @@
 [package]
-name = "import"
+name = "sst_importer"
 version = "0.1.0"
 edition = "2018"
 publish = false

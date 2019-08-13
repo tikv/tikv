@@ -119,7 +119,7 @@ log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
-import2 = { path = "components/import", package = "import" }
+sst_importer = { path = "components/sst_importer" }
 keys = { path = "components/keys" }
 
 [dependencies.murmur3]
@@ -191,7 +191,7 @@ members = [
   "components/pd_client",
   "components/external_storage",
   "components/backup",
-  "components/import",
+  "components/sst_importer",
   "components/keys",
   "cmd",
 ]
