@@ -29,12 +29,27 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
     )))
 }
 
-/// Required args like `&[&(Option<Byte>, Option<Json>)]`.
-#[rpn_fn(raw_varg)]
+fn json_validator(expr: &tipb::Expr) -> Result<()> {
+    for chunk in expr.get_children().chunks(2) {
+        if chunk.len() == 1 {
+            return Err(other_err!(
+                "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
+            ));
+        } else {
+            super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
+            super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
+        }
+    }
+    Ok(())
+}
+
+/// Required args like `&[(&Option<Byte>, &Option<Json>)]`.
+#[rpn_fn(raw_varg, extra_validator = json_validator)]
 #[inline]
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
     for chunk in raw_args.chunks(2) {
+        // chunk.len() must be 1 or 2 here.
         if chunk.len() == 1 {
             return Err(other_err!(
                 "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
