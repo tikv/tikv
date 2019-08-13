@@ -6,17 +6,19 @@ use std::{i64, str, u64};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 
-use tipb::expression::FieldType;
 use tidb_query_datatype::prelude::*;
-use tidb_query_datatype::{self, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH, Collation};
+use tidb_query_datatype::{self, Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
+use tipb::expression::FieldType;
 
-use crate::expr::Flag;
-use crate::codec::convert::*;
-use crate::codec::mysql::decimal::RoundMode;
-use crate::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType, DEFAULT_FSP, MAX_FSP};
-use crate::codec::{mysql, Datum, error};
 use crate::codec::convert::ConvertTo;
+use crate::codec::convert::*;
 use crate::codec::data_type::Bytes;
+use crate::codec::mysql::decimal::RoundMode;
+use crate::codec::mysql::{
+    charset, Decimal, Duration, Json, Res, Time, TimeType, DEFAULT_FSP, MAX_FSP,
+};
+use crate::codec::{error, mysql, Datum};
+use crate::expr::Flag;
 
 impl ScalarFunc {
     // OK
@@ -247,12 +249,8 @@ impl ScalarFunc {
             Decimal::from(val as u64)
         };
         match Self::produce_dec_with_specified_tp(ctx, res, &self.field_type) {
-            Ok(dec) => {
-                Ok(Some(Cow::Owned(dec)))
-            }
-            Err(e) => {
-                Err(e)
-            }
+            Ok(dec) => Ok(Some(Cow::Owned(dec))),
+            Err(e) => Err(e),
         }
     }
 
@@ -270,12 +268,8 @@ impl ScalarFunc {
             Decimal::zero()
         };
         match Self::produce_dec_with_specified_tp(ctx, res, &self.field_type) {
-            Err(e) => {
-                Err(e)
-            }
-            Ok(dec) => {
-                Ok(Some(Cow::Owned(dec)))
-            }
+            Err(e) => Err(e),
+            Ok(dec) => Ok(Some(Cow::Owned(dec))),
         }
     }
 
@@ -292,12 +286,8 @@ impl ScalarFunc {
             Cow::Owned(Decimal::zero())
         };
         match Self::produce_dec_with_specified_tp(ctx, res.into_owned(), &self.field_type) {
-            Ok(dec) => {
-                Ok(Some(Cow::Owned(dec)))
-            }
-            Err(e) => {
-                Err(e)
-            }
+            Ok(dec) => Ok(Some(Cow::Owned(dec))),
+            Err(e) => Err(e),
         }
     }
 
@@ -331,12 +321,8 @@ impl ScalarFunc {
         let val: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let dec: Decimal = <Time as ConvertTo<Decimal>>::convert(&val, ctx)?;
         match Self::produce_dec_with_specified_tp(ctx, dec, &self.field_type) {
-            Ok(dec) => {
-                Ok(Some(Cow::Owned(dec)))
-            }
-            Err(e) => {
-                Err(e)
-            }
+            Ok(dec) => Ok(Some(Cow::Owned(dec))),
+            Err(e) => Err(e),
         }
     }
 
@@ -349,12 +335,8 @@ impl ScalarFunc {
         let val: Duration = try_opt!(self.children[0].eval_duration(ctx, row));
         let dec: Decimal = <Duration as ConvertTo<Decimal>>::convert(&val, ctx)?;
         match Self::produce_dec_with_specified_tp(ctx, dec, &self.field_type) {
-            Ok(dec) => {
-                Ok(Some(Cow::Owned(dec)))
-            }
-            Err(e) => {
-                Err(e)
-            }
+            Ok(dec) => Ok(Some(Cow::Owned(dec))),
+            Err(e) => Err(e),
         }
     }
 
@@ -367,12 +349,8 @@ impl ScalarFunc {
         let val: Cow<Json> = try_opt!(self.children[0].eval_json(ctx, row));
         let dec: Decimal = <Json as ConvertTo<Decimal>>::convert(&val, ctx)?;
         match Self::produce_dec_with_specified_tp(ctx, dec, &self.field_type) {
-            Ok(dec) => {
-                Ok(Some(Cow::Owned(dec)))
-            }
-            Err(e) => {
-                Err(e)
-            }
+            Ok(dec) => Ok(Some(Cow::Owned(dec))),
+            Err(e) => Err(e),
         }
     }
 
@@ -389,7 +367,12 @@ impl ScalarFunc {
         } else {
             format!("{}", val)
         };
-        let n = Self::produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()), &self.field_type, false)?;
+        let n = Self::produce_str_with_specified_tp(
+            ctx,
+            Cow::Owned(s.into_bytes()),
+            &self.field_type,
+            false,
+        )?;
         let mut n = n.to_vec();
         Self::pad_zero_for_binary_type(&mut n, &self.field_type);
         Ok(Some(Cow::Owned(n)))
@@ -409,7 +392,12 @@ impl ScalarFunc {
         } else {
             format!("{}", val)
         };
-        let n = Self::produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()), &self.field_type, false)?;
+        let n = Self::produce_str_with_specified_tp(
+            ctx,
+            Cow::Owned(s.into_bytes()),
+            &self.field_type,
+            false,
+        )?;
         let mut n = n.to_vec();
         Self::pad_zero_for_binary_type(&mut n, &self.field_type);
         Ok(Some(Cow::Owned(n)))
@@ -423,7 +411,12 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val: Cow<Decimal> = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        let n = Self::produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()), &self.field_type, false)?;
+        let n = Self::produce_str_with_specified_tp(
+            ctx,
+            Cow::Owned(s.into_bytes()),
+            &self.field_type,
+            false,
+        )?;
         let mut n = n.to_vec();
         Self::pad_zero_for_binary_type(&mut n, &self.field_type);
         Ok(Some(Cow::Owned(n)))
@@ -701,7 +694,11 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val: Cow<str> = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        if self.field_type.flag().contains(FieldTypeFlag::PARSE_TO_JSON) {
+        if self
+            .field_type
+            .flag()
+            .contains(FieldTypeFlag::PARSE_TO_JSON)
+        {
             let j: Json = val.parse()?;
             Ok(Some(Cow::Owned(j)))
         } else {
@@ -779,6 +776,7 @@ impl ScalarFunc {
 
     /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in tidb) produces
     /// a new string according to `flen` and `chs`.
+    ///
     /// # panic
     ///
     /// The s must represent a valid str, otherwise, panic!
@@ -827,7 +825,11 @@ impl ScalarFunc {
             let mut res = s.into_owned();
             truncate_binary(&mut res, flen as isize);
             Ok(Cow::Owned(res))
-        } else if ft.tp() == FieldTypeTp::String && s.len() < flen && ft.is_binary_string_like() && pad_zero {
+        } else if ft.tp() == FieldTypeTp::String
+            && s.len() < flen
+            && ft.is_binary_string_like()
+            && pad_zero
+        {
             let mut s = s.into_owned();
             s.resize(flen, 0);
             Ok(Cow::Owned(s))
@@ -914,7 +916,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[allow(clippy::inconsistent_digit_grouping)]
-            let time_int = 2012_12_12_12_00_23i64;
+        let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
@@ -1039,7 +1041,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[allow(clippy::inconsistent_digit_grouping)]
-            let int_t = 2012_12_12_12_00_23u64;
+        let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
@@ -2204,19 +2206,19 @@ mod tests {
     //     assert!(res.is_err());
     // }
 
-// TODO
-//        #[test]
-//        fn test_in_union() {
-//            use super::*;
-//            // empty implicit arguments
-//            assert!(!in_union(&[]));
-//
-//            // single implicit arguments
-//            assert!(!in_union(&[Datum::I64(0)]));
-//            assert!(in_union(&[Datum::I64(1)]));
-//
-//            // multiple implicit arguments
-//            assert!(!in_union(&[Datum::I64(0), Datum::I64(1)]));
-//            assert!(in_union(&[Datum::I64(1), Datum::I64(0)]));
-//        }
+    // TODO
+    // #[test]
+    // fn test_in_union() {
+    //     use super::*;
+    //     // empty implicit arguments
+    //     assert!(!in_union(&[]));
+    //
+    //     // single implicit arguments
+    //     assert!(!in_union(&[Datum::I64(0)]));
+    //     assert!(in_union(&[Datum::I64(1)]));
+    //
+    //     // multiple implicit arguments
+    //     assert!(!in_union(&[Datum::I64(0), Datum::I64(1)]));
+    //     assert!(in_union(&[Datum::I64(1), Datum::I64(0)]));
+    // }
 }
