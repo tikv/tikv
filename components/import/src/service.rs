@@ -16,6 +16,7 @@ pub fn send_rpc_error<M, E: Debug>(ctx: RpcContext<'_>, sink: UnarySink<M>, erro
     }));
 }
 
+#[macro_export]
 macro_rules! send_rpc_response {
     ($res:ident, $sink:ident, $label:ident, $timer:ident) => {{
         let res = match $res {
