@@ -13,6 +13,7 @@ use kvproto::raft_cmdpb::*;
 
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
+use crate::server::CONFIG_ROCKSDB_GAUGE;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
 use import2::send_rpc_response;
@@ -70,9 +71,13 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         let res = {
             let mut switcher = self.switcher.lock().unwrap();
+            fn mf(cf: &str, name: &str, v: f64) {
+                CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
+            }
+
             match req.get_mode() {
-                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine),
-                SwitchMode::Import => switcher.enter_import_mode(&self.engine),
+                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine, mf),
+                SwitchMode::Import => switcher.enter_import_mode(&self.engine, mf),
             }
         };
         match res {
