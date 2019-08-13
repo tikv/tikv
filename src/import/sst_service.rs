@@ -16,7 +16,7 @@ use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
-use import2::send_rpc_response;
+use sst_importer::send_rpc_response;
 
 use super::import_mode::*;
 use super::metrics::*;

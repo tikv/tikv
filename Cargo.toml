@@ -120,7 +120,7 @@ engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
 keys = { path = "components/keys" }
-import2 = { path = "components/import", package = "import" }
+sst_importer = { path = "components/sst_importer" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -190,7 +190,7 @@ members = [
   "components/external_storage",
   "components/backup",
   "components/keys",
-  "components/import",
+  "components/sst_importer",
   "cmd",
 ]
 
