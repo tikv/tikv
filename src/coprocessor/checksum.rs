@@ -49,7 +49,7 @@ impl<S: Snapshot> ChecksumContext<S> {
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
     fn handle_request(&mut self) -> Result<Response> {
         let algorithm = self.req.get_algorithm();
-        if algorithm != ChecksumAlgorithm::Crc64_Xor {
+        if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
         }
 
