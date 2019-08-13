@@ -5,6 +5,11 @@ edition = "2018"
 publish = false
 
 [dependencies]
+futures = "0.1"
+grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+quick-error = "1.2.2"
 serde = "1.0"
 serde_derive = "1.0"
-quick-error = "1.2.2"
+uuid = { version = "0.6", features = [ "serde", "v4" ] }
+
+engine = { path = "../engine" }
