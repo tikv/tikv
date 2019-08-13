@@ -119,6 +119,7 @@ log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
+keys = { path = "components/keys" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -189,6 +190,7 @@ members = [
   "components/pd_client",
   "components/external_storage",
   "components/backup",
+  "components/keys",
   "cmd",
 ]
 
