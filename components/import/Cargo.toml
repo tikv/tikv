@@ -15,7 +15,11 @@ uuid = { version = "0.6", features = [ "serde", "v4" ] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 engine = { path = "../engine" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
 [dependencies.prometheus]
 version = "0.4.2"
 default-features = false
+
+[dev-dependencies]
+tempfile = "3.0"

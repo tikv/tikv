@@ -14,7 +14,7 @@
 
 use import2::metrics;
 use import2::service;
-mod import_mode;
+use import2::import_mode;
 mod sst_importer;
 mod sst_service;
 
