@@ -578,11 +578,10 @@ pub fn produce_dec_with_specified_tp(
                 {
                     ctx.warnings.append_warning(Error::truncated());
                 } else {
-                    if let Err(e) = ctx.handle_truncate(true) {
-                        if e.is_overflow() {
-                            ctx.handle_overflow_err(e)?
-                        }
-                    }
+                    // although according to tidb,
+                    // we should handler overflow after handle_truncate,
+                    // however, no overflow err will return by handle_truncate
+                    ctx.handle_truncate(true)?;
                 }
             }
             dec = rounded
