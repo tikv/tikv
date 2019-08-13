@@ -619,12 +619,10 @@ pub fn produce_str_with_specified_tp<'a>(
             // so we can unwrap directly here because we need the `s` represent a valid str
             let s: &str = std::str::from_utf8(s.as_ref()).unwrap();
             let mut indices = s.char_indices().skip(flen);
-            if let Some((truncate_pos, _)) = indices.next() {
+            indices.next().map(|(truncate_pos, _)| {
                 let char_count = flen + 1 + indices.count();
-                Some((char_count, truncate_pos))
-            } else {
-                None
-            }
+                (char_count, truncate_pos)
+            })
         };
         if truncate_info.is_none() {
             return Ok(s);
