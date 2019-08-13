@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use super::LazyBatchColumn;
 use crate::codec::data_type::VectorValue;

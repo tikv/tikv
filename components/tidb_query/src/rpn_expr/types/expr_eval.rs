@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
@@ -283,7 +283,7 @@ mod tests {
 
     use tidb_query_codegen::rpn_fn;
     use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
-    use tipb::expression::FieldType;
+    use tipb::FieldType;
     use tipb_helper::ExprDefBuilder;
 
     use crate::codec::batch::LazyBatchColumn;
@@ -306,7 +306,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_scalar());
         assert_eq!(*val.scalar_value().unwrap().as_real(), Real::new(1.5).ok());
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Creates fixture to be used in `test_eval_single_column_node_xxx`.
@@ -356,7 +356,7 @@ mod tests {
             val.vector_value().unwrap().logical_rows(),
             logical_rows.as_slice()
         );
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
@@ -542,7 +542,7 @@ mod tests {
             [Some(8), Some(0), Some(-2)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Binary function (arguments are scalar, scalar)
@@ -700,7 +700,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Binary function (arguments are both raw columns). The same column is referred multiple times
@@ -942,7 +942,7 @@ mod tests {
     /// Parse from an expression tree then evaluate.
     #[test]
     fn test_parse_and_eval() {
-        use tipb::expression::{Expr, ScalarFuncSig};
+        use tipb::{Expr, ScalarFuncSig};
 
         // We will build an expression tree from:
         //      fn_d(

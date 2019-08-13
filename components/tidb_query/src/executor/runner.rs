@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
-use tipb::executor::{self, ExecType, ExecutorExecutionSummary};
-use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
+use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -29,7 +29,7 @@ pub struct ExecutorsRunner<SS> {
 ///
 /// Normal executors iterate rows one by one.
 pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
-    exec_descriptors: Vec<executor::Executor>,
+    exec_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
@@ -77,7 +77,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
 
                 Box::new(
-                    super::TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?
+                    super::TopNExecutor::new(exec.take_top_n(), Arc::clone(&ctx), src)?
                         .with_summary_collector(C::new(summary_slot_index)),
                 )
             }
@@ -106,7 +106,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
 ///
 /// The inner-most executor must be a table scan executor or an index scan executor.
 fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
-    mut first: executor::Executor,
+    mut first: tipb::Executor,
     storage: S,
     ranges: Vec<KeyRange>,
     is_streaming: bool,
@@ -148,7 +148,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
 
 impl<SS: 'static> ExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static>(
-        mut req: DAGRequest,
+        mut req: DagRequest,
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
@@ -161,7 +161,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
 
         let executor = if !(req.get_collect_execution_summaries()) {
             build_executors::<_, ExecSummaryCollectorDisabled>(
-                req.take_executors().into_vec(),
+                req.take_executors().into(),
                 storage,
                 ranges,
                 config,
@@ -169,7 +169,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
             )?
         } else {
             build_executors::<_, ExecSummaryCollectorEnabled>(
-                req.take_executors().into_vec(),
+                req.take_executors().into(),
                 storage,
                 ranges,
                 config,

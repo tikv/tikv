@@ -2,35 +2,34 @@
 
 use super::setup::*;
 use super::signal_handler;
-use crate::binutil::setup::initial_logger;
-use crate::config::{check_and_persist_critical_config, TiKvConfig};
-use crate::coprocessor;
-use crate::fatal;
-use crate::import::{ImportSSTService, SSTImporter};
-use crate::pd::{PdClient, RpcClient};
-use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use crate::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use crate::raftstore::store::{fsm, LocalReader};
-use crate::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
-use crate::server::resolve;
-use crate::server::status_server::StatusServer;
-use crate::server::transport::ServerRaftStoreRouter;
-use crate::server::DEFAULT_CLUSTER_ID;
-use crate::server::{create_raft_storage, Node, RaftKv, Server};
-use crate::storage::lock_manager::{
-    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
-};
-use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::setup::initial_logger;
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use pd_client::{PdClient, RpcClient};
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use tikv::config::{check_and_persist_critical_config, TiKvConfig};
+use tikv::coprocessor;
+use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use tikv::raftstore::store::{fsm, LocalReader};
+use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
+use tikv::server::resolve;
+use tikv::server::status_server::StatusServer;
+use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::DEFAULT_CLUSTER_ID;
+use tikv::server::{create_raft_storage, Node, RaftKv, Server};
+use tikv::storage::lock_manager::{
+    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
+};
+use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
@@ -50,7 +49,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     // Print version information.
-    super::log_tikv_info();
+    tikv::log_tikv_info();
 
     config.compatible_adjust();
     if let Err(e) = config.validate() {

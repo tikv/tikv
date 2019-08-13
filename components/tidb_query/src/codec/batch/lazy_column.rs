@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use super::BufferVec;
 use crate::codec::data_type::VectorValue;
@@ -161,8 +161,7 @@ impl LazyBatchColumn {
         if self.is_decoded() {
             return Ok(());
         }
-
-        let eval_type = box_try!(EvalType::try_from(field_type.tp()));
+        let eval_type = box_try!(EvalType::try_from(field_type.as_accessor().tp()));
         let raw_vec = self.raw();
         let raw_vec_len = raw_vec.len();
 

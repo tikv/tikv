@@ -5,13 +5,12 @@ use std::time::Duration;
 
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Stream};
-use protobuf::{CodedInputStream, Message};
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
-use tipb::analyze::{AnalyzeReq, AnalyzeType};
-use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
-use tipb::executor::ExecType;
-use tipb::select::DAGRequest;
+use protobuf::{CodedInputStream, Message};
+use tipb::{AnalyzeReq, AnalyzeType};
+use tipb::{ChecksumRequest, ChecksumScanOn};
+use tipb::{DagRequest, ExecType};
 
 use crate::server::readpool::{self, ReadPool};
 use crate::server::Config;
@@ -93,7 +92,7 @@ impl<E: Engine> Endpoint<E> {
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
-                let mut dag = DAGRequest::default();
+                let mut dag = DagRequest::default();
                 box_try!(dag.merge_from(&mut is));
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
@@ -487,12 +486,13 @@ mod tests {
     use std::thread;
     use std::vec;
 
-    use tipb::executor::Executor;
-    use tipb::expression::Expr;
+    use tipb::Executor;
+    use tipb::Expr;
 
     use crate::coprocessor::readpool_impl::build_read_pool_for_test;
     use crate::storage::kv::{destroy_tls_engine, set_tls_engine, RocksEngine};
     use crate::storage::TestEngineBuilder;
+    use protobuf::Message;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -668,7 +668,7 @@ mod tests {
             }
             let mut e = Executor::default();
             e.mut_selection().mut_conditions().push(expr);
-            let mut dag = DAGRequest::default();
+            let mut dag = DagRequest::default();
             dag.mut_executors().push(e);
             let mut req = coppb::Request::default();
             req.set_tp(REQ_TYPE_DAG);

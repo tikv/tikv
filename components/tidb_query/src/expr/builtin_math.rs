@@ -558,7 +558,7 @@ mod tests {
     use std::{f64, i64, u64};
 
     use tidb_query_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::codec::Datum;
     use crate::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
@@ -657,6 +657,7 @@ mod tests {
             let got = eval_func_with(sig, &[arg], |op, args| {
                 if args[0]
                     .get_field_type()
+                    .as_accessor()
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
@@ -731,6 +732,7 @@ mod tests {
             let got = eval_func_with(sig, &[arg], |op, args| {
                 if args[0]
                     .get_field_type()
+                    .as_accessor()
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
@@ -850,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_pi() {
-        let got = eval_func(ScalarFuncSig::PI, &[]).unwrap();
+        let got = eval_func(ScalarFuncSig::Pi, &[]).unwrap();
         assert_eq!(got, Datum::F64(f64::consts::PI));
     }
 
@@ -914,7 +916,7 @@ mod tests {
 
         for (arg, exp) in cases {
             let arg = Datum::Bytes(arg.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::CRC32, &[arg]).unwrap();
+            let got = eval_func(ScalarFuncSig::Crc32, &[arg]).unwrap();
             let exp = Datum::I64(exp);
             assert_eq!(got, exp);
         }
@@ -1350,6 +1352,7 @@ mod tests {
             let got = eval_func_with(ScalarFuncSig::TruncateInt, &[x, d], |op, args| {
                 if args[0]
                     .get_field_type()
+                    .as_accessor()
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
                 {

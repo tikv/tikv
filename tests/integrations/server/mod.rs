@@ -6,7 +6,7 @@ mod raft_client;
 use std::sync::Arc;
 
 use futures::Future;
-use grpcio::RpcStatusCode::*;
+use grpcio::RpcStatusCode;
 use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
@@ -18,7 +18,7 @@ use tikv_util::security::{SecurityConfig, SecurityManager};
 macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: UnarySink<$resp_name>) {
-            let status = RpcStatus::new(GRPC_STATUS_UNIMPLEMENTED, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -27,7 +27,7 @@ macro_rules! unary_call {
 macro_rules! sstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: ServerStreamingSink<$resp_name>) {
-            let status = RpcStatus::new(GRPC_STATUS_UNIMPLEMENTED, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -36,7 +36,7 @@ macro_rules! sstream_call {
 macro_rules! cstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
-            let status = RpcStatus::new(GRPC_STATUS_UNIMPLEMENTED, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -45,7 +45,7 @@ macro_rules! cstream_call {
 macro_rules! bstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
-            let status = RpcStatus::new(GRPC_STATUS_UNIMPLEMENTED, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -111,7 +111,7 @@ trait MockKvService {
     );
     unary_call!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
-    unary_call!(kv_gc, GCRequest, GCResponse);
+    unary_call!(kv_gc, GcRequest, GcResponse);
     unary_call!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
     unary_call!(raw_get, RawGetRequest, RawGetResponse);
     unary_call!(raw_batch_get, RawBatchGetRequest, RawBatchGetResponse);
@@ -176,7 +176,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call_dispatch!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call_dispatch!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
-    unary_call_dispatch!(kv_gc, GCRequest, GCResponse);
+    unary_call_dispatch!(kv_gc, GcRequest, GcResponse);
     unary_call_dispatch!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
     unary_call_dispatch!(raw_get, RawGetRequest, RawGetResponse);
     unary_call_dispatch!(raw_batch_get, RawBatchGetRequest, RawBatchGetResponse);

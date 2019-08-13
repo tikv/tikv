@@ -2,7 +2,7 @@
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::EvalType;
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
 use crate::codec::data_type::*;
@@ -43,7 +43,8 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         // The rewrite should always success.
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
-        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(src_schema).tp()).unwrap();
+        let rewritten_eval_type =
+            EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
         out_exp.push(exp);
 
         // Choose a type-aware SUM implementation based on the eval type after rewriting exp.
@@ -172,7 +173,7 @@ mod tests {
             .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 1);
-        assert_eq!(schema[0].tp(), FieldTypeTp::Double);
+        assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::Double);
 
         assert_eq!(exp.len(), 1);
 

@@ -10,7 +10,7 @@ pub struct AlreadyBootstrapped;
 impl PdMocker for AlreadyBootstrapped {
     fn bootstrap(&self, _: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
         let mut err = Error::default();
-        err.set_field_type(ErrorType::ALREADY_BOOTSTRAPPED);
+        err.set_type(ErrorType::AlreadyBootstrapped);
         err.set_message("cluster is already bootstrapped".to_owned());
 
         let mut header = ResponseHeader::default();

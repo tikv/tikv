@@ -36,7 +36,7 @@ lazy_static! {
     .unwrap();
     pub static ref REGION_HASH_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_hash_duration_seconds",
-        "Bucketed histogram of raftstore hash compution duration"
+        "Bucketed histogram of raftstore hash computation duration"
     )
     .unwrap();
     pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE: Gauge = register_gauge!(
