@@ -14,7 +14,6 @@ use libc::c_int;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
-const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_CONCURRENCY: usize = 2048000;
@@ -31,13 +30,13 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
-    pub gc_ratio_threshold: f64,
     pub max_key_size: usize,
     pub scheduler_notify_capacity: usize,
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
     pub scheduler_pending_write_threshold: ReadableSize,
     pub block_cache: BlockCacheConfig,
+    pub gc: GCConfig,
 }
 
 impl Default for Config {
@@ -45,13 +44,13 @@ impl Default for Config {
         let total_cpu = sys_info::cpu_num().unwrap();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
-            gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_notify_capacity: DEFAULT_SCHED_CAPACITY,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             block_cache: BlockCacheConfig::default(),
+            gc: GCConfig::default(),
         }
     }
 }
@@ -61,6 +60,7 @@ impl Config {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
+        self.gc.validate()?;
         Ok(())
     }
 }
@@ -107,5 +107,53 @@ impl BlockCacheConfig {
         cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
         cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
         Some(Cache::new_lru_cache(cache_opts))
+    }
+}
+
+pub const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
+pub const DEFAULT_GC_BATCH_SIZE: usize = 512;
+const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 5 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
+pub struct GCConfig {
+    pub ratio_threshold: f64,
+    pub batch_size: usize,
+    pub max_write_bytes_per_sec: ReadableSize,
+}
+
+impl Default for GCConfig {
+    fn default() -> GCConfig {
+        GCConfig {
+            ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
+            batch_size: DEFAULT_GC_BATCH_SIZE,
+            max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
+        }
+    }
+}
+
+impl GCConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.batch_size == 0 {
+            return Err(("storage.gc.batch_size should not be 0.").into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gc_config_validate() {
+        let cfg = GCConfig::default();
+        cfg.validate().unwrap();
+
+        let mut invalid_cfg = GCConfig::default();
+        invalid_cfg.batch_size = 0;
+        assert!(invalid_cfg.validate().is_err());
     }
 }

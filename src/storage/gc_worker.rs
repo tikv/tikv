@@ -9,6 +9,7 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
+use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -18,6 +19,7 @@ use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 
+use super::config::GCConfig;
 use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
@@ -29,9 +31,6 @@ use crate::server::transport::ServerRaftStoreRouter;
 use pd_client::PdClient;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
-
-// TODO: make it configurable.
-pub const GC_BATCH_SIZE: usize = 512;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -132,7 +131,10 @@ struct GCRunner<E: Engine> {
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
 
-    ratio_threshold: f64,
+    /// Used to limit the write flow of GC.
+    limiter: Option<IOLimiter>,
+
+    cfg: GCConfig,
 
     stats: StatisticsSummary,
 }
@@ -142,13 +144,19 @@ impl<E: Engine> GCRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        ratio_threshold: f64,
+        cfg: GCConfig,
     ) -> Self {
+        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
+            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
+        } else {
+            None
+        };
         Self {
             engine,
             local_storage,
             raft_store_router,
-            ratio_threshold,
+            limiter,
+            cfg,
             stats: StatisticsSummary::default(),
         }
     }
@@ -190,7 +198,7 @@ impl<E: Engine> GCRunner<E> {
 
         // range start gc with from == None, and this is an optimization to
         // skip gc before scanning all data.
-        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.ratio_threshold);
+        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
             KV_GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
@@ -251,8 +259,12 @@ impl<E: Engine> GCRunner<E> {
         }
         self.stats.add_statistics(&txn.take_statistics());
 
+        let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
+            if let Some(limiter) = &self.limiter {
+                limiter.request(write_size as i64);
+            }
             self.engine.write(ctx, modifies)?;
         }
         Ok(next_scan_key)
@@ -267,9 +279,9 @@ impl<E: Engine> GCRunner<E> {
 
         let mut next_key = None;
         loop {
-            // Scans at most `GC_BATCH_SIZE` keys
+            // Scans at most `GCConfig.batch_size` keys
             let (keys, next) = self
-                .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
+                .scan_keys(ctx, safe_point, next_key, self.cfg.batch_size)
                 .map_err(|e| {
                     warn!("gc scan_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
                     e
@@ -610,6 +622,7 @@ fn make_context(mut region: metapb::Region, peer: metapb::Peer) -> Context {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.take_region_epoch());
     ctx.set_peer(peer);
+    ctx.set_not_fill_cache(true);
     ctx
 }
 
@@ -1057,7 +1070,7 @@ pub struct GCWorker<E: Engine> {
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: Option<ServerRaftStoreRouter>,
 
-    ratio_threshold: f64,
+    cfg: Option<GCConfig>,
 
     worker: Arc<Mutex<Worker<GCTask>>>,
     worker_scheduler: worker::Scheduler<GCTask>,
@@ -1070,7 +1083,7 @@ impl<E: Engine> GCWorker<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        ratio_threshold: f64,
+        cfg: GCConfig,
     ) -> GCWorker<E> {
         let worker = Arc::new(Mutex::new(
             WorkerBuilder::new("gc-worker")
@@ -1082,7 +1095,7 @@ impl<E: Engine> GCWorker<E> {
             engine,
             local_storage,
             raft_store_router,
-            ratio_threshold,
+            cfg: Some(cfg),
             worker,
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
@@ -1105,7 +1118,7 @@ impl<E: Engine> GCWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
-            self.ratio_threshold,
+            self.cfg.take().unwrap(),
         );
         self.worker
             .lock()

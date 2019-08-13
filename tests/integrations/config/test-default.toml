@@ -8,6 +8,8 @@
 
 [storage.block-cache]
 
+[storage.gc]
+
 [pd]
 
 [metric]

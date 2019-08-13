@@ -17,7 +17,7 @@ use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::{BlockCacheConfig, Config as StorageConfig};
+use tikv::storage::{BlockCacheConfig, Config as StorageConfig, GCConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
@@ -473,7 +473,6 @@ fn test_serde_custom_tikv_config() {
     };
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
-        gc_ratio_threshold: 1.2,
         max_key_size: 8192,
         scheduler_notify_capacity: 123,
         scheduler_concurrency: 123,
@@ -485,6 +484,11 @@ fn test_serde_custom_tikv_config() {
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
+        },
+        gc: GCConfig {
+            ratio_threshold: 1.2,
+            batch_size: 256,
+            max_write_bytes_per_sec: ReadableSize::mb(10),
         },
     };
     value.coprocessor = CopConfig {

@@ -262,7 +262,7 @@ fn test_auto_gc() {
         .map(|(id, engine)| {
             let mut config = Config::default();
             // Do not skip GC
-            config.gc_ratio_threshold = 0.9;
+            config.gc.ratio_threshold = 0.9;
             let storage = SyncTestStorageBuilder::from_engine(engine.clone())
                 .config(config)
                 .build()

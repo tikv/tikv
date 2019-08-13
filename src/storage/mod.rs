@@ -36,7 +36,9 @@ use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
 
-pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+pub use self::config::{
+    BlockCacheConfig, Config, GCConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR,
+};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::kv::{
     destroy_tls_engine, set_tls_engine, with_tls_engine, CFStatistics, Cursor, CursorBuilder,
@@ -779,7 +781,7 @@ impl<E: Engine> Storage<E> {
             engine.clone(),
             local_storage,
             raft_store_router,
-            config.gc_ratio_threshold,
+            config.gc.clone(),
         );
 
         gc_worker.start()?;

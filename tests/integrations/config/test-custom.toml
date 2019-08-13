@@ -52,7 +52,6 @@ a = "b"
 
 [storage]
 data-dir = "/var"
-gc-ratio-threshold = 1.2
 max-key-size = 8192
 scheduler-notify-capacity = 123
 scheduler-concurrency = 123
@@ -65,6 +64,11 @@ capacity = "40GB"
 num-shard-bits = 10
 strict-capacity-limit = true
 high-pri-pool-ratio = 0.8
+
+[storage.gc]
+ratio-threshold = 1.2
+batch-size = 256
+max-write-bytes-per-sec = "10MB"
 
 [pd]
 endpoints = [
