@@ -1529,7 +1529,7 @@ pub fn maybe_upgrade_from_2_to_3(
     // For meta data in the default CF.
     //
     //  1. store_ident_key: 0x01 0x01
-    //  2. prepare_boostrap_key: 0x01 0x02
+    //  2. prepare_bootstrap_key: 0x01 0x02
     if let Some(m) =
         kv_engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)?
     {

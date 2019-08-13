@@ -693,7 +693,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
@@ -873,7 +873,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>) {
-        v1!("removing stores {:?} from configrations...", store_ids);
+        v1!("removing stores {:?} from configurations...", store_ids);
         self.remove_failed_stores(store_ids, region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         v1!("success");
