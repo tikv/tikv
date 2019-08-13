@@ -2,7 +2,6 @@
 
 use byteorder::{BigEndian, ByteOrder};
 
-use std::fmt;
 use std::error::Error as StdError;
 use kvproto::metapb::Region;
 use std::mem;
@@ -216,35 +215,22 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Display)]
 pub enum Error {
+    #[display(fmt = "{} is not a valid raft log key",
+              "hex::encode_upper(_0)")]
     InvalidLogKey(Vec<u8>),
+    #[display(fmt = "invalid region {} key length for key {}",
+              "_0", "hex::encode_upper(_1)")]
     InvalidRegionKeyLength(String, Vec<u8>),
+    #[display(fmt = "invalid region {} prefix for key {}",
+              "_0", "hex::encode_upper(_1)")]
     InvalidRegionPrefix(String, Vec<u8>),
 }
 
 impl StdError for Error { }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Error::InvalidLogKey(k) => {
-                write!(f, "{} is not a valid raft log key",
-                       hex::encode_upper(k))
-            }
-            Error::InvalidRegionKeyLength(r, k) => {
-                write!(f, "invalid region {} key length for key {}",
-                       r, hex::encode_upper(k))
-            }
-            Error::InvalidRegionPrefix(r, k) => {
-                write!(f, "invalid region {} prefix for key {}",
-                       r, hex::encode_upper(k))
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
