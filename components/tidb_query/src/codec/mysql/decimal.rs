@@ -20,7 +20,7 @@ use crate::codec::data_type::*;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Res<T> {
     Ok(T),
     Truncated(T),
@@ -61,6 +61,46 @@ impl<T> Res<T> {
             Res::Truncated(_) => true,
             _ => false,
         }
+    }
+
+    /// Convert `Res` into `Result` with an `EvalContext` that handling the errors
+    /// If `truncated_err` is None, `ctx` will try to handle the default truncated error: `Error::truncated()`,
+    /// otherwise handle the specified error inside `truncated_err`.
+    /// Same does `overflow_err` means.
+    fn into_result_impl(
+        self,
+        ctx: &mut EvalContext,
+        truncated_err: Option<Error>,
+        overflow_err: Option<Error>,
+    ) -> Result<T> {
+        match self {
+            Res::Ok(t) => Ok(t),
+            Res::Truncated(t) => if let Some(error) = truncated_err {
+                ctx.handle_truncate_err(error)
+            } else {
+                ctx.handle_truncate(true)
+            }
+            .map(|()| t),
+
+            Res::Overflow(t) => if let Some(error) = overflow_err {
+                ctx.handle_overflow_err(error)
+            } else {
+                ctx.handle_overflow(true)
+            }
+            .map(|()| t),
+        }
+    }
+
+    pub fn into_result_with_overflow_err(
+        self,
+        ctx: &mut EvalContext,
+        overflow_err: Error,
+    ) -> Result<T> {
+        self.into_result_impl(ctx, None, Some(overflow_err))
+    }
+
+    pub fn into_result(self, ctx: &mut EvalContext) -> Result<T> {
+        self.into_result_impl(ctx, None, None)
     }
 }
 
@@ -457,7 +497,7 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     if res.is_overflow() {
         return Res::Overflow(max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0));
     }
-    let (int_word_to, frac_word_to) = res.clone().unwrap();
+    let (int_word_to, frac_word_to) = res.unwrap();
     let mut idx_to = (int_word_to + frac_word_to) as usize;
     let mut res = res.map(|_| {
         Decimal::new(
@@ -2775,6 +2815,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn test_string() {
         let cases = vec![
             (WORD_BUF_LEN, b"12345" as &'static [u8], Res::Ok("12345")),
@@ -3507,5 +3548,54 @@ mod tests {
         );
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+    }
+
+    #[test]
+    fn test_into_result_impl() {
+        // Truncated cases
+        let mut ctx = EvalContext::default();
+        let truncated_res = Res::Truncated(2333);
+        let truncated_err_cases = vec![Error::truncated(), Error::truncated_wrong_val("", "")];
+
+        for error in truncated_err_cases {
+            assert_eq!(
+                error.code(),
+                truncated_res
+                    .into_result_impl(&mut ctx, Some(error), None)
+                    .unwrap_err()
+                    .code()
+            );
+        }
+
+        // TRUNCATE_AS_WARNING
+        let mut ctx = EvalContext::new(std::sync::Arc::new(EvalConfig::from_flag(
+            Flag::TRUNCATE_AS_WARNING,
+        )));
+        let truncated_res = Res::Truncated(2333);
+
+        assert!(truncated_res
+            .into_result_impl(&mut ctx, Some(Error::truncated()), None)
+            .is_ok());
+
+        // Overflow cases
+        let mut ctx = EvalContext::default();
+        let overflow_res = Res::Overflow(666);
+        let error = Error::overflow("", "");
+        assert_eq!(
+            error.code(),
+            overflow_res
+                .into_result_impl(&mut ctx, None, Some(error))
+                .unwrap_err()
+                .code(),
+        );
+
+        // OVERFLOW_AS_WARNING
+        let mut ctx = EvalContext::new(std::sync::Arc::new(EvalConfig::from_flag(
+            Flag::OVERFLOW_AS_WARNING,
+        )));
+        let error = Error::overflow("", "");
+        assert!(overflow_res
+            .into_result_impl(&mut ctx, None, Some(error))
+            .is_ok());
     }
 }
