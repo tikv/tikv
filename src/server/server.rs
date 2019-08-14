@@ -167,7 +167,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let server = sb.build()?;
         let (ref host, port) = server.bind_addrs()[0];
         let addr = SocketAddr::new(IpAddr::from_str(host)?, port as u16);
-        info!("listening on addr"; "addr" => addr);
         self.local_addr = addr;
         self.builder_or_server = Some(Either::Right(server));
         Ok(addr)
