@@ -172,7 +172,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
             );
             // when meet large region use approximate way to produce split keys
             if region_size >= self.region_max_size * self.split_limit * 2 {
-                policy = CheckPolicy::APPROXIMATE
+                policy = CheckPolicy::Approximate
             }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
@@ -434,7 +434,7 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
             Ok((region_id, CasualMessage::RegionApproximateSize { .. })) => {
@@ -452,7 +452,7 @@ pub mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(&rx, &region, vec![b"0006".to_vec()]);
 
         // so split keys will be [z0006, z0012]
@@ -461,7 +461,7 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
         engine.flush(true).unwrap();
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(&rx, &region, vec![b"0006".to_vec(), b"0012".to_vec()]);
 
         // for test batch_split_limit
@@ -471,7 +471,7 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
         engine.flush(true).unwrap();
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(
             &rx,
             &region,
@@ -486,12 +486,12 @@ pub mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::Scan));
     }
 
     #[test]
     fn test_checker_with_same_max_and_split_size() {
-        let mut checker = Checker::new(24, 24, 1, CheckPolicy::SCAN);
+        let mut checker = Checker::new(24, 24, 1, CheckPolicy::Scan);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         loop {
@@ -506,7 +506,7 @@ pub mod tests {
 
     #[test]
     fn test_checker_with_max_twice_bigger_than_split_size() {
-        let mut checker = Checker::new(20, 10, 1, CheckPolicy::SCAN);
+        let mut checker = Checker::new(20, 10, 1, CheckPolicy::Scan);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         for _ in 0..2 {

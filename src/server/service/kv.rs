@@ -18,7 +18,7 @@ use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode::*, ServerStreamingSink, UnarySink, WriteFlags,
+    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -72,7 +72,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         }
     }
 
-    fn send_fail_status<M>(&self, ctx: RpcContext<'_>, sink: UnarySink<M>, err: Error, code: i32) {
+    fn send_fail_status<M>(
+        &self,
+        ctx: RpcContext<'_>,
+        sink: UnarySink<M>,
+        err: Error,
+        code: RpcStatusCode,
+    ) {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
         ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
@@ -311,7 +317,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GCRequest, sink: UnarySink<GCResponse>) {
+    fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
         let future = future_gc(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -618,7 +624,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
-                let code = GRPC_STATUS_UNKNOWN;
+                let code = RpcStatusCode::UNKNOWN;
                 let msg = Some(format!("{:?}", e));
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
@@ -656,9 +662,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(msg))
+                            RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(GRPC_STATUS_UNKNOWN, None),
+                        Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
                     };
                     sink.fail(status)
                         .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
@@ -693,9 +699,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(msg))
+                            RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(GRPC_STATUS_UNKNOWN, None),
+                        Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
                     };
                     sink.fail(status).map_err(
                         |e| error!("KvService::batch_raft send response fail"; "err" => ?e),
@@ -717,7 +723,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 SnapTask::Recv { sink, .. } => sink,
                 _ => unreachable!(),
             };
-            let status = RpcStatus::new(GRPC_STATUS_RESOURCE_EXHAUSTED, Some(err_msg));
+            let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, Some(err_msg));
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -825,7 +831,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         };
 
         if let Err(e) = self.ch.casual_send(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), GRPC_STATUS_RESOURCE_EXHAUSTED);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -896,7 +902,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let (cb, future) = paired_future_callback();
 
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            self.send_fail_status(ctx, sink, Error::from(e), GRPC_STATUS_RESOURCE_EXHAUSTED);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -982,7 +988,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             })
             .map_err(|e| {
                 let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(GRPC_STATUS_UNKNOWN, msg))
+                GrpcError::RpcFailure(RpcStatus::new(RpcStatusCode::UNKNOWN, msg))
             });
 
         ctx.spawn(sink.send_all(response_retriever).map(|_| ()).map_err(|e| {
@@ -1134,10 +1140,10 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(batch_commands_request::request::Cmd::GC(req)) => {
+        Some(batch_commands_request::request::Cmd::Gc(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
             let resp = future_gc(&storage, req)
-                .map(oneof!(batch_commands_response::response::Cmd::GC))
+                .map(oneof!(batch_commands_response::response::Cmd::Gc))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
@@ -1284,7 +1290,7 @@ fn future_get<E: Engine>(
             } else {
                 match v {
                     Ok(Some(val)) => resp.set_value(val),
-                    Ok(None) => (),
+                    Ok(None) => resp.set_not_found(true),
                     Err(e) => resp.set_error(extract_key_error(&e)),
                 }
             }
@@ -1597,13 +1603,13 @@ fn future_resolve_lock<E: Engine>(
 
 fn future_gc<E: Engine>(
     storage: &Storage<E>,
-    mut req: GCRequest,
-) -> impl Future<Item = GCResponse, Error = Error> {
+    mut req: GcRequest,
+) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_gc(req.take_context(), req.get_safe_point(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = GCResponse::default();
+        let mut resp = GcResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1650,7 +1656,7 @@ fn future_raw_get<E: Engine>(
             } else {
                 match v {
                     Ok(Some(val)) => resp.set_value(val),
-                    Ok(None) => {}
+                    Ok(None) => resp.set_not_found(true),
                     Err(e) => resp.set_error(format!("{}", e)),
                 }
             }
@@ -1983,7 +1989,7 @@ fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
             LockType::Lock => Op::Lock,
             LockType::Pessimistic => Op::PessimisticLock,
         };
-        lock_info.set_field_type(op);
+        lock_info.set_type(op);
         lock_info.set_start_ts(lock.ts);
         lock_info.set_primary(lock.primary);
         lock_info.set_short_value(lock.short_value.unwrap_or_default());
@@ -2017,7 +2023,7 @@ fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
                 WriteType::Lock => Op::Lock,
                 WriteType::Rollback => Op::Rollback,
             };
-            write_info.set_field_type(op);
+            write_info.set_type(op);
             write_info.set_start_ts(write.start_ts);
             write_info.set_commit_ts(commit_ts);
             write_info.set_short_value(write.short_value.unwrap_or_default());
@@ -2040,7 +2046,7 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
 }
 
 mod batch_commands_response {
-    pub type Response = kvproto::tikvpb::BatchCommandsResponse_Response;
+    pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
 
     pub mod response {
         pub type Cmd = kvproto::tikvpb::BatchCommandsResponse_Response_oneof_cmd;
@@ -2048,7 +2054,7 @@ mod batch_commands_response {
 }
 
 mod batch_commands_request {
-    pub type Request = kvproto::tikvpb::BatchCommandsRequest_Request;
+    pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
 
     pub mod request {
         pub type Cmd = kvproto::tikvpb::BatchCommandsRequest_Request_oneof_cmd;

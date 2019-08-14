@@ -8,14 +8,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use crate::pd::PdClient;
 use crate::raftstore::{Error, Result};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Peekable, Snapshot as EngineSnapshot};
 use futures::Future;
 use kvproto::errorpb;
-use kvproto::import_sstpb::SSTMeta;
+use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -25,6 +24,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
+use pd_client::PdClient;
 use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
@@ -2204,7 +2204,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
-                ExecResult::IngestSST { ssts } => self.on_ingest_sst_result(ssts),
+                ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
             }
         }
 
@@ -2566,7 +2566,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             return;
         }
-        let task = SplitCheckTask::new(self.fsm.peer.region().clone(), true, CheckPolicy::SCAN);
+        let task = SplitCheckTask::new(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
@@ -2889,7 +2889,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.propose_raft_command(req, Callback::None);
     }
 
-    fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMeta>) {
+    fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
         for sst in &ssts {
             self.fsm.peer.size_diff_hint += sst.get_length();
         }

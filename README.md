@@ -116,6 +116,9 @@ To build TiKV you'll need to at least have the following installed:
 * `awk` - Pattern scanning/processing language
 * `cmake` - Build tool (required for gRPC)
 * `make` - Build tool (run common workflows)
+
+If you are targeting other platforms than x86_64 linux, following library is also required.
+
 * `llvm` and `clang` - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb)
 
 ### Getting the repository
@@ -170,7 +173,7 @@ cargo test $TESTNAME
 
 Our CI systems automatically test all the pull requests, so making sure the full suite passes the test before creating your PR is not strictly required. **All merged PRs must have passed CI test.**
 
-Note that, to reduce compilation time, TiKV builds do not include debugging information by default. The easiest way to enable debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo).
+Note that, to reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include line numbers only. The easiest way to enable debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo).
 
 ```bash
 RUSTFLAGS=-Cdebuginfo=2 make

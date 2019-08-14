@@ -474,7 +474,7 @@ impl ScalarFunc {
             Ok(dur) => Ok(Some(dur)),
             Err(e) => {
                 if e.is_overflow() {
-                    ctx.handle_overflow(e)?;
+                    ctx.handle_overflow_err(e)?;
                     Ok(None)
                 } else {
                     Err(e)
@@ -760,7 +760,7 @@ mod tests {
     use std::{i64, u64};
 
     use tidb_query_datatype::{self, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
-    use tipb::expression::{Expr, FieldType, ScalarFuncSig};
+    use tipb::{Expr, FieldType, ScalarFuncSig};
 
     use chrono::Utc;
 

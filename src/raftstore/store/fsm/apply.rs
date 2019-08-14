@@ -17,7 +17,7 @@ use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::import_sstpb::SSTMeta;
+use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
@@ -202,8 +202,8 @@ pub enum ExecResult {
     DeleteRange {
         ranges: Vec<Range>,
     },
-    IngestSST {
-        ssts: Vec<SSTMeta>,
+    IngestSst {
+        ssts: Vec<SstMeta>,
     },
 }
 
@@ -973,7 +973,7 @@ impl ApplyDelegate {
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
-                | ExecResult::IngestSST { .. }
+                | ExecResult::IngestSst { .. }
                 | ExecResult::CatchUpLogs { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
@@ -1107,7 +1107,7 @@ impl ApplyDelegate {
                 CmdType::DeleteRange => {
                     self.handle_delete_range(ctx, req, &mut ranges, ctx.use_delete_range)
                 }
-                CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
+                CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1142,7 +1142,7 @@ impl ApplyDelegate {
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            ApplyResult::Res(ExecResult::IngestSST { ssts })
+            ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
         };
@@ -1324,7 +1324,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &ApplyContext,
         req: &Request,
-        ssts: &mut Vec<SSTMeta>,
+        ssts: &mut Vec<SstMeta>,
     ) -> Result<Response> {
         let sst = req.get_ingest_sst().get_sst();
 
@@ -2069,7 +2069,7 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
     Some(req.get_change_peer())
 }
 
-fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
+fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
     let uuid = sst.get_uuid();
     if let Err(e) = Uuid::from_bytes(uuid) {
         return Err(box_err!("invalid uuid {:?}: {:?}", uuid, e));
@@ -2978,10 +2978,10 @@ mod tests {
         let wb = WriteBatch::default();
         assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
-        // IngestSST command
+        // IngestSst command
         let mut req = Request::default();
-        req.set_cmd_type(CmdType::IngestSST);
-        req.set_ingest_sst(IngestSSTRequest::default());
+        req.set_cmd_type(CmdType::IngestSst);
+        req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
         let wb = WriteBatch::default();
@@ -3356,9 +3356,9 @@ mod tests {
             self
         }
 
-        fn ingest_sst(mut self, meta: &SSTMeta) -> EntryBuilder {
+        fn ingest_sst(mut self, meta: &SstMeta) -> EntryBuilder {
             let mut cmd = Request::default();
-            cmd.set_cmd_type(CmdType::IngestSST);
+            cmd.set_cmd_type(CmdType::IngestSst);
             cmd.mut_ingest_sst().set_sst(meta.clone());
             self.req.mut_requests().push(cmd);
             self
@@ -3582,7 +3582,7 @@ mod tests {
         file2.append(&data2).unwrap();
         file2.finish().unwrap();
 
-        // IngestSST
+        // IngestSst
         let put_ok = EntryBuilder::new(9, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .put(&[sst_range.0], &[sst_range.1])
@@ -3636,7 +3636,7 @@ mod tests {
 
     #[test]
     fn test_check_sst_for_ingestion() {
-        let mut sst = SSTMeta::default();
+        let mut sst = SstMeta::default();
         let mut region = Region::default();
 
         // Check uuid and cf name

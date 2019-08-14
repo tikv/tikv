@@ -17,8 +17,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use crate::pd::metrics::*;
-use crate::pd::{Error, PdClient, RegionStat};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::util::is_epoch_stale;
@@ -27,6 +25,8 @@ use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
+use pd_client::metrics::*;
+use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::time::time_now_sec;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
@@ -765,7 +765,7 @@ fn new_split_region_request(
 
 fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
-    ids: Vec<pdpb::SplitID>,
+    ids: Vec<pdpb::SplitId>,
     right_derive: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();

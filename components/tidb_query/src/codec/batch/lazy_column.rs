@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use super::BufferVec;
 use crate::codec::data_type::VectorValue;

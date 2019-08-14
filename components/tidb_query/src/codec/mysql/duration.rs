@@ -10,8 +10,9 @@ use tikv_util::codec::BytesSlice;
 
 use super::{check_fsp, Decimal, Json};
 use crate::codec::convert::ConvertTo;
+use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::codec::mysql::MAX_FSP;
-use crate::codec::{Result, TEN_POW};
+use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
 use bitfield::bitfield;
@@ -33,10 +34,9 @@ const MAX_DURATION_VALUE: u32 = MAX_HOURS * 10000 + MAX_MINUTES * 100 + MAX_SECO
 #[inline]
 fn check_hour(hour: u32) -> Result<u32> {
     if hour > MAX_HOURS {
-        Err(invalid_type!(
-            "invalid hour value: {} larger than {}",
-            hour,
-            MAX_HOURS
+        Err(Error::Eval(
+            "DURATION OVERFLOW".to_string(),
+            ERR_DATA_OUT_OF_RANGE,
         ))
     } else {
         Ok(hour)
@@ -46,11 +46,7 @@ fn check_hour(hour: u32) -> Result<u32> {
 #[inline]
 fn check_minute(minute: u32) -> Result<u32> {
     if minute > MAX_MINUTES {
-        Err(invalid_type!(
-            "invalid minute value: {} larger than {}",
-            minute,
-            MAX_MINUTES
-        ))
+        Err(Error::truncated_wrong_val("MINUTES", minute))
     } else {
         Ok(minute)
     }
@@ -59,11 +55,7 @@ fn check_minute(minute: u32) -> Result<u32> {
 #[inline]
 fn check_second(second: u32) -> Result<u32> {
     if second > MAX_SECONDS {
-        Err(invalid_type!(
-            "invalid second value: {} larger than {}",
-            second,
-            MAX_SECONDS
-        ))
+        Err(Error::truncated_wrong_val("SECONDS", second))
     } else {
         Ok(second)
     }
@@ -72,18 +64,14 @@ fn check_second(second: u32) -> Result<u32> {
 #[inline]
 fn check_micros(micros: u32) -> Result<u32> {
     if micros > MAX_MICROS {
-        Err(invalid_type!(
-            "invalid fractional value: {} larger than {}",
-            micros,
-            MAX_MICROS
-        ))
+        Err(Error::truncated_wrong_val("MICROS", micros))
     } else {
         Ok(micros)
     }
 }
 
 mod parser {
-    use super::{check_hour, check_minute, check_second, MICRO_WIDTH, TEN_POW};
+    use super::{check_hour, check_minute, check_second, Error, MICRO_WIDTH, TEN_POW};
     use nom::character::complete::{digit1, multispace0, multispace1};
     use nom::{
         alt, call, char, complete, cond, do_parse, eof, map, map_res, opt, peek, preceded, tag,
@@ -111,7 +99,7 @@ mod parser {
             if buf.len() <= 7 {
                 Ok(buf_to_int(buf))
             } else {
-                Err(invalid_type!("invalid time value, more than {} digits", 7))
+                Err(Error::truncated_wrong_val("TIME DIGITS", 7))
             }
         })
     }
@@ -448,9 +436,9 @@ impl Duration {
 
     pub fn from_millis(millis: i64, fsp: i8) -> Result<Duration> {
         Duration::from_micros(
-            millis
-                .checked_mul(1000)
-                .ok_or(invalid_type!("micros overflow"))?,
+            millis.checked_mul(1000).ok_or_else(|| {
+                Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE)
+            })?,
             fsp,
         )
     }
@@ -481,7 +469,7 @@ impl Duration {
 
         let (mut neg, [mut day, mut hour, mut minute, mut second, micros]) =
             self::parser::parse(input, fsp)
-                .map_err(|_| invalid_type!("invalid time format"))?
+                .map_err(|_| Error::truncated_wrong_val("time", format!("{:?}", input)))?
                 .1;
 
         if day.is_some() && hour.is_none() {

@@ -4,12 +4,10 @@ use std::cmp;
 use std::i64;
 use std::thread;
 
-use protobuf::Message;
-
 use kvproto::coprocessor::Response;
 use kvproto::kvrpcpb::Context;
-use tipb::expression::{Expr, ExprType, ScalarFuncSig};
-use tipb::select::Chunk;
+use protobuf::Message;
+use tipb::{Chunk, Expr, ExprType, ScalarFuncSig};
 
 use test_coprocessor::*;
 use test_storage::*;
@@ -1205,7 +1203,7 @@ fn test_where() {
 
         let mut cond = Expr::default();
         cond.set_tp(ExprType::ScalarFunc);
-        cond.set_sig(ScalarFuncSig::LTInt);
+        cond.set_sig(ScalarFuncSig::LtInt);
         cond.mut_field_type()
             .as_mut_accessor()
             .set_tp(FieldTypeTp::LongLong);
@@ -1258,7 +1256,7 @@ fn test_handle_truncate() {
 
             let mut cond = Expr::default();
             cond.set_tp(ExprType::ScalarFunc);
-            cond.set_sig(ScalarFuncSig::LTInt);
+            cond.set_sig(ScalarFuncSig::LtInt);
             cond.mut_children().push(col);
             cond.mut_children().push(right);
             cond
@@ -1296,7 +1294,7 @@ fn test_handle_truncate() {
             // id = "3x" + count
             let mut cond = Expr::default();
             cond.set_tp(ExprType::ScalarFunc);
-            cond.set_sig(ScalarFuncSig::EQInt);
+            cond.set_sig(ScalarFuncSig::EqInt);
             cond.mut_children().push(col_id);
             cond.mut_children().push(plus);
             cond
