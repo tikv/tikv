@@ -510,7 +510,7 @@ fn test_split_region() {
     let resp = client.split_region(&req).unwrap();
     let result_split_keys: Vec<_> = resp
         .get_regions()
-        .into_iter()
+        .iter()
         .map(|x| {
             Key::from_encoded(x.get_start_key().to_vec())
                 .into_raw()
