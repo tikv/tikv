@@ -8,8 +8,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-#[cfg(test)]
-use std::thread;
 use std::{cmp, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -2290,8 +2288,6 @@ pub enum Msg {
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     #[cfg(test)]
-    Testmsg(Sender<i32>),
-    #[cfg(test)]
     Validate(u64, Box<dyn FnOnce(&ApplyDelegate) + Send>),
 }
 
@@ -2326,8 +2322,6 @@ impl Debug for Msg {
             Msg::Snapshot(GenSnapTask { region_id, .. }) => {
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
-            #[cfg(test)]
-            Msg::Testmsg(_tx) => write!(f, "test msg"),
             #[cfg(test)]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -2649,15 +2643,6 @@ impl ApplyFsm {
         );
     }
 
-    /// Used to test imitation message processing  
-    #[cfg(test)]
-    fn handle_testmsg(&self, tx: Sender<i32>) {
-        match thread::current().name() {
-            Some("apply-0::test_apply_tilt") => tx.send(0).unwrap(),
-            _ => tx.send(1).unwrap(),
-        };
-    }
-
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -2681,8 +2666,6 @@ impl ApplyFsm {
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f(&self.delegate),
-                #[cfg(test)]
-                Some(Msg::Testmsg(tx)) => self.handle_testmsg(tx),
                 None => break,
             }
         }
@@ -2889,8 +2872,6 @@ impl ApplyRouter {
                 ),
                 #[cfg(test)]
                 Msg::Validate(_, _) => return,
-                #[cfg(test)]
-                Msg::Testmsg(_) => return,
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -3998,7 +3979,17 @@ mod tests {
             let router = router.clone();
             let t = thread::spawn(move || {
                 for _i in 0..10000 {
-                    router.schedule_task(1, Msg::Testmsg(tx1.clone()));
+                    let sender = tx1.clone();
+                    router.schedule_task(
+                        1,
+                        Msg::Validate(
+                            1,
+                            Box::new(move |_| match thread::current().name() {
+                                Some("apply-0::test_apply_tilt") => sender.send(0).unwrap(),
+                                _ => sender.send(1).unwrap(),
+                            }),
+                        ),
+                    );
                 }
             });
             worker.push(t);
@@ -4009,7 +4000,17 @@ mod tests {
             let router = router.clone();
             let t = thread::spawn(move || {
                 for _i in 0..10000 {
-                    router.schedule_task(2, Msg::Testmsg(tx1.clone()));
+                    let sender = tx1.clone();
+                    router.schedule_task(
+                        2,
+                        Msg::Validate(
+                            2,
+                            Box::new(move |_| match thread::current().name() {
+                                Some("apply-0::test_apply_tilt") => sender.send(0).unwrap(),
+                                _ => sender.send(1).unwrap(),
+                            }),
+                        ),
+                    );
                 }
             });
             worker.push(t);
