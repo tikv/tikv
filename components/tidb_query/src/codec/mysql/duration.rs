@@ -669,11 +669,11 @@ impl Duration {
     }
 
     pub fn from_i64(ctx: &mut EvalContext, mut n: i64, fsp: u8) -> Result<Duration> {
-        use crate::codec::error::{Error, ERR_TRUNCATE_WRONG_VALUE};
+        use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
 
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
-            ctx.handle_overflow(Error::overflow("Duration", &n.to_string()))?;
+            ctx.handle_overflow_err(Error::overflow("Duration", &n.to_string()))?;
             let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, MAX_MICROS, fsp);
             return Ok(max);
         }
@@ -718,8 +718,7 @@ impl ConvertTo<Decimal> for Duration {
 impl ConvertTo<Json> for Duration {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        let mut d = *self;
-        d.set_fsp(MAX_FSP as u8);
+        let d = self.maximize_fsp();
         Ok(Json::String(d.to_string()))
     }
 }
