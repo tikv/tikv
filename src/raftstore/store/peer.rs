@@ -454,6 +454,11 @@ impl Peer {
     }
 
     #[inline]
+    pub fn get_last_term(&self) -> u64 {
+        self.raft_group.raft.raft_log.last_term()
+    }
+
+    #[inline]
     pub fn maybe_append_merge_entries(&mut self, merge: CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
@@ -2298,6 +2303,7 @@ impl Peer {
 
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
+            term: self.get_last_term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),

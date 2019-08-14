@@ -562,6 +562,7 @@ impl Cluster {
 
     fn region_heartbeat(
         &mut self,
+        _term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
@@ -1009,6 +1010,7 @@ impl PdClient for TestPdClient {
 
     fn region_heartbeat(
         &self,
+        term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
@@ -1019,7 +1021,7 @@ impl PdClient for TestPdClient {
         let resp = self
             .cluster
             .wl()
-            .region_heartbeat(region, leader.clone(), region_stat);
+            .region_heartbeat(term, region, leader.clone(), region_stat);
         match resp {
             Ok(resp) => {
                 let store_id = leader.get_store_id();

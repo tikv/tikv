@@ -188,6 +188,7 @@ mod tests {
         }
         fn region_heartbeat(
             &self,
+            _: u64,
             _: metapb::Region,
             _: metapb::Peer,
             _: RegionStat,
