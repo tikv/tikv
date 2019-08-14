@@ -191,6 +191,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Either::Left(builder) => builder.build()?,
             Either::Right(server) => server,
         };
+        info!("listening on addr"; "addr" => &self.local_addr);
         grpc_server.start();
         self.builder_or_server = Some(Either::Right(grpc_server));
 
