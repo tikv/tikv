@@ -144,6 +144,7 @@ fn cast_uint_as_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
+            // TODO, TiDB's uint to decimal seems has bug, fix this after fix TiDB's
             let dec = if in_union(extra.implicit_args) && *val < 0 {
                 Decimal::zero()
             } else {
@@ -200,12 +201,11 @@ fn cast_uint_as_int(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Opt
     match val {
         None => Ok(None),
         Some(val) => {
-            if in_union(extra.implicit_args) && *val < 0 {
-                Ok(Some(0))
-            } else {
-                // needn't to call convert_uint_as_int
-                Ok(Some(*val as i64))
-            }
+            // the val is uint, so it will never < 0,
+            // then we needn't to check whether in_union.
+            //
+            // needn't to call convert_uint_as_int
+            Ok(Some(*val as i64))
         }
     }
 }
@@ -217,6 +217,8 @@ fn cast_uint_as_real(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Op
     match val {
         None => Ok(None),
         Some(val) => {
+            // TODO, TiDB's here may has bug(val is uint, why it will <0 ?),
+            // fix this after TiDB's had fixed.
             if in_union(extra.implicit_args) && *val < 0 {
                 return Ok(Some(Real::new(0f64).unwrap()));
             }
