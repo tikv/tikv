@@ -12,6 +12,7 @@ use url::Url;
 
 use super::Storage;
 
+/// A storage saves files in S3.
 #[derive(Clone)]
 pub struct S3Storage {
     bucket: String,
@@ -20,8 +21,10 @@ pub struct S3Storage {
 }
 
 impl S3Storage {
+    /// The url scheme of the `S3Storage`.
     pub const SCHEME: &'static str = "s3";
 
+    /// Create a new S3 storage at the given path.
     pub fn new(url: Url) -> Result<S3Storage> {
         // This can greatly improve performance dealing with payloads greater
         // than 100MB. See https://github.com/rusoto/rusoto/pull/1227

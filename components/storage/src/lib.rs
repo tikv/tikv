@@ -1,5 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! External storage support.
+//!
+//! This crate define an abstraction of external storage. Currently, it
+//! supports local storage and S3(Simple Storage Service) storage
+
 #[macro_use(slog_error, slog_info, slog_debug)]
 extern crate slog;
 #[macro_use]
