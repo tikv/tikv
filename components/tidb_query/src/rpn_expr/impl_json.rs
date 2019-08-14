@@ -50,11 +50,6 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
     for chunk in raw_args.chunks(2) {
         // chunk.len() must be 1 or 2 here.
-        if chunk.len() == 1 {
-            return Err(other_err!(
-                "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
-            ));
-        }
         let key: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
         let key = match key {
             // json_object should raise an error if key is None(NULL)
@@ -249,19 +244,20 @@ mod tests {
             ],
             vec![
                 ScalarValue::from(None::<Bytes>),
-                ScalarValue::from(Bytes::from("1")),
+                ScalarValue::from(Json::from_str("1").unwrap()),
             ],
         ];
 
         for err_args in err_cases {
             let output: Result<Option<Json>> = RpnFnScalarEvaluator::new()
                 .push_params(err_args)
-                .evaluate(ScalarFuncSig::JsonObjectSig);
+                .evaluate_with_validate(ScalarFuncSig::JsonObjectSig);
 
             assert!(output.is_err());
         }
     }
 
+    #[test]
     fn test_json_unquote() {
         let cases = vec![
             (None, false, None),

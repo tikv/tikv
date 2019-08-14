@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{Evaluable, ScalarValue};
@@ -111,13 +111,13 @@ impl RpnFnScalarEvaluator {
 
         // load func first
         let func: RpnFnMeta = super::super::map_pb_sig_to_rpn_func(sig, &children_ed).unwrap();
-
+        let ret_field_type = ret_field_type.into();
         if validate {
             let mut fun_sig_expr = Expr::default();
 
             fun_sig_expr.set_sig(sig);
             fun_sig_expr.set_children(children_ed.clone().into());
-            fun_sig_expr.set_tp(ExprType::ScalarFunc);
+            fun_sig_expr.set_field_type(ret_field_type.clone());
 
             if let Err(e) = (func.validator_ptr)(&fun_sig_expr) {
                 return (Err(e), context);
