@@ -252,6 +252,10 @@ where
         }
     }
 
+    pub fn get_normal_scheduler(&self) -> Ns {
+        self.normal_scheduler.clone()
+    }
+
     /// A helper function that tries to unify a common access pattern to
     /// mailbox.
     ///

@@ -2653,8 +2653,8 @@ impl ApplyFsm {
     #[cfg(test)]
     fn handle_testmsg(&self, tx: Sender<i32>) {
         match thread::current().name() {
-            Some("apply-1::test-apply-tilt") => tx.send(1).unwrap(),
-            _ => tx.send(0).unwrap(),
+            Some("apply-0::test_apply_tilt") => tx.send(0).unwrap(),
+            _ => tx.send(1).unwrap(),
         };
     }
 
@@ -3974,6 +3974,19 @@ mod tests {
 
         router.schedule_task(1, Msg::Registration(reg));
 
+        let mut reg = Registration::default();
+        reg.id = 2;
+        reg.term = 2;
+        reg.region.set_id(2);
+        reg.region.set_start_key(b"l5".to_vec());
+        reg.region.set_end_key(b"z5".to_vec());
+        reg.apply_state.set_applied_index(3);
+        reg.region.mut_region_epoch().set_version(3);
+        reg.region.mut_peers().push(new_peer(1, 2));
+        reg.region.mut_region_epoch().set_conf_ver(1);
+
+        router.schedule_task(2, Msg::Registration(reg));
+
         let (send, rec) = channel();
 
         let mut apply0_handle = 0;
@@ -3991,11 +4004,22 @@ mod tests {
             worker.push(t);
         }
 
+        for _i in 0..100 {
+            let tx1 = send.clone();
+            let router = router.clone();
+            let t = thread::spawn(move || {
+                for _i in 0..10000 {
+                    router.schedule_task(2, Msg::Testmsg(tx1.clone()));
+                }
+            });
+            worker.push(t);
+        }
+
         for w in worker {
             w.join().unwrap();
         }
 
-        for _i in 0..1000000 {
+        for _i in 0..2000000 {
             match rec.recv().unwrap() {
                 0 => apply0_handle += 1,
                 1 => apply1_handle += 1,
@@ -4008,6 +4032,12 @@ mod tests {
             apply1_handle - apply0_handle
         };
 
-        assert!(sub > 500000);
+        println!(
+            "apply0 handle {}  apply1 handle {}",
+            apply0_handle, apply1_handle
+        );
+        let sum = apply0_handle + apply1_handle;
+        println!("sub is {} sum is {}", sub, sum);
+        assert!(sum == 2000000);
     }
 }

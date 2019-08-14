@@ -103,6 +103,7 @@ impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 #[allow(clippy::vec_box)]
 pub struct Batch<N, C> {
     normals: Vec<Box<N>>,
+    count: Vec<usize>,
     control: Option<Box<C>>,
 }
 
@@ -111,6 +112,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     pub fn with_capacity(cap: usize) -> Batch<N, C> {
         Batch {
             normals: Vec::with_capacity(cap),
+            count: Vec::with_capacity(cap),
             control: None,
         }
     }
@@ -121,7 +123,10 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
-            FsmTypes::Normal(n) => self.normals.push(n),
+            FsmTypes::Normal(n) => {
+                self.normals.push(n);
+                self.count.push(0);
+            }
             FsmTypes::Control(c) => {
                 assert!(self.control.is_none());
                 self.control = Some(c);
@@ -142,6 +147,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     fn clear(&mut self) {
         self.normals.clear();
+        self.count.clear();
         self.control.take();
     }
 
@@ -152,6 +158,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     /// larger than the given value before FSM is released.
     pub fn release(&mut self, index: usize, checked_len: usize) -> bool {
         let mut fsm = self.normals.swap_remove(index);
+        let i = self.count.swap_remove(index);
         let mailbox = fsm.take_mailbox().unwrap();
         mailbox.release(fsm);
         if mailbox.len() == checked_len {
@@ -164,6 +171,8 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
                     let last_index = self.normals.len();
                     self.normals.push(s);
                     self.normals.swap(index, last_index);
+                    self.count.push(i);
+                    self.count.swap(index, last_index);
                     false
                 }
             }
@@ -177,6 +186,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     /// the function will return false to let caller to keep polling.
     pub fn remove(&mut self, index: usize) -> bool {
         let mut fsm = self.normals.swap_remove(index);
+        let i = self.count.swap_remove(index);
         let mailbox = fsm.take_mailbox().unwrap();
         if mailbox.is_empty() {
             mailbox.release(fsm);
@@ -186,6 +196,8 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             let last_index = self.normals.len();
             self.normals.push(fsm);
             self.normals.swap(index, last_index);
+            self.count.push(i);
+            self.count.swap(index, last_index);
             false
         }
     }
@@ -214,8 +226,30 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             control_box.release(s);
         }
     }
-}
 
+    pub fn check_batch(&mut self, check_size: &mut usize, scheduler: NormalScheduler<N, C>) {
+        let mut v: Vec<usize> = Vec::new();
+        for (i, count) in self.count.iter_mut().enumerate() {
+            if count > check_size {
+                v.push(i);
+            }
+            *count += 1;
+        }
+        while let Some(index) = v.pop() {
+            let mut fsm = self.normals.swap_remove(index);
+            self.count.swap_remove(index);
+            let mailbox = fsm.take_mailbox().unwrap();
+            mailbox.release(fsm);
+            match mailbox.take_fsm() {
+                Some(mut n) => {
+                    n.set_mailbox(Cow::Borrowed(&mailbox));
+                    scheduler.schedule(n);
+                }
+                None => {}
+            };
+        }
+    }
+}
 /// A handler that poll all FSM in ready.
 ///
 /// A General process works like following:
@@ -331,6 +365,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.remove(r);
                 }
             }
+            batch.check_batch(&mut 5, self.router.get_normal_scheduler());
+
             // Fetch batch after every round is finished. It's helpful to protect regions
             // from becoming hungry if some regions are hot points.
             self.fetch_batch(&mut batch, self.max_batch_size);
