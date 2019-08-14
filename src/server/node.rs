@@ -146,9 +146,6 @@ where
             self.bootstrap_cluster(&engines, first_region)?;
         }
 
-        // Put store only if the cluster is bootstrapped.
-        self.pd_client.put_store(self.store.clone())?;
-
         self.start_store(
             store_id,
             engines,
@@ -159,6 +156,11 @@ where
             coprocessor_host,
             importer,
         )?;
+
+        // Put store only if the cluster is bootstrapped.
+        info!("put store to PD"; "store" => ?&self.store);
+        self.pd_client.put_store(self.store.clone())?;
+
         Ok(())
     }
 
