@@ -7,7 +7,7 @@ other than Linux. PRs are welcome!
 
 */
 
-use std::collections::HashMap;
+use crate::collections::HashMap;
 use std::io;
 
 pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
