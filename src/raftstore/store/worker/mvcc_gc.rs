@@ -27,6 +27,7 @@ impl MvccGcRunner {
 
 impl Runnable<MvccGcTask> for MvccGcRunner {
     fn run(&mut self, _task: MvccGcTask) {
-        unimplemented!();
+        // TODO: implement it.
+        // unimplemented!();
     }
 }

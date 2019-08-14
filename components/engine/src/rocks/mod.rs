@@ -11,9 +11,10 @@ pub use self::snapshot::*;
 
 pub use engine_rocksdb::rocksdb_options::UnsafeSnap;
 pub use engine_rocksdb::{
-    load_latest_options, rocksdb::supported_compression, run_ldb_tool,
+    load_latest_options, new_compaction_filter, rocksdb::supported_compression, run_ldb_tool,
     set_external_sst_file_global_seq_no, BlockBasedOptions, CColumnFamilyDescriptor, CFHandle,
-    Cache, ColumnFamilyOptions, CompactOptions, CompactionJobInfo, CompactionOptions,
+    Cache, ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
+    CompactionFilterFactory, CompactionFilterHandle, CompactionJobInfo, CompactionOptions,
     CompactionPriority, DBBottommostLevelCompaction, DBCompactionStyle, DBCompressionType,
     DBEntryType, DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
