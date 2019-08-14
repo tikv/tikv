@@ -195,9 +195,9 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     }
 }
 
-#[rpn_fn(capture = [extra])]
+#[rpn_fn]
 #[inline]
-fn cast_uint_as_int(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Option<i64>> {
+fn cast_uint_as_int(val: &Option<Int>) -> Result<Option<i64>> {
     match val {
         None => Ok(None),
         Some(val) => {
