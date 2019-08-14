@@ -492,6 +492,7 @@ impl ArithmeticOpWithCtx for DecimalDivide {
                 )
                 .map(Some)
         } else {
+            // TODO: handle RpnFuncExtra's field_type, round the result if is needed.
             ctx.handle_division_by_zero().map(|_| None)
         }?)
     }
