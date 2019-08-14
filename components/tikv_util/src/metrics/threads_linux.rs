@@ -1,11 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
 use std::time::Instant;
 
+use crate::collections::HashMap;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
