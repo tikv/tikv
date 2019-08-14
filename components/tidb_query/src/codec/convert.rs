@@ -540,19 +540,12 @@ pub fn produce_dec_with_specified_tp(
             dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
         } else if frac != decimal {
             let old = dec.clone();
-            let rounded = match dec.round(decimal as i8, RoundMode::HalfEven) {
-                Res::Ok(d) => d,
-                Res::Truncated(_) => {
-                    return Err(Error::truncated());
-                }
-                Res::Overflow(_) => {
-                    // TODO, is the err msg right
-                    return Err(Error::overflow(
-                        "Decimal",
-                        &format!("({}, {})", flen, decimal),
-                    ));
-                }
-            };
+            let rounded = dec
+                .round(decimal as i8, RoundMode::HalfEven)
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("Decimal", &format!("({}, {})", flen, decimal)),
+                )?;
             if !rounded.is_zero() && frac > decimal && rounded != old {
                 if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
                     || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
