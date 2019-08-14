@@ -14,21 +14,21 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
         .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(raw_varg, min_args=2, extra_validator = json_modify_validator)]
 #[inline]
-fn json_set(args: &[&Option<Json>]) -> Result<Option<Json>> {
+fn json_set(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Set)
 }
 
-#[rpn_fn(varg)]
+#[rpn_fn(raw_varg, min_args=2, extra_validator = json_modify_validator)]
 #[inline]
-fn json_insert(args: &[&Option<Json>]) -> Result<Option<Json>> {
+fn json_insert(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Insert)
 }
 
-#[rpn_fn(varg, min_args=1)]
+#[rpn_fn(raw_varg, min_args=2, extra_validator = json_modify_validator)]
 #[inline]
-fn json_replace(args: &[&Option<Json>]) -> Result<Option<Json>> {
+fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Replace)
 }
 
@@ -36,7 +36,11 @@ fn json_replace(args: &[&Option<Json>]) -> Result<Option<Json>> {
 /// TODO: think about can macros be used in this function.
 /// TODO: implement the functions.
 #[inline]
-fn json_modify(args: &[&Option<Json>], mt: ModifyType) -> Result<Option<Json>> {
+fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
+    unimplemented!()
+}
+
+fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
     unimplemented!()
 }
 
