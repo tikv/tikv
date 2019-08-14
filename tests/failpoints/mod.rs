@@ -9,14 +9,13 @@ extern crate slog_global;
 
 mod cases;
 
-fn setup<'a>() -> fail::FailScenario<'a> {
-    fail::FailScenario::setup()
-}
+use std::sync::Once;
 
-// The prefix "_" here is to guarantee running this case first.
-#[test]
-fn _ci_setup() {
-    test_util::setup_for_ci();
+static INIT: Once = Once::new();
+
+fn setup<'a>() -> fail::FailScenario<'a> {
+    INIT.call_once(test_util::setup_for_ci);
+    fail::FailScenario::setup()
 }
 
 #[test]
