@@ -240,12 +240,9 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             self.count.swap_remove(index);
             let mailbox = fsm.take_mailbox().unwrap();
             mailbox.release(fsm);
-            match mailbox.take_fsm() {
-                Some(mut n) => {
-                    n.set_mailbox(Cow::Borrowed(&mailbox));
-                    scheduler.schedule(n);
-                }
-                None => {}
+            if let Some(mut n) = mailbox.take_fsm() {
+                n.set_mailbox(Cow::Borrowed(&mailbox));
+                scheduler.schedule(n);
             };
         }
     }
