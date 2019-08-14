@@ -176,34 +176,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
-    /// Register a gRPC service.
-    /// Register after starting, it fails and returns the service.
-    pub fn register_service(&mut self, svc: grpcio::Service) -> Option<grpcio::Service> {
-        match self.builder_or_server.take() {
-            Some(Either::Left(mut builder)) => {
-                builder = builder.register_service(svc);
-                self.builder_or_server = Some(Either::Left(builder));
-                None
-            }
-            Some(server) => {
-                self.builder_or_server = Some(server);
-                Some(svc)
-            }
-            None => Some(svc),
-        }
-    }
-
-    /// Build gRPC server and bind to address.
-    pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
-        let sb = self.builder_or_server.take().unwrap().left().unwrap();
-        let server = sb.build()?;
-        let (ref host, port) = server.bind_addrs()[0];
-        let addr = SocketAddr::new(IpAddr::from_str(host)?, port as u16);
-        self.local_addr = addr;
-        self.builder_or_server = Some(Either::Right(server));
-        Ok(addr)
-    }
-
     /// Starts the TiKV server.
     pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
         let snap_runner = SnapHandler::new(
@@ -214,8 +186,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&cfg),
         );
         box_try!(self.snap_worker.start(snap_runner));
-
-        let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
+        let builder_or_server = self.builder_or_server.take().unwrap();
+        let mut grpc_server = match builder_or_server {
+            Either::Left(builder) => builder.build()?,
+            Either::Right(server) => server,
+        };
         info!("listening on addr"; "addr" => &self.local_addr);
         grpc_server.start();
         self.builder_or_server = Some(Either::Right(grpc_server));
