@@ -827,7 +827,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let split_keys = if !req.get_split_key().is_empty() {
             vec![Key::from_raw(req.get_split_key()).into_encoded()]
         } else {
-            req.take_split_keys().into_iter().map(|x| Key::from_raw(&x).into_encoded()).collect()
+            req.take_split_keys()
+                .into_iter()
+                .map(|x| Key::from_raw(&x).into_encoded())
+                .collect()
         };
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
