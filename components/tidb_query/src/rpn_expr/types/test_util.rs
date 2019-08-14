@@ -1,10 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::{Expr, FieldType, ScalarFuncSig};
+use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{Evaluable, ScalarValue};
 use crate::expr::EvalContext;
+use crate::rpn_expr::types::function::RpnFnMeta;
 use crate::rpn_expr::RpnExpressionBuilder;
 use crate::Result;
 
@@ -82,6 +83,15 @@ impl RpnFnScalarEvaluator {
         ret_field_type: impl Into<FieldType>,
         sig: ScalarFuncSig,
     ) -> (Result<ScalarValue>, EvalContext) {
+        self.evaluate_raw_with_validate(ret_field_type, sig, false)
+    }
+
+    fn evaluate_raw_with_validate(
+        self,
+        ret_field_type: impl Into<FieldType>,
+        sig: ScalarFuncSig,
+        validate: bool,
+    ) -> (Result<ScalarValue>, EvalContext) {
         let mut context = match self.context {
             Some(ctx) => ctx,
             None => EvalContext::default(),
@@ -98,7 +108,21 @@ impl RpnFnScalarEvaluator {
                 ed
             })
             .collect();
-        let func = super::super::map_pb_sig_to_rpn_func(sig, &children_ed).unwrap();
+
+        // load func first
+        let func: RpnFnMeta = super::super::map_pb_sig_to_rpn_func(sig, &children_ed).unwrap();
+
+        if validate {
+            let mut fun_sig_expr = Expr::default();
+
+            fun_sig_expr.set_sig(sig);
+            fun_sig_expr.set_children(children_ed.clone().into());
+            fun_sig_expr.set_tp(ExprType::ScalarFunc);
+
+            if let Err(e) = (func.validator_ptr)(&fun_sig_expr) {
+                return (Err(e), context);
+            }
+        }
 
         let expr = self
             .rpn_expr_builder
@@ -113,6 +137,22 @@ impl RpnFnScalarEvaluator {
     }
 
     /// Evaluates the given function by using collected parameters.
+    /// Comparing with evaluate, evaluate_with_validate validates the arguments for rpn_expr.
+    pub fn evaluate_with_validate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>>
+    where
+        Option<T>: From<ScalarValue>,
+    {
+        let return_field_type = match &self.return_field_type {
+            Some(ft) => ft.clone(),
+            None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
+        };
+        let result = self
+            .evaluate_raw_with_validate(return_field_type, sig, true)
+            .0;
+        result.map(|v| v.into())
+    }
+
+    /// Evaluates the given function by using collected parameters.
     pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>>
     where
         Option<T>: From<ScalarValue>,
@@ -121,7 +161,6 @@ impl RpnFnScalarEvaluator {
             Some(ft) => ft.clone(),
             None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
         };
-
         let result = self.evaluate_raw(return_field_type, sig).0;
         result.map(|v| v.into())
     }
