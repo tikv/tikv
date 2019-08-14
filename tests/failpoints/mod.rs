@@ -10,9 +10,13 @@ extern crate slog_global;
 mod cases;
 
 fn setup<'a>() -> fail::FailScenario<'a> {
-    let guard = fail::FailScenario::setup();
+    fail::FailScenario::setup()
+}
+
+// The prefix "_" here is to guarantee running this case first.
+#[test]
+fn _ci_setup() {
     test_util::setup_for_ci();
-    guard
 }
 
 #[test]
