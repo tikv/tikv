@@ -80,12 +80,12 @@ COPY ./src ./src
 COPY ./components ./components
 COPY ./cmd ./cmd
 
+# Remove profiling feature
+RUN sed -i '/^profiling/d' ./cmd/Cargo.toml
+
 # Add cmd back
 RUN sed -i '/"components\/pd_client",/a\ \ "cmd",' Cargo.toml && \
     sed -i '/X_CARGO_CONFIG_FILE=${DIST_CONFIG}/ax-build-dist: export X_PACKAGE=cmd' Makefile
-
-# Remove profiling feature
-RUN sed -i '/^profiling/d' ./cmd/Cargo.toml
 
 RUN make build_dist_release
 
