@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.16]
+- Return region error when TiKV is closing [#4820](https://github.com/tikv/tikv/pull/4820)
+- Support reverse `raw_scan` and `raw_batch_scan` [#5148](https://github.com/tikv/tikv/pull/5148)
+
 ## [2.1.15]
 - Unify log format [#5083](https://github.com/tikv/tikv/pull/5083)
 - Change the way of calculating the approximate distance [#4017](https://github.com/tikv/tikv/pull/4017)
