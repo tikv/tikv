@@ -159,7 +159,7 @@ impl Config {
             );
             self.advertise_addr = self.addr.clone();
         }
-        if self.advertise_addr.starts_with("0.") {
+        if self.advertise_addr.starts_with("0.0.0.0") {
             return Err(box_err!(
                 "invalid advertise-addr: {:?}",
                 self.advertise_addr

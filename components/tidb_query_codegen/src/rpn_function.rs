@@ -6,7 +6,7 @@ use quote::ToTokens;
 use syn::punctuated::Punctuated;
 use syn::*;
 
-/// Parses an attribute like `#[rpn_fn(vargs, capture = [ctx, output_rows])`.
+/// Parses an attribute like `#[rpn_fn(varg, capture = [ctx, output_rows])`.
 #[derive(Debug, Default)]
 struct RpnFnAttr {
     /// Whether or not the function is a varg function. Varg function accepts `&[&Option<T>]`.

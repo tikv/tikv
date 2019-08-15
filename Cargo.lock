@@ -1130,7 +1130,7 @@ dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.5.0-alpha.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf-build 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf-build 0.9.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft-proto 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1785,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "protobuf-build"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bitflags 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2907,7 +2907,7 @@ version = "0.0.1"
 source = "git+https://github.com/pingcap/tipb.git#16909e03435eec96cc72f6ca18f85b4ef930a14e"
 dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf-build 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf-build 0.9.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3543,7 +3543,7 @@ dependencies = [
 "checksum protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)" = "<none>"
 "checksum protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8aefcec9f142b524d98fc81d07827743be89dd6586a1ba6ab21fa66a500b3fa5"
 "checksum protobuf-build 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)" = "62f22aa4ee3b1c1eb7b02150fe7d10b38ef0898c44c401e99ba6d1ed53b3a420"
-"checksum protobuf-build 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)" = "54f826711d2d848d4dbf8681ce3894ed893440fe263c674788525a628c18a092"
+"checksum protobuf-build 0.9.2 (registry+https://github.com/rust-lang/crates.io-index)" = "cffab7c9ad1d2566f475b7945ca66356af7d75131de9e84918d17e244951eff4"
 "checksum protobuf-codegen 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)" = "<none>"
 "checksum protobuf-codegen 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)" = "31539be8028d6b9e8e1b3b7c74e2fa3555302e27b2cc20dbaee6ffba648f75e2"
 "checksum quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7ac990ab4e038dd8481a5e3fd00641067fcfc674ad663f3222752ed5284e05d4"
