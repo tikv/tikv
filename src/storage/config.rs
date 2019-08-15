@@ -86,7 +86,7 @@ impl Default for BlockCacheConfig {
             num_shard_bits: 6,
             strict_capacity_limit: false,
             high_pri_pool_ratio: 0.0,
-            memory_allocator: None,
+            memory_allocator: Some(String::from("nodump")),
         }
     }
 }
@@ -118,7 +118,7 @@ impl BlockCacheConfig {
         if let Some(ref alloc) = self.memory_allocator {
             match alloc.as_str() {
                 #[cfg(feature = "jemalloc")]
-                "jemalloc-nodump" => match MemoryAllocator::new_jemalloc_memory_allocator() {
+                "nodump" => match MemoryAllocator::new_jemalloc_memory_allocator() {
                     Ok(allocator) => {
                         return Some(allocator);
                     }
