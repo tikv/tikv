@@ -246,7 +246,7 @@ impl From<StateRole> for Role {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum DetectType {
     Detect,
     CleanUpWaitFor,

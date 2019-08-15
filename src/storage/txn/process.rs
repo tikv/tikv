@@ -866,3 +866,403 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
     }
     Ok((lock, writes, values))
 }
+
+#[cfg(test)]
+mod test {
+    use super::{Executor, MsgScheduler, Task};
+    use crate::storage::kv::CbContext;
+    use crate::storage::kv::Engine;
+    use crate::storage::kv::Result as KvResult;
+    use crate::storage::kv::{BTreeEngine, BTreeEngineSnapshot};
+    use crate::storage::lock_manager::deadlock::{DetectType, Task as DetectTask};
+    use crate::storage::lock_manager::DetectorScheduler;
+    use crate::storage::lock_manager::{WaiterMgrScheduler, WaiterTask};
+    use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::txn::sched_pool::SchedPool;
+    use crate::storage::txn::scheduler::Msg;
+    use crate::storage::types::Key;
+    use crate::storage::{Command, Mutation, Options};
+    use engine::{CF_LOCK, CF_WRITE};
+    use futures::sync::mpsc as fmpsc;
+    use futures::{stream, Stream};
+    use kvproto::kvrpcpb::Context as KvContext;
+    use std::iter;
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
+    use tikv_util::worker::FutureScheduler;
+
+    #[derive(Clone)]
+    struct MockMsgScheduler(MockMsgSchedulerInner);
+    type MockMsgSchedulerInner = Arc<Mutex<Option<Box<dyn FnMut(Msg) + Send + 'static>>>>;
+
+    impl MsgScheduler for MockMsgScheduler {
+        fn on_msg(&self, task: Msg) {
+            let maybe_fn = self.0.lock().unwrap().take();
+            if let Some(mut f) = maybe_fn {
+                f(task);
+            }
+        }
+    }
+
+    impl MockMsgScheduler {
+        fn set_on_msg(&self, f: Box<dyn FnMut(Msg) + Send + 'static>) {
+            let mut cb = self.0.lock().unwrap();
+            *cb = Some(f);
+        }
+    }
+
+    fn assert_good_write_msg(msg: Msg) {
+        match msg {
+            Msg::WriteFinished { .. } => {}
+            Msg::FinishedWithErr { err, .. } => {
+                println!("{:?}", err);
+                panic!("wrong msg");
+            }
+            err => {
+                println!("{:?}", err);
+                panic!("wrong msg");
+            }
+        }
+    }
+
+    struct Fixture {
+        engine: BTreeEngine,
+        pool: SchedPool,
+        dead_rx: fmpsc::UnboundedReceiver<Option<DetectTask>>,
+        dead_sched: DetectorScheduler,
+        _wait_rx: fmpsc::UnboundedReceiver<Option<WaiterTask>>,
+        wait_sched: WaiterMgrScheduler,
+    }
+
+    // Set up a testing engine and return a test fixture
+    fn setup_engine() -> Fixture {
+        // Set up the engine and the deadlock detector scheduler
+        let cfs = &[CF_LOCK, CF_WRITE];
+        let engine = BTreeEngine::new(cfs);
+        let pool = SchedPool::new(engine.clone(), 1, "pool");
+        // The deadlock detector tasks will arrive here
+        let (dead_tx, dead_rx) = fmpsc::unbounded();
+        let dead_future_sched = FutureScheduler::new("dead-sched", dead_tx);
+        let dead_sched = DetectorScheduler::new(dead_future_sched);
+        let (wait_tx, wait_rx) = fmpsc::unbounded();
+        let wait_future_sched = FutureScheduler::new("wait-sched", wait_tx);
+        let wait_sched = WaiterMgrScheduler::new(wait_future_sched);
+
+        Fixture {
+            engine,
+            pool,
+            dead_rx,
+            dead_sched,
+            _wait_rx: wait_rx,
+            wait_sched,
+        }
+    }
+
+    // Retrieve a DB snapshot for the command to run against
+    fn make_snap(fx: &Fixture) -> BTreeEngineSnapshot {
+        let snap: Arc<Mutex<Option<BTreeEngineSnapshot>>> = Arc::new(Mutex::new(None));
+        let snap_clone = snap.clone();
+        let snap_cb = Box::new(
+            move |(_ctxt, new_snap): (CbContext, KvResult<BTreeEngineSnapshot>)| {
+                let mut snap = snap_clone.lock().unwrap();
+                *snap = Some(new_snap.unwrap());
+            },
+        );
+
+        let kv_ctxt = KvContext::new();
+        fx.engine.async_snapshot(&kv_ctxt, snap_cb).unwrap();
+
+        #[allow(clippy::let_and_return)]
+        // It's not possible to do what clippy says here. rust-clippy#1524
+        let snap = snap.lock().unwrap().take().unwrap();
+        snap
+    }
+
+    // Execute a comand and assert that it completes successfully
+    fn must_ex_cmd(fx: &Fixture, cmd: Command) {
+        // Set up a channel to introspect the results of tasks
+        let mock_sched = MockMsgScheduler(Arc::new(Mutex::new(None)));
+        let (msg_tx, msg_rx) = mpsc::channel();
+        mock_sched.set_on_msg(Box::new(move |msg| {
+            msg_tx.send(msg).unwrap();
+        }));
+
+        let cmd_task = Task::new(0, cmd);
+
+        // Run the task
+        let cb_ctxt = CbContext::new();
+        let e: Executor<BTreeEngine, _> = Executor::new(
+            mock_sched,
+            fx.pool.clone(),
+            Some(fx.wait_sched.clone()),
+            Some(fx.dead_sched.clone()),
+        );
+        e.execute(cb_ctxt, KvResult::Ok(make_snap(&fx)), cmd_task);
+
+        // Assert that it completed successfully
+        let msg = msg_rx.recv().expect("process sched msg");
+        assert_good_write_msg(msg);
+    }
+
+    fn must_acquire_pessimistic_lock(fx: &Fixture, keys: &[Key]) {
+        let kv_ctxt = KvContext::new();
+        let mut opts = Options::default();
+        opts.for_update_ts = 1;
+        let cmd = Command::AcquirePessimisticLock {
+            ctx: kv_ctxt,
+            keys: keys.to_owned().into_iter().map(|k| (k, true)).collect(),
+            primary: keys[0].as_encoded().clone(),
+            start_ts: 1,
+            options: opts,
+        };
+        must_ex_cmd(fx, cmd);
+    }
+
+    fn must_prewrite_put_pessimistic(fx: &Fixture, kvs: &[(Key, Vec<u8>)]) {
+        let kv_ctxt = KvContext::new();
+        let mut opts = Options::default();
+        opts.for_update_ts = 1;
+        opts.is_pessimistic_lock = iter::repeat(true).take(kvs.len()).collect();
+        let cmd = Command::Prewrite {
+            ctx: kv_ctxt,
+            mutations: kvs
+                .to_owned()
+                .into_iter()
+                .map(|kv| Mutation::Put(kv))
+                .collect(),
+            primary: kvs[0].0.as_encoded().clone(),
+            start_ts: 1,
+            options: opts,
+        };
+        must_ex_cmd(fx, cmd);
+    }
+
+    fn must_commit(fx: &Fixture, keys: &[Key]) {
+        let kv_ctxt = KvContext::new();
+        let cmd = Command::Commit {
+            ctx: kv_ctxt,
+            keys: keys.to_owned(),
+            lock_ts: 1,
+            commit_ts: 2,
+        };
+        must_ex_cmd(fx, cmd);
+    }
+
+    fn must_cleanup(fx: &Fixture, key: &Key) {
+        let kv_ctxt = KvContext::new();
+        let cmd = Command::Cleanup {
+            ctx: kv_ctxt,
+            key: key.clone(),
+            start_ts: 1,
+        };
+        must_ex_cmd(fx, cmd);
+    }
+
+    fn must_rollback(fx: &Fixture, keys: &[Key]) {
+        let kv_ctxt = KvContext::new();
+        let cmd = Command::Rollback {
+            ctx: kv_ctxt,
+            keys: keys.to_owned(),
+            start_ts: 1,
+        };
+        must_ex_cmd(fx, cmd);
+    }
+
+    fn must_pessimistic_rollback(fx: &Fixture, keys: &[Key]) {
+        let kv_ctxt = KvContext::new();
+        let cmd = Command::PessimisticRollback {
+            ctx: kv_ctxt,
+            keys: keys.to_owned(),
+            start_ts: 1,
+            for_update_ts: 1,
+        };
+        must_ex_cmd(fx, cmd);
+    }
+
+    fn must_pessimistic_resolve_lock(fx: &Fixture, keys: &[Key]) {
+        let key_locks = keys
+            .iter()
+            .map(|k| {
+                let lock = Lock::new(LockType::Put, k.to_raw().unwrap(), 1, 10, None, 1, 0);
+                (k.clone(), lock)
+            })
+            .collect();
+
+        let kv_ctxt = KvContext::new();
+        let cmd = Command::ResolveLock {
+            ctx: kv_ctxt,
+            txn_status: [(1, 0)].iter().cloned().collect(),
+            scan_key: None,
+            key_locks,
+        };
+        must_ex_cmd(fx, cmd);
+    }
+
+    fn must_pessimistic_resolve_lock_lite(fx: &Fixture, keys: &[Key]) {
+        let kv_ctxt = KvContext::new();
+        let cmd = Command::ResolveLockLite {
+            ctx: kv_ctxt,
+            start_ts: 1,
+            commit_ts: 2,
+            resolve_keys: keys.to_owned(),
+        };
+        must_ex_cmd(fx, cmd);
+    }
+
+    fn assert_cleanup_task(dead_task: DetectTask) {
+        match dead_task {
+            DetectTask::Detect { tp, .. } => {
+                assert_eq!(tp, DetectType::CleanUp);
+            }
+            _ => panic!("wrong task"),
+        }
+    }
+
+    // Dropping the fixture drops the DetectorSchedule and its tx
+    // handle, preventing deadlock
+    fn drop_fixture(fx: Fixture) -> fmpsc::UnboundedReceiver<Option<DetectTask>> {
+        fx.dead_rx
+    }
+
+    fn next_dead_task(
+        dead_iter: &mut stream::Wait<fmpsc::UnboundedReceiver<Option<DetectTask>>>,
+    ) -> DetectTask {
+        let dead_task = dead_iter.next().expect("detector msg");
+        dead_task
+            .expect("detector task ok")
+            .expect("detector task some")
+    }
+
+    #[test]
+    fn notify_deadlock_detector_on_pessimistic_commit() {
+        let fx = setup_engine();
+
+        let keys = vec![Key::from_raw(b"k")];
+        let kvs: Vec<_> = keys
+            .clone()
+            .into_iter()
+            .map(|k| (k, b"v".to_vec()))
+            .collect();
+
+        must_acquire_pessimistic_lock(&fx, &keys);
+        must_prewrite_put_pessimistic(&fx, &kvs);
+        must_commit(&fx, &keys);
+
+        let mut dead_iter = drop_fixture(fx).wait();
+        let dead_task = next_dead_task(&mut dead_iter);
+
+        assert_cleanup_task(dead_task);
+        assert!(dead_iter.next().is_none());
+    }
+
+    #[test]
+    fn notify_deadlock_detector_on_pessimistic_cleanup() {
+        let fx = setup_engine();
+
+        let keys = vec![Key::from_raw(b"k")];
+        let kvs: Vec<_> = keys
+            .clone()
+            .into_iter()
+            .map(|k| (k, b"v".to_vec()))
+            .collect();
+
+        must_acquire_pessimistic_lock(&fx, &keys);
+        must_prewrite_put_pessimistic(&fx, &kvs);
+        must_cleanup(&fx, &keys[0]);
+
+        let mut dead_iter = drop_fixture(fx).wait();
+        let dead_task = next_dead_task(&mut dead_iter);
+
+        assert_cleanup_task(dead_task);
+        assert!(dead_iter.next().is_none());
+    }
+
+    #[test]
+    fn notify_deadlock_detector_on_rollback_if_pessimistic() {
+        let fx = setup_engine();
+
+        let keys = vec![Key::from_raw(b"k")];
+        let kvs: Vec<_> = keys
+            .clone()
+            .into_iter()
+            .map(|k| (k, b"v".to_vec()))
+            .collect();
+
+        must_acquire_pessimistic_lock(&fx, &keys);
+        must_prewrite_put_pessimistic(&fx, &kvs);
+        must_rollback(&fx, &keys);
+
+        let mut dead_iter = drop_fixture(fx).wait();
+        let dead_task = next_dead_task(&mut dead_iter);
+
+        assert_cleanup_task(dead_task);
+        assert!(dead_iter.next().is_none());
+    }
+
+    #[test]
+    fn notify_deadlock_detector_on_pessimistic_rollback() {
+        let fx = setup_engine();
+
+        let keys = vec![Key::from_raw(b"k")];
+        let kvs: Vec<_> = keys
+            .clone()
+            .into_iter()
+            .map(|k| (k, b"v".to_vec()))
+            .collect();
+
+        must_acquire_pessimistic_lock(&fx, &keys);
+        must_prewrite_put_pessimistic(&fx, &kvs);
+        must_pessimistic_rollback(&fx, &keys);
+
+        let mut dead_iter = drop_fixture(fx).wait();
+        let dead_task = next_dead_task(&mut dead_iter);
+
+        assert_cleanup_task(dead_task);
+        assert!(dead_iter.next().is_none());
+    }
+
+    #[test]
+    fn notify_deadlock_detector_on_pessimistic_resolve_lock() {
+        let fx = setup_engine();
+
+        let keys = vec![Key::from_raw(b"k")];
+        let kvs: Vec<_> = keys
+            .clone()
+            .into_iter()
+            .map(|k| (k, b"v".to_vec()))
+            .collect();
+
+        must_acquire_pessimistic_lock(&fx, &keys);
+        must_prewrite_put_pessimistic(&fx, &kvs);
+        must_pessimistic_resolve_lock(&fx, &keys);
+
+        let mut dead_iter = drop_fixture(fx).wait();
+        let dead_task = next_dead_task(&mut dead_iter);
+
+        assert_cleanup_task(dead_task);
+        assert!(dead_iter.next().is_none());
+    }
+
+    #[test]
+    fn notify_deadlock_detector_on_pessimistic_resolve_lock_lite() {
+        let fx = setup_engine();
+
+        let keys = vec![Key::from_raw(b"k")];
+        let kvs: Vec<_> = keys
+            .clone()
+            .into_iter()
+            .map(|k| (k, b"v".to_vec()))
+            .collect();
+
+        must_acquire_pessimistic_lock(&fx, &keys);
+        must_prewrite_put_pessimistic(&fx, &kvs);
+        must_pessimistic_resolve_lock_lite(&fx, &keys);
+
+        let mut dead_iter = drop_fixture(fx).wait();
+        let dead_task = next_dead_task(&mut dead_iter);
+
+        assert_cleanup_task(dead_task);
+        assert!(dead_iter.next().is_none());
+    }
+
+}
