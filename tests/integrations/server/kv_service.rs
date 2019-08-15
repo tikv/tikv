@@ -3,7 +3,7 @@
 use futures::{Future, Sink, Stream};
 use grpcio::*;
 use kvproto::tikvpb::BatchCommandsRequest;
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
