@@ -13,7 +13,7 @@ WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
-RUN rustup default $(cat "rust-toolchain")
+RUN rustup default \$(cat ./rust-toolchain)
 
 # Install dependencies at first
 COPY Cargo.toml Cargo.lock ./
@@ -25,6 +25,10 @@ RUN sed -i '/fuzz/d' Cargo.toml && \\
 
 # Use Makefile to build
 COPY Makefile ./
+
+# Remove cmd from dependencies build
+RUN sed -i '/cmd/d' Cargo.toml && \\
+    sed -i '/X_PACKAGE/d' Makefile
 
 # For cargo
 COPY scripts/run-cargo.sh ./scripts/run-cargo.sh
@@ -44,6 +48,9 @@ done
 
 
 cat <<EOT >> ${output}
+
+# Remove profiler from tidb_query
+RUN sed -i '/profiler/d' ./components/tidb_query/Cargo.toml
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild
@@ -70,6 +77,14 @@ cat <<EOT >> ${output}
 # Build real binaries now
 COPY ${dir}/src ./src
 COPY ${dir}/components ./components
+COPY ./cmd ./cmd
+
+# Remove profiling feature and add cmd back
+RUN sed -i '/^profiling/d' ./cmd/Cargo.toml && \\
+    sed -i '/"components\/pd_client",/a\ \ "cmd",' Cargo.toml
+
+# Restore Makefile
+COPY Makefile ./
 
 RUN make build_dist_release
 
