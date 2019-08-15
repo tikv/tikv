@@ -26,7 +26,6 @@ use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
@@ -84,7 +83,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E> {
+impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
         let future = future_get(&self.storage, req)
