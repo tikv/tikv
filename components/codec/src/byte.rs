@@ -905,10 +905,9 @@ mod tests {
             let encoded_len = MemComparableByteCodec::encoded_len(payload_len);
             let mut payload_encoded: Vec<u8> =
                 vec![0; encoded_prefix_len + encoded_len + encoded_suffix_len];
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..encoded_prefix_len {
-                payload_encoded[i] = rand::random();
-            }
+            payload_encoded[0..encoded_prefix_len]
+                .iter_mut()
+                .for_each(|byte| *byte = rand::random());
             {
                 let src = payload_raw.as_slice();
                 let dest = &mut payload_encoded.as_mut_slice()[encoded_prefix_len..];
@@ -918,10 +917,9 @@ mod tests {
                     MemComparableByteCodec::encode_all(src, dest);
                 }
             }
-            #[allow(clippy::needless_range_loop)]
-            for i in encoded_prefix_len + encoded_len..encoded_suffix_len {
-                payload_encoded[i] = rand::random();
-            }
+            payload_encoded[encoded_prefix_len + encoded_len..encoded_suffix_len]
+                .iter_mut()
+                .for_each(|byte| *byte = rand::random());
 
             let mut base_buffer: Vec<u8> =
                 Vec::with_capacity(prefix_len + encoded_len + suffix_len);
