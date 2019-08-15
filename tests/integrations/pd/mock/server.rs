@@ -13,7 +13,6 @@ use pd_client::Error as PdError;
 use tikv_util::security::*;
 
 use kvproto::pdpb::*;
-use kvproto::pdpb_grpc::{self, Pd};
 
 use super::mocker::*;
 
@@ -62,7 +61,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
-        let service = pdpb_grpc::create_pd(self.mocker.clone());
+        let service = create_pd(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)

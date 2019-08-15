@@ -11,8 +11,9 @@ use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
-use kvproto::tikvpb::{BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage};
-use kvproto::tikvpb_grpc::{create_tikv, Tikv};
+use kvproto::tikvpb::{
+    create_tikv, BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage, Tikv,
+};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
 macro_rules! unary_call {
