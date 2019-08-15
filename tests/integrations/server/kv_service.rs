@@ -31,7 +31,7 @@ fn test_batch_commands() {
         }
         match sender.send((batch_req, WriteFlags::default())).wait() {
             Ok(s) => sender = s,
-            Err(e) => panic!("tikv cilent send fail: {:?}", e),
+            Err(e) => panic!("tikv client send fail: {:?}", e),
         }
     }
 
