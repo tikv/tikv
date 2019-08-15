@@ -4,7 +4,7 @@ WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
-RUN rustup default nightly-2019-07-19
+RUN rustup default $(cat ./rust-toolchain)
 
 # Install dependencies at first
 COPY Cargo.toml Cargo.lock ./
@@ -84,8 +84,10 @@ COPY ./cmd ./cmd
 RUN sed -i '/^profiling/d' ./cmd/Cargo.toml
 
 # Add cmd back
-RUN sed -i '/"components\/pd_client",/a\ \ "cmd",' Cargo.toml && \
-    sed -i '/X_CARGO_CONFIG_FILE=${DIST_CONFIG}/ax-build-dist: export X_PACKAGE=cmd' Makefile
+RUN sed -i '/"components\/pd_client",/a\ \ "cmd",' Cargo.toml
+
+# Restore Makefile
+COPY Makefile ./
 
 RUN make build_dist_release
 
