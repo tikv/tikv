@@ -11,7 +11,8 @@ COPY Cargo.toml Cargo.lock ./
 
 # Remove fuzz and test workspace, remove profiler feature
 RUN sed -i '/fuzz/d' Cargo.toml && \
-    sed -i '/test\_/d' Cargo.toml
+    sed -i '/test\_/d' Cargo.toml && \
+    sed -i '/profiler/d' Cargo.toml
 
 # Use Makefile to build
 COPY Makefile ./
@@ -31,7 +32,6 @@ COPY ./components/log_wrappers/Cargo.toml ./components/log_wrappers/Cargo.toml
 COPY ./components/match_template/Cargo.toml ./components/match_template/Cargo.toml
 COPY ./components/panic_hook/Cargo.toml ./components/panic_hook/Cargo.toml
 COPY ./components/pd_client/Cargo.toml ./components/pd_client/Cargo.toml
-COPY ./components/profiler/Cargo.toml ./components/profiler/Cargo.toml
 COPY ./components/tidb_query/Cargo.toml ./components/tidb_query/Cargo.toml
 COPY ./components/tidb_query_codegen/Cargo.toml ./components/tidb_query_codegen/Cargo.toml
 COPY ./components/tidb_query_datatype/Cargo.toml ./components/tidb_query_datatype/Cargo.toml
@@ -39,8 +39,8 @@ COPY ./components/tikv_alloc/Cargo.toml ./components/tikv_alloc/Cargo.toml
 COPY ./components/tikv_util/Cargo.toml ./components/tikv_util/Cargo.toml
 COPY ./components/tipb_helper/Cargo.toml ./components/tipb_helper/Cargo.toml
 
-# Remove profiler example
-RUN sed -i '/\[\[example\]\]/,+2d' ./components/profiler/Cargo.toml
+# Remove profiler from tidb_query
+RUN sed -i '/profiler/d' ./components/tidb_query/Cargo.toml
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild
@@ -54,7 +54,6 @@ RUN mkdir -p ./src/bin && \
     mkdir ./components/match_template/src && echo '' > ./components/match_template/src/lib.rs && \
     mkdir ./components/panic_hook/src && echo '' > ./components/panic_hook/src/lib.rs && \
     mkdir ./components/pd_client/src && echo '' > ./components/pd_client/src/lib.rs && \
-    mkdir ./components/profiler/src && echo '' > ./components/profiler/src/lib.rs && \
     mkdir ./components/tidb_query/src && echo '' > ./components/tidb_query/src/lib.rs && \
     mkdir ./components/tidb_query_codegen/src && echo '' > ./components/tidb_query_codegen/src/lib.rs && \
     mkdir ./components/tidb_query_datatype/src && echo '' > ./components/tidb_query_datatype/src/lib.rs && \
@@ -68,7 +67,6 @@ RUN mkdir -p ./src/bin && \
     rm -rf ./target/release/.fingerprint/match_template-* && \
     rm -rf ./target/release/.fingerprint/panic_hook-* && \
     rm -rf ./target/release/.fingerprint/pd_client-* && \
-    rm -rf ./target/release/.fingerprint/profiler-* && \
     rm -rf ./target/release/.fingerprint/tidb_query-* && \
     rm -rf ./target/release/.fingerprint/tidb_query_codegen-* && \
     rm -rf ./target/release/.fingerprint/tidb_query_datatype-* && \
@@ -85,6 +83,9 @@ COPY ./cmd ./cmd
 # Add cmd back
 RUN sed -i '/"components\/pd_client",/a\ \ "cmd",' Cargo.toml && \
     sed -i '/X_CARGO_CONFIG_FILE=${DIST_CONFIG}/ax-build-dist: export X_PACKAGE=cmd' Makefile
+
+# Remove profiling feature
+RUN sed -i '/^profiling/d' ./cmd/Cargo.toml
 
 RUN make build_dist_release
 
