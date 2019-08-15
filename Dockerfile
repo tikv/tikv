@@ -80,11 +80,9 @@ COPY ./src ./src
 COPY ./components ./components
 COPY ./cmd ./cmd
 
-# Remove profiling feature
-RUN sed -i '/^profiling/d' ./cmd/Cargo.toml
-
-# Add cmd back
-RUN sed -i '/"components\/pd_client",/a\ \ "cmd",' Cargo.toml
+# Remove profiling feature and add cmd back
+RUN sed -i '/^profiling/d' ./cmd/Cargo.toml && \
+    sed -i '/"components\/pd_client",/a\ \ "cmd",' Cargo.toml
 
 # Restore Makefile
 COPY Makefile ./
