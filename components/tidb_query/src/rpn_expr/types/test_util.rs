@@ -83,15 +83,6 @@ impl RpnFnScalarEvaluator {
         ret_field_type: impl Into<FieldType>,
         sig: ScalarFuncSig,
     ) -> (Result<ScalarValue>, EvalContext) {
-        self.evaluate_raw_with_validate(ret_field_type, sig, false)
-    }
-
-    fn evaluate_raw_with_validate(
-        self,
-        ret_field_type: impl Into<FieldType>,
-        sig: ScalarFuncSig,
-        validate: bool,
-    ) -> (Result<ScalarValue>, EvalContext) {
         let mut context = match self.context {
             Some(ctx) => ctx,
             None => EvalContext::default(),
@@ -109,19 +100,17 @@ impl RpnFnScalarEvaluator {
             })
             .collect();
 
-        // load func first
+        // use validator_ptr to testing the test arguments.
         let func: RpnFnMeta = super::super::map_pb_sig_to_rpn_func(sig, &children_ed).unwrap();
         let ret_field_type = ret_field_type.into();
-        if validate {
-            let mut fun_sig_expr = Expr::default();
 
-            fun_sig_expr.set_sig(sig);
-            fun_sig_expr.set_children(children_ed.clone().into());
-            fun_sig_expr.set_field_type(ret_field_type.clone());
+        let mut fun_sig_expr = Expr::default();
+        fun_sig_expr.set_sig(sig);
+        fun_sig_expr.set_children(children_ed.clone().into());
+        fun_sig_expr.set_field_type(ret_field_type.clone());
 
-            if let Err(e) = (func.validator_ptr)(&fun_sig_expr) {
-                return (Err(e), context);
-            }
+        if let Err(e) = (func.validator_ptr)(&fun_sig_expr) {
+            return (Err(e), context);
         }
 
         let expr = self
@@ -134,22 +123,6 @@ impl RpnFnScalarEvaluator {
         let result = ret.map(|ret| ret.get_logical_scalar_ref(0).to_owned());
 
         (result, context)
-    }
-
-    /// Evaluates the given function by using collected parameters.
-    /// Comparing with evaluate, evaluate_with_validate validates the arguments for rpn_expr.
-    pub fn evaluate_with_validate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>>
-    where
-        Option<T>: From<ScalarValue>,
-    {
-        let return_field_type = match &self.return_field_type {
-            Some(ft) => ft.clone(),
-            None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
-        };
-        let result = self
-            .evaluate_raw_with_validate(return_field_type, sig, true)
-            .0;
-        result.map(|v| v.into())
     }
 
     /// Evaluates the given function by using collected parameters.

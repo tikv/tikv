@@ -251,7 +251,7 @@ mod tests {
         for err_args in err_cases {
             let output: Result<Option<Json>> = RpnFnScalarEvaluator::new()
                 .push_params(err_args)
-                .evaluate_with_validate(ScalarFuncSig::JsonObjectSig);
+                .evaluate(ScalarFuncSig::JsonObjectSig);
 
             assert!(output.is_err());
         }
