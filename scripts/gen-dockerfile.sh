@@ -13,7 +13,7 @@ WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
-RUN rustup default \$(cat ./rust-toolchain)
+RUN rustup default $(cat "rust-toolchain")
 
 # Install dependencies at first
 COPY Cargo.toml Cargo.lock ./
