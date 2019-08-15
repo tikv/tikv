@@ -21,6 +21,7 @@ fn setup<'a>() -> fail::FailScenario<'a> {
 #[test]
 fn test_setup() {
     let _ = std::thread::spawn(move || {
+        let _ = setup();
         panic_hook::mute();
         let _g = setup();
         panic!("Poison!");
