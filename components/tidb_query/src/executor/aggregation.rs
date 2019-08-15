@@ -403,10 +403,10 @@ impl<Src: Executor> StreamAggExecutor<Src> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::i64;
 
     use tidb_query_datatype::FieldTypeTp;
+    use tikv_util::collections::HashMap;
     use tipb::ColumnInfo;
     use tipb::{Expr, ExprType};
 
