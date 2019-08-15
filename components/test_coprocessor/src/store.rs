@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
-use tikv::coprocessor::codec::{datum, table, Datum};
+use tidb_query::codec::{datum, table, Datum};
 use tikv::storage::{
     Engine, FixtureStore, Key, Mutation, RocksEngine, SnapshotStore, TestEngineBuilder,
 };
@@ -35,7 +35,7 @@ impl<'a, E: Engine> Insert<'a, E> {
     }
 
     pub fn execute(self) -> i64 {
-        self.execute_with_ctx(Context::new())
+        self.execute_with_ctx(Context::default())
     }
 
     pub fn execute_with_ctx(self, ctx: Context) -> i64 {
@@ -73,7 +73,7 @@ impl<'a, E: Engine> Delete<'a, E> {
     }
 
     pub fn execute(self, id: i64, row: Vec<Datum>) {
-        self.execute_with_ctx(Context::new(), id, row)
+        self.execute_with_ctx(Context::default(), id, row)
     }
 
     pub fn execute_with_ctx(self, ctx: Context, id: i64, row: Vec<Datum>) {
@@ -159,15 +159,17 @@ impl<E: Engine> Store<E> {
 
     pub fn commit_with_ctx(&mut self, ctx: Context) {
         let commit_ts = next_id() as u64;
-        let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
-        self.store
-            .commit(ctx, handles, self.current_ts, commit_ts)
-            .unwrap();
-        self.last_committed_ts = commit_ts;
+        let handles: Vec<_> = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
+        if !handles.is_empty() {
+            self.store
+                .commit(ctx, handles, self.current_ts, commit_ts)
+                .unwrap();
+            self.last_committed_ts = commit_ts;
+        }
     }
 
     pub fn commit(&mut self) {
-        self.commit_with_ctx(Context::new());
+        self.commit_with_ctx(Context::default());
     }
 
     pub fn get_engine(&self) -> E {
@@ -181,7 +183,7 @@ impl<E: Engine> Store<E> {
     pub fn export(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
         self.store
             .scan(
-                Context::new(),
+                Context::default(),
                 Key::from_encoded(vec![]),
                 None,
                 100_000,
@@ -197,8 +199,8 @@ impl<E: Engine> Store<E> {
 
     /// Directly creates a `SnapshotStore` over current committed data.
     pub fn to_snapshot_store(&self) -> SnapshotStore<E::Snap> {
-        let snapshot = self.get_engine().snapshot(&Context::new()).unwrap();
-        SnapshotStore::new(snapshot, self.last_committed_ts, IsolationLevel::SI, true)
+        let snapshot = self.get_engine().snapshot(&Context::default()).unwrap();
+        SnapshotStore::new(snapshot, self.last_committed_ts, IsolationLevel::Si, true)
     }
 
     /// Strip off committed MVCC information to create a `FixtureStore`.
@@ -244,9 +246,15 @@ mod tests {
     fn test_export() {
         let mut store = Store::new();
         store.begin();
-        store.put(Context::new(), vec![(b"key1".to_vec(), b"value1".to_vec())]);
-        store.put(Context::new(), vec![(b"key2".to_vec(), b"foo".to_vec())]);
-        store.delete(Context::new(), vec![b"key0".to_vec()]);
+        store.put(
+            Context::default(),
+            vec![(b"key1".to_vec(), b"value1".to_vec())],
+        );
+        store.put(
+            Context::default(),
+            vec![(b"key2".to_vec(), b"foo".to_vec())],
+        );
+        store.delete(Context::default(), vec![b"key0".to_vec()]);
         store.commit();
 
         assert_eq!(
@@ -258,9 +266,15 @@ mod tests {
         );
 
         store.begin();
-        store.put(Context::new(), vec![(b"key1".to_vec(), b"value2".to_vec())]);
-        store.put(Context::new(), vec![(b"key2".to_vec(), b"foo".to_vec())]);
-        store.delete(Context::new(), vec![b"key0".to_vec()]);
+        store.put(
+            Context::default(),
+            vec![(b"key1".to_vec(), b"value2".to_vec())],
+        );
+        store.put(
+            Context::default(),
+            vec![(b"key2".to_vec(), b"foo".to_vec())],
+        );
+        store.delete(Context::default(), vec![b"key0".to_vec()]);
         store.commit();
 
         assert_eq!(
@@ -272,21 +286,27 @@ mod tests {
         );
 
         store.begin();
-        store.delete(Context::new(), vec![b"key0".to_vec(), b"key2".to_vec()]);
+        store.delete(Context::default(), vec![b"key0".to_vec(), b"key2".to_vec()]);
         store.commit();
 
         assert_eq!(store.export(), vec![(b"key1".to_vec(), b"value2".to_vec())]);
 
         store.begin();
-        store.delete(Context::new(), vec![b"key1".to_vec()]);
+        store.delete(Context::default(), vec![b"key1".to_vec()]);
         store.commit();
 
         assert_eq!(store.export(), vec![]);
 
         store.begin();
-        store.put(Context::new(), vec![(b"key2".to_vec(), b"bar".to_vec())]);
-        store.put(Context::new(), vec![(b"key1".to_vec(), b"foo".to_vec())]);
-        store.put(Context::new(), vec![(b"k".to_vec(), b"box".to_vec())]);
+        store.put(
+            Context::default(),
+            vec![(b"key2".to_vec(), b"bar".to_vec())],
+        );
+        store.put(
+            Context::default(),
+            vec![(b"key1".to_vec(), b"foo".to_vec())],
+        );
+        store.put(Context::default(), vec![(b"k".to_vec(), b"box".to_vec())]);
         store.commit();
 
         assert_eq!(
@@ -299,7 +319,7 @@ mod tests {
         );
 
         store.begin();
-        store.delete(Context::new(), vec![b"key1".to_vec(), b"key1".to_vec()]);
+        store.delete(Context::default(), vec![b"key1".to_vec(), b"key1".to_vec()]);
         store.commit();
 
         assert_eq!(
@@ -311,7 +331,7 @@ mod tests {
         );
 
         store.begin();
-        store.delete(Context::new(), vec![b"key2".to_vec()]);
+        store.delete(Context::default(), vec![b"key2".to_vec()]);
 
         assert_eq!(
             store.export(),
@@ -326,8 +346,8 @@ mod tests {
         assert_eq!(store.export(), vec![(b"k".to_vec(), b"box".to_vec())]);
 
         store.begin();
-        store.put(Context::new(), vec![(b"key1".to_vec(), b"v1".to_vec())]);
-        store.put(Context::new(), vec![(b"key2".to_vec(), b"v2".to_vec())]);
+        store.put(Context::default(), vec![(b"key1".to_vec(), b"v1".to_vec())]);
+        store.put(Context::default(), vec![(b"key2".to_vec(), b"v2".to_vec())]);
 
         assert_eq!(store.export(), vec![(b"k".to_vec(), b"box".to_vec())]);
 

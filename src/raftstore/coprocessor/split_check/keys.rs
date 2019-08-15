@@ -230,7 +230,7 @@ mod tests {
     use std::cmp;
     use std::sync::{mpsc, Arc};
     use std::u64;
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::worker::Runnable;
 
     use super::*;
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -278,11 +278,11 @@ mod tests {
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(1);
         region.set_start_key(vec![]);
         region.set_end_key(vec![]);
-        region.mut_peers().push(Peer::new());
+        region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
@@ -300,7 +300,7 @@ mod tests {
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
             Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
@@ -311,7 +311,7 @@ mod tests {
         }
 
         put_data(&engine, 90, 160, true);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(
             &rx,
             &region,
@@ -319,7 +319,7 @@ mod tests {
         );
 
         put_data(&engine, 160, 300, false);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(
             &rx,
             &region,
@@ -331,7 +331,7 @@ mod tests {
         );
 
         put_data(&engine, 300, 500, false);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(
             &rx,
             &region,
@@ -346,12 +346,15 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::Scan));
     }
 
     #[test]
     fn test_region_approximate_keys() {
-        let path = TempDir::new("_test_region_approximate_keys").expect("");
+        let path = Builder::new()
+            .prefix("_test_region_approximate_keys")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -378,8 +381,8 @@ mod tests {
             db.flush_cf(default_cf, true).unwrap();
         }
 
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let range_keys = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
     }

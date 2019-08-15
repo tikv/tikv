@@ -268,7 +268,7 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
                 cf_tree.write().unwrap().insert(k, v);
             }
 
-            Modify::DeleteRange(_cf, _start_key, _end_key) => unimplemented!(),
+            Modify::DeleteRange(_cf, _start_key, _end_key, _notify_only) => unimplemented!(),
         };
     }
     Ok(())
@@ -310,7 +310,7 @@ pub mod tests {
         for (k, v) in &test_data {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
-        let snap = engine.snapshot(&Context::new()).unwrap();
+        let snap = engine.snapshot(&Context::default()).unwrap();
         let mut statistics = CFStatistics::default();
 
         // lower bound > upper bound, seek() returns false.

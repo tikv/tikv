@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use kvproto::metapb;
 
-use crate::pd::PdClient;
+use pd_client::PdClient;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -67,16 +67,16 @@ impl<T: PdClient> Runner<T> {
         Ok(addr)
     }
 
-    fn get_address(&mut self, store_id: u64) -> Result<String> {
+    fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
-        let s = box_try!(pd_client.get_store(store_id));
+        let mut s = box_try!(pd_client.get_store(store_id));
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER
                 .with_label_values(&["tombstone"])
                 .inc();
             return Err(box_err!("store {} has been removed", store_id));
         }
-        let addr = s.get_address().to_owned();
+        let addr = s.take_address();
         // In some tests, we use empty address for store first,
         // so we should ignore here.
         // TODO: we may remove this check after we refactor the test.
@@ -119,9 +119,7 @@ where
         store_addrs: HashMap::default(),
     };
     box_try!(worker.start(runner));
-    let resolver = PdStoreAddrResolver {
-        sched: worker.scheduler(),
-    };
+    let resolver = PdStoreAddrResolver::new(worker.scheduler());
     Ok((worker, resolver))
 }
 
@@ -143,9 +141,9 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use crate::pd::{PdClient, PdFuture, RegionStat, Result};
     use kvproto::metapb;
     use kvproto::pdpb;
+    use pd_client::{PdClient, PdFuture, RegionStat, Result};
     use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -233,7 +231,7 @@ mod tests {
     }
 
     fn new_store(addr: &str, state: metapb::StoreState) -> metapb::Store {
-        let mut store = metapb::Store::new();
+        let mut store = metapb::Store::default();
         store.set_id(1);
         store.set_state(state);
         store.set_address(addr.into());
@@ -256,21 +254,21 @@ mod tests {
     #[test]
     fn test_resolve_store_state_up() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Up);
-        let mut runner = new_runner(store);
+        let runner = new_runner(store);
         assert!(runner.get_address(0).is_ok());
     }
 
     #[test]
     fn test_resolve_store_state_offline() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Offline);
-        let mut runner = new_runner(store);
+        let runner = new_runner(store);
         assert!(runner.get_address(0).is_ok());
     }
 
     #[test]
     fn test_resolve_store_state_tombstone() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
-        let mut runner = new_runner(store);
+        let runner = new_runner(store);
         assert!(runner.get_address(0).is_err());
     }
 

@@ -1,6 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod db;
+mod sst;
+pub use sst::{SstWriter, SstWriterBuilder};
+
 pub mod util;
 
 mod snapshot;
@@ -13,12 +16,13 @@ pub use engine_rocksdb::{
     Cache, ColumnFamilyOptions, CompactOptions, CompactionJobInfo, CompactionOptions,
     CompactionPriority, DBBottommostLevelCompaction, DBCompactionStyle, DBCompressionType,
     DBEntryType, DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode,
-    DBStatisticsHistogramType, DBStatisticsTickerType, DBVector, Env, EnvOptions, EventListener,
-    ExternalSstFileInfo, FlushJobInfo, HistogramData, IngestExternalFileOptions, IngestionInfo, Kv,
-    LRUCacheOptions, PerfContext, Range, RateLimiter, ReadOptions, SeekKey, SequentialFile,
-    SliceTransform, SstFileWriter, TablePropertiesCollection, TablePropertiesCollector,
-    TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions, UserCollectedProperties,
-    Writable, WriteBatch, WriteOptions, WriteStallCondition, WriteStallInfo, DB,
+    DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
+    EnvOptions, EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData,
+    IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, PerfContext, Range, RateLimiter,
+    ReadOptions, SeekKey, SequentialFile, SliceTransform, TablePropertiesCollection,
+    TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
+    UserCollectedProperties, Writable, WriteBatch, WriteOptions, WriteStallCondition,
+    WriteStallInfo, DB,
 };
 
 #[cfg(test)]
@@ -28,16 +32,16 @@ mod tests {
     use crate::{Iterable, Mutable, Peekable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
-    use tempdir::TempDir;
+    use tempfile::Builder;
 
     #[test]
     fn test_base() {
-        let path = TempDir::new("var").unwrap();
+        let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine =
             Arc::new(util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap());
 
-        let mut r = Region::new();
+        let mut r = Region::default();
         r.set_id(10);
 
         let key = b"key";
@@ -69,7 +73,7 @@ mod tests {
 
     #[test]
     fn test_peekable() {
-        let path = TempDir::new("var").unwrap();
+        let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine = util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap();
 
@@ -84,7 +88,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let path = TempDir::new("var").unwrap();
+        let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine =
             Arc::new(util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap());

@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::{exponential_buckets, Gauge, Histogram, HistogramVec, IntCounterVec};
+use prometheus::{exponential_buckets, Gauge, Histogram, HistogramVec, IntCounter, IntCounterVec};
 
 lazy_static! {
     pub static ref SNAP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -36,7 +36,7 @@ lazy_static! {
     .unwrap();
     pub static ref REGION_HASH_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_hash_duration_seconds",
-        "Bucketed histogram of raftstore hash compution duration"
+        "Bucketed histogram of raftstore hash computation duration"
     )
     .unwrap();
     pub static ref STALE_PEER_PENDING_DELETE_RANGE_GAUGE: Gauge = register_gauge!(
@@ -46,20 +46,13 @@ lazy_static! {
     .unwrap();
     pub static ref LOCAL_READ_REJECT: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_local_read_reject_total",
-        "Total number of rejections from the local read thread.",
+        "Total number of rejections from the local reader.",
         &["reason"]
     )
     .unwrap();
-    pub static ref LOCAL_READ_WAIT_DURATION: Histogram = register_histogram!(
-        "tikv_raftstore_local_read_requests_wait_duration",
-        "Bucketed histogram of local read requests wait duration.",
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
-    )
-    .unwrap();
-    pub static ref LOCAL_READ_BATCH_REQUESTS: Histogram = register_histogram!(
-        "tikv_raftstore_local_read_batch_requests_total",
-        "Bucketed histogram of local read batch requests size.",
-        exponential_buckets(1.0, 2.0, 15).unwrap()
+    pub static ref LOCAL_READ_EXECUTED_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_executed_requests",
+        "Total number of requests directly executed by local reader."
     )
     .unwrap();
 }

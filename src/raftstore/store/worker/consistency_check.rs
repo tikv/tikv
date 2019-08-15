@@ -153,12 +153,12 @@ mod tests {
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::worker::Runnable;
 
     #[test]
     fn test_consistency_check() {
-        let path = TempDir::new("tikv-store-test").unwrap();
+        let path = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let db = new_engine(
             path.path().to_str().unwrap(),
             None,
@@ -168,8 +168,8 @@ mod tests {
         .unwrap();
         let db = Arc::new(db);
 
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
         let mut runner = Runner::new(tx);

@@ -9,8 +9,8 @@ use fail;
 use kvproto::metapb::{Peer, Region};
 use raft::eraftpb::MessageType;
 
+use pd_client::PdClient;
 use test_raftstore::*;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -326,6 +326,8 @@ fn test_stale_read_during_merging() {
 
 #[test]
 fn test_read_index_when_transfer_leader_2() {
+    let _guard = crate::setup();
+
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.

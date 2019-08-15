@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use kvproto::import_sstpb::SSTMeta;
+use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -12,6 +12,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
 
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
+use crate::raftstore::store::fsm::PeerFsm;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
 use crate::storage::kv::CompactedEvent;
@@ -209,6 +210,10 @@ pub enum CasualMessage {
     ClearRegionSize,
     /// Indicate a target region is overlapped.
     RegionOverlapped,
+
+    /// A test only message, it is useful when we want to access
+    /// peer's internal state.
+    Test(Box<dyn FnOnce(&mut PeerFsm) + Send + 'static>),
 }
 
 impl fmt::Debug for CasualMessage {
@@ -220,9 +225,11 @@ impl fmt::Debug for CasualMessage {
                 index,
                 escape(hash)
             ),
-            CasualMessage::SplitRegion { ref split_keys, .. } => {
-                write!(fmt, "Split region with {}", KeysInfoFormatter(&split_keys))
-            }
+            CasualMessage::SplitRegion { ref split_keys, .. } => write!(
+                fmt,
+                "Split region with {}",
+                KeysInfoFormatter(split_keys.iter())
+            ),
             CasualMessage::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
             }
@@ -248,6 +255,7 @@ impl fmt::Debug for CasualMessage {
                 "clear region size"
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
+            CasualMessage::Test(_) => write!(fmt, "Test"),
         }
     }
 }
@@ -326,7 +334,7 @@ pub enum StoreMsg {
     SnapshotStats,
 
     ValidateSSTResult {
-        invalid_ssts: Vec<SSTMeta>,
+        invalid_ssts: Vec<SstMeta>,
     },
 
     // Clear region size and keys for all regions in the range, so we can force them to re-calculate

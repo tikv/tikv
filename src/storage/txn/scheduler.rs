@@ -28,7 +28,7 @@ use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
-use tikv_util::collections::HashMap;
+use tikv_util::{collections::HashMap, time::SlowTimer};
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{
@@ -52,18 +52,18 @@ pub enum Msg {
     ReadFinished {
         cid: u64,
         pr: ProcessResult,
-        tag: &'static str,
+        tag: CommandKind,
     },
     WriteFinished {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
-        tag: &'static str,
+        tag: CommandKind,
     },
     FinishedWithErr {
         cid: u64,
         err: Error,
-        tag: &'static str,
+        tag: CommandKind,
     },
     WaitForLock {
         cid: u64,
@@ -85,7 +85,7 @@ impl Debug for Msg {
 impl Display for Msg {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
+            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {}", cmd),
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
@@ -101,7 +101,7 @@ struct TaskContext {
     lock: Lock,
     cb: StorageCb,
     write_bytes: usize,
-    tag: &'static str,
+    tag: CommandKind,
     // How long it waits on latches.
     latch_timer: Option<HistogramTimer>,
     // Total duration of a command.
@@ -112,6 +112,10 @@ impl TaskContext {
     fn new(task: Task, latches: &Latches, cb: StorageCb) -> TaskContext {
         let tag = task.cmd().tag();
         let lock = gen_command_lock(latches, task.cmd());
+        // Write command should acquire write lock.
+        if !task.cmd().readonly() && !lock.is_write_lock() {
+            panic!("write lock is expected for command {}", task.cmd());
+        }
         let write_bytes = if lock.is_write_lock() {
             task.cmd().write_bytes()
         } else {
@@ -124,14 +128,8 @@ impl TaskContext {
             cb,
             write_bytes,
             tag,
-            latch_timer: Some(
-                SCHED_LATCH_HISTOGRAM_VEC
-                    .with_label_values(&[tag])
-                    .start_coarse_timer(),
-            ),
-            _cmd_timer: SCHED_HISTOGRAM_VEC
-                .with_label_values(&[tag])
-                .start_coarse_timer(),
+            latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.get(tag).start_coarse_timer()),
+            _cmd_timer: SCHED_HISTOGRAM_VEC_STATIC.get(tag).start_coarse_timer(),
         }
     }
 
@@ -258,7 +256,7 @@ impl<E: Engine> Scheduler<E> {
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
-        info!("Scheduler::new is called to initialize the transaction scheduler");
+        let t = SlowTimer::new();
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
             task_contexts.push(Mutex::new(Default::default()));
@@ -280,7 +278,7 @@ impl<E: Engine> Scheduler<E> {
             detector_scheduler,
         });
 
-        info!("Scheduler::new is finished, the transaction scheduler is initialized");
+        slow_log!(t, "initialized the transaction scheduler");
         Scheduler {
             engine: Some(engine),
             inner,
@@ -329,17 +327,14 @@ impl<E: Engine> Scheduler<E> {
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
         self.try_to_wake_up(cid);
-
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tag, "new"])
-            .inc();
-        SCHED_COMMANDS_PRI_COUNTER_VEC
-            .with_label_values(&[priority_tag])
+        SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
+        SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+            .get(priority_tag)
             .inc();
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
-    /// the method initiates a get snapshot operation for furthur processing.
+    /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
         if self.inner.acquire_lock(cid) {
             self.get_snapshot(cid);
@@ -349,9 +344,7 @@ impl<E: Engine> Scheduler<E> {
     fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCb) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
-            SCHED_TOO_BUSY_COUNTER_VEC
-                .with_label_values(&[cmd.tag()])
-                .inc();
+            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             execute_callback(
                 callback,
                 ProcessResult::Failed {
@@ -377,16 +370,12 @@ impl<E: Engine> Scheduler<E> {
 
         let f = |engine: &E| {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "async_snapshot_err"])
-                    .inc();
+                SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
-                error!("engine async_snapshot failed"; "err" => ?e);
+                info!("engine async_snapshot failed"; "err" => ?e);
                 self.finish_with_err(cid, e.into());
             } else {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "snapshot"])
-                    .inc();
+                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
         };
 
@@ -403,9 +392,7 @@ impl<E: Engine> Scheduler<E> {
         debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tctx.tag, "error"])
-            .inc();
+        SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
 
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
@@ -419,17 +406,13 @@ impl<E: Engine> Scheduler<E> {
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
-    fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: &str) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tag, "read_finish"])
-            .inc();
+    fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: CommandKind) {
+        SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[tag, "next_cmd"])
-                .inc();
+            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
             self.schedule_command(cmd, tctx.cb);
         } else {
             execute_callback(tctx.cb, pr);
@@ -439,10 +422,14 @@ impl<E: Engine> Scheduler<E> {
     }
 
     /// Event handler for the success of write.
-    fn on_write_finished(&self, cid: u64, pr: ProcessResult, result: EngineResult<()>, tag: &str) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tag, "write_finish"])
-            .inc();
+    fn on_write_finished(
+        &self,
+        cid: u64,
+        pr: ProcessResult,
+        result: EngineResult<()>,
+        tag: CommandKind,
+    ) {
+        SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
 
         debug!("write command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -453,9 +440,7 @@ impl<E: Engine> Scheduler<E> {
             },
         };
         if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[tag, "next_cmd"])
-                .inc();
+            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
             self.schedule_command(cmd, tctx.cb);
         } else {
             execute_callback(tctx.cb, pr);
@@ -475,9 +460,7 @@ impl<E: Engine> Scheduler<E> {
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tctx.tag, "lock_wait"])
-            .inc();
+        SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
         self.inner.waiter_mgr_scheduler.as_ref().unwrap().wait_for(
             start_ts,
             tctx.cb,
@@ -559,65 +542,65 @@ mod tests {
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
             Command::ScanLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 max_ts: 5,
                 start_key: None,
                 limit: 0,
             },
             Command::ResolveLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![],
             },
             Command::MvccByKey {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 key: Key::from_raw(b"k"),
             },
             Command::MvccByStartTs {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 start_ts: 25,
             },
         ];
         let write_cmds = vec![
             Command::Prewrite {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),
             },
             Command::AcquirePessimisticLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![(Key::from_raw(b"k"), false)],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),
             },
             Command::Commit {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 lock_ts: 10,
                 commit_ts: 20,
             },
             Command::Cleanup {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 key: Key::from_raw(b"k"),
                 start_ts: 10,
             },
             Command::Rollback {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
             },
             Command::PessimisticRollback {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
                 for_update_ts: 20,
             },
             Command::ResolveLock {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![(
@@ -626,7 +609,7 @@ mod tests {
                 )],
             },
             Command::ResolveLockLite {
-                ctx: Context::new(),
+                ctx: Context::default(),
                 start_ts: 10,
                 commit_ts: 0,
                 resolve_keys: vec![Key::from_raw(b"k")],

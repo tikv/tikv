@@ -22,11 +22,11 @@ use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Stat
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
-use crate::pd::PdClient;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
+use pd_client::PdClient;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 
@@ -48,6 +48,9 @@ const GC_TASK_SLOW_SECONDS: u64 = 30;
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
 
 const BEGIN_KEY: &[u8] = b"";
+
+const PROCESS_TYPE_GC: &str = "gc";
+const PROCESS_TYPE_SCAN: &str = "scan";
 
 /// Provides safe point.
 /// TODO: Give it a better name?
@@ -701,6 +704,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// Starts working in another thread. This function moves the `GCManager` and returns a handler
     /// of it.
     fn start(mut self) -> Result<GCManagerHandle> {
+        set_status_metrics(GCManagerState::Init);
+        self.initialize();
+
         let (tx, rx) = mpsc::channel();
         self.gc_manager_ctx.set_stop_signal_receiver(rx);
         let res: Result<_> = ThreadBuilder::new()
@@ -718,17 +724,21 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// Polls safe point and does GC in a loop, again and again, until interrupted by invoking
     /// `GCManagerHandle::stop`.
     fn run(&mut self) {
-        info!("gc-manager is started");
+        debug!("gc-manager is started");
         self.run_impl().unwrap_err();
         set_status_metrics(GCManagerState::None);
-        info!("gc-manager is stopped");
+        debug!("gc-manager is stopped");
     }
 
     fn run_impl(&mut self) -> GCManagerResult<()> {
-        set_status_metrics(GCManagerState::Init);
-        self.initialize()?;
-
         loop {
+            AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                .with_label_values(&[PROCESS_TYPE_GC])
+                .set(0);
+            AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                .with_label_values(&[PROCESS_TYPE_SCAN])
+                .set(0);
+
             set_status_metrics(GCManagerState::Idle);
             self.wait_for_next_safe_point()?;
 
@@ -745,12 +755,11 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// The only task of initializing is to simply get the current safe point as the initial value
     /// of `safe_point`. TiKV won't do any GC automatically until the first time `safe_point` was
     /// updated to a greater value than initial value.
-    fn initialize(&mut self) -> GCManagerResult<()> {
-        info!("gc-manager is initializing");
+    fn initialize(&mut self) {
+        debug!("gc-manager is initializing");
         self.safe_point = 0;
         self.try_update_safe_point();
-        info!("gc-manager started"; "safe_point" => self.safe_point);
-        Ok(())
+        debug!("gc-manager started"; "safe_point" => self.safe_point);
     }
 
     /// Waits until the safe_point updates. Returns the new safe point.
@@ -791,6 +800,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             Ordering::Greater => {
                 debug!("gc_worker: update safe point"; "safe_point" => safe_point);
                 self.safe_point = safe_point;
+                AUTO_GC_SAFE_POINT_GAUGE.set(safe_point as i64);
                 true
             }
         }
@@ -868,7 +878,15 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     info!(
                         "gc_worker: auto gc rewinds"; "processed_regions" => processed_regions
                     );
+
                     processed_regions = 0;
+                    // Set the metric to zero to show that rewinding has happened.
+                    AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                        .with_label_values(&[PROCESS_TYPE_GC])
+                        .set(0);
+                    AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                        .with_label_values(&[PROCESS_TYPE_SCAN])
+                        .set(0);
                 }
             } else {
                 // We are not going to rewind, So we will stop if `progress` reaches `end`.
@@ -964,6 +982,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             );
         }
         *processed_regions += 1;
+        AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+            .with_label_values(&[PROCESS_TYPE_GC])
+            .inc();
 
         Ok(next_key)
     }
@@ -979,15 +1000,17 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         let res = self.cfg.region_info_provider.seek_region(
             key.as_encoded(),
             Box::new(move |iter| {
+                let mut scanned_regions = 0;
                 for info in iter {
+                    scanned_regions += 1;
                     if info.role == StateRole::Leader {
                         if find_peer(&info.region, store_id).is_some() {
-                            let _ = tx.send(Some(info.region.clone()));
+                            let _ = tx.send((Some(info.region.clone()), scanned_regions));
                             return;
                         }
                     }
                 }
-                let _ = tx.send(None);
+                let _ = tx.send((None, scanned_regions));
             }),
         );
 
@@ -998,7 +1021,14 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             return (None, None);
         };
 
-        match rx.recv() {
+        let seek_region_res = rx.recv().map(|(region, scanned_regions)| {
+            AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                .with_label_values(&[PROCESS_TYPE_SCAN])
+                .add(scanned_regions);
+            region
+        });
+
+        match seek_region_res {
             Ok(Some(mut region)) => {
                 let peer = find_peer(&region, store_id).unwrap().clone();
                 let end_key = region.take_end_key();
@@ -1248,7 +1278,7 @@ mod tests {
         let regions: BTreeMap<_, _> = regions
             .into_iter()
             .map(|(start_key, end_key, id)| {
-                let mut r = metapb::Region::new();
+                let mut r = metapb::Region::default();
                 r.set_id(id);
                 r.set_start_key(start_key.clone());
                 r.set_end_key(end_key);
@@ -1263,7 +1293,7 @@ mod tests {
         for safe_point in &safe_points {
             test_util.add_next_safe_point(*safe_point);
         }
-        test_util.gc_manager.as_mut().unwrap().initialize().unwrap();
+        test_util.gc_manager.as_mut().unwrap().initialize();
 
         test_util.gc_manager.as_mut().unwrap().gc_a_round().unwrap();
         test_util.stop();
@@ -1339,7 +1369,7 @@ mod tests {
         assert_eq!(gc_manager.safe_point, 0);
         test_util.add_next_safe_point(0);
         test_util.add_next_safe_point(5);
-        gc_manager.initialize().unwrap();
+        gc_manager.initialize();
         assert_eq!(gc_manager.safe_point, 0);
         assert!(gc_manager.try_update_safe_point());
         assert_eq!(gc_manager.safe_point, 5);

@@ -10,7 +10,6 @@ use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
-use prometheus::local::LocalHistogram;
 use time::Timespec;
 
 use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
@@ -186,7 +185,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     fn redirect(&self, mut cmd: RaftCommand) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
-        let mut err = errorpb::Error::new();
+        let mut err = errorpb::Error::default();
         match self.router.send(cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
@@ -204,7 +203,7 @@ impl<C: ProposalRouter> LocalReader<C> {
             }
         }
 
-        let mut resp = RaftCmdResponse::new();
+        let mut resp = RaftCmdResponse::default();
         resp.mut_header().set_error(err);
         let read_resp = ReadResponse {
             response: resp,
@@ -307,6 +306,7 @@ impl<C: ProposalRouter> LocalReader<C> {
                         self.delegates
                             .borrow_mut()
                             .insert(region_id, Some(delegate));
+                        metrics.local_executed_requests += 1;
                         return;
                     }
                     break;
@@ -369,7 +369,7 @@ impl<C: ProposalRouter> LocalReader<C> {
                     | CmdType::Put
                     | CmdType::DeleteRange
                     | CmdType::Prewrite
-                    | CmdType::IngestSST
+                    | CmdType::IngestSst
                     | CmdType::ReadIndex
                     | CmdType::Invalid => return false,
                 }
@@ -431,9 +431,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
 struct ReadMetrics {
-    requests_wait_duration: LocalHistogram,
-    batch_requests_size: LocalHistogram,
-
+    local_executed_requests: i64,
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: i64,
     rejected_by_peer_id_mismatch: i64,
@@ -452,8 +450,7 @@ struct ReadMetrics {
 impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
-            requests_wait_duration: LOCAL_READ_WAIT_DURATION.local(),
-            batch_requests_size: LOCAL_READ_BATCH_REQUESTS.local(),
+            local_executed_requests: 0,
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
             rejected_by_term_mismatch: 0,
@@ -478,8 +475,6 @@ impl ReadMetrics {
     }
 
     fn flush(&mut self) {
-        self.requests_wait_duration.flush();
-        self.batch_requests_size.flush();
         if self.rejected_by_store_id_mismatch > 0 {
             LOCAL_READ_REJECT
                 .with_label_values(&["store_id_mismatch"])
@@ -534,11 +529,9 @@ impl ReadMetrics {
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
         }
-        if self.rejected_by_cache_miss > 0 {
-            LOCAL_READ_REJECT
-                .with_label_values(&["cache_miss"])
-                .inc_by(self.rejected_by_cache_miss);
-            self.rejected_by_cache_miss = 0;
+        if self.local_executed_requests > 0 {
+            LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
+            self.local_executed_requests = 0;
         }
     }
 }
@@ -549,7 +542,7 @@ mod tests {
     use std::thread;
 
     use kvproto::raft_cmdpb::*;
-    use tempdir::TempDir;
+    use tempfile::{Builder, TempDir};
     use time::Duration;
 
     use crate::raftstore::store::util::Lease;
@@ -569,7 +562,7 @@ mod tests {
         LocalReader<SyncSender<RaftCommand>>,
         Receiver<RaftCommand>,
     ) {
-        let path = TempDir::new(path).unwrap();
+        let path = Builder::new().prefix(path).tempdir().unwrap();
         let db =
             rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
@@ -589,7 +582,7 @@ mod tests {
         pr_ids
             .into_iter()
             .map(|id| {
-                let mut pr = metapb::Peer::new();
+                let mut pr = metapb::Peer::default();
                 pr.set_store_id(store_id);
                 pr.set_id(id);
                 pr
@@ -638,12 +631,12 @@ mod tests {
         // from "" to "",
         // epoch 1, 1,
         // term 6.
-        let mut region1 = metapb::Region::new();
+        let mut region1 = metapb::Region::default();
         region1.set_id(1);
         let prs = new_peers(store_id, vec![2, 3, 4]);
         region1.set_peers(prs.clone().into());
         let epoch13 = {
-            let mut ep = metapb::RegionEpoch::new();
+            let mut ep = metapb::RegionEpoch::default();
             ep.set_conf_ver(1);
             ep.set_version(3);
             ep
@@ -653,14 +646,14 @@ mod tests {
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
 
-        let mut cmd = RaftCmdRequest::new();
-        let mut header = RaftRequestHeader::new();
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
         header.set_region_id(1);
         header.set_peer(leader2.clone());
         header.set_region_epoch(epoch13.clone());
         header.set_term(term6);
         cmd.set_header(header);
-        let mut req = Request::new();
+        let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
         cmd.set_requests(vec![req].into());
 

@@ -1,15 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{DeadlockFuture, Error, Result};
-use crate::tikv_util::security::SecurityManager;
-use futures::future;
 use futures::unsync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
 use grpcio::{ChannelBuilder, EnvBuilder, WriteFlags};
 use kvproto::deadlock::*;
-use kvproto::deadlock_grpc::DeadlockClient;
 use std::sync::Arc;
 use std::time::Duration;
+use tikv_util::security::SecurityManager;
 
 pub type Callback = Box<dyn Fn(DeadlockResponse)>;
 
@@ -40,16 +38,6 @@ impl Client {
             addr: addr.to_owned(),
             client,
             sender: None,
-        }
-    }
-
-    pub fn get_wait_for_entries(&self) -> DeadlockFuture<WaitForEntriesResponse> {
-        match self
-            .client
-            .get_wait_for_entries_async(&WaitForEntriesRequest::new())
-        {
-            Ok(f) => Box::new(f.map_err(Error::Grpc)),
-            Err(e) => Box::new(future::err(Error::Grpc(e))),
         }
     }
 
@@ -87,6 +75,6 @@ impl Client {
             .as_ref()
             .unwrap()
             .unbounded_send(req)
-            .map_err(|e| Error::Other(Box::new(e)))
+            .map_err(|e| Error::Other(box_err!(e)))
     }
 }

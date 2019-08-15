@@ -10,13 +10,6 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref OUTDATED_REQ_WAIT_TIME: HistogramVec = register_histogram_vec!(
-        "tikv_coprocessor_outdated_request_wait_seconds",
-        "Bucketed histogram of outdated coprocessor request wait duration",
-        &["req"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
-    )
-    .unwrap();
     pub static ref COPR_REQ_HANDLE_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handle_seconds",
         "Bucketed histogram of coprocessor handle request duration",
@@ -56,18 +49,15 @@ lazy_static! {
         &["req", "metric"]
     )
     .unwrap();
-    pub static ref COPR_EXECUTOR_COUNT: IntCounterVec = register_int_counter_vec!(
-        "tikv_coprocessor_executor_count",
-        "Total number of each executor",
-        &["type"]
+    pub static ref COPR_DAG_REQ_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_coprocessor_dag_request_count",
+        "Total number of DAG requests",
+        &["vec_type"]
     )
     .unwrap();
-
-    // TODO: Use static metrics.
-    pub static ref COPR_GET_OR_SCAN_COUNT: IntCounterVec = register_int_counter_vec!(
-        "tikv_coprocessor_get_or_scan_count",
-        "Total number of rocksdb query of get or scan count",
-        &["type"]
+    pub static ref COPR_RESP_SIZE: IntCounter = register_int_counter!(
+        "tikv_coprocessor_response_bytes",
+        "Total bytes of response body"
     )
     .unwrap();
 }

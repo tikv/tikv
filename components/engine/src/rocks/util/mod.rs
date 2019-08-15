@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use self::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE, ROCKSDB_TOTAL_SST_FILES_SIZE,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE,
+    ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE,
+    ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 use crate::rocks::load_latest_options;
 use crate::rocks::set_external_sst_file_global_seq_no;
@@ -265,24 +267,37 @@ pub fn db_exist(path: &str) -> bool {
 /// Gets total used size of rocksdb engine, including:
 /// *  total size (bytes) of all SST files.
 /// *  total size (bytes) of active and unflushed immutable memtables.
+/// *  total size (bytes) of all blob files.
 ///
 pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
     for cf in ALL_CFS {
         let handle = get_cf_handle(&engine, cf).unwrap();
-        let cf_used_size = engine
-            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
-            .expect("rocksdb is too old, missing total-sst-files-size property");
-
-        used_size += cf_used_size;
-
-        // For memtable
-        if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
-        {
-            used_size += mem_table;
-        }
+        used_size += get_engine_cf_used_size(&engine, handle);
     }
     used_size
+}
+
+pub fn get_engine_cf_used_size(engine: &DB, handle: &CFHandle) -> u64 {
+    let mut cf_used_size = engine
+        .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+        .expect("rocksdb is too old, missing total-sst-files-size property");
+    // For memtable
+    if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
+        cf_used_size += mem_table;
+    }
+    // For blob files
+    if let Some(live_blob) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE)
+    {
+        cf_used_size += live_blob;
+    }
+    if let Some(obsolete_blob) =
+        engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
+    {
+        cf_used_size += obsolete_blob;
+    }
+
+    cf_used_size
 }
 
 /// Gets engine's compression ratio at given level.
@@ -604,11 +619,11 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::rocks::{
-        ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
+        ColumnFamilyOptions, DBOptions, IngestExternalFileOptions, SstWriterBuilder,
         TitanDBOptions, Writable, DB,
     };
-    use crate::CF_DEFAULT;
-    use tempdir::TempDir;
+    use crate::{CfName, CF_DEFAULT};
+    use tempfile::Builder;
 
     #[test]
     fn test_cfs_diff() {
@@ -628,7 +643,10 @@ mod tests {
 
     #[test]
     fn test_new_engine_opt() {
-        let path = TempDir::new("_util_rocksdb_test_check_column_families").expect("");
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_check_column_families")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         // create db when db not exist
@@ -693,7 +711,10 @@ mod tests {
 
     #[test]
     fn test_compression_ratio() {
-        let path = TempDir::new("_util_rocksdb_test_compression_ratio").expect("");
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_compression_ratio")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
         let opts = DBOptions::new();
@@ -718,10 +739,12 @@ mod tests {
         // Just do nothing
     }
 
-    fn gen_sst_with_kvs(db: &DB, cf: &CFHandle, path: &str, kvs: &[(&str, &str)]) {
-        let opts = db.get_options_cf(cf).clone();
-        let mut writer = SstFileWriter::new(EnvOptions::new(), opts);
-        writer.open(path).unwrap();
+    fn gen_sst_with_kvs(db: Arc<DB>, cf: CfName, path: &str, kvs: &[(&str, &str)]) {
+        let mut writer = SstWriterBuilder::new()
+            .set_db(db)
+            .set_cf(cf)
+            .build(path)
+            .unwrap();
         for &(k, v) in kvs {
             writer.put(k.as_bytes(), v.as_bytes()).unwrap();
         }
@@ -738,22 +761,30 @@ mod tests {
         db_opts: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) {
-        let path = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion").expect("");
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_prepare_sst_for_ingestion")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let sst_dir = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion_sst").expect("");
+        let sst_dir = Builder::new()
+            .prefix("_util_rocksdb_test_prepare_sst_for_ingestion_sst")
+            .tempdir()
+            .unwrap();
         let sst_path = sst_dir.path().join("abc.sst");
         let sst_clone = sst_dir.path().join("abc.sst.clone");
 
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
         let cf_name = "default";
-        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
+        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts)
+            .map(Arc::new)
+            .unwrap();
         let cf = db.cf_handle(cf_name).unwrap();
         let mut ingest_opts = IngestExternalFileOptions::new();
         ingest_opts.move_files(true);
 
-        gen_sst_with_kvs(&db, cf, sst_path.to_str().unwrap(), &kvs);
+        gen_sst_with_kvs(db.clone(), cf_name, sst_path.to_str().unwrap(), &kvs);
         let size = fs::metadata(&sst_path).unwrap().len();
         let checksum = calc_crc32(&sst_path).unwrap();
 
@@ -807,7 +838,10 @@ mod tests {
 
     #[test]
     fn test_compact_files_in_range() {
-        let temp_dir = TempDir::new("test_compact_files_in_range").unwrap();
+        let temp_dir = Builder::new()
+            .prefix("test_compact_files_in_range")
+            .tempdir()
+            .unwrap();
 
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);

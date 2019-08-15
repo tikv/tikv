@@ -72,7 +72,7 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
 /// Task is a running command.
 pub struct Task {
     pub cid: u64,
-    pub tag: &'static str,
+    pub tag: CommandKind,
 
     cmd: Command,
     ts: u64,
@@ -165,18 +165,14 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
         match snapshot {
             Ok(snapshot) => {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[task.tag, "snapshot_ok"])
-                    .inc();
+                SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_ok.inc();
 
                 self.process_by_worker(cb_ctx, snapshot, task);
             }
             Err(err) => {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[task.tag, "snapshot_err"])
-                    .inc();
+                SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_err.inc();
 
-                error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool().pool.spawn(move || {
                     notify_scheduler(
                         self.take_scheduler(),
@@ -194,9 +190,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[task.tag, "process"])
-            .inc();
+        SCHED_STAGE_COUNTER_VEC.get(task.tag).process.inc();
         debug!(
             "process cmd with snapshot";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -221,7 +215,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             } else {
                 with_tls_engine(|engine| self.process_write(engine, snapshot, task))
             };
-            tls_add_statistics(tag, &statistics);
+            tls_add_statistics(tag.get_str(), &statistics);
             slow_log!(
                 timer,
                 "[region {}] scheduler handle command: {}, ts: {}",
@@ -230,7 +224,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 ts
             );
 
-            tls_collect_read_duration(tag, read_duration.elapsed());
+            tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
             future::ok::<_, ()>(())
         });
     }
@@ -278,9 +272,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 pr,
                 lock_info,
             }) => {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "write"])
-                    .inc();
+                SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if lock_info.is_some() {
                     let (lock, is_first_lock) = lock_info.unwrap();
@@ -314,18 +306,16 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                                 },
                             );
                             KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                .with_label_values(&[tag])
+                                .get(tag)
                                 .observe(rows as f64);
                             future::ok::<_, ()>(())
                         })
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
-                        SCHED_STAGE_COUNTER_VEC
-                            .with_label_values(&[tag, "async_write_err"])
-                            .inc();
+                        SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
-                        error!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                        info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else {
@@ -336,9 +326,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             // Write prepare failure typically means conflicting transactions are detected. Delivers the
             // error to the callback, and releases the latches.
             Err(err) => {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "prepare_write_err"])
-                    .inc();
+                SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
 
                 debug!("write command failed at prewrite"; "cid" => cid);
                 Msg::FinishedWithErr { cid, err, tag }
@@ -425,14 +413,14 @@ fn process_read_impl<E: Engine>(
             let (kv_pairs, _) = result?;
             let mut locks = Vec::with_capacity(kv_pairs.len());
             for (key, lock) in kv_pairs {
-                let mut lock_info = LockInfo::new();
+                let mut lock_info = LockInfo::default();
                 lock_info.set_primary_lock(lock.primary);
                 lock_info.set_lock_version(lock.ts);
                 lock_info.set_key(key.into_raw()?);
                 locks.push(lock_info);
             }
 
-            tls_collect_keyread_histogram_vec(tag, locks.len() as f64);
+            tls_collect_keyread_histogram_vec(tag.get_str(), locks.len() as f64);
 
             Ok(ProcessResult::Locks { locks })
         }
@@ -457,7 +445,7 @@ fn process_read_impl<E: Engine>(
             );
             statistics.add(reader.get_statistics());
             let (kv_pairs, has_remain) = result?;
-            tls_collect_keyread_histogram_vec(tag, kv_pairs.len() as f64);
+            tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
 
             if kv_pairs.is_empty() {
                 Ok(ProcessResult::Res)
@@ -724,7 +712,7 @@ fn process_write_impl<S: Snapshot>(
             let wait_table_is_empty = wait_table_is_empty();
             // Map (txn's start_ts, is_pessimistic_txn) => Option<key_hashes>
             let mut txn_to_keys = if waiter_mgr_scheduler.is_some() {
-                Some(HashMap::new())
+                Some(HashMap::default())
             } else {
                 None
             };
@@ -856,14 +844,13 @@ pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
     scheduler.on_msg(msg);
 }
 
-// Make clippy happy.
-type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
+type LockWritesVals = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
 
 fn find_mvcc_infos_by_key<S: Snapshot>(
     reader: &mut MvccReader<S>,
     key: &Key,
     mut ts: u64,
-) -> Result<MultipleReturnValue> {
+) -> Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
     let lock = reader.load_lock(key)?;

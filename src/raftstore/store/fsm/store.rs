@@ -6,7 +6,7 @@ use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
-use kvproto::import_sstpb::SSTMeta;
+use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
@@ -22,7 +22,6 @@ use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::import::SSTImporter;
-use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::config::Config;
@@ -30,7 +29,7 @@ use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
@@ -45,9 +44,10 @@ use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
-    ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
-    SplitCheckRunner, SplitCheckTask,
+    ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner,
+    RegionTask, SplitCheckRunner, SplitCheckTask,
 };
+use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
     SnapshotDeleter, StoreMsg, StoreTick,
@@ -56,6 +56,7 @@ use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
+use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -215,7 +216,6 @@ pub struct PollContext<T, C: 'static> {
     pub raft_wb: WriteBatch,
     pub pending_count: usize,
     pub sync_log: bool,
-    pub is_busy: bool,
     pub has_ready: bool,
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
@@ -316,7 +316,7 @@ impl<T: Transport, C> PollContext<T, C> {
             "msg_type" => ?msg_type,
         );
 
-        let mut gc_msg = RaftMessage::new();
+        let mut gc_msg = RaftMessage::default();
         gc_msg.set_region_id(region_id);
         gc_msg.set_from_peer(to_peer.clone());
         gc_msg.set_to_peer(from_peer.clone());
@@ -530,13 +530,13 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         let dur = self.timer.elapsed();
-        if !self.poll_ctx.is_busy {
+        if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
                 self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
                     * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
             );
             if dur >= election_timeout {
-                self.poll_ctx.is_busy = true;
+                self.poll_ctx.store_stat.is_busy = true;
             }
         }
 
@@ -716,8 +716,8 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut region_peers = vec![];
 
         let t = Instant::now();
-        let mut kv_wb = WriteBatch::new();
-        let mut raft_wb = WriteBatch::new();
+        let mut kv_wb = WriteBatch::default();
+        let mut raft_wb = WriteBatch::default();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
@@ -897,11 +897,10 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
-            kv_wb: WriteBatch::new(),
+            kv_wb: WriteBatch::default(),
             raft_wb: WriteBatch::with_capacity(4 * 1024),
             pending_count: 0,
             sync_log: false,
-            is_busy: false,
             has_ready: false,
             ready_res: Vec::new(),
             need_flush_trans: false,
@@ -1059,15 +1058,16 @@ impl RaftBatchSystem {
             mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
         }
         self.router.register_all(mailboxes);
+
         // Make sure Msg::Start is the first message each FSM received.
+        for addr in address {
+            self.router.force_send(addr, PeerMsg::Start).unwrap();
+        }
         self.router
             .send_control(StoreMsg::Start {
                 store: store.clone(),
             })
             .unwrap();
-        for addr in address {
-            self.router.force_send(addr, PeerMsg::Start).unwrap();
-        }
 
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
@@ -1181,7 +1181,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
-        // Check if the target peer is tomebtone.
+        // Check if the target peer is tombstone.
         let state_key = keys::region_state_key(region_id);
         let local_state: RegionLocalState =
             match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
@@ -1195,7 +1195,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             if util::is_first_vote_msg(msg.get_message()) {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 // Last check on whether target peer is created, otherwise, the
-                // vote message will never be comsumed.
+                // vote message will never be consumed.
                 if meta.regions.contains_key(&region_id) {
                     return Ok(false);
                 }
@@ -1560,7 +1560,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 
     fn store_heartbeat_pd(&mut self) {
-        let mut stats = StoreStats::new();
+        let mut stats = StoreStats::default();
 
         let used_size = self.ctx.snap_mgr.get_total_snap_size();
         stats.set_used_size(used_size);
@@ -1757,7 +1757,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
-    fn on_validate_sst_result(&mut self, ssts: Vec<SSTMeta>) {
+    fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() {
             return;
         }
@@ -1884,7 +1884,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .consistency_check_time
             .insert(target_region_id, Instant::now());
         let mut request = new_admin_request(target_region_id, target_peer);
-        let mut admin = AdminRequest::new();
+        let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::ComputeHash);
         request.set_admin_request(admin);
 
@@ -2054,11 +2054,10 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::collections::HashMap;
 
     use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::storage::kv::CompactedEvent;
-    use protobuf::RepeatedField;
+    use tikv_util::collections::HashMap;
 
     use super::*;
 
@@ -2109,13 +2108,13 @@ mod tests {
     fn test_is_range_covered() {
         let meta = vec![(b"b", b"d"), (b"d", b"e"), (b"e", b"f"), (b"f", b"h")];
         let mut region_ranges = BTreeMap::new();
-        let mut region_peers = HashMap::new();
+        let mut region_peers = HashMap::default();
 
         {
             for (i, (start, end)) in meta.into_iter().enumerate() {
-                let mut region = metapb::Region::new();
-                let peer = metapb::Peer::new();
-                region.set_peers(RepeatedField::from_vec(vec![peer]));
+                let mut region = metapb::Region::default();
+                let peer = metapb::Peer::default();
+                region.set_peers(vec![peer].into());
                 region.set_start_key(start.to_vec());
                 region.set_end_key(end.to_vec());
 
@@ -2149,9 +2148,9 @@ mod tests {
         region_peers.clear();
         {
             for (i, (start, end)) in meta.into_iter().enumerate() {
-                let mut region = metapb::Region::new();
-                let peer = metapb::Peer::new();
-                region.set_peers(RepeatedField::from_vec(vec![peer]));
+                let mut region = metapb::Region::default();
+                let peer = metapb::Peer::default();
+                region.set_peers(vec![peer].into());
                 region.set_start_key(start.to_vec());
                 region.set_end_key(end.to_vec());
 

@@ -11,7 +11,6 @@ use engine::{util, Range};
 use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use tikv_util::escape;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 
@@ -173,7 +172,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
             );
             // when meet large region use approximate way to produce split keys
             if region_size >= self.region_max_size * self.split_limit * 2 {
-                policy = CheckPolicy::APPROXIMATE
+                policy = CheckPolicy::Approximate
             }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
@@ -287,8 +286,8 @@ fn get_approximate_split_keys_cf(
             split_size,
             collection.len(),
             cfname,
-            escape(&start),
-            escape(&end)
+            hex::encode_upper(&start),
+            hex::encode_upper(&end)
         ));
     }
     keys.sort();
@@ -359,7 +358,7 @@ pub mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::{iter, u64};
-    use tempdir::TempDir;
+    use tempfile::Builder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
 
@@ -396,7 +395,7 @@ pub mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -409,11 +408,11 @@ pub mod tests {
             .collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(1);
         region.set_start_key(vec![]);
         region.set_end_key(vec![]);
-        region.mut_peers().push(Peer::new());
+        region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
@@ -435,7 +434,7 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
             Ok((region_id, CasualMessage::RegionApproximateSize { .. })) => {
@@ -453,7 +452,7 @@ pub mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(&rx, &region, vec![b"0006".to_vec()]);
 
         // so split keys will be [z0006, z0012]
@@ -462,7 +461,7 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
         engine.flush(true).unwrap();
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(&rx, &region, vec![b"0006".to_vec(), b"0012".to_vec()]);
 
         // for test batch_split_limit
@@ -472,7 +471,7 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
         engine.flush(true).unwrap();
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
         must_split_at(
             &rx,
             &region,
@@ -487,12 +486,12 @@ pub mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
+        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::Scan));
     }
 
     #[test]
     fn test_checker_with_same_max_and_split_size() {
-        let mut checker = Checker::new(24, 24, 1, CheckPolicy::SCAN);
+        let mut checker = Checker::new(24, 24, 1, CheckPolicy::Scan);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         loop {
@@ -507,7 +506,7 @@ pub mod tests {
 
     #[test]
     fn test_checker_with_max_twice_bigger_than_split_size() {
-        let mut checker = Checker::new(20, 10, 1, CheckPolicy::SCAN);
+        let mut checker = Checker::new(20, 10, 1, CheckPolicy::Scan);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         for _ in 0..2 {
@@ -521,10 +520,10 @@ pub mod tests {
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_id(id);
         peer.set_store_id(id);
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(id);
         region.set_start_key(start_key);
         region.set_end_key(end_key);
@@ -534,7 +533,10 @@ pub mod tests {
 
     #[test]
     fn test_get_approximate_split_keys_error() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();
@@ -570,7 +572,10 @@ pub mod tests {
 
     #[test]
     fn test_get_approximate_split_keys() {
-        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let tmp = Builder::new()
+            .prefix("test_raftstore_util")
+            .tempdir()
+            .unwrap();
         let path = tmp.path().to_str().unwrap();
 
         let db_opts = DBOptions::new();
@@ -684,7 +689,10 @@ pub mod tests {
 
     #[test]
     fn test_region_approximate_size() {
-        let path = TempDir::new("_test_raftstore_region_approximate_size").expect("");
+        let path = Builder::new()
+            .prefix("_test_raftstore_region_approximate_size")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -721,8 +729,10 @@ pub mod tests {
 
     #[test]
     fn test_region_maybe_inaccurate_approximate_size() {
-        let path =
-            TempDir::new("_test_raftstore_region_maybe_inaccurate_approximate_size").expect("");
+        let path = Builder::new()
+            .prefix("_test_raftstore_region_maybe_inaccurate_approximate_size")
+            .tempdir()
+            .unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();

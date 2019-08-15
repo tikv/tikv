@@ -6,8 +6,8 @@ use futures::{Future, Stream};
 use protobuf::Message;
 
 use kvproto::coprocessor::{Request, Response};
-use tipb::schema::ColumnInfo;
-use tipb::select::{SelectResponse, StreamResponse};
+use tipb::ColumnInfo;
+use tipb::{SelectResponse, StreamResponse};
 
 use tikv::coprocessor::Endpoint;
 use tikv::storage::Engine;
@@ -33,7 +33,7 @@ where
 {
     let resp = handle_request(cop, req);
     assert!(!resp.get_data().is_empty(), "{:?}", resp);
-    let mut sel_resp = SelectResponse::new();
+    let mut sel_resp = SelectResponse::default();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp
 }
@@ -53,7 +53,7 @@ where
             let resp = resp.unwrap();
             check_range(&resp);
             assert!(!resp.get_data().is_empty());
-            let mut stream_resp = StreamResponse::new();
+            let mut stream_resp = StreamResponse::default();
             stream_resp.merge_from_bytes(resp.get_data()).unwrap();
             stream_resp
         })

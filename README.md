@@ -11,7 +11,7 @@ The design of TiKV is inspired by some great distributed systems from Google, su
 
 ![cncf_logo](images/cncf.png)
 
-TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
+TiKV is an incubating project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2019/05/21/toc-votes-to-move-tikv-into-cncf-incubator/).
 
 ---
 
@@ -39,6 +39,14 @@ TiKV has the following key features:
 
     Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transactions, support for RDBMS, and NoSQL design patterns.
 
+## Docs
+
+For instructions on deployment, configuration, and maintenance of TiKV, see our Documentation on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) or on our [website](https://tikv.org/docs/3.0/tasks/getting-started/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
+
+> **Note:**
+>
+> We are currently migrating our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to the [official website](https://tikv.org/docs). We'd appreciate if you could check out the new look on the website and offer your feedback [here](https://github.com/tikv/website). The Wiki page will be discontinued when the migration is finished. Stay tuned!
+
 ## TiKV Adopters
 
 You can view the list of [TiKV Adopters](docs/adopters.md).
@@ -62,31 +70,38 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
 
-We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/TiKV-Documentation).
+We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/).
 
 ### Testing deployment
 
-- [Try TiKV and TiDB](https://github.com/pingcap/docs/blob/master/op-guide/docker-compose.md)
+- [Try TiKV and TiDB](https://github.com/pingcap/docs/blob/master/dev/how-to/get-started/deploy-tidb-from-docker-compose.md)
 
     You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://github.com/pingcap/docs).
 
 - Try TiKV separately
-    - [Deploy TiKV Using Docker Compose](docs/op-guide/deploy-tikv-using-docker-compose.md): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
-    - [Deploy TiKV Using Docker](docs/op-guide/deploy-tikv-using-docker.md): To deploy a multi-node TiKV testing cluster using Docker
-    - [Deploy TiKV Using Binary Files](docs/op-guide/deploy-tikv-using-binary.md): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
+    - [Deploy TiKV Using Docker Compose](docs/how-to/deploy/using-docker-compose.md): To quickly test TiKV separately without TiDB using [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) on a single machine
+    - [Deploy TiKV Using Docker](docs/how-to/deploy/using-docker.md): To deploy a multi-node TiKV testing cluster using Docker
+    - [Deploy TiKV Using Binary Files](docs/how-to/deploy/using-binary.md): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
 
 ### Production deployment
 
 For the production environment, use [Ansible](https://github.com/pingcap/tidb-ansible) to deploy the cluster.
 
-- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/op-guide/ansible-deployment.md)
-- [Deploy TiKV separately Using Ansible](docs/op-guide/deploy-tikv-using-ansible.md)
+- [Deploy TiDB Using Ansible](https://github.com/pingcap/docs/blob/master/dev/how-to/deploy/orchestrated/ansible.md)
+- [Deploy TiKV separately Using Ansible](docs/how-to/deploy/using-ansible.md)
 
 ## Client drivers
 
-Currently, the only interface to TiKV is the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
+Currently, the interfaces to TiKV are the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
 
-If you want to try the Go client, see [Try Two Types of APIs](docs/clients/go-client-api.md).
+These are the clients for TiKV:
+
+- [Go](https://github.com/tikv/client-go) (The most stable and widely used)
+- [Java](https://github.com/tikv/client-java)
+- [Rust](https://github.com/tikv/client-rust)
+- [C](https://github.com/tikv/client-rust)
+
+If you want to try the Go client, see [Try Two Types of APIs](docs/reference/clients/go-client-api.md).
 
 ## Setting up a development workspace
 
@@ -100,9 +115,11 @@ To build TiKV you'll need to at least have the following installed:
 * `rustup` - Rust toolchain manager
 * `awk` - Pattern scanning/processing language
 * `cmake` - Build tool (required for gRPC)
-* `go` - Programming language (required for gRPC)
 * `make` - Build tool (run common workflows)
-* `clang` or `gcc` - C compiler toolchain
+
+If you are targeting other platforms than x86_64 linux, following library is also required.
+
+* `llvm` and `clang` - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb)
 
 ### Getting the repository
 
@@ -156,13 +173,29 @@ cargo test $TESTNAME
 
 Our CI systems automatically test all the pull requests, so making sure the full suite passes the test before creating your PR is not strictly required. **All merged PRs must have passed CI test.**
 
+Note that, to reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include line numbers only. The easiest way to enable debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo).
+
+```bash
+RUSTFLAGS=-Cdebuginfo=2 make
+RUSTFLAGS=-Cdebuginfo=2 cargo build
+```
+
+When building with make, cargo will automatically use [pipelined][p] compilation to increase the paralellism of the build. To turn on pipelining while using cargo directly,
+set `CARGO_BUILD_PIPELINING=true`:
+
+```bash
+CARGO_BUILD_PIPELINING=true cargo build
+```
+
+[p]: https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199
+
 ### Getting the rest of the system working
 
-To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd)) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
+To get [PD](https://github.com/pingcap/pd) working with TiKV, we suggest you follow the instructions in [Deploy TiKV Using Binary Files](docs/how-to/deploy/using-binary.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
 
 ### Configuration
 
-Read our configuration guide to learn about various [configuration options](https://github.com/tikv/tikv/tree/master/docs/op-guide).
+Read our configuration guide to learn about various [configuration options](./docs/reference/configuration). Also, here is a [configuration template](./etc/config-template.toml).
 
 ## Contributing
 

@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{error, result};
-use tikv_util::escape;
 
 quick_error! {
     #[derive(Debug)]
@@ -16,8 +15,8 @@ quick_error! {
         NotInRange( key: Vec<u8>, regoin_id: u64, start: Vec<u8>, end: Vec<u8>) {
             description("Key is out of range")
             display(
-                "Key {:?} is out of [region {}] [{:?}, {:?})",
-                escape(&key), regoin_id, escape(&start), escape(&end)
+                "Key {} is out of [region {}] [{}, {})",
+                hex::encode_upper(&key), regoin_id, hex::encode_upper(&start), hex::encode_upper(&end)
             )
         }
         Protobuf(err: protobuf::ProtobufError) {
@@ -52,8 +51,8 @@ impl From<Error> for raft::Error {
 
 impl From<Error> for kvproto::errorpb::Error {
     fn from(err: Error) -> kvproto::errorpb::Error {
-        let mut errorpb = kvproto::errorpb::Error::new();
-        errorpb.set_message(error::Error::description(&err).to_owned());
+        let mut errorpb = kvproto::errorpb::Error::default();
+        errorpb.set_message(format!("{}", err));
 
         if let Error::NotInRange(key, region_id, start_key, end_key) = err {
             errorpb.mut_key_not_in_region().set_key(key);
