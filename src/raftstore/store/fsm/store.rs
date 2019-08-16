@@ -1115,8 +1115,11 @@ impl RaftBatchSystem {
             .consistency_check_worker
             .start(consistency_check_runner));
 
-        let mvcc_gc_runner = MvccGcRunner::new();
-        box_try!(workers.mvcc_gc_worker.start(mvcc_gc_runner));
+        let mvcc_gc_runner = MvccGcRunner::new(Arc::clone(&engines.kv));
+        let mvcc_gc_timer = MvccGcRunner::new_timer();
+        box_try!(workers
+            .mvcc_gc_worker
+            .start_with_timer(mvcc_gc_runner, mvcc_gc_timer));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);

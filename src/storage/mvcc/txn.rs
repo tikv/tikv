@@ -693,6 +693,9 @@ impl CompactionFilter for WriteCompactionFilter {
         _: &mut bool,
     ) -> bool {
         let safe_point = self.safe_point.load(Ordering::Acquire);
+        if safe_point == 0 {
+            return false;
+        }
 
         let key_prefix = match Key::split_on_ts_for(key) {
             Ok((_, ts)) if ts > safe_point => return false,
@@ -712,7 +715,7 @@ impl CompactionFilter for WriteCompactionFilter {
         if !self.remove_older {
             // here `filtered` must be false.
             match write_type {
-                WriteType::Rollback | WriteType::Lock => {}
+                WriteType::Rollback | WriteType::Lock => filtered = true,
                 WriteType::Delete => {
                     self.remove_older = true;
                     filtered = level == self.max_level;
@@ -730,6 +733,16 @@ impl CompactionFilter for WriteCompactionFilter {
 }
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 16 * 1024;
+
+pub fn init_mvcc_gc_db(db: Arc<DB>) {
+    let mut mvcc_gc_db = MVCC_GC_DB.lock().unwrap();
+    *mvcc_gc_db = Some(db);
+}
+
+pub fn init_safe_point(safe_point: Arc<AtomicU64>) {
+    let mut sp = SAFE_POINT.lock().unwrap();
+    *sp = Some(safe_point);
+}
 
 lazy_static! {
     static ref SAFE_POINT: Mutex<Option<Arc<AtomicU64>>> = Mutex::new(None);
