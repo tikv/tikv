@@ -1105,7 +1105,7 @@ impl PdClient for TestPdClient {
 
         let mut resp = pdpb::AskBatchSplitResponse::default();
         for _ in 0..count {
-            let mut id = pdpb::SplitId::new();
+            let mut id = pdpb::SplitId::default();
             id.set_new_region_id(self.alloc_id().unwrap());
             for _ in region.get_peers() {
                 id.mut_new_peer_ids().push(self.alloc_id().unwrap());
