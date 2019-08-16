@@ -77,6 +77,7 @@ BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 
@@ -245,7 +246,7 @@ expression: format clippy
 
 ## The docker driver
 ## ------------------
-docker: docker-tikv docker-tikv-ctl docker-tikv-server docker-tikv-importer
+docker: docker-tikv docker-tikv-ctl docker-tikv-server
 
 docker-rust-toolchain:
 	docker build -t tikv/rust-toolchain -f docker/rust-toolchain/Dockerfile .
@@ -259,26 +260,31 @@ docker-tikv-ctl: docker-tikv
 docker-tikv-server: docker-tikv
 	docker build -t tikv/tikv-server -f docker/tikv-server/Dockerfile .
 
-docker-tikv-importer: docker-tikv
-	docker build -t tikv/tikv-importer -f docker/tikv-importer/Dockerfile .
+# Remove any previously built images
+docker-clean:
+	docker rmi tikv/tikv tikv/tikv-ctl tikv/tikv-server tikv/tikv-importer
 
-docker-tag-with-hash:
+# Tag docker iamges with the git hash
+docker-tag-with-git-hash:
 	docker tag tikv/tikv tikv/tikv:${TIKV_BUILD_GIT_HASH}
 	docker tag tikv/tikv-server tikv/tikv-server:${TIKV_BUILD_GIT_HASH}
-	docker tag tikv/tikv-importer tikv/tikv-importer:${TIKV_BUILD_GIT_HASH}
 	docker tag tikv/tikv-ctl tikv/tikv-ctl:${TIKV_BUILD_GIT_HASH}
 
+# Tag docker images with the git tag
+docker-tag-with-git-tag:
+	docker tag tikv/tikv tikv/tikv:${TIKV_BUILD_GIT_TAG}
+	docker tag tikv/tikv-server tikv/tikv-server:${TIKV_BUILD_GIT_TAG}
+	docker tag tikv/tikv-ctl tikv/tikv-ctl:${TIKV_BUILD_GIT_TAG}
+
+# Extract binaries from the docker images into the `bin/`
 docker-extract-binaries:
 	mkdir -p bin
 	docker rm -f tikv-binary-extraction-dummy || true
 	docker create --name tikv-binary-extraction-dummy tikv/tikv
 	docker cp tikv-binary-extraction-dummy:/tikv-server bin/tikv-server
-	docker cp tikv-binary-extraction-dummy:/tikv-importer bin/tikv-importer
 	docker cp tikv-binary-extraction-dummy:/tikv-ctl bin/tikv-ctl
 	docker rm -f tikv-binary-extraction-dummy
 
-docker-clean:
-	docker rmi tikv/tikv tikv/tikv-ctl tikv/tikv-server tikv/tikv-importer
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
 
