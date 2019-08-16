@@ -620,8 +620,8 @@ impl<S: Snapshot> MvccTxn<S> {
 }
 
 use engine::rocks::{
-    new_compaction_filter, util::get_cf_handle, CompactionFilter, CompactionFilterContext,
-    CompactionFilterFactory, CompactionFilterHandle, Writable, WriteBatch, WriteOptions, DB,
+    new_compaction_filter_raw, util::get_cf_handle, CompactionFilter, CompactionFilterContext,
+    CompactionFilterFactory, DBCompactionFilter, Writable, WriteBatch, WriteOptions, DB,
 };
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -633,19 +633,20 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
-    ) -> CompactionFilterHandle {
-        info!("WriteCompactionFilterFactory::create_compaction_filter is called");
-        if !context.is_full_compaction() {
-            return CompactionFilterHandle {
-                inner: std::ptr::null_mut(),
-            };
+    ) -> *mut DBCompactionFilter {
+        info!(
+            "WriteCompactionFilterFactory::create_compaction_filter is called";
+            "manual" => context.is_manual_compaction(),
+        );
+        if !context.is_manual_compaction() {
+            return std::ptr::null_mut();
         }
         let name = CString::new("write_compaction_filter").unwrap();
         let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone).unwrap();
         let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone).unwrap();
         let metrics = METRICS.lock().unwrap().as_ref().map(Arc::clone).unwrap();
         let filter = Box::new(WriteCompactionFilter::new(safe_point, db, metrics));
-        unsafe { new_compaction_filter(name, true, filter).unwrap() }
+        unsafe { new_compaction_filter_raw(name, true, filter) }
     }
 }
 
@@ -686,6 +687,17 @@ impl WriteCompactionFilter {
         self.metrics
             .default_versions
             .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Drop for WriteCompactionFilter {
+    fn drop(&mut self) {
+        error!("WriteCompactionFilter is dropped");
+        if !self.write_batch.is_empty() {
+            let mut opts = WriteOptions::new();
+            opts.set_sync(true);
+            self.db.write_opt(&self.write_batch, &opts).unwrap();
+        }
     }
 }
 
@@ -1698,5 +1710,34 @@ mod tests {
 
         must_get(&engine, k, 19, v);
         assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
+    }
+
+    use super::{init_metrics, init_mvcc_gc_db, init_safe_point, GcMetrics};
+    use engine::rocks::util::{compact_range, get_cf_handle};
+    use engine::rocks::DB;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
+
+    fn init_compaction_filter_deps(safe_point: Arc<AtomicU64>, db: Arc<DB>) {
+        init_safe_point(safe_point);
+        init_mvcc_gc_db(db);
+        init_metrics(Arc::new(GcMetrics::default()));
+    }
+
+    #[test]
+    fn test_compaction_filter() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, b"key", b"value", b"key", 101);
+        must_commit(&engine, b"key", 101, 102);
+        must_prewrite_put(&engine, b"key", b"value", b"key", 201);
+        must_commit(&engine, b"key", 201, 202);
+
+        let kv = Arc::clone(&engine.get_rocksdb());
+        init_compaction_filter_deps(Arc::new(AtomicU64::new(150)), Arc::clone(&kv));
+        let handle = get_cf_handle(&kv, "write").unwrap();
+        compact_range(&kv, handle, None, None, false, 1);
+        must_get_none(&engine, b"key", 101);
+        must_get(&engine, b"key", 201, b"value");
     }
 }

@@ -49,7 +49,7 @@ use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
-    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
+    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, MvccGcTask, RaftlogGcTask, ReadDelegate, RegionTask,
     SplitCheckTask,
 };
 use crate::raftstore::store::PdTask;
@@ -2919,14 +2919,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_mvcc_gc(&mut self, safe_point: u64, start_key: Vec<u8>, end_key: Vec<u8>) {
-        info!(
-            "handle mvcc-gc task";
-            "region_id" => self.fsm.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-            "safe_point" => safe_point,
-            "start_key" => ?&start_key,
-            "end_key" => ?&end_key,
-        );
+        let task = MvccGcTask {
+            safe_point,
+            start_key,
+            end_key,
+        };
+        if let Err(e) = self.ctx.mvcc_gc_scheduler.schedule(task) {
+            error!(
+                "schedule to mvcc gc";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
+        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
