@@ -50,22 +50,23 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
     for chunk in raw_args.chunks(2) {
         // chunk.len() must be 1 or 2 here.
-        let key: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
-        let key = match key {
-            // json_object should raise an error if key is None(NULL)
-            None => Err(other_err!(
-                "Data truncation: JSON documents may not contain NULL member names."
-            )),
-            Some(v) => {
-                String::from_utf8(v.to_owned()).map_err(|e| crate::codec::Error::from(e).into())
-            }
-        }?;
+        let key = Evaluable::borrow_scalar_value_ref(&chunk[0])
+            .as_ref()
+            .map_or_else(
+                || {
+                    Err(other_err!(
+                        "Data truncation: JSON documents may not contain NULL member names."
+                    ))
+                },
+                |v: &Bytes| {
+                    String::from_utf8(v.to_owned()).map_err(|e| crate::codec::Error::from(e).into())
+                },
+            )?;
 
-        let value: &Option<Json> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
-        let value = match value {
-            None => Json::None,
-            Some(v) => v.to_owned(),
-        };
+        let value = Evaluable::borrow_scalar_value_ref(&chunk[1])
+            .as_ref()
+            .map_or(Json::None, |v: &Json| v.to_owned());
+
         pairs.insert(key, value);
     }
     Ok(Some(Json::Object(pairs)))
@@ -74,7 +75,7 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
 macro_rules! parse_opt {
     ($expr:expr) => {{
         match $expr {
-            Some(ref v) => v.to_owned().clone(),
+            Some(ref v) => v.to_owned(),
             None => return Ok(None),
         }
     }};
@@ -222,8 +223,8 @@ mod tests {
 
             let mut new_vargs: Vec<ScalarValue> = vec![];
             for (key, value) in vargs.into_iter() {
-                new_vargs.push(ScalarValue::from(key.clone()));
-                new_vargs.push(ScalarValue::from(value.clone()));
+                new_vargs.push(ScalarValue::from(key));
+                new_vargs.push(ScalarValue::from(value));
             }
 
             let expected = Json::from_str(expected).unwrap();
