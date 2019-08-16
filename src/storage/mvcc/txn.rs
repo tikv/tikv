@@ -620,13 +620,12 @@ impl<S: Snapshot> MvccTxn<S> {
 }
 
 use engine::rocks::{
-    new_compaction_filter, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
-    CompactionFilterHandle,
+    new_compaction_filter, util::get_cf_handle, CompactionFilter, CompactionFilterContext,
+    CompactionFilterFactory, CompactionFilterHandle, Writable, WriteBatch, WriteOptions, DB,
 };
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{mem, ptr};
 
 pub struct WriteCompactionFilterFactory;
 
@@ -637,53 +636,49 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
     ) -> CompactionFilterHandle {
         info!("WriteCompactionFilterFactory::create_compaction_filter is called");
         if !context.is_full_compaction() {
-            return compaction_filter_handle();
+            return CompactionFilterHandle {
+                inner: std::ptr::null_mut(),
+            };
         }
         let name = CString::new("write_compaction_filter").unwrap();
-        let filter = Box::new(WriteCompactionFilter::new(Arc::clone(&SAFE_POINT)));
+        let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone).unwrap();
+        let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone).unwrap();
+        let filter = Box::new(WriteCompactionFilter::new(safe_point, db));
         unsafe { new_compaction_filter(name, true, filter).unwrap() }
     }
 }
 
 struct WriteCompactionFilter {
     safe_point: Arc<AtomicU64>,
-    buffers: Vec<Vec<u8>>,
+    db: Arc<DB>,
+    max_level: usize,
+    write_batch: WriteBatch,
 
     key_prefix: Vec<u8>,
     remove_older: bool,
-    start_timestamps: Vec<u64>,
 }
 
 impl WriteCompactionFilter {
-    fn new(safe_point: Arc<AtomicU64>) -> Self {
-        let buffers = mem::replace(&mut *GEN_DEFAULT_CF_TASKS.lock().unwrap(), vec![]);
+    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>) -> Self {
+        let cf_handle = get_cf_handle(&db, CF_WRITE).unwrap();
+        let max_level = db.get_options_cf(cf_handle).get_num_levels() - 1;
         WriteCompactionFilter {
             safe_point,
-            buffers,
+            db,
+            max_level,
+            write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
             key_prefix: vec![],
             remove_older: false,
-            start_timestamps: vec![],
         }
     }
 
-    fn remove_default_content(&mut self) {
-        let key_len = self.key_prefix.len();
-        let ts_count = self.start_timestamps.len();
-        let mut required_len = mem::size_of::<u32>() + key_len;
-        required_len += mem::size_of::<u32>() + mem::size_of::<u64>() * ts_count;
-        loop {
-            if let Some(buffer) = self.buffers.last_mut() {
-                if buffer.capacity() - buffer.len() > required_len {
-                    buffer.extend_from_slice(&(key_len as u32).to_le_bytes());
-                    buffer.extend_from_slice(&self.key_prefix);
-                    buffer.extend_from_slice(&(ts_count as u32).to_le_bytes());
-                    for ts in &self.start_timestamps {
-                        buffer.extend_from_slice(&(*ts as u32).to_le_bytes());
-                    }
-                    break;
-                }
-            }
-            self.buffers.push(Vec::with_capacity(1 << 27));
+    fn delete_default_key(&self, key: &[u8]) {
+        self.write_batch.delete(key).unwrap();
+        if self.write_batch.data_size() > DEFAULT_DELETE_BATCH_SIZE {
+            let mut opts = WriteOptions::new();
+            opts.set_sync(true);
+            self.db.write_opt(&self.write_batch, &opts).unwrap();
+            self.write_batch.clear();
         }
     }
 }
@@ -691,7 +686,7 @@ impl WriteCompactionFilter {
 impl CompactionFilter for WriteCompactionFilter {
     fn filter(
         &mut self,
-        _level: usize,
+        level: usize,
         key: &[u8],
         value: &[u8],
         _: &mut Vec<u8>,
@@ -699,84 +694,46 @@ impl CompactionFilter for WriteCompactionFilter {
     ) -> bool {
         let safe_point = self.safe_point.load(Ordering::Acquire);
 
-        let (key_prefix, ts) = match Key::split_on_ts_for(key) {
+        let key_prefix = match Key::split_on_ts_for(key) {
             Ok((_, ts)) if ts > safe_point => return false,
-            Ok((key, ts)) => (key, ts),
+            Ok((key, _)) => key,
             // Invalid MVCC keys, don't touch them.
             Err(_) => return false,
         };
 
         if self.key_prefix != key_prefix {
-            if !self.start_timestamps.is_empty() {
-                self.remove_default_content();
-            }
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
-            self.start_timestamps.clear();
         }
 
-        if self.remove_older {
-            self.start_timestamps.push(ts);
-            return true;
-        }
-
-        let write = Write::parse(value).unwrap();
-        match write.write_type {
-            WriteType::Delete => {
-                self.remove_older = true;
-                return true;
+        let mut filtered = self.remove_older;
+        let (write_type, start_ts, has_short) = Write::parse_without_value(value).unwrap();
+        if !self.remove_older {
+            // here `filtered` must be false.
+            match write_type {
+                WriteType::Rollback | WriteType::Lock => {}
+                WriteType::Delete => {
+                    self.remove_older = true;
+                    filtered = level == self.max_level;
+                }
+                WriteType::Put => self.remove_older = true,
             }
-            WriteType::Put => {
-                self.remove_older = true;
-                return false;
-            }
-            WriteType::Rollback | WriteType::Lock => return true,
         }
-    }
-}
 
-pub struct DefaultCompactionFilterFactory;
-
-impl CompactionFilterFactory for DefaultCompactionFilterFactory {
-    fn create_compaction_filter(
-        &self,
-        context: &CompactionFilterContext,
-    ) -> CompactionFilterHandle {
-        info!("DefaultCompactionFilterFactory::create_compaction_filter is called");
-        if !context.is_full_compaction() {
-            return compaction_filter_handle();
+        if filtered && !has_short {
+            let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
+            self.delete_default_key(key.as_encoded());
         }
-        let name = CString::new("default_compaction_filter").unwrap();
-        let filter = Box::new(DefaultCompactionFilter {});
-        unsafe { new_compaction_filter(name, true, filter).unwrap() }
+        filtered
     }
 }
 
-struct DefaultCompactionFilter {}
-impl CompactionFilter for DefaultCompactionFilter {
-    fn filter(
-        &mut self,
-        _level: usize,
-        _key: &[u8],
-        _value: &[u8],
-        _: &mut Vec<u8>,
-        _: &mut bool,
-    ) -> bool {
-        false
-    }
-}
+const DEFAULT_DELETE_BATCH_SIZE: usize = 16 * 1024;
 
-// Only modified in mvcc_gc_worker thread.
 lazy_static! {
-    static ref SAFE_POINT: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-    static ref GEN_DEFAULT_CF_TASKS: Mutex<Vec<Vec<u8>>> = Mutex::new(vec![]);
-}
-
-fn compaction_filter_handle() -> CompactionFilterHandle {
-    CompactionFilterHandle {
-        inner: ptr::null_mut(),
-    }
+    static ref SAFE_POINT: Mutex<Option<Arc<AtomicU64>>> = Mutex::new(None);
+    static ref MVCC_GC_DB: Mutex<Option<Arc<DB>>> = Mutex::new(None);
 }
 
 #[cfg(test)]

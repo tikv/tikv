@@ -12,9 +12,7 @@ pub use self::lock::{Lock, LockType};
 pub use self::reader::EntryScanner;
 pub use self::reader::MvccReader;
 pub use self::reader::{Scanner, ScannerBuilder};
-pub use self::txn::{
-    DefaultCompactionFilterFactory, MvccTxn, WriteCompactionFilterFactory, MAX_TXN_WRITE_SIZE,
-};
+pub use self::txn::{MvccTxn, WriteCompactionFilterFactory, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
 
 use std::error;

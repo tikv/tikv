@@ -36,7 +36,7 @@ use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
 use crate::storage::lock_manager::Config as PessimisticTxnConfig;
-use crate::storage::mvcc::{DefaultCompactionFilterFactory, WriteCompactionFilterFactory};
+use crate::storage::mvcc::WriteCompactionFilterFactory;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
@@ -399,12 +399,6 @@ impl DefaultCfConfig {
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
-        cf_opts
-            .set_compaction_filter_factory(
-                "default_compaction_filter_factory",
-                Box::new(DefaultCompactionFilterFactory {}),
-            )
-            .unwrap();
         cf_opts
     }
 }

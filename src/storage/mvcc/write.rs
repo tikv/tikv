@@ -122,6 +122,17 @@ impl Write {
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
         WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
     }
+
+    /// Returns write type, start timestamp and a flag indicates having short value or not.
+    pub fn parse_without_value(mut b: &[u8]) -> Result<(WriteType, u64, bool)> {
+        if b.is_empty() {
+            return Err(Error::BadFormatWrite);
+        }
+        let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
+        let start_ts = number::decode_var_u64(&mut b)?;
+        let has_short_value = !b.is_empty();
+        Ok((write_type, start_ts, has_short_value))
+    }
 }
 
 #[cfg(test)]
