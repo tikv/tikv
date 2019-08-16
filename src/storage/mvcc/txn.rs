@@ -624,7 +624,7 @@ use engine::rocks::{
     CompactionFilterFactory, CompactionFilterHandle, Writable, WriteBatch, WriteOptions, DB,
 };
 use std::ffi::CString;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct WriteCompactionFilterFactory;
@@ -643,7 +643,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         let name = CString::new("write_compaction_filter").unwrap();
         let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone).unwrap();
         let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone).unwrap();
-        let filter = Box::new(WriteCompactionFilter::new(safe_point, db));
+        let metrics = METRICS.lock().unwrap().as_ref().map(Arc::clone).unwrap();
+        let filter = Box::new(WriteCompactionFilter::new(safe_point, db, metrics));
         unsafe { new_compaction_filter(name, true, filter).unwrap() }
     }
 }
@@ -651,6 +652,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 struct WriteCompactionFilter {
     safe_point: Arc<AtomicU64>,
     db: Arc<DB>,
+    metrics: Arc<GcMetrics>,
     max_level: usize,
     write_batch: WriteBatch,
 
@@ -659,12 +661,13 @@ struct WriteCompactionFilter {
 }
 
 impl WriteCompactionFilter {
-    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>) -> Self {
+    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>, metrics: Arc<GcMetrics>) -> Self {
         let cf_handle = get_cf_handle(&db, CF_WRITE).unwrap();
         let max_level = db.get_options_cf(cf_handle).get_num_levels() - 1;
         WriteCompactionFilter {
             safe_point,
             db,
+            metrics,
             max_level,
             write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
             key_prefix: vec![],
@@ -680,6 +683,9 @@ impl WriteCompactionFilter {
             self.db.write_opt(&self.write_batch, &opts).unwrap();
             self.write_batch.clear();
         }
+        self.metrics
+            .default_versions
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -724,15 +730,25 @@ impl CompactionFilter for WriteCompactionFilter {
             }
         }
 
-        if filtered && !has_short {
-            let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
-            self.delete_default_key(key.as_encoded());
+        if filtered {
+            self.metrics.write_versions.fetch_add(1, Ordering::Relaxed);
+            if !has_short {
+                let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
+                self.delete_default_key(key.as_encoded());
+            }
         }
+
         filtered
     }
 }
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 16 * 1024;
+
+#[derive(Default)]
+pub struct GcMetrics {
+    pub write_versions: AtomicUsize,
+    pub default_versions: AtomicUsize,
+}
 
 pub fn init_mvcc_gc_db(db: Arc<DB>) {
     let mut mvcc_gc_db = MVCC_GC_DB.lock().unwrap();
@@ -744,9 +760,15 @@ pub fn init_safe_point(safe_point: Arc<AtomicU64>) {
     *sp = Some(safe_point);
 }
 
+pub fn init_metrics(metrics: Arc<GcMetrics>) {
+    let mut m = METRICS.lock().unwrap();
+    *m = Some(metrics);
+}
+
 lazy_static! {
     static ref SAFE_POINT: Mutex<Option<Arc<AtomicU64>>> = Mutex::new(None);
     static ref MVCC_GC_DB: Mutex<Option<Arc<DB>>> = Mutex::new(None);
+    static ref METRICS: Mutex<Option<Arc<GcMetrics>>> = Mutex::new(None);
 }
 
 #[cfg(test)]

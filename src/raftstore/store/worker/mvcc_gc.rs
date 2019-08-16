@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::raftstore::store::keys::data_key;
-use crate::storage::mvcc::{init_mvcc_gc_db, init_safe_point};
+use crate::storage::mvcc::{init_metrics, init_mvcc_gc_db, init_safe_point, GcMetrics};
 use engine::rocks::util::{compact_range, get_cf_handle};
 use engine::rocks::DB;
 use engine::CF_WRITE;
@@ -56,8 +56,15 @@ impl MvccGcRunner {
 
     fn compact(&self, start_key: &[u8], end_key: &[u8]) {
         init_mvcc_gc_db(Arc::clone(&self.db));
+        let metrics = Arc::new(GcMetrics::default());
+        init_metrics(Arc::clone(&metrics));
         let handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
         compact_range(&self.db, handle, Some(start_key), Some(end_key), true, 1);
+        info!(
+            "compact_range deletes {} writes, {} defaults",
+            metrics.write_versions.load(Ordering::Relaxed),
+            metrics.default_versions.load(Ordering::Relaxed),
+        );
     }
 }
 
@@ -120,6 +127,7 @@ impl RunnableWithTimer<MvccGcTask, ()> for MvccGcRunner {
             "gc worker handles {} regions in {} ms",
             merged_count, elapsed
         );
+        timer.add_task(COLLECT_TASK_INTERVAL, ());
     }
 }
 
