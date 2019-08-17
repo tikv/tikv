@@ -1612,7 +1612,7 @@ mod tests {
     }
 
     impl Debugger {
-        fn get_store_ident (&self) -> Result<StoreIdent> {
+        fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
                 .map_err(|e| box_err!(e))
@@ -2307,6 +2307,9 @@ mod tests {
         debugger.set_store_id(store_id);
         debugger.set_cluster_id(cluster_id);
         assert_eq!(store_id, debugger.get_store_id().expect("get store id"));
-        assert_eq!(cluster_id, debugger.get_cluster_id().expect("get cluster id"));
+        assert_eq!(
+            cluster_id,
+            debugger.get_cluster_id().expect("get cluster id")
+        );
     }
 }
