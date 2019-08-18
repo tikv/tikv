@@ -35,6 +35,7 @@ features = ["nightly"]
 [dependencies.engine_rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
 package = "rocksdb"
+default-features = false
 
 [dev-dependencies]
 tempfile = "3.0"

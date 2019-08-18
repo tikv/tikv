@@ -8,7 +8,7 @@ publish = false
 [features]
 default = ["tikv/default"]
 tcmalloc = ["tikv/tcmalloc"]
-jemalloc = ["tikv/jemalloc"]
+jemalloc = ["tikv/jemalloc", "engine/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
@@ -49,7 +49,7 @@ hex = "0.3"
 vlog = "0.1.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 tikv_util = { path = "../components/tikv_util" }
-engine = { path = "../components/engine" }
+engine = { path = "../components/engine", default-features = false }
 pd_client = { path = "../components/pd_client" }
 
 [target.'cfg(unix)'.dependencies]
