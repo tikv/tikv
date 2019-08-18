@@ -19,7 +19,7 @@ pub use engine_rocksdb::{
     ReadOptions, SeekKey, SequentialFile, SliceTransform, SstFileWriter, TablePropertiesCollection,
     TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
     UserCollectedProperties, Writable, WriteBatch, WriteOptions, WriteStallCondition,
-    WriteStallInfo, DB,
+    WriteStallInfo, DB, MemoryAllocator,
 };
 
 #[cfg(test)]
