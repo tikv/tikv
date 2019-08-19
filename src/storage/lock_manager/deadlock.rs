@@ -9,10 +9,9 @@ use crate::raftstore::coprocessor::{Coprocessor, CoprocessorHost, ObserverContex
 use crate::server::resolve::StoreAddrResolver;
 use futures::{Future, Sink, Stream};
 use grpcio::{
-    self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*, UnarySink, WriteFlags,
+    self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink, WriteFlags,
 };
 use kvproto::deadlock::*;
-use kvproto::deadlock_grpc;
 use kvproto::metapb::Region;
 use pd_client::{RpcClient, INVALID_ID};
 use raft::StateRole;
@@ -600,7 +599,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     ) {
         if !self.is_leader() {
             let status = RpcStatus::new(
-                GRPC_STATUS_FAILED_PRECONDITION,
+                RpcStatusCode::FAILED_PRECONDITION,
                 Some("I'm not the leader of deadlock detector".to_string()),
             );
             handle.spawn(sink.fail(status).map_err(|_| ()));
@@ -702,7 +701,7 @@ impl Service {
     }
 }
 
-impl deadlock_grpc::Deadlock for Service {
+impl Deadlock for Service {
     // TODO: remove it
     fn get_wait_for_entries(
         &mut self,
@@ -713,7 +712,7 @@ impl deadlock_grpc::Deadlock for Service {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
             let status = RpcStatus::new(
-                GRPC_STATUS_RESOURCE_EXHAUSTED,
+                RpcStatusCode::RESOURCE_EXHAUSTED,
                 Some("waiter manager has stopped".to_owned()),
             );
             ctx.spawn(sink.fail(status).map_err(|_| ()))
@@ -743,7 +742,7 @@ impl deadlock_grpc::Deadlock for Service {
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {
             let status = RpcStatus::new(
-                GRPC_STATUS_RESOURCE_EXHAUSTED,
+                RpcStatusCode::RESOURCE_EXHAUSTED,
                 Some("deadlock detector has stopped".to_owned()),
             );
             ctx.spawn(sink.fail(status).map_err(|_| ()));

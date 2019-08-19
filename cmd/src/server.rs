@@ -2,43 +2,43 @@
 
 use super::setup::*;
 use super::signal_handler;
-use crate::binutil::setup::initial_logger;
-use crate::config::{check_and_persist_critical_config, TiKvConfig};
-use crate::coprocessor;
-use crate::fatal;
-use crate::import::{ImportSSTService, SSTImporter};
-use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use crate::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use crate::raftstore::store::PdTask;
-use crate::raftstore::store::{fsm, LocalReader};
-use crate::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
-use crate::server::resolve;
-use crate::server::status_server::StatusServer;
-use crate::server::transport::ServerRaftStoreRouter;
-use crate::server::DEFAULT_CLUSTER_ID;
-use crate::server::{create_raft_storage, Node, RaftKv, Server};
-use crate::storage::lock_manager::{
-    register_role_change_observer, Detector, DetectorScheduler, Service as DeadlockService,
-    WaiterManager, WaiterMgrScheduler,
-};
-use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use crate::storage::{FlowStatistics, FlowStatsReporter};
+use crate::setup::initial_logger;
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use kvproto::deadlock_grpc::create_deadlock;
+use kvproto::debugpb_grpc::create_debug;
+use kvproto::import_sstpb_grpc::create_import_sst;
 use pd_client::{PdClient, RpcClient};
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use tikv::config::{check_and_persist_critical_config, TiKvConfig};
+use tikv::coprocessor;
+use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use tikv::raftstore::store::{fsm, LocalReader};
+use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
+use tikv::server::resolve;
+use tikv::server::service::DebugService;
+use tikv::server::status_server::StatusServer;
+use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::DEFAULT_CLUSTER_ID;
+use tikv::server::{create_raft_storage, Node, RaftKv, Server};
+use tikv::storage::lock_manager::{
+    register_role_change_observer, Detector, DetectorScheduler, Service as DeadlockService,
+    WaiterManager, WaiterMgrScheduler,
+};
+use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
-use tikv_util::collections::HashMap;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
-use tikv_util::worker::{FutureScheduler, FutureWorker};
+use tikv_util::worker::FutureWorker;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -54,7 +54,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     // Print version information.
-    super::log_tikv_info();
+    tikv::log_tikv_info();
 
     config.compatible_adjust();
     if let Err(e) = config.validate() {
@@ -89,14 +89,6 @@ pub fn run_tikv(mut config: TiKvConfig) {
 
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);
-}
-
-impl FlowStatsReporter for FutureScheduler<PdTask> {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
-        if let Err(e) = self.schedule(PdTask::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
-        }
-    }
 }
 
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
@@ -244,6 +236,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             Some(router.clone()),
         );
 
+    let server_cfg = Arc::new(cfg.server.clone());
+
+    // Create coprocessor endpoint.
+    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
+        &cfg.readpool.coprocessor.build_config(),
+        pd_sender.clone(),
+        engine.clone(),
+    );
+    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
+
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
     let import_service = ImportSSTService::new(
         cfg.import.clone(),
@@ -252,14 +254,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::clone(&importer),
     );
 
-    let server_cfg = Arc::new(cfg.server.clone());
+    // Create Debug service.
+    let debug_service = DebugService::new(engines.clone(), raft_router.clone());
+
     // Create server
-    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-        &cfg.readpool.coprocessor.build_config(),
-        pd_sender.clone(),
-        engine.clone(),
-    );
-    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
@@ -268,11 +266,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router,
         resolver.clone(),
         snap_mgr.clone(),
-        Some(engines.clone()),
-        Some(import_service),
-        deadlock_service,
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
+
+    // Register services.
+    server.register_service(create_import_sst(import_service));
+    server.register_service(create_debug(debug_service));
+    if let Some(deadlock_service) = deadlock_service {
+        server.register_service(create_deadlock(deadlock_service));
+    }
+
     let trans = server.transport();
 
     // Create node.
@@ -352,6 +355,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     // Run server.
+    server
+        .build_and_bind()
+        .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {}", e));

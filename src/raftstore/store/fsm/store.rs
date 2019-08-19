@@ -6,7 +6,7 @@ use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
-use kvproto::import_sstpb::SSTMeta;
+use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
@@ -216,7 +216,6 @@ pub struct PollContext<T, C: 'static> {
     pub raft_wb: WriteBatch,
     pub pending_count: usize,
     pub sync_log: bool,
-    pub is_busy: bool,
     pub has_ready: bool,
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
@@ -531,13 +530,13 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         let dur = self.timer.elapsed();
-        if !self.poll_ctx.is_busy {
+        if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
                 self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
                     * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
             );
             if dur >= election_timeout {
-                self.poll_ctx.is_busy = true;
+                self.poll_ctx.store_stat.is_busy = true;
             }
         }
 
@@ -902,7 +901,6 @@ where
             raft_wb: WriteBatch::with_capacity(4 * 1024),
             pending_count: 0,
             sync_log: false,
-            is_busy: false,
             has_ready: false,
             ready_res: Vec::new(),
             need_flush_trans: false,
@@ -1060,15 +1058,16 @@ impl RaftBatchSystem {
             mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
         }
         self.router.register_all(mailboxes);
+
         // Make sure Msg::Start is the first message each FSM received.
+        for addr in address {
+            self.router.force_send(addr, PeerMsg::Start).unwrap();
+        }
         self.router
             .send_control(StoreMsg::Start {
                 store: store.clone(),
             })
             .unwrap();
-        for addr in address {
-            self.router.force_send(addr, PeerMsg::Start).unwrap();
-        }
 
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
@@ -1758,7 +1757,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
-    fn on_validate_sst_result(&mut self, ssts: Vec<SSTMeta>) {
+    fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() {
             return;
         }
@@ -2055,10 +2054,10 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::collections::HashMap;
 
     use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::storage::kv::CompactedEvent;
+    use tikv_util::collections::HashMap;
 
     use super::*;
 
@@ -2109,7 +2108,7 @@ mod tests {
     fn test_is_range_covered() {
         let meta = vec![(b"b", b"d"), (b"d", b"e"), (b"e", b"f"), (b"f", b"h")];
         let mut region_ranges = BTreeMap::new();
-        let mut region_peers = HashMap::new();
+        let mut region_peers = HashMap::default();
 
         {
             for (i, (start, end)) in meta.into_iter().enumerate() {

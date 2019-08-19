@@ -10,7 +10,7 @@ use rand_xorshift::XorShiftRng;
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
 use tikv_util::codec::number;
-use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::mysql::charset;
 use crate::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
@@ -327,7 +327,7 @@ mod tests {
     use std::{i64, u64};
 
     use tidb_query_datatype::{self, Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
-    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+    use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
     use super::{Error, EvalConfig, EvalContext, Expression};
     use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};

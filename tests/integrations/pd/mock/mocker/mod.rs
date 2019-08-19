@@ -39,7 +39,7 @@ pub trait PdMocker {
         None
     }
 
-    fn alloc_id(&self, _: &AllocIDRequest) -> Option<Result<AllocIDResponse>> {
+    fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
         None
     }
 
@@ -70,7 +70,7 @@ pub trait PdMocker {
         None
     }
 
-    fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+    fn get_region_by_id(&self, _: &GetRegionByIdRequest) -> Option<Result<GetRegionResponse>> {
         None
     }
 
@@ -111,15 +111,15 @@ pub trait PdMocker {
 
     fn update_gc_safe_point(
         &self,
-        _: &UpdateGCSafePointRequest,
-    ) -> Option<Result<UpdateGCSafePointResponse>> {
+        _: &UpdateGcSafePointRequest,
+    ) -> Option<Result<UpdateGcSafePointResponse>> {
         None
     }
 
     fn get_gc_safe_point(
         &self,
-        _: &GetGCSafePointRequest,
-    ) -> Option<Result<GetGCSafePointResponse>> {
+        _: &GetGcSafePointRequest,
+    ) -> Option<Result<GetGcSafePointResponse>> {
         None
     }
 }
