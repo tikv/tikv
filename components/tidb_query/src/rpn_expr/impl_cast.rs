@@ -341,33 +341,6 @@ cast_as_unsigned_integer!(DateTime, cast_datetime_as_uint);
 cast_as_unsigned_integer!(Duration, cast_duration_as_uint);
 cast_as_unsigned_integer!(Json, cast_json_as_uint);
 
-/// The implementation for push down signature `CastIntAsReal` from unsigned integer.
-#[rpn_fn(capture = [ctx])]
-#[inline]
-pub fn cast_uint_as_real(ctx: &mut EvalContext, val: &Option<Int>) -> Result<Option<Real>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let val = (*val as u64).convert(ctx)?;
-            // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
-            Ok(Real::new(val).ok())
-        }
-    }
-}
-
-/// The implementation for push down signature `CastIntAsString` from unsigned integer.
-#[rpn_fn]
-#[inline]
-pub fn cast_uint_as_string(val: &Option<Int>) -> Result<Option<Bytes>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-            Ok(Some((*val as u64).to_string().into_bytes()))
-        }
-    }
-}
-
 /// The implementation for push down signature `CastIntAsJson` from unsigned integer.
 #[rpn_fn]
 #[inline]
