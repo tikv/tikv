@@ -21,7 +21,7 @@ use raft::StateRole;
 
 use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
 use super::metrics::*;
-use super::mvcc::{MvccReader, MvccTxn};
+use super::mvcc::MvccReader;
 use super::{Callback, Error, Key, Result};
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
@@ -34,12 +34,10 @@ use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError,
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
 
-/// After the GC scan of a key, output a message to the log if there are at least this many
-/// versions of the key.
+// TODO: move them to better place.
+#[allow(dead_code)]
 const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
-
-/// After the GC delete versions of a key, output a message to the log if at least this many
-/// versions are deleted.
+#[allow(dead_code)]
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_PENDING_TASKS: usize = 2;
@@ -169,16 +167,9 @@ impl<E: Engine> GCRunner<E> {
         .map_err(Error::from)
     }
 
-    /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
-    fn scan_keys(
-        &mut self,
-        ctx: &mut Context,
-        safe_point: u64,
-        from: Option<Key>,
-        limit: usize,
-    ) -> Result<(Vec<Key>, Option<Key>)> {
+    fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
         let snapshot = self.get_snapshot(ctx)?;
-        let mut reader = MvccReader::new(
+        let reader = MvccReader::new(
             snapshot,
             Some(ScanMode::Forward),
             !ctx.get_not_fill_cache(),
@@ -187,84 +178,10 @@ impl<E: Engine> GCRunner<E> {
             ctx.get_isolation_level(),
         );
 
-        let is_range_start = from.is_none();
-
-        // range start gc with from == None, and this is an optimization to
-        // skip gc before scanning all data.
-        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.ratio_threshold);
-        let res = if skip_gc {
-            KV_GC_SKIPPED_COUNTER.inc();
-            Ok((vec![], None))
-        } else {
-            reader
-                .scan_keys(from, limit)
-                .map_err(Error::from)
-                .and_then(|(keys, next)| {
-                    if keys.is_empty() {
-                        assert!(next.is_none());
-                        if is_range_start {
-                            KV_GC_EMPTY_RANGE_COUNTER.inc();
-                        }
-                    }
-                    Ok((keys, next))
-                })
-        };
-        self.stats.add(reader.get_statistics());
-        res
-    }
-
-    /// Cleans up outdated data.
-    fn gc_keys(
-        &mut self,
-        ctx: &mut Context,
-        safe_point: u64,
-        keys: Vec<Key>,
-        mut next_scan_key: Option<Key>,
-    ) -> Result<Option<Key>> {
-        let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::new(snapshot, 0, !ctx.get_not_fill_cache()).unwrap();
-        for k in keys {
-            let gc_info = txn.gc(k.clone(), safe_point)?;
-
-            if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                debug!(
-                    "GC found plenty versions for a key";
-                    "region_id" => ctx.get_region_id(),
-                    "versions" => gc_info.found_versions,
-                    "key" => %k
-                );
-            }
-            // TODO: we may delete only part of the versions in a batch, which may not beyond
-            // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
-            if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                debug!(
-                    "GC deleted plenty versions for a key";
-                    "region_id" => ctx.get_region_id(),
-                    "versions" => gc_info.deleted_versions,
-                    "key" => %k
-                );
-            }
-
-            if !gc_info.is_completed {
-                next_scan_key = Some(k);
-                break;
-            }
+        if !reader.need_gc(safe_point, self.ratio_threshold) {
+            debug!("skip gc region {}", ctx.get_region_id());
+            return Ok(());
         }
-        self.stats.add(&txn.take_statistics());
-
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
-            self.engine.write(ctx, modifies)?;
-        }
-        Ok(next_scan_key)
-    }
-
-    fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
-        debug!(
-            "start doing GC";
-            "region_id" => ctx.get_region_id(),
-            "safe_point" => safe_point
-        );
 
         let mut raft_cmd = raft_cmdpb::RaftCmdRequest::new();
         raft_cmd.mut_header().set_region_id(ctx.region_id);
@@ -280,48 +197,14 @@ impl<E: Engine> GCRunner<E> {
 
         let router = self.raft_store_router.as_ref().unwrap();
         if let Err(e) = router.send_command(raft_cmd, RaftCallback::None) {
+            // TODO: handle errors better.
             warn!(
                 "send MvccGc command to raftstore fail";
                 "region_id" => ctx.region_id,
                 "error" => ?e,
             );
-        } else {
-            // TODO: handle errors better.
-            info!(
-                "send MvccGc command to raftstore success";
-                "region_id" => ctx.region_id,
-            );
-            return Ok(());
         }
-
-        let mut next_key = None;
-        loop {
-            // Scans at most `GC_BATCH_SIZE` keys
-            let (keys, next) = self
-                .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
-                .map_err(|e| {
-                    warn!("gc scan_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
-                    e
-                })?;
-            if keys.is_empty() {
-                break;
-            }
-
-            // Does the GC operation on all scanned keys
-            next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
-                warn!("gc gc_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
-                e
-            })?;
-            if next_key.is_none() {
-                break;
-            }
-        }
-
-        debug!(
-            "gc has finished";
-            "region_id" => ctx.get_region_id(),
-            "safe_point" => safe_point
-        );
+        info!("send mvcc_gc command to raftstore success"; "region_id" => ctx.region_id);
         Ok(())
     }
 
