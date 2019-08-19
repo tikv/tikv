@@ -323,7 +323,7 @@ mod tests {
             Vec<(Json, Json, Json, Json, Json)>,
             Datum::Json,
             |x| x,
-            ScalarFuncSig::JSONAnyValue
+            ScalarFuncSig::JsonAnyValue
         );
     }
 
