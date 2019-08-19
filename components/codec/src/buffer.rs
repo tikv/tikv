@@ -33,30 +33,36 @@ impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
 }
 
 impl<'a> BufferReader for &'a [u8] {
+    #[inline]
     fn bytes(&self) -> &[u8] {
         self
     }
 
+    #[inline]
     fn advance(&mut self, count: usize) {
         *self = &self[count..]
     }
 }
 
 impl<'a, T: BufferReader + ?Sized> BufferReader for &'a mut T {
+    #[inline]
     fn bytes(&self) -> &[u8] {
         (**self).bytes()
     }
 
+    #[inline]
     fn advance(&mut self, count: usize) {
         (**self).advance(count)
     }
 }
 
 impl<T: BufferReader + ?Sized> BufferReader for Box<T> {
+    #[inline]
     fn bytes(&self) -> &[u8] {
         (**self).bytes()
     }
 
+    #[inline]
     fn advance(&mut self, count: usize) {
         (**self).advance(count)
     }
@@ -111,10 +117,12 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
 }
 
 impl<'a> BufferWriter for &'a mut [u8] {
+    #[inline]
     unsafe fn bytes_mut(&mut self, _size: usize) -> &mut [u8] {
         self
     }
 
+    #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
         let original_self = std::mem::replace(self, &mut []);
         *self = &mut original_self[count..];
@@ -132,6 +140,7 @@ impl BufferWriter for Vec<u8> {
         &mut std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..]
     }
 
+    #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
         let len = self.len();
         self.set_len(len + count);
@@ -139,20 +148,24 @@ impl BufferWriter for Vec<u8> {
 }
 
 impl<'a, T: BufferWriter + ?Sized> BufferWriter for &'a mut T {
+    #[inline]
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
         (**self).bytes_mut(size)
     }
 
+    #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
         (**self).advance_mut(count)
     }
 }
 
 impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
+    #[inline]
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
         (**self).bytes_mut(size)
     }
 
+    #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
         (**self).advance_mut(count)
     }

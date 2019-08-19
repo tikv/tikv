@@ -13,7 +13,7 @@ use tikv_util::codec::number;
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::mysql::charset;
-use crate::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use crate::codec::mysql::{Decimal, DecimalDecoder, Duration, Json, Time, MAX_FSP};
 use crate::codec::{self, datum, Datum};
 
 mod builtin_arithmetic;
@@ -268,7 +268,9 @@ impl Expression {
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
                 .map(|e| Expression::new_const(e, field_type)),
-            ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
+            ExprType::MysqlDecimal => expr
+                .get_val()
+                .decode_decimal()
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
