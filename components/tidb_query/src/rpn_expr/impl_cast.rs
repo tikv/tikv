@@ -9,6 +9,7 @@ use tipb::FieldType;
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
+use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
 use crate::Result;
@@ -403,76 +404,51 @@ pub fn cast_int_as_duration(
     }
 }
 
-#[rpn_fn(capture = [extra])]
-#[inline]
-pub fn cast_real_as_duration(
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Real>,
-) -> Result<Option<Duration>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            // FIXME: the `Duration::parse` should return `Res` which indicates whether `Overflow` or `Truncated` occurred.
-            let dur = Duration::parse(
-                val.into_inner().to_string().as_bytes(),
-                extra.ret_field_type.get_decimal() as i8,
-            )?;
-            Ok(Some(dur))
+macro_rules! cast_as_duration {
+    ($ty:ty, $as_uint_fn:ident, $extra:expr) => {
+        #[rpn_fn(capture = [ctx, extra])]
+        #[inline]
+        pub fn $as_uint_fn(
+            ctx: &mut EvalContext,
+            extra: &RpnFnCallExtra<'_>,
+            val: &Option<$ty>,
+        ) -> Result<Option<Duration>> {
+            match val {
+                None => Ok(None),
+                Some(val) => {
+                    let result = Duration::parse($extra, extra.ret_field_type.get_decimal() as i8);
+                    match result {
+                        Ok(dur) => Ok(Some(dur)),
+                        Err(e) => match e.code() {
+                            ERR_DATA_OUT_OF_RANGE => {
+                                ctx.handle_overflow_err(e)?;
+                                Ok(Some(Duration::zero()))
+                            }
+                            WARN_DATA_TRUNCATED => {
+                                ctx.handle_truncate_err(e)?;
+                                Ok(Some(Duration::zero()))
+                            }
+                            _ => Err(e.into()),
+                        },
+                    }
+                }
+            }
         }
-    }
+    };
 }
 
-#[rpn_fn(capture = [extra])]
-#[inline]
-pub fn cast_bytes_as_duration(
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Json>,
-) -> Result<Option<Duration>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let s = val.unquote()?;
-            let dur = Duration::parse(s.as_bytes(), extra.ret_field_type.get_decimal() as i8)?;
-            Ok(Some(dur))
-        }
-    }
-}
-
-#[rpn_fn(capture = [extra])]
-#[inline]
-pub fn cast_decimal_as_duration(
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Decimal>,
-) -> Result<Option<Duration>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let dur = Duration::parse(
-                val.to_string().as_bytes(),
-                extra.ret_field_type.get_decimal() as i8,
-            )?;
-            Ok(Some(dur))
-        }
-    }
-}
-
-#[rpn_fn(capture = [extra])]
-#[inline]
-pub fn cast_json_as_duration(
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Decimal>,
-) -> Result<Option<Duration>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let dur = Duration::parse(
-                val.to_string().as_bytes(),
-                extra.ret_field_type.get_decimal() as i8,
-            )?;
-            Ok(Some(dur))
-        }
-    }
-}
+cast_as_duration!(
+    Real,
+    cast_real_as_duration,
+    val.into_inner().to_string().as_bytes()
+);
+cast_as_duration!(Bytes, cast_bytes_as_duration, val);
+cast_as_duration!(Json, cast_json_as_duration, val.unquote()?.as_bytes());
+cast_as_duration!(
+    Decimal,
+    cast_decimal_as_duration,
+    val.to_string().as_bytes()
+);
 
 #[cfg(test)]
 mod tests {
