@@ -674,7 +674,7 @@ impl Duration {
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
             ctx.handle_overflow_err(Error::overflow("Duration", &n.to_string()))?;
-            let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, MAX_MICROS, fsp);
+            let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
             return Ok(max);
         }
 

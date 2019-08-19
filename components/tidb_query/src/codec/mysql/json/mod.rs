@@ -129,6 +129,7 @@ impl ConvertTo<Json> for f64 {
 impl ConvertTo<Json> for Real {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
         Ok(Json::Double(self.into_inner()))
     }
 }
