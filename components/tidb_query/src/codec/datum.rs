@@ -13,8 +13,8 @@ use tikv_util::codec::{number, BytesSlice};
 use tikv_util::escape;
 
 use super::mysql::{
-    self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
-    PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+    self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Json,
+    JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{Error, Result};
 use crate::codec::convert::{ConvertTo, ToInt};
@@ -797,7 +797,7 @@ pub fn decode_datum(data: &mut BytesSlice<'_>) -> Result<Datum> {
                 let dur = Duration::from_nanos(nanos, MAX_FSP)?;
                 Datum::Dur(dur)
             }
-            DECIMAL_FLAG => Decimal::decode(data).map(Datum::Dec)?,
+            DECIMAL_FLAG => data.decode_decimal().map(Datum::Dec)?,
             VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64)?,
             VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64)?,
             JSON_FLAG => Json::decode(data).map(Datum::Json)?,
