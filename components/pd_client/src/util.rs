@@ -16,10 +16,9 @@ use grpcio::{
     Result as GrpcResult,
 };
 use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
+    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient, RegionHeartbeatRequest,
     RegionHeartbeatResponse, ResponseHeader,
 };
-use kvproto::pdpb_grpc::PdClient;
 use tokio_timer::timer::Handle;
 
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};

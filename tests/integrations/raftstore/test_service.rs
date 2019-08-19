@@ -7,10 +7,10 @@ use futures::{future, Future, Stream};
 use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use kvproto::coprocessor::*;
-use kvproto::debugpb_grpc::DebugClient;
+use kvproto::debugpb::DebugClient;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
