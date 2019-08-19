@@ -18,11 +18,11 @@ pub use engine_rocksdb::{
     DBEntryType, DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
     EnvOptions, EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData,
-    IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, PerfContext, Range, RateLimiter,
-    ReadOptions, SeekKey, SequentialFile, SliceTransform, TablePropertiesCollection,
-    TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
-    UserCollectedProperties, Writable, WriteBatch, WriteOptions, WriteStallCondition,
-    WriteStallInfo, DB,
+    IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, MemoryAllocator, PerfContext,
+    Range, RateLimiter, ReadOptions, SeekKey, SequentialFile, SliceTransform,
+    TablePropertiesCollection, TablePropertiesCollector, TablePropertiesCollectorFactory,
+    TitanBlobIndex, TitanDBOptions, UserCollectedProperties, Writable, WriteBatch, WriteOptions,
+    WriteStallCondition, WriteStallInfo, DB,
 };
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use tipb::FieldType;
 
 use super::data_type::*;
 use crate::codec::datum;
-use crate::codec::mysql::Tz;
+use crate::codec::mysql::{DecimalDecoder, Tz};
 use crate::codec::{Error, Result};
 
 #[inline]
@@ -43,7 +43,7 @@ fn decode_float(v: &mut &[u8]) -> Result<f64> {
 
 #[inline]
 fn decode_decimal(v: &mut &[u8]) -> Result<Decimal> {
-    Decimal::decode(v)
+    v.decode_decimal()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as decimal".to_owned()))
 }
 
