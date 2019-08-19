@@ -13,7 +13,7 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 
 use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use tikv_util::security::SecurityManager;

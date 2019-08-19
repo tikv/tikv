@@ -1,9 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::convert::TryFrom;
 
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+use tidb_query_datatype::*;
 use tipb::FieldType;
 
 use crate::codec::convert::*;
@@ -122,21 +123,6 @@ pub fn get_cast_fn_rpn_node(
     })
 }
 
-fn produce_dec_with_specified_tp(
-    ctx: &mut EvalContext,
-    dec: Decimal,
-    ft: &FieldType,
-) -> Result<Decimal> {
-    // FIXME: The implementation is not exactly the same as TiDB's `ProduceDecWithSpecifiedTp`.
-    let (flen, decimal) = (ft.as_accessor().flen(), ft.as_accessor().decimal());
-    if flen == tidb_query_datatype::UNSPECIFIED_LENGTH
-        || decimal == tidb_query_datatype::UNSPECIFIED_LENGTH
-    {
-        return Ok(dec);
-    }
-    Ok(dec.convert_to(ctx, flen as u8, decimal as u8)?)
-}
-
 /// Indicates whether the current expression is evaluated in union statement
 ///
 /// Note: The TiDB will push down the `inUnion` flag by implicit constant arguments,
@@ -150,7 +136,7 @@ fn in_union(implicit_args: &[ScalarValue]) -> bool {
 /// The unsigned int implementation for push down signature `CastIntAsDecimal`.
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-pub fn cast_uint_as_decimal(
+fn cast_uint_as_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra<'_>,
     val: &Option<i64>,
@@ -158,7 +144,12 @@ pub fn cast_uint_as_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            let dec = Decimal::from(*val as u64);
+            // TODO, TiDB's uint to decimal seems has bug, fix this after fix TiDB's
+            let dec = if in_union(extra.implicit_args) && *val < 0 {
+                Decimal::zero()
+            } else {
+                Decimal::from(*val as u64)
+            };
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 dec,
@@ -204,14 +195,63 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     }
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn]
 #[inline]
-pub fn cast_uint_as_int(ctx: &mut EvalContext, val: &Option<Int>) -> Result<Option<i64>> {
+fn cast_uint_as_int(val: &Option<Int>) -> Result<Option<i64>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = (*val as u64).to_int(ctx, FieldTypeTp::LongLong)?;
-            Ok(Some(val))
+            // the val is uint, so it will never < 0,
+            // then we needn't to check whether in_union.
+            //
+            // needn't to call convert_uint_as_int
+            Ok(Some(*val as i64))
+        }
+    }
+}
+
+/// The implementation for push down signature `CastIntAsReal` from unsigned integer.
+#[rpn_fn(capture = [extra])]
+#[inline]
+fn cast_uint_as_real(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            // TODO, TiDB's here may has bug(val is uint, why it will <0 ?),
+            // fix this after TiDB's had fixed.
+            if in_union(extra.implicit_args) && *val < 0 {
+                return Ok(Some(Real::new(0f64).unwrap()));
+            }
+            let val = *val as u64;
+            Ok(Real::new(val as f64).ok())
+        }
+    }
+}
+
+/// The implementation for push down signature `CastIntAsString` from unsigned integer.
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_uint_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let p = (*val as u64).to_string().into_bytes();
+            let res = produce_str_with_specified_tp(
+                ctx,
+                Cow::Borrowed(p.as_slice()),
+                &extra.ret_field_type,
+                false,
+            )?;
+            let mut res = match res {
+                Cow::Borrowed(_) => p,
+                Cow::Owned(x) => x.to_vec(),
+            };
+            pad_zero_for_binary_type(&mut res, &extra.ret_field_type);
+            Ok(Some(res))
         }
     }
 }
@@ -276,33 +316,6 @@ cast_as_unsigned_integer!(
 cast_as_unsigned_integer!(DateTime, cast_datetime_as_uint);
 cast_as_unsigned_integer!(Duration, cast_duration_as_uint);
 cast_as_unsigned_integer!(Json, cast_json_as_uint);
-
-/// The implementation for push down signature `CastIntAsReal` from unsigned integer.
-#[rpn_fn(capture = [ctx])]
-#[inline]
-pub fn cast_uint_as_real(ctx: &mut EvalContext, val: &Option<Int>) -> Result<Option<Real>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let val = (*val as u64).convert(ctx)?;
-            // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
-            Ok(Real::new(val).ok())
-        }
-    }
-}
-
-/// The implementation for push down signature `CastIntAsString` from unsigned integer.
-#[rpn_fn]
-#[inline]
-pub fn cast_uint_as_string(val: &Option<Int>) -> Result<Option<Bytes>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-            Ok(Some((*val as u64).to_string().into_bytes()))
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
