@@ -3974,11 +3974,11 @@ mod tests {
         let mut apply1_handle = 0;
 
         let mut worker: Vec<JoinHandle<()>> = Vec::new();
-        for _i in 0..100 {
+        for _i in 0..1 {
             let tx1 = send.clone();
             let router = router.clone();
             let t = thread::spawn(move || {
-                for _i in 0..10000 {
+                for _i in 0..1000000 {
                     let sender = tx1.clone();
                     router.schedule_task(
                         1,
@@ -3995,11 +3995,11 @@ mod tests {
             worker.push(t);
         }
 
-        for _i in 0..100 {
+        for _i in 0..1 {
             let tx1 = send.clone();
             let router = router.clone();
             let t = thread::spawn(move || {
-                for _i in 0..10000 {
+                for _i in 0..1000000 {
                     let sender = tx1.clone();
                     router.schedule_task(
                         2,
