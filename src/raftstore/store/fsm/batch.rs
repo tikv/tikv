@@ -103,6 +103,7 @@ impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 #[allow(clippy::vec_box)]
 pub struct Batch<N, C> {
     normals: Vec<Box<N>>,
+    // Record the number of times fsm was polled.
     count: Vec<usize>,
     control: Option<Box<C>>,
 }
@@ -227,6 +228,8 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
+    /// Release fsm when it handles the check_size round in this batch.
+    /// Then notify owner via a `FsmScheduler`.
     pub fn check_batch(&mut self, check_size: &mut usize, scheduler: NormalScheduler<N, C>) {
         let mut v: Vec<usize> = Vec::new();
         for (i, count) in self.count.iter_mut().enumerate() {
@@ -362,6 +365,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.remove(r);
                 }
             }
+            // If the FSM is in the batch for a long time,
+            // we need to release it to balance the thread load.
             batch.check_batch(&mut 5, self.router.get_normal_scheduler());
 
             // Fetch batch after every round is finished. It's helpful to protect regions
