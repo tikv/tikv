@@ -642,11 +642,16 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return std::ptr::null_mut();
         }
         let name = CString::new("write_compaction_filter").unwrap();
-        let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone).unwrap();
-        let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone).unwrap();
-        let metrics = METRICS.lock().unwrap().as_ref().map(Arc::clone).unwrap();
-        let filter = Box::new(WriteCompactionFilter::new(safe_point, db, metrics));
-        unsafe { new_compaction_filter_raw(name, true, filter) }
+        let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone);
+        let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone);
+        let metrics = METRICS.lock().unwrap().as_ref().map(Arc::clone);
+        match (safe_point, db, metrics) {
+            (Some(sp), Some(db), Some(m)) => {
+                let filter = Box::new(WriteCompactionFilter::new(sp, db, m));
+                unsafe { new_compaction_filter_raw(name, true, filter) }
+            }
+            _ => std::ptr::null_mut(),
+        }
     }
 }
 
@@ -680,7 +685,7 @@ impl WriteCompactionFilter {
         self.write_batch.delete(key).unwrap();
         if self.write_batch.data_size() > DEFAULT_DELETE_BATCH_SIZE {
             let mut opts = WriteOptions::new();
-            opts.set_sync(true);
+            opts.set_sync(false);
             self.db.write_opt(&self.write_batch, &opts).unwrap();
             self.write_batch.clear();
         }

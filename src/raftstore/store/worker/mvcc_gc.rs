@@ -56,63 +56,41 @@ impl MvccGcRunner {
 
     fn compact(&self, start_key: &[u8], end_key: &[u8]) {
         let handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
-        compact_range(&self.db, handle, Some(start_key), Some(end_key), false, 8);
+        compact_range(&self.db, handle, Some(start_key), Some(end_key), false, 2);
     }
 }
 
 impl Runnable<MvccGcTask> for MvccGcRunner {
     fn run(&mut self, task: MvccGcTask) {
         self.safe_point.store(task.safe_point, Ordering::Release);
-        insert_range(&mut self.tasks, &task.start_key, &task.end_key);
-    }
+        if let Some((sk, ek, mc)) = insert_range(&mut self.tasks, &task.start_key, &task.end_key) {
+            init_mvcc_gc_db(Arc::clone(&self.db));
+            let metrics = Arc::new(GcMetrics::default());
+            init_metrics(Arc::clone(&metrics));
 
-    fn on_tick(&mut self) {
-        let tasks = mem::replace(&mut self.tasks, Default::default());
-        if tasks.len() < CONTIGUOUS_REGION_GC_THRESHOLD {
-            return;
+            let start_time = Instant::now();
+            self.compact(&sk, &ek);
+            let elapsed = duration_to_ms(start_time.elapsed());
+            info!(
+                "gc worker handles {} regions in {} ms, delete {} writes, {} defaults",
+                mc,
+                elapsed,
+                metrics.write_versions.load(Ordering::Relaxed),
+                metrics.default_versions.load(Ordering::Relaxed),
+            );
         }
-
-        init_mvcc_gc_db(Arc::clone(&self.db));
-        let metrics = Arc::new(GcMetrics::default());
-        init_metrics(Arc::clone(&metrics));
-
-        let start_time = Instant::now();
-        let mut merged_count = 0;
-        for (start_key, (end_key, count)) in tasks {
-            if count < CONTIGUOUS_REGION_GC_THRESHOLD {
-                self.tasks.insert(start_key, (end_key, count));
-                continue;
-            }
-            merged_count += count;
-            self.compact(&start_key, &end_key);
-        }
-        if merged_count == 0 {
-            return;
-        }
-        let elapsed = duration_to_ms(start_time.elapsed());
-        info!(
-            "on tick, gc worker handles {} regions in {} ms, delete {} writes, {} defaults",
-            merged_count,
-            elapsed,
-            metrics.write_versions.load(Ordering::Relaxed),
-            metrics.default_versions.load(Ordering::Relaxed),
-        );
     }
 }
 
 impl RunnableWithTimer<MvccGcTask, ()> for MvccGcRunner {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
-        let tasks = mem::replace(&mut self.tasks, Default::default());
-        if tasks.len() < CONTIGUOUS_REGION_GC_THRESHOLD {
-            return;
-        }
-
         init_mvcc_gc_db(Arc::clone(&self.db));
         let metrics = Arc::new(GcMetrics::default());
         init_metrics(Arc::clone(&metrics));
 
         let start_time = Instant::now();
         let mut merged_count = 0;
+        let tasks = mem::replace(&mut self.tasks, Default::default());
         for (start_key, (end_key, count)) in tasks {
             merged_count += count;
             self.compact(&start_key, &end_key);
@@ -130,9 +108,13 @@ impl RunnableWithTimer<MvccGcTask, ()> for MvccGcRunner {
 }
 
 const COLLECT_TASK_INTERVAL: Duration = Duration::from_secs(60);
-const CONTIGUOUS_REGION_GC_THRESHOLD: usize = 10;
+const CONTIGUOUS_REGION_GC_THRESHOLD: usize = 16;
 
-fn insert_range(map: &mut BTreeMap<Vec<u8>, (Vec<u8>, usize)>, start_key: &[u8], end_key: &[u8]) {
+fn insert_range(
+    map: &mut BTreeMap<Vec<u8>, (Vec<u8>, usize)>,
+    start_key: &[u8],
+    end_key: &[u8],
+) -> Option<(Vec<u8>, Vec<u8>, usize)> {
     let mut start_key = data_key(start_key);
     let mut end_key = data_end_key(end_key);
 
@@ -158,7 +140,11 @@ fn insert_range(map: &mut BTreeMap<Vec<u8>, (Vec<u8>, usize)>, start_key: &[u8],
             merged_count += mc;
         }
     }
+    if merged_count > CONTIGUOUS_REGION_GC_THRESHOLD {
+        return Some((start_key.clone(), end_key.clone(), merged_count));
+    }
     map.insert(start_key, (end_key, merged_count));
+    None
 }
 
 #[test]

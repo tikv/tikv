@@ -425,7 +425,10 @@ impl<S: Snapshot> MvccReader<S> {
 
         let props = match self.get_mvcc_properties(safe_point) {
             Some(v) => v,
-            None => return true,
+            None => {
+                error!("region needs gc because of no mvcc properties");
+                return true;
+            }
         };
 
         // No data older than safe_point to GC.
