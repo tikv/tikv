@@ -1,10 +1,11 @@
 use std::cmp::{max, min};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display};
-use std::mem;
 use std::ops::Bound::Included;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use crate::raftstore::store::keys::{data_end_key, data_key};
@@ -35,16 +36,24 @@ pub struct MvccGcRunner {
     db: Arc<DB>,
     safe_point: Arc<AtomicU64>,
     tasks: BTreeMap<Vec<u8>, (Vec<u8>, usize)>,
+    running_tasks: HashMap<Vec<u8>, Vec<u8>>,
+    sender: SyncSender<(Vec<u8>, Vec<u8>)>,
+    receiver: Receiver<(Vec<u8>, Vec<u8>)>,
 }
 
 impl MvccGcRunner {
     pub fn new(db: Arc<DB>) -> MvccGcRunner {
         let safe_point = Arc::new(AtomicU64::new(0));
         init_safe_point(Arc::clone(&safe_point));
+        init_mvcc_gc_db(Arc::clone(&db));
+        let (tx, rx) = mpsc::sync_channel(CONCURRENCY);
         MvccGcRunner {
             db,
             safe_point,
             tasks: BTreeMap::new(),
+            running_tasks: HashMap::new(),
+            sender: tx,
+            receiver: rx,
         }
     }
 
@@ -54,61 +63,87 @@ impl MvccGcRunner {
         timer
     }
 
-    fn compact(&self, start_key: &[u8], end_key: &[u8]) {
-        let handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
-        compact_range(&self.db, handle, Some(start_key), Some(end_key), false, 2);
-    }
+    // fn compact(&self, start_key: &[u8], end_key: &[u8]) {
+    //     let handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
+    //     compact_range(&self.db, handle, Some(start_key), Some(end_key), false, 2);
+    // }
 }
 
 impl Runnable<MvccGcTask> for MvccGcRunner {
     fn run(&mut self, task: MvccGcTask) {
         self.safe_point.store(task.safe_point, Ordering::Release);
-        if let Some((sk, ek, mc)) = insert_range(&mut self.tasks, &task.start_key, &task.end_key) {
-            init_mvcc_gc_db(Arc::clone(&self.db));
-            let metrics = Arc::new(GcMetrics::default());
-            init_metrics(Arc::clone(&metrics));
+        for (sk, ek) in &self.running_tasks {
+            let dsk = data_key(&task.start_key);
+            let dek = data_end_key(&task.end_key);
+            if sk < &dek && &dsk < ek {
+                // overlap with a range in compaction.
+                info!("gc task overlap, skip");
+                return;
+            }
+        }
 
-            let start_time = Instant::now();
-            self.compact(&sk, &ek);
-            let elapsed = duration_to_ms(start_time.elapsed());
-            info!(
-                "gc worker handles {} regions in {} ms, delete {} writes, {} defaults",
-                mc,
-                elapsed,
-                metrics.write_versions.load(Ordering::Relaxed),
-                metrics.default_versions.load(Ordering::Relaxed),
-            );
+        if let Some((sk, ek, mc)) = insert_range(&mut self.tasks, &task.start_key, &task.end_key) {
+            if self.running_tasks.len() >= CONCURRENCY {
+                let (recv_sk, _) = self.receiver.recv().unwrap();
+                self.running_tasks.remove(&recv_sk).unwrap();
+            }
+            self.running_tasks.insert(sk.clone(), ek.clone());
+            let sender = self.sender.clone();
+            let db = Arc::clone(&self.db);
+
+            thread::spawn(move || {
+                let metrics = Arc::new(GcMetrics::default());
+                init_metrics(Arc::clone(&metrics));
+                let start_time = Instant::now();
+
+                let handle = get_cf_handle(&db, CF_WRITE).unwrap();
+                compact_range(&db, handle, Some(&sk), Some(&ek), false, 1);
+
+                let elapsed = duration_to_ms(start_time.elapsed());
+                info!(
+                    "gc worker handles {} regions in {} ms, delete {} writes, {} defaults",
+                    mc,
+                    elapsed,
+                    metrics.write_versions.load(Ordering::Relaxed),
+                    metrics.default_versions.load(Ordering::Relaxed),
+                );
+                sender.send((sk, ek)).unwrap();
+            });
+            // Avoid 2 compaction filter uses 1 metrics.
+            thread::sleep(Duration::from_secs(1));
         }
     }
 }
 
 impl RunnableWithTimer<MvccGcTask, ()> for MvccGcRunner {
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
-        init_mvcc_gc_db(Arc::clone(&self.db));
-        let metrics = Arc::new(GcMetrics::default());
-        init_metrics(Arc::clone(&metrics));
+    fn on_timeout(&mut self, _timer: &mut Timer<()>, _: ()) {
+        // TODO: deal with it.
+        // init_mvcc_gc_db(Arc::clone(&self.db));
+        // let metrics = Arc::new(GcMetrics::default());
+        // init_metrics(Arc::clone(&metrics));
 
-        let start_time = Instant::now();
-        let mut merged_count = 0;
-        let tasks = mem::replace(&mut self.tasks, Default::default());
-        for (start_key, (end_key, count)) in tasks {
-            merged_count += count;
-            self.compact(&start_key, &end_key);
-        }
-        let elapsed = duration_to_ms(start_time.elapsed());
-        info!(
-            "on timeout, gc worker handles {} regions in {} ms, delete {} writes, {} defaults",
-            merged_count,
-            elapsed,
-            metrics.write_versions.load(Ordering::Relaxed),
-            metrics.default_versions.load(Ordering::Relaxed),
-        );
-        timer.add_task(COLLECT_TASK_INTERVAL, ());
+        // let start_time = Instant::now();
+        // let mut merged_count = 0;
+        // let tasks = mem::replace(&mut self.tasks, Default::default());
+        // for (start_key, (end_key, count)) in tasks {
+        //     merged_count += count;
+        //     self.compact(&start_key, &end_key);
+        // }
+        // let elapsed = duration_to_ms(start_time.elapsed());
+        // info!(
+        //     "on timeout, gc worker handles {} regions in {} ms, delete {} writes, {} defaults",
+        //     merged_count,
+        //     elapsed,
+        //     metrics.write_versions.load(Ordering::Relaxed),
+        //     metrics.default_versions.load(Ordering::Relaxed),
+        // );
+        // timer.add_task(COLLECT_TASK_INTERVAL, ());
     }
 }
 
 const COLLECT_TASK_INTERVAL: Duration = Duration::from_secs(60);
 const CONTIGUOUS_REGION_GC_THRESHOLD: usize = 16;
+const CONCURRENCY: usize = 4;
 
 fn insert_range(
     map: &mut BTreeMap<Vec<u8>, (Vec<u8>, usize)>,

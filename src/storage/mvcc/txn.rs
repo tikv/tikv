@@ -664,6 +664,12 @@ struct WriteCompactionFilter {
 
     key_prefix: Vec<u8>,
     remove_older: bool,
+
+    versions: usize,
+    stale_versions: usize,
+    stale_rows: usize,
+    deleted: usize,
+    skipped: usize, // can't delete because it's not the last level.
 }
 
 impl WriteCompactionFilter {
@@ -678,6 +684,12 @@ impl WriteCompactionFilter {
             write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
             key_prefix: vec![],
             remove_older: false,
+
+            versions: 0,
+            stale_versions: 0,
+            stale_rows: 0,
+            deleted: 0,
+            skipped: 0,
         }
     }
 
@@ -703,6 +715,14 @@ impl Drop for WriteCompactionFilter {
             opts.set_sync(true);
             self.db.write_opt(&self.write_batch, &opts).unwrap();
         }
+        info!(
+            "WriteCompactionFilter finished";
+            "versions" => self.versions,
+            "stale_versions" => self.stale_versions,
+            "stale_rows" => self.stale_rows,
+            "deleted" => self.deleted,
+            "skipped" => self.skipped,
+        );
     }
 }
 
@@ -716,9 +736,9 @@ impl CompactionFilter for WriteCompactionFilter {
         _: &mut bool,
     ) -> bool {
         let safe_point = self.safe_point.load(Ordering::Acquire);
-        if safe_point == 0 {
-            return false;
-        }
+        assert!(safe_point > 0);
+
+        self.versions += 1;
 
         let key_prefix = match Key::split_on_ts_for(key) {
             Ok((_, ts)) if ts > safe_point => return false,
@@ -727,10 +747,13 @@ impl CompactionFilter for WriteCompactionFilter {
             Err(_) => return false,
         };
 
+        self.stale_versions += 1;
+
         if self.key_prefix != key_prefix {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
+            self.stale_rows += 1;
         }
 
         let mut filtered = self.remove_older;
@@ -742,6 +765,9 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Delete => {
                     self.remove_older = true;
                     filtered = level == self.max_level;
+                    if !filtered {
+                        self.skipped += 1;
+                    }
                 }
                 WriteType::Put => self.remove_older = true,
             }
@@ -753,6 +779,7 @@ impl CompactionFilter for WriteCompactionFilter {
                 let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
                 self.delete_default_key(key.as_encoded());
             }
+            self.deleted += 1;
         }
 
         filtered
