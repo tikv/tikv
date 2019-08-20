@@ -42,7 +42,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 
 pub fn run_tikv(mut config: TiKvConfig) {
     if let Err(e) = persist_critical_config(&config) {
-        fatal!("persis critical config failed: {}", e);
+        fatal!("persist critical config failed: {}", e);
     }
 
     // Sets the global logger ASAP.
