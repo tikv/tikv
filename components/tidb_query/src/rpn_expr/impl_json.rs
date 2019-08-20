@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
+
 use tidb_query_codegen::rpn_fn;
+use tidb_query_datatype::EvalType;
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::json::*;
 use crate::Result;
-
-use std::collections::BTreeMap;
 
 #[rpn_fn]
 #[inline]
@@ -29,22 +30,22 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
     )))
 }
 
-fn json_validator(expr: &tipb::Expr) -> Result<()> {
+fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
     for chunk in expr.get_children().chunks(2) {
         if chunk.len() == 1 {
             return Err(other_err!(
                 "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
             ));
         } else {
-            super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
-            super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
+            super::function::validate_expr_return_type(&chunk[0], EvalType::Bytes)?;
+            super::function::validate_expr_return_type(&chunk[1], EvalType::Json)?;
         }
     }
     Ok(())
 }
 
 /// Required args like `&[(&Option<Byte>, &Option<Json>)]`.
-#[rpn_fn(raw_varg, extra_validator = json_validator)]
+#[rpn_fn(raw_varg, extra_validator = json_object_validator)]
 #[inline]
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
@@ -72,24 +73,23 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     Ok(Some(Json::Object(pairs)))
 }
 
-macro_rules! parse_opt {
-    ($expr:expr) => {{
-        match $expr {
-            Some(ref v) => v.to_owned(),
-            None => return Ok(None),
-        }
-    }};
-}
-
 // According to mysql 5.7,
 // arguments of json_merge should not be less than 2.
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
 pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
     // min_args = 2, so it's ok to call args[0]
-    let mut base_json = parse_opt!(args[0]);
+    let mut base_json = match args[0] {
+        None => return Ok(None),
+        Some(json) => json.to_owned()
+    };
+
     for json_to_merge in &args[1..] {
-        base_json = base_json.merge(parse_opt!(json_to_merge));
+        let json_to_merge = match json_to_merge {
+            None => return Ok(None),
+            Some(json) => json.to_owned()
+        };
+        base_json = base_json.merge(json_to_merge);
     }
     Ok(Some(base_json))
 }
@@ -104,13 +104,12 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
 
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
-
-    use std::str::FromStr;
 
     #[test]
     fn test_json_type() {
