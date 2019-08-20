@@ -2793,7 +2793,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::useless_vec)]
     #[test]
     fn test_request_inspector() {
         struct DummyInspector {
@@ -2843,8 +2842,8 @@ mod tests {
             table.push((req.clone(), policy));
         }
 
-        for applied_to_index_term in vec![true, false] {
-            for lease_state in vec![LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
+        for &applied_to_index_term in &[true, false] {
+            for &lease_state in &[LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
                 for (req, mut policy) in table.clone() {
                     let mut inspector = DummyInspector {
                         applied_to_index_term,
@@ -2876,7 +2875,7 @@ mod tests {
 
         // Err(_)
         let mut err_table = vec![];
-        for op in vec![CmdType::Prewrite, CmdType::Invalid] {
+        for &op in &[CmdType::Prewrite, CmdType::Invalid] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
             req.set_requests(vec![request].into());
