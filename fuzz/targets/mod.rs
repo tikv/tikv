@@ -158,14 +158,13 @@ impl<T: ReadLiteralExt> ReadAsTimeType for T {}
 
 fn fuzz_time(t: tidb_query::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Result<(), Error> {
     use tidb_query::codec::convert::ConvertTo;
-    use tidb_query::codec::data_type::Decimal;
+    use tidb_query::codec::data_type::{Decimal, Duration};
     use tidb_query::codec::mysql::TimeEncoder;
     use tidb_query::expr::EvalContext;
 
     let _ = t.clone().set_time_type(cursor.read_as_time_type()?);
     let _ = t.is_zero();
     let _ = t.invalid_zero();
-    let _ = t.to_duration();
     let _ = t.to_packed_u64();
     let _ = t.clone().round_frac(cursor.read_as_i8()?);
     let _ = t.is_leap_year();
@@ -180,6 +179,7 @@ fn fuzz_time(t: tidb_query::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Re
     let _: f64 = t.convert(&mut ctx)?;
     let _: Vec<u8> = t.convert(&mut ctx)?;
     let _: Decimal = t.convert(&mut ctx)?;
+    let _: Duration = t.convert(&mut ctx)?;
     Ok(())
 }
 

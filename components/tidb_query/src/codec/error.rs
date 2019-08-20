@@ -44,7 +44,7 @@ quick_error! {
             description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
-        Eval(s: String,code:i32) {
+        Eval(s: String, code:i32) {
             description("evaluation failed")
             display("{}", s)
         }
@@ -188,6 +188,12 @@ impl From<RegexpError> for Error {
     fn from(err: RegexpError) -> Error {
         let msg = format!("Got error '{:.64}' from regexp", err.description());
         Error::Eval(msg, ERR_REGEXP)
+    }
+}
+
+impl From<Box<codec::Error>> for Error {
+    fn from(err: Box<codec::Error>) -> Error {
+        box_err!("codec:{:?}", err)
     }
 }
 

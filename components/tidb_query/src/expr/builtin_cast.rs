@@ -521,9 +521,8 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let res = val
-            .to_duration()?
-            .round_frac(self.field_type.decimal() as i8)?;
+        let dur: Duration = val.convert(ctx)?;
+        let res = dur.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(res))
     }
 
