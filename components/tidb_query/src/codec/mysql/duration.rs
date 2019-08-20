@@ -243,7 +243,6 @@ mod parser {
                 >> (neg, [day, hhmmss[0], hhmmss[1], hhmmss[2], fraction])
         )
     }
-
 } /* parser */
 
 bitfield! {
