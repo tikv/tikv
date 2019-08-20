@@ -14,9 +14,12 @@ mod top_n;
 mod util;
 
 fn main() {
+    let mut cpu_set = nix::sched::CpuSet::new();
+    cpu_set.set(19).unwrap();
+    nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set).unwrap();
+
     let mut c = criterion::Criterion::default()
-        .configure_from_args()
-        .sample_size(10);
+        .configure_from_args();
 
     util::fixture::bench(&mut c);
     table_scan::bench(&mut c);
