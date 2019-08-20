@@ -28,7 +28,7 @@ use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
-use tikv_util::collections::HashMap;
+use tikv_util::{collections::HashMap, time::SlowTimer};
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{
@@ -256,7 +256,7 @@ impl<E: Engine> Scheduler<E> {
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
-        info!("Scheduler::new is called to initialize the transaction scheduler");
+        let t = SlowTimer::new();
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
             task_contexts.push(Mutex::new(Default::default()));
@@ -278,7 +278,7 @@ impl<E: Engine> Scheduler<E> {
             detector_scheduler,
         });
 
-        info!("Scheduler::new is finished, the transaction scheduler is initialized");
+        slow_log!(t, "initialized the transaction scheduler");
         Scheduler {
             engine: Some(engine),
             inner,
@@ -372,7 +372,7 @@ impl<E: Engine> Scheduler<E> {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
-                error!("engine async_snapshot failed"; "err" => ?e);
+                info!("engine async_snapshot failed"; "err" => ?e);
                 self.finish_with_err(cid, e.into());
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();

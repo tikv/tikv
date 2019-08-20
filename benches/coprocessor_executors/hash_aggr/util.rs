@@ -4,14 +4,15 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::executor::Aggregation;
-use tipb::expression::Expr;
+use tipb::Aggregation;
+use tipb::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchFastHashAggregationExecutor;
-use tikv::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
-use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::executor::{Executor, HashAggExecutor};
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_query::batch::executors::BatchFastHashAggregationExecutor;
+use tidb_query::batch::executors::BatchSlowHashAggregationExecutor;
+use tidb_query::batch::interface::*;
+use tidb_query::executor::{Executor, HashAggExecutor};
+use tidb_query::expr::EvalConfig;
+use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::hash_aggregate;
@@ -63,7 +64,7 @@ impl HashAggrBencher for NormalBencher {
                 black_box(Box::new(src)),
             )
             .unwrap();
-            Box::new(ex) as Box<dyn Executor>
+            Box::new(ex) as Box<dyn Executor<StorageStats = Statistics>>
         })
         .bench(b);
     }
@@ -102,7 +103,7 @@ impl HashAggrBencher for BatchBencher {
                     black_box(aggr_expr.to_vec()),
                 )
                 .unwrap();
-                Box::new(ex) as Box<dyn BatchExecutor>
+                Box::new(ex) as Box<dyn BatchExecutor<StorageStats = Statistics>>
             } else {
                 let ex = BatchSlowHashAggregationExecutor::new(
                     black_box(Arc::new(EvalConfig::default())),
@@ -111,7 +112,7 @@ impl HashAggrBencher for BatchBencher {
                     black_box(aggr_expr.to_vec()),
                 )
                 .unwrap();
-                Box::new(ex) as Box<dyn BatchExecutor>
+                Box::new(ex) as Box<dyn BatchExecutor<StorageStats = Statistics>>
             }
         })
         .bench(b);

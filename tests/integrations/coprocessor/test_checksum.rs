@@ -7,22 +7,23 @@ use crc::crc64::{self, Digest, Hasher64};
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
-use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
+use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
-use tikv::coprocessor::dag::Scanner;
+use test_coprocessor::*;
+use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query::storage::Range;
+use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
 
-use test_coprocessor::*;
-
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::default();
-    ctx.set_isolation_level(IsolationLevel::SI);
+    ctx.set_isolation_level(IsolationLevel::Si);
 
     let mut checksum = ChecksumRequest::default();
     checksum.set_start_ts(u64::MAX);
     checksum.set_scan_on(scan_on);
-    checksum.set_algorithm(ChecksumAlgorithm::Crc64_Xor);
+    checksum.set_algorithm(ChecksumAlgorithm::Crc64Xor);
 
     let mut req = Request::default();
     req.set_context(ctx);
@@ -66,20 +67,22 @@ fn test_checksum() {
 
 fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> u64 {
     let ctx = Context::default();
-    let snap = SnapshotStore::new(
+    let store = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),
         u64::MAX,
-        IsolationLevel::SI,
+        IsolationLevel::Si,
         true,
     );
-    let mut scanner = Scanner::new(
-        &snap, true, // Scan in reversed order.
-        false, range,
-    )
-    .unwrap();
+    let mut scanner = RangesScanner::new(RangesScannerOptions {
+        storage: TiKVStorage::from(store),
+        ranges: vec![Range::from_pb_range(range, false)],
+        scan_backward_in_range: true,
+        is_key_only: false,
+        is_scanned_range_aware: false,
+    });
 
     let mut checksum = 0;
-    while let Some((k, v)) = scanner.next_row().unwrap() {
+    while let Some((k, v)) = scanner.next().unwrap() {
         let mut digest = Digest::new(crc64::ECMA);
         digest.write(&k);
         digest.write(&v);

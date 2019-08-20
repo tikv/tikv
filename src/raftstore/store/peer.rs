@@ -3,18 +3,19 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, slice, u64};
+use std::{cmp, mem, u64};
 
 use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
 use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse,
-    Request, Response, TransferLeaderRequest, TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest,
+    RaftCmdResponse, ReadIndexResponse, Request, Response, TransferLeaderRequest,
+    TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
@@ -26,8 +27,8 @@ use raft::{
     NO_LIMIT,
 };
 use time::Timespec;
+use uuid::Uuid;
 
-use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
@@ -35,8 +36,10 @@ use crate::raftstore::store::fsm::{
 };
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
+use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
+use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
@@ -53,7 +56,7 @@ use super::DestroyPeerJob;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
-    id: u64,
+    id: Uuid,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
@@ -62,10 +65,7 @@ struct ReadIndexRequest {
 impl ReadIndexRequest {
     // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     fn binary_id(&self) -> &[u8] {
-        unsafe {
-            let id = &self.id as *const u64 as *const u8;
-            slice::from_raw_parts(id, 8)
-        }
+        self.id.as_bytes()
     }
 
     fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
@@ -74,7 +74,7 @@ impl ReadIndexRequest {
     }
 
     fn with_command(
-        id: u64,
+        id: Uuid,
         req: RaftCmdRequest,
         cb: Callback,
         renew_lease_time: Timespec,
@@ -102,17 +102,11 @@ impl Drop for ReadIndexRequest {
 
 #[derive(Default)]
 struct ReadIndexQueue {
-    id_allocator: u64,
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
 }
 
 impl ReadIndexQueue {
-    fn next_id(&mut self) -> u64 {
-        self.id_allocator += 1;
-        self.id_allocator
-    }
-
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
@@ -340,6 +334,8 @@ pub struct Peer {
     pub pending_merge_state: Option<MergeState>,
     /// The state to wait for `PrepareMerge` apply result.
     pub pending_merge_apply_result: Option<WaitApplyResultState>,
+    /// source region is catching up logs for merge
+    pub catch_up_logs: Option<Arc<AtomicU64>>,
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
@@ -366,7 +362,6 @@ impl Peer {
 
         let raft_cfg = raft::Config {
             id: peer.get_id(),
-            peers: vec![],
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
             min_election_tick: cfg.raft_min_election_timeout_ticks,
@@ -381,7 +376,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
+        let raft_group = RawNode::with_logger(&raft_cfg, ps, &slog_global::get_global())?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -421,6 +416,7 @@ impl Peer {
             pending_messages: vec![],
             pending_merge_apply_result: None,
             peer_stat: PeerStat::default(),
+            catch_up_logs: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -447,6 +443,36 @@ impl Peer {
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
+    }
+
+    #[inline]
+    pub fn get_index_term(&self, idx: u64) -> u64 {
+        match self.raft_group.raft.raft_log.term(idx) {
+            Ok(t) => t,
+            Err(e) => panic!("{} fail to load term for {}: {:?}", self.tag, idx, e),
+        }
+    }
+
+    #[inline]
+    pub fn maybe_append_merge_entries(&mut self, merge: CommitMergeRequest) -> Option<u64> {
+        let mut entries = merge.get_entries();
+        if entries.is_empty() {
+            return None;
+        }
+        let first = entries.first().unwrap();
+
+        // make sure message should be with index not smaller than committed
+        let mut log_idx = first.get_index() - 1;
+        if log_idx < self.raft_group.raft.raft_log.committed {
+            entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
+            log_idx = self.raft_group.raft.raft_log.committed;
+        }
+        let log_term = self.get_index_term(log_idx);
+
+        self.raft_group
+            .raft
+            .raft_log
+            .maybe_append(log_idx, log_term, merge.get_commit(), entries)
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
@@ -697,9 +723,9 @@ impl Peer {
             .committed_entries
             .as_ref()
             .map_or(0, |v| v.len() as u64);
-        metrics.append += ready.entries.len() as u64;
+        metrics.append += ready.entries().len() as u64;
 
-        if !raft::is_empty_snap(&ready.snapshot) {
+        if !raft::is_empty_snap(ready.snapshot()) {
             metrics.snapshot += 1;
         }
     }
@@ -935,7 +961,7 @@ impl Peer {
 
     fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
-        if let Some(ref ss) = ready.ss {
+        if let Some(ss) = ready.ss() {
             match ss.raft_state {
                 StateRole::Leader => {
                     // The local read can only be performed after a new leader has applied
@@ -1296,7 +1322,7 @@ impl Peer {
                 if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
                     let ctx = ProposalContext::from_bytes(&entry.context);
                     if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
-                        // We dont need to suspect its lease because peers of new region that
+                        // We don't need to suspect its lease because peers of new region that
                         // in other store do not start election before theirs election timeout
                         // which is longer than the max leader lease.
                         // It's safe to read local within its current lease, however, it's not
@@ -1390,16 +1416,16 @@ impl Peer {
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
         // `ready`.
-        if !self.is_leader() && !ready.read_states.is_empty() {
+        if !self.is_leader() && !ready.read_states().is_empty() {
             // NOTE: there could still be some read requests following, which will be cleared in
             // `clear_uncommitted` later.
-            for state in &ready.read_states {
+            for state in ready.read_states() {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
                 self.post_pending_read_index_on_replica(ctx);
             }
         } else if self.ready_to_handle_read() {
-            for state in &ready.read_states {
+            for state in ready.read_states() {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
@@ -1409,7 +1435,7 @@ impl Peer {
                 propose_time = Some(read.renew_lease_time);
             }
         } else {
-            for state in &ready.read_states {
+            for state in ready.read_states() {
                 let read = &mut self.pending_reads.reads[self.pending_reads.ready_cnt];
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 self.pending_reads.ready_cnt += 1;
@@ -1420,7 +1446,7 @@ impl Peer {
 
         // Note that only after handle read_states can we identify what requests are
         // actually stale.
-        if ready.ss.is_some() {
+        if ready.ss().is_some() {
             let term = self.term();
             // all uncommitted reads will be dropped silently in raft.
             self.pending_reads.clear_uncommitted(term);
@@ -1441,7 +1467,6 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         apply_state: RaftApplyState,
         applied_index_term: u64,
-        merged: bool,
         apply_metrics: &ApplyMetrics,
     ) -> bool {
         let mut has_ready = false;
@@ -1450,10 +1475,8 @@ impl Peer {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        if !merged {
-            self.raft_group
-                .advance_apply(apply_state.get_applied_index());
-        }
+        self.raft_group
+            .advance_apply(apply_state.get_applied_index());
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
@@ -1679,10 +1702,10 @@ impl Peer {
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
     fn count_healthy_node<'a, I>(&self, progress: I) -> usize
     where
-        I: Iterator<Item = &'a Progress>,
+        I: Iterator<Item = (&'a u64, &'a Progress)>,
     {
         let mut healthy = 0;
-        for pr in progress {
+        for (_, pr) in progress {
             if pr.matched >= self.get_store().truncated_index() {
                 healthy += 1;
             }
@@ -1739,7 +1762,7 @@ impl Peer {
         }
 
         let status = self.raft_group.status_ref();
-        let total = status.progress.unwrap().voters().len();
+        let total = status.progress.unwrap().voter_ids().len();
         if total == 1 {
             // It's always safe if there is only one node in the cluster.
             return Ok(());
@@ -1749,18 +1772,19 @@ impl Peer {
         match change_type {
             ConfChangeType::AddNode => {
                 if let Err(raft::Error::NotExists(_, _)) = progress.promote_learner(peer.get_id()) {
-                    let _ = progress.insert_voter(peer.get_id(), Progress::default());
+                    let _ = progress.insert_voter(peer.get_id(), Progress::new(0, 0));
                 }
             }
             ConfChangeType::RemoveNode => {
-                progress.remove(peer.get_id());
+                progress.remove(peer.get_id())?;
             }
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
         }
-        let healthy = self.count_healthy_node(progress.voters().values());
-        let quorum_after_change = raft::quorum(progress.voters().len());
+        let healthy = self.count_healthy_node(progress.voters());
+        let quorum_after_change = raft::majority(progress.voter_ids().len());
         if healthy >= quorum_after_change {
             return Ok(());
         }
@@ -1808,11 +1832,11 @@ impl Peer {
         let status = self.raft_group.status_ref();
         let progress = status.progress.unwrap();
 
-        if !progress.voters().contains_key(&peer_id) {
+        if !progress.voter_ids().contains(&peer_id) {
             return false;
         }
 
-        for progress in progress.voters().values() {
+        for (_, progress) in progress.voters() {
             if progress.state == ProgressState::Snapshot {
                 return false;
             }
@@ -1835,7 +1859,7 @@ impl Peer {
         }
 
         let last_index = self.get_store().last_index();
-        last_index <= progress.voters()[&peer_id].matched + ctx.cfg.leader_transfer_max_log_lag
+        last_index <= progress.get(peer_id).unwrap().matched + ctx.cfg.leader_transfer_max_log_lag
     }
 
     fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
@@ -1918,9 +1942,8 @@ impl Peer {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        let id = self.pending_reads.next_id();
-        let ctx = id.to_ne_bytes();
-        self.raft_group.read_index(ctx.to_vec());
+        let id = Uuid::new_v4();
+        self.raft_group.read_index(id.as_bytes().to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -2404,7 +2427,7 @@ pub trait RequestInspector {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap | CmdType::ReadIndex => has_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSst => {
                     has_write = true
                 }
                 CmdType::Prewrite | CmdType::Invalid => {
@@ -2612,7 +2635,7 @@ impl ReadExecutor {
                 | CmdType::Put
                 | CmdType::Delete
                 | CmdType::DeleteRange
-                | CmdType::IngestSST
+                | CmdType::IngestSst
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
@@ -2770,7 +2793,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::useless_vec)]
     #[test]
     fn test_request_inspector() {
         struct DummyInspector {
@@ -2812,7 +2834,7 @@ mod tests {
             (CmdType::Put, RequestPolicy::ProposeNormal),
             (CmdType::Delete, RequestPolicy::ProposeNormal),
             (CmdType::DeleteRange, RequestPolicy::ProposeNormal),
-            (CmdType::IngestSST, RequestPolicy::ProposeNormal),
+            (CmdType::IngestSst, RequestPolicy::ProposeNormal),
         ] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
@@ -2820,8 +2842,8 @@ mod tests {
             table.push((req.clone(), policy));
         }
 
-        for applied_to_index_term in vec![true, false] {
-            for lease_state in vec![LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
+        for &applied_to_index_term in &[true, false] {
+            for &lease_state in &[LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
                 for (req, mut policy) in table.clone() {
                     let mut inspector = DummyInspector {
                         applied_to_index_term,
@@ -2853,7 +2875,7 @@ mod tests {
 
         // Err(_)
         let mut err_table = vec![];
-        for op in vec![CmdType::Prewrite, CmdType::Invalid] {
+        for &op in &[CmdType::Prewrite, CmdType::Invalid] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
             req.set_requests(vec![request].into());

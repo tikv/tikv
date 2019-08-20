@@ -12,20 +12,7 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(
-    kv,
-    slog_o,
-    slog_kv,
-    slog_error,
-    slog_warn,
-    slog_info,
-    slog_debug,
-    slog_crit,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
+#[macro_use(slog_o, slog_error, slog_warn, slog_info, slog_debug, slog_crit)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
@@ -54,6 +41,7 @@ pub mod future;
 pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod deadline;
 pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
@@ -517,6 +505,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 logger::convert_log_level_to_slog_level(level),
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
+                vec![],
             );
         }
 
@@ -655,9 +644,8 @@ mod tests {
             }
         }
 
-        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
-            a.clone()
+            *a
         }
     }
 
@@ -745,10 +733,7 @@ mod tests {
         assert_eq!(unescape(r"a\\023"), b"a\\023");
         // Escaped three digit octal
         assert_eq!(unescape(r"a\000"), b"a\0");
-        assert_eq!(
-            unescape(r"\342\235\244\360\237\220\267"),
-            "❤🐷".as_bytes()
-        );
+        assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
         // Whitespace
         assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
         // Hex Octals

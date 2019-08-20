@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::expression::Expr;
+use tipb::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchTopNExecutor;
-use tikv::coprocessor::dag::executor::{Executor, TopNExecutor};
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_query::batch::executors::BatchTopNExecutor;
+use tidb_query::executor::{Executor, TopNExecutor};
+use tidb_query::expr::EvalConfig;
+use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::top_n;
@@ -55,7 +56,7 @@ impl TopNBencher for NormalBencher {
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             assert_eq!(order_by_expr.len(), order_is_desc.len());
-            let meta = top_n(order_by_expr, order_is_desc, n).take_topN();
+            let meta = top_n(order_by_expr, order_is_desc, n).take_top_n();
             let src = fb.clone().build_normal_fixture_executor();
             Box::new(
                 TopNExecutor::new(
@@ -64,7 +65,7 @@ impl TopNBencher for NormalBencher {
                     black_box(Box::new(src)),
                 )
                 .unwrap(),
-            ) as Box<dyn Executor>
+            ) as Box<dyn Executor<StorageStats = Statistics>>
         })
         .bench(b);
     }

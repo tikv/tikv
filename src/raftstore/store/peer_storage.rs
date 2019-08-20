@@ -453,8 +453,13 @@ impl Storage for PeerStorage {
         self.initial_state()
     }
 
-    fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
-        self.entries(low, high, max_size)
+    fn entries(
+        &self,
+        low: u64,
+        high: u64,
+        max_size: impl Into<Option<u64>>,
+    ) -> raft::Result<Vec<Entry>> {
+        self.entries(low, high, max_size.into().unwrap_or(u64::MAX))
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
@@ -533,15 +538,12 @@ impl PeerStorage {
                 self.raft_state
             );
 
-            return Ok(RaftState {
-                hard_state,
-                conf_state: ConfState::default(),
-            });
+            return Ok(RaftState::new(hard_state, ConfState::default()));
         }
-        Ok(RaftState {
+        Ok(RaftState::new(
             hard_state,
-            conf_state: conf_state_from_region(self.region()),
-        })
+            conf_state_from_region(self.region()),
+        ))
     }
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -1118,13 +1120,13 @@ impl PeerStorage {
         ready: &Ready,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let snapshot_index = if raft::is_empty_snap(&ready.snapshot) {
+        let snapshot_index = if raft::is_empty_snap(ready.snapshot()) {
             0
         } else {
             fail_point!("raft_before_apply_snap");
             self.apply_snapshot(
                 &mut ctx,
-                &ready.snapshot,
+                ready.snapshot(),
                 &ready_ctx.kv_wb(),
                 &ready_ctx.raft_wb(),
             )?;
@@ -1133,18 +1135,18 @@ impl PeerStorage {
             last_index(&ctx.raft_state)
         };
 
-        if ready.must_sync {
+        if ready.must_sync() {
             ready_ctx.set_sync_log(true);
         }
 
-        if !ready.entries.is_empty() {
-            self.append(&mut ctx, &ready.entries, ready_ctx)?;
+        if !ready.entries().is_empty() {
+            self.append(&mut ctx, ready.entries(), ready_ctx)?;
         }
 
         // Last index is 0 means the peer is created from raft message
         // and has not applied snapshot yet, so skip persistent hard state.
         if ctx.raft_state.get_last_index() > 0 {
-            if let Some(ref hs) = ready.hs {
+            if let Some(hs) = ready.hs() {
                 ctx.raft_state.set_hard_state(hs.clone());
             }
         }
@@ -1527,7 +1529,7 @@ pub fn maybe_upgrade_from_2_to_3(
     // For meta data in the default CF.
     //
     //  1. store_ident_key: 0x01 0x01
-    //  2. prepare_boostrap_key: 0x01 0x02
+    //  2. prepare_bootstrap_key: 0x01 0x02
     if let Some(m) =
         kv_engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)?
     {

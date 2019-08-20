@@ -2,31 +2,28 @@
 
 use std::mem;
 
-use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::Message;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use tipb::executor::TableScan;
 
-use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use kvproto::coprocessor::{KeyRange, Response};
+use protobuf::Message;
+use tidb_query::codec::datum;
+use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
+use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
-use crate::coprocessor::codec::datum;
-use crate::coprocessor::dag::executor::{
-    Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor,
-};
-use crate::coprocessor::*;
-
-use super::cmsketch::CMSketch;
-use super::fmsketch::FMSketch;
+use super::cmsketch::CmSketch;
+use super::fmsketch::FmSketch;
 use super::histogram::Histogram;
+use crate::coprocessor::dag::TiKVStorage;
+use crate::coprocessor::*;
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    snap: Option<SnapshotStore<S>>,
+    storage: Option<TiKVStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
-    metrics: Statistics,
+    storage_stats: Statistics,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
@@ -36,7 +33,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
-        let snap = SnapshotStore::new(
+        let store = SnapshotStore::new(
             snap,
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
@@ -44,9 +41,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
         );
         Ok(Self {
             req,
-            snap: Some(snap),
+            storage: Some(store.into()),
             ranges,
-            metrics: Default::default(),
+            storage_stats: Statistics::default(),
         })
     }
 
@@ -57,11 +54,11 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let (collectors, pk_builder) = builder.collect_columns_stats()?;
 
         let pk_hist = pk_builder.into_proto();
-        let cols: Vec<analyze::SampleCollector> =
+        let cols: Vec<tipb::SampleCollector> =
             collectors.into_iter().map(|col| col.into_proto()).collect();
 
         let res_data = {
-            let mut res = analyze::AnalyzeColumnsResp::default();
+            let mut res = tipb::AnalyzeColumnsResp::default();
             res.set_collectors(cols.into());
             res.set_pk_hist(pk_hist);
             box_try!(res.write_to_bytes())
@@ -73,10 +70,10 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut IndexScanExecutor<SnapshotStore<S>>,
+        scanner: &mut IndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
-        let mut cms = CMSketch::new(
+        let mut cms = CmSketch::new(
             req.get_cmsketch_depth() as usize,
             req.get_cmsketch_width() as usize,
         );
@@ -90,7 +87,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
         }
-        let mut res = analyze::AnalyzeIndexResp::default();
+        let mut res = tipb::AnalyzeIndexResp::default();
         res.set_hist(hist.into_proto());
         if let Some(c) = cms {
             res.set_cms(c.into_proto());
@@ -108,20 +105,20 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let mut scanner = ScanExecutor::index_scan_with_cols_len(
                     i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
-                    self.snap.take().unwrap(),
+                    self.storage.take().unwrap(),
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_storage_stats(&mut self.metrics);
+                scanner.collect_storage_stats(&mut self.storage_stats);
                 res
             }
 
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
-                let snap = self.snap.take().unwrap();
+                let storage = self.storage.take().unwrap();
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
-                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
+                let mut builder = SampleBuilder::new(col_req, storage, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_storage_stats(&mut self.metrics);
+                builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
         };
@@ -133,7 +130,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
-                resp.set_other_error(format!("{}", e));
+                resp.set_other_error(e.to_string());
                 Ok(resp)
             }
             Err(e) => Err(e),
@@ -141,13 +138,13 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
-        dest.add(&self.metrics);
-        self.metrics = Default::default();
+        dest.add(&self.storage_stats);
+        self.storage_stats = Statistics::default();
     }
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: TableScanExecutor<SnapshotStore<S>>,
+    data: TableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
@@ -164,7 +161,7 @@ struct SampleBuilder<S: Snapshot> {
 impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        snap: SnapshotStore<S>,
+        storage: TiKVStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let cols_info = req.take_columns_info();
@@ -179,7 +176,7 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::default();
         meta.set_columns(cols_info);
-        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap)?;
+        let table_scanner = ScanExecutor::table_scan(meta, ranges, storage, false)?;
         Ok(Self {
             data: table_scanner,
             col_len,
@@ -231,8 +228,8 @@ struct SampleCollector {
     null_count: u64,
     count: u64,
     max_sample_size: usize,
-    fm_sketch: FMSketch,
-    cm_sketch: Option<CMSketch>,
+    fm_sketch: FmSketch,
+    cm_sketch: Option<CmSketch>,
     rng: ThreadRng,
     total_size: u64,
 }
@@ -249,15 +246,15 @@ impl SampleCollector {
             null_count: 0,
             count: 0,
             max_sample_size,
-            fm_sketch: FMSketch::new(max_fm_sketch_size),
-            cm_sketch: CMSketch::new(cm_sketch_depth, cm_sketch_width),
+            fm_sketch: FmSketch::new(max_fm_sketch_size),
+            cm_sketch: CmSketch::new(cm_sketch_depth, cm_sketch_width),
             rng: thread_rng(),
             total_size: 0,
         }
     }
 
-    fn into_proto(self) -> analyze::SampleCollector {
-        let mut s = analyze::SampleCollector::default();
+    fn into_proto(self) -> tipb::SampleCollector {
+        let mut s = tipb::SampleCollector::default();
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
         s.set_fm_sketch(self.fm_sketch.into_proto());
@@ -294,8 +291,9 @@ impl SampleCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::datum;
-    use crate::coprocessor::codec::datum::Datum;
+
+    use tidb_query::codec::datum;
+    use tidb_query::codec::datum::Datum;
 
     #[test]
     fn test_sample_collector() {

@@ -11,7 +11,7 @@ pub use self::fixture::FixtureBuilder;
 use criterion::black_box;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::Executor as PbExecutor;
+use tipb::Executor as PbExecutor;
 
 use test_coprocessor::*;
 use tikv::coprocessor::RequestHandler;
@@ -34,18 +34,16 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     store: &Store<RocksEngine>,
     enable_batch: bool,
 ) -> Box<dyn RequestHandler> {
-    use tikv::coprocessor::dag::builder::DAGBuilder;
-    use tikv::coprocessor::Deadline;
-    use tipb::select::DAGRequest;
+    use tipb::DagRequest;
 
-    let mut dag = DAGRequest::default();
+    let mut dag = DagRequest::default();
     dag.set_executors(executors.to_vec().into());
 
-    DAGBuilder::build(
+    tikv::coprocessor::dag::build_handler(
         black_box(dag),
         black_box(ranges.to_vec()),
         black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),
-        Deadline::from_now("", std::time::Duration::from_secs(10)),
+        tikv_util::deadline::Deadline::from_now(std::time::Duration::from_secs(10)),
         64,
         false,
         enable_batch,

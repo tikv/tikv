@@ -10,7 +10,6 @@ use tempfile::Builder;
 
 use test_raftstore::*;
 use tikv::config::DbConfig;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::{
     keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
@@ -18,6 +17,7 @@ use tikv::storage::kv::{DBOptions, Writable, DB};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv_util::rocksdb_util;
 use tikv_util::config::MB;
+use pd_client::PdClient;
 
 const CLUSTER_ID: u64 = 1_000_000_000;
 const STOER_ID: u64 = 1;
@@ -154,7 +154,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     // For meta data in the default CF.
     //
     //  1. store_ident_key: 0x01 0x01
-    //  2. prepare_boostrap_key: 0x01 0x02
+    //  2. prepare_bootstrap_key: 0x01 0x02
     let store_ident = write_store_ident(&kv_engine, CF_DEFAULT, keys::STORE_IDENT_KEY);
     let region = write_region(&kv_engine, CF_DEFAULT, keys::PREPARE_BOOTSTRAP_KEY);
 

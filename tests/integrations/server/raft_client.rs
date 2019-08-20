@@ -60,7 +60,7 @@ fn test_batch_raft_fallback() {
             _stream: RequestStream<BatchRaftMessage>,
             sink: ClientStreamingSink<Done>,
         ) {
-            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            let status = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }

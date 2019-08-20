@@ -172,7 +172,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_err.inc();
 
-                error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool().pool.spawn(move || {
                     notify_scheduler(
                         self.take_scheduler(),
@@ -315,7 +315,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
-                        error!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                        info!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else {
@@ -844,14 +844,13 @@ pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
     scheduler.on_msg(msg);
 }
 
-// Make clippy happy.
-type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
+type LockWritesVals = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
 
 fn find_mvcc_infos_by_key<S: Snapshot>(
     reader: &mut MvccReader<S>,
     key: &Key,
     mut ts: u64,
-) -> Result<MultipleReturnValue> {
+) -> Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
     let lock = reader.load_lock(key)?;

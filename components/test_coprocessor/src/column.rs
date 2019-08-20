@@ -2,8 +2,8 @@
 
 use super::*;
 
-use tikv::coprocessor::codec::{datum, Datum};
-use tipb::schema::ColumnInfo;
+use tidb_query::codec::{datum, Datum};
+use tipb::ColumnInfo;
 
 pub const TYPE_VAR_CHAR: i32 = 1;
 pub const TYPE_LONG: i32 = 2;

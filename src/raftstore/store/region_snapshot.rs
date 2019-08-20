@@ -258,6 +258,10 @@ impl RegionIterator {
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        fail_point!("region_snapshot_seek", |_| {
+            return Err(box_err!("region seek error"));
+        });
+
         self.should_seekable(key)?;
         let key = keys::data_key(key);
         if key == self.end_key {
@@ -360,7 +364,7 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{EnvOptions, IngestExternalFileOptions, Snapshot, SstFileWriter, Writable};
+    use engine::rocks::{IngestExternalFileOptions, Snapshot, SstWriterBuilder, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
     use engine::Engines;
     use engine::*;
@@ -594,7 +598,6 @@ mod tests {
         check_seek_result(&snap, Some(b"a00"), Some(b"a15"), &seek_table);
     }
 
-    #[allow(clippy::type_complexity)]
     #[test]
     fn test_iterate() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
@@ -814,6 +817,7 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         let cache = cfg.storage.block_cache.build_shared_cache();
         cfg.rocksdb.titan.enabled = true;
+        cfg.rocksdb.titan.disable_gc = true;
         cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
         cfg.rocksdb.defaultcf.disable_auto_compactions = true;
         // Disable dynamic_level_bytes, otherwise SST files would be ingested to L0.
@@ -889,8 +893,9 @@ mod tests {
         // Delete one mvcc kvs we have written above.
         // Here we make the kvs on the L5 by ingesting SST.
         let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
-        let mut writer = SstFileWriter::new(EnvOptions::new(), db.get_options());
-        writer.open(&sst_file_path.to_str().unwrap()).unwrap();
+        let mut writer = SstWriterBuilder::new()
+            .build(&sst_file_path.to_str().unwrap())
+            .unwrap();
         writer
             .delete(&data_key(
                 Key::from_raw(b"a").append_ts(start_ts).as_encoded(),

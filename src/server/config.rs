@@ -43,6 +43,7 @@ pub enum GrpcCompressionType {
 /// Configuration for the `server` module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[serde(skip)]
@@ -158,7 +159,7 @@ impl Config {
             );
             self.advertise_addr = self.addr.clone();
         }
-        if self.advertise_addr.starts_with("0.") {
+        if self.advertise_addr.starts_with("0.0.0.0") {
             return Err(box_err!(
                 "invalid advertise-addr: {:?}",
                 self.advertise_addr
@@ -218,9 +219,9 @@ impl Config {
     /// Gets configured grpc compression algorithm.
     pub fn grpc_compression_algorithm(&self) -> CompressionAlgorithms {
         match self.grpc_compression_type {
-            GrpcCompressionType::None => CompressionAlgorithms::None,
-            GrpcCompressionType::Deflate => CompressionAlgorithms::Deflate,
-            GrpcCompressionType::Gzip => CompressionAlgorithms::Gzip,
+            GrpcCompressionType::None => CompressionAlgorithms::GRPC_COMPRESS_NONE,
+            GrpcCompressionType::Deflate => CompressionAlgorithms::GRPC_COMPRESS_DEFLATE,
+            GrpcCompressionType::Gzip => CompressionAlgorithms::GRPC_COMPRESS_GZIP,
         }
     }
 }

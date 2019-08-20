@@ -7,10 +7,10 @@ use futures::{future, Future, Stream};
 use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use kvproto::coprocessor::*;
-use kvproto::debugpb_grpc::DebugClient;
+use kvproto::debugpb::DebugClient;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
@@ -155,9 +155,9 @@ fn test_mvcc_basic() {
     ts += 1;
     let prewrite_start_version = ts;
     let mut mutation = Mutation::default();
-    mutation.op = Op::Put;
-    mutation.key = k.clone();
-    mutation.value = v.clone();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -233,9 +233,9 @@ fn test_mvcc_rollback_and_cleanup() {
     ts += 1;
     let prewrite_start_version = ts;
     let mut mutation = Mutation::default();
-    mutation.op = Op::Put;
-    mutation.key = k.clone();
-    mutation.value = v.clone();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -260,13 +260,13 @@ fn test_mvcc_rollback_and_cleanup() {
     let prewrite_start_version2 = ts;
     let (k2, v2) = (b"key2".to_vec(), b"value2".to_vec());
     let mut mut_pri = Mutation::default();
-    mut_pri.op = Op::Put;
-    mut_pri.key = k2.clone();
-    mut_pri.value = v2.clone();
+    mut_pri.set_op(Op::Put);
+    mut_pri.set_key(k2.clone());
+    mut_pri.set_value(v2.clone());
     let mut mut_sec = Mutation::default();
-    mut_sec.op = Op::Put;
-    mut_sec.key = k.clone();
-    mut_sec.value = b"foo".to_vec();
+    mut_sec.set_op(Op::Put);
+    mut_sec.set_key(k.clone());
+    mut_sec.set_value(b"foo".to_vec());
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -342,9 +342,9 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     ts += 1;
     let prewrite_start_version = ts;
     let mut mutation = Mutation::default();
-    mutation.op = Op::Put;
-    mutation.key = k.clone();
-    mutation.value = v.clone();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -370,13 +370,13 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     let (k2, v2) = (b"key2".to_vec(), b"value2".to_vec());
     let new_v = b"new value".to_vec();
     let mut mut_pri = Mutation::default();
-    mut_pri.op = Op::Put;
-    mut_pri.key = k.clone();
-    mut_pri.value = new_v.clone();
+    mut_pri.set_op(Op::Put);
+    mut_pri.set_key(k.clone());
+    mut_pri.set_value(new_v.clone());
     let mut mut_sec = Mutation::default();
-    mut_sec.op = Op::Put;
-    mut_sec.key = k2.clone();
-    mut_sec.value = v2.to_vec();
+    mut_sec.set_op(Op::Put);
+    mut_sec.set_key(k2.clone());
+    mut_sec.set_value(v2.clone());
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -414,7 +414,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     // GC `k` at the latest ts.
     ts += 1;
     let gc_safe_ponit = ts;
-    let mut gc_req = GCRequest::default();
+    let mut gc_req = GcRequest::default();
     gc_req.set_context(ctx.clone());
     gc_req.safe_point = gc_safe_ponit;
     let gc_resp = client.kv_gc(&gc_req).unwrap();
@@ -549,7 +549,7 @@ fn test_debug_get() {
     // Debug get
     let mut req = debugpb::GetRequest::default();
     req.set_cf(CF_DEFAULT.to_owned());
-    req.set_db(debugpb::DB::KV);
+    req.set_db(debugpb::Db::Kv);
     req.set_key(key);
     let mut resp = debug_client.get(&req.clone()).unwrap();
     assert_eq!(resp.take_value(), v);
@@ -557,7 +557,7 @@ fn test_debug_get() {
     req.set_key(b"foo".to_vec());
     match debug_client.get(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NotFound);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -594,7 +594,7 @@ fn test_debug_raft_log() {
     req.set_log_index(region_id + 1);
     match debug_client.raft_log(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NotFound);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -660,7 +660,7 @@ fn test_debug_region_info() {
     req.set_region_id(region_id + 1);
     match debug_client.region_info(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NotFound);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -696,9 +696,13 @@ fn test_debug_region_size() {
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
     req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
-    let entries = debug_client.region_size(&req).unwrap().take_entries();
+    let entries: Vec<_> = debug_client
+        .region_size(&req)
+        .unwrap()
+        .take_entries()
+        .into();
     assert_eq!(entries.len(), 3);
-    for e in entries.into_vec() {
+    for e in entries {
         cfs.iter().find(|&&c| c == e.cf).unwrap();
         assert!(e.size > 0);
     }
@@ -706,7 +710,7 @@ fn test_debug_region_size() {
     req.set_region_id(region_id + 1);
     match debug_client.region_size(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, RpcStatusCode::NotFound);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }

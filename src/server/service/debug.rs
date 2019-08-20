@@ -8,8 +8,7 @@ use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use kvproto::debugpb::*;
-use kvproto::debugpb_grpc;
+use kvproto::debugpb::{self, *};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
     StatusCmdType, StatusRequest,
@@ -24,9 +23,9 @@ use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
-        Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
-        Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
-        Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
+        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, Some(msg)),
+        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, Some(msg)),
+        Error::Other(e) => (RpcStatusCode::UNKNOWN, Some(format!("{:?}", e))),
     };
     RpcStatus::new(code, msg)
 }
@@ -83,7 +82,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
+impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -174,7 +173,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
         const TAG: &str = "debug_region_size";
 
         let region_id = req.get_region_id();
-        let cfs = req.take_cfs().into_vec();
+        let cfs = req.take_cfs().into();
 
         let f = self
             .pool
@@ -188,7 +187,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
                     entries
                         .into_iter()
                         .map(|(cf, size)| {
-                            let mut entry = RegionSizeResponse_Entry::default();
+                            let mut entry = region_size_response::Entry::default();
                             entry.set_cf(cf);
                             entry.set_size(size as u64);
                             entry
@@ -304,7 +303,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
         let f = self.pool.spawn_fn(move || {
             let list = fail::list().into_iter().map(|(name, actions)| {
-                let mut entry = ListFailPointsResponse_Entry::default();
+                let mut entry = list_fail_points_response::Entry::default();
                 entry.set_name(name);
                 entry.set_actions(actions);
                 entry
@@ -478,4 +477,12 @@ fn consistency_check<T: RaftStoreRouter>(
                     Ok(())
                 })
         })
+}
+
+mod region_size_response {
+    pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
+}
+
+mod list_fail_points_response {
+    pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
 }
