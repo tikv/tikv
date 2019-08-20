@@ -193,6 +193,7 @@ pub struct PollContext<T, C: 'static> {
     pub pd_scheduler: FutureScheduler<PdTask>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
+    // handle Compact, RaftlogGc, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub region_scheduler: Scheduler<RegionTask>,
     pub apply_router: ApplyRouter,
@@ -918,6 +919,7 @@ struct Workers {
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     split_check_worker: Worker<SplitCheckTask>,
+    // handle Compact, RaftlogGc, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
     region_worker: Worker<RegionTask>,
     coprocessor_host: Arc<CoprocessorHost>,
