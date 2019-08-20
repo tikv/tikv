@@ -15,14 +15,11 @@ mod util;
 
 fn main() {
     let mut cpu_set = nix::sched::CpuSet::new();
-    cpu_set.set(0).unwrap();
+    cpu_set.set(19).unwrap();
     nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set).unwrap();
 
     let mut c = criterion::Criterion::default()
-        .warm_up_time(std::time::Duration::new(15, 0))
-        .measurement_time(std::time::Duration::new(25, 0))
-        .configure_from_args()
-        .sample_size(10);
+        .configure_from_args();
 
     util::fixture::bench(&mut c);
     table_scan::bench(&mut c);
