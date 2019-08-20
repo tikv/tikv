@@ -454,5 +454,4 @@ mod tests {
         iter.prev(&mut statistics);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
     }
-
 }
