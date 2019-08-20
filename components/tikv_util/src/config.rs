@@ -62,19 +62,19 @@ const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 pub struct ReadableSize(pub u64);
 
 impl ReadableSize {
-    pub fn kb(count: u64) -> ReadableSize {
+    pub const fn kb(count: u64) -> ReadableSize {
         ReadableSize(count * KB)
     }
 
-    pub fn mb(count: u64) -> ReadableSize {
+    pub const fn mb(count: u64) -> ReadableSize {
         ReadableSize(count * MB)
     }
 
-    pub fn gb(count: u64) -> ReadableSize {
+    pub const fn gb(count: u64) -> ReadableSize {
         ReadableSize(count * GB)
     }
 
-    pub fn as_mb(self) -> u64 {
+    pub const fn as_mb(self) -> u64 {
         self.0 / MB
     }
 }

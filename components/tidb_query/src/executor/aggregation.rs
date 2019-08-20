@@ -4,8 +4,7 @@ use std::cmp::Ordering;
 use std::mem;
 use std::sync::Arc;
 
-use tipb::executor::Aggregation;
-use tipb::expression::{Expr, ExprType};
+use tipb::{Aggregation, Expr, ExprType};
 
 use indexmap::map::Entry as OrderMapEntry;
 use indexmap::IndexMap as OrderMap;
@@ -404,12 +403,12 @@ impl<Src: Executor> StreamAggExecutor<Src> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::i64;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::expression::{Expr, ExprType};
-    use tipb::schema::ColumnInfo;
+    use tikv_util::collections::HashMap;
+    use tipb::ColumnInfo;
+    use tipb::{Expr, ExprType};
 
     use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;

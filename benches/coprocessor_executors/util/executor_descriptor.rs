@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::executor::{ExecType, Executor as PbExecutor, TopN};
-use tipb::expression::{ByItem, Expr};
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::{ByItem, Expr};
+use tipb::{ExecType, Executor as PbExecutor, TopN};
 
 /// Builds a table scan executor descriptor.
 pub fn table_scan(columns_info: &[ColumnInfo]) -> PbExecutor {
@@ -79,6 +79,6 @@ pub fn top_n(order_by_expr: &[Expr], order_is_desc: &[bool], n: usize) -> PbExec
     );
     let mut exec = PbExecutor::default();
     exec.set_tp(ExecType::TypeTopN);
-    exec.set_topN(meta);
+    exec.set_top_n(meta);
     exec
 }

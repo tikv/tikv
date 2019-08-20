@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
@@ -184,8 +183,8 @@ pub struct Runner<T: PdClient> {
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
-    // Seconds between when a region is expected to send a heartbeat.
-    region_heartbeat_interval: u64,
+    // Records the timestamp of boot time.
+    start_ts: u64,
 
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
@@ -200,7 +199,6 @@ impl<T: PdClient> Runner<T> {
         router: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
-        region_heartbeat_interval: u64,
     ) -> Runner<T> {
         Runner {
             store_id,
@@ -210,7 +208,7 @@ impl<T: PdClient> Runner<T> {
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
-            region_heartbeat_interval,
+            start_ts: time_now_sec(),
             scheduler,
         }
     }
@@ -696,10 +694,9 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
                     peer_stat.last_report_ts = time_now_sec();
-                    last_report_ts = cmp::max(
-                        last_report_ts,
-                        peer_stat.last_report_ts - self.region_heartbeat_interval,
-                    );
+                    if last_report_ts == 0 {
+                        last_report_ts = self.start_ts;
+                    }
                     (
                         read_bytes_delta,
                         read_keys_delta,
@@ -765,7 +762,7 @@ fn new_split_region_request(
 
 fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
-    ids: Vec<pdpb::SplitID>,
+    ids: Vec<pdpb::SplitId>,
     right_derive: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();

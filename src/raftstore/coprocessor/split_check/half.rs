@@ -232,14 +232,14 @@ mod tests {
         runnable.run(SplitCheckTask::new(
             region.clone(),
             false,
-            CheckPolicy::SCAN,
+            CheckPolicy::Scan,
         ));
         let split_key = Key::from_raw(b"0005");
         must_split_at(&rx, &region, vec![split_key.clone().into_encoded()]);
         runnable.run(SplitCheckTask::new(
             region.clone(),
             false,
-            CheckPolicy::APPROXIMATE,
+            CheckPolicy::Approximate,
         ));
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
     }

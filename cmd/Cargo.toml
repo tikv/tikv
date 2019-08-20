@@ -1,0 +1,56 @@
+[package]
+name = "cmd"
+version = "0.0.1"
+license = "Apache-2.0"
+edition = "2018"
+publish = false
+
+[features]
+default = ["tikv/default"]
+tcmalloc = ["tikv/tcmalloc"]
+jemalloc = ["tikv/jemalloc"]
+mimalloc = ["tikv/mimalloc"]
+portable = ["tikv/portable"]
+sse = ["tikv/sse"]
+mem-profiling = ["tikv/mem-profiling"]
+profiling = ["tikv/profiling"]
+failpoints = ["tikv/failpoints"]
+
+[lib]
+name = "cmd"
+
+[[bin]]
+name = "tikv-server"
+
+[[bin]]
+name = "tikv-ctl"
+
+[dependencies]
+tikv = { path = "../", default-features = false }
+log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
+rand = "0.6.5"
+toml = "0.4"
+libc = "0.2"
+fs2 = "0.4"
+protobuf = "2"
+nix = "0.11"
+chrono = "0.4"
+clap = "2.32"
+url = "1.7.2"
+futures = "0.1"
+serde = "1.0"
+serde_json = "1.0"
+fail = "0.3"
+grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+raft = "0.6.0-alpha"
+hex = "0.3"
+vlog = "0.1.4"
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+tikv_util = { path = "../components/tikv_util" }
+engine = { path = "../components/engine" }
+pd_client = { path = "../components/pd_client" }
+
+[target.'cfg(unix)'.dependencies]
+signal = "0.6"
