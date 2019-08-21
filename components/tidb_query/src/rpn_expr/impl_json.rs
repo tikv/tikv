@@ -81,13 +81,13 @@ pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
     // min_args = 2, so it's ok to call args[0]
     let mut base_json = match args[0] {
         None => return Ok(None),
-        Some(json) => json.to_owned()
+        Some(json) => json.to_owned(),
     };
 
     for json_to_merge in &args[1..] {
         let json_to_merge = match json_to_merge {
             None => return Ok(None),
-            Some(json) => json.to_owned()
+            Some(json) => json.to_owned(),
         };
         base_json = base_json.merge(json_to_merge);
     }
