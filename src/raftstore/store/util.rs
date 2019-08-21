@@ -544,7 +544,7 @@ fn u64_to_timespec(u: u64) -> Timespec {
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
 #[inline]
-pub fn parse_data_at<T: Message>(data: &[u8], index: u64, tag: &str) -> T {
+pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -> T {
     protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
         panic!("{} data is corrupted at {}: {:?}", tag, index, e);
     })
@@ -568,7 +568,7 @@ pub fn is_sibling_regions(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
 
 pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     // Here `learners` means learner peers, and `nodes` means voter peers.
-    let mut conf_state = ConfState::new();
+    let mut conf_state = ConfState::default();
     for p in region.get_peers() {
         if p.get_is_learner() {
             conf_state.mut_learners().push(p.get_id());
@@ -847,7 +847,7 @@ mod tests {
         ];
 
         for (msg_type, term, is_vote) in tbl {
-            let mut msg = Message::new();
+            let mut msg = Message::default();
             msg.set_msg_type(msg_type);
             msg.set_term(term);
             assert_eq!(is_first_vote_msg(&msg), is_vote);
@@ -865,7 +865,7 @@ mod tests {
         ];
 
         for (msg_type, commit, can_create) in tbl {
-            let mut msg = Message::new();
+            let mut msg = Message::default();
             msg.set_msg_type(msg_type);
             msg.set_commit(commit);
             assert_eq!(is_initial_msg(&msg), can_create);
