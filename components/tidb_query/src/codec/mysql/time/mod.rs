@@ -19,7 +19,7 @@ use tikv_util::codec::BytesSlice;
 
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use crate::codec::mysql::{self, Decimal};
+use crate::codec::mysql::{self, Decimal, Json};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -496,15 +496,6 @@ impl Time {
         }
     }
 
-    pub fn to_duration(&self) -> Result<MyDuration> {
-        if self.is_zero() {
-            return Ok(MyDuration::zero());
-        }
-        let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC
-            + i64::from(self.time.nanosecond());
-        MyDuration::from_nanos(nanos, self.fsp as i8)
-    }
-
     /// Serialize time to a u64.
     ///
     /// If `tp` is TIMESTAMP, it will be converted to a UTC time first.
@@ -821,6 +812,32 @@ impl ConvertTo<Decimal> for Time {
         }
 
         self.to_numeric_string().parse()
+    }
+}
+
+impl ConvertTo<Json> for Time {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        let s = if self.time_type == TimeType::DateTime || self.time_type == TimeType::Timestamp {
+            // TODO: avoid this clone
+            let mut val = self.clone();
+            val.fsp = mysql::MAX_FSP as u8;
+            val.to_string()
+        } else {
+            self.to_string()
+        };
+        Ok(Json::String(s))
+    }
+}
+
+impl ConvertTo<MyDuration> for Time {
+    fn convert(&self, _: &mut EvalContext) -> Result<MyDuration> {
+        if self.is_zero() {
+            return Ok(MyDuration::zero());
+        }
+        let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC
+            + i64::from(self.time.nanosecond());
+        MyDuration::from_nanos(nanos, self.fsp as i8)
     }
 }
 
@@ -1599,9 +1616,10 @@ mod tests {
             ("2017-01-05 23:59:59.575601", 0, "00:00:00"),
             ("0000-00-00 00:00:00", 6, "00:00:00"),
         ];
+        let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
-            let du = t.to_duration().unwrap();
+            let du: MyDuration = t.convert(&mut ctx).unwrap();
             let get = du.to_string();
             assert_eq!(get, expect);
         }

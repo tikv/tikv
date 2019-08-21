@@ -644,9 +644,8 @@ mod tests {
             }
         }
 
-        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
-            a.clone()
+            *a
         }
     }
 

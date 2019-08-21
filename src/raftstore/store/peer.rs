@@ -20,7 +20,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
-use protobuf::{self, Message};
+use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
@@ -2211,7 +2211,7 @@ impl Peer {
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = apply::get_change_peer_cmd(req).unwrap();
-        let mut cc = eraftpb::ConfChange::new();
+        let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
         cc.set_context(data);
@@ -2793,7 +2793,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::useless_vec)]
     #[test]
     fn test_request_inspector() {
         struct DummyInspector {
@@ -2843,8 +2842,8 @@ mod tests {
             table.push((req.clone(), policy));
         }
 
-        for applied_to_index_term in vec![true, false] {
-            for lease_state in vec![LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
+        for &applied_to_index_term in &[true, false] {
+            for &lease_state in &[LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
                 for (req, mut policy) in table.clone() {
                     let mut inspector = DummyInspector {
                         applied_to_index_term,
@@ -2876,7 +2875,7 @@ mod tests {
 
         // Err(_)
         let mut err_table = vec![];
-        for op in vec![CmdType::Prewrite, CmdType::Invalid] {
+        for &op in &[CmdType::Prewrite, CmdType::Invalid] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
             req.set_requests(vec![request].into());
