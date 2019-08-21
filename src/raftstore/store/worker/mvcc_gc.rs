@@ -8,10 +8,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::raftstore::store::keys::{data_end_key, data_key};
 use crate::storage::mvcc::{init_metrics, init_mvcc_gc_db, init_safe_point, GcMetrics};
 use engine::rocks::util::{compact_range, get_cf_handle};
 use engine::rocks::DB;
+use engine::util::get_range_properties_cf;
 use engine::CF_WRITE;
 use tikv_util::time::{duration_to_ms, Instant};
 use tikv_util::timer::Timer;
@@ -35,6 +37,7 @@ impl Display for MvccGcTask {
 pub struct MvccGcRunner {
     db: Arc<DB>,
     safe_point: Arc<AtomicU64>,
+    metrics: Arc<GcMetrics>,
     tasks: BTreeMap<Vec<u8>, (Vec<u8>, usize)>,
     running_tasks: HashMap<Vec<u8>, Vec<u8>>,
     sender: SyncSender<(Vec<u8>, Vec<u8>)>,
@@ -43,13 +46,17 @@ pub struct MvccGcRunner {
 
 impl MvccGcRunner {
     pub fn new(db: Arc<DB>) -> MvccGcRunner {
+        init_mvcc_gc_db(Arc::clone(&db));
         let safe_point = Arc::new(AtomicU64::new(0));
         init_safe_point(Arc::clone(&safe_point));
-        init_mvcc_gc_db(Arc::clone(&db));
+        let metrics = Arc::new(GcMetrics::default());
+        init_metrics(Arc::clone(&metrics));
+
         let (tx, rx) = mpsc::sync_channel(CONCURRENCY);
         MvccGcRunner {
             db,
             safe_point,
+            metrics,
             tasks: BTreeMap::new(),
             running_tasks: HashMap::new(),
             sender: tx,
@@ -87,25 +94,48 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
                 let (recv_sk, _) = self.receiver.recv().unwrap();
                 self.running_tasks.remove(&recv_sk).unwrap();
             }
+
+            // Check properties.
+            let collection = get_range_properties_cf(&self.db, CF_WRITE, &sk, &ek).unwrap();
+            if collection.is_empty() {
+                info!("empty properties for the given range, skip");
+                return;
+            }
+            let mut props = MvccProperties::new();
+            for (_, v) in &*collection {
+                let mvcc = MvccProperties::decode(v.user_collected_properties()).unwrap();
+                props.add(&mvcc);
+            }
+            if props.min_ts > task.safe_point {
+                info!(
+                    "min ts: {}, safe_point: {}, skip",
+                    props.min_ts, task.safe_point
+                );
+                return;
+            }
+            if props.num_versions as f64 <= props.num_rows as f64 * 1.1
+                && props.num_versions as f64 <= props.num_puts as f64 * 1.1
+            {
+                info!(
+                    "num_versions: {}, num_rows: {}, num_puts: {}, skip",
+                    props.num_versions, props.num_rows, props.num_puts,
+                );
+                return;
+            }
+
             self.running_tasks.insert(sk.clone(), ek.clone());
             let sender = self.sender.clone();
             let db = Arc::clone(&self.db);
 
             thread::spawn(move || {
-                let metrics = Arc::new(GcMetrics::default());
-                init_metrics(Arc::clone(&metrics));
                 let start_time = Instant::now();
-
                 let handle = get_cf_handle(&db, CF_WRITE).unwrap();
                 compact_range(&db, handle, Some(&sk), Some(&ek), false, 1);
-
                 let elapsed = duration_to_ms(start_time.elapsed());
                 info!(
-                    "gc worker handles {} regions in {} ms, delete {} writes, {} defaults",
+                    "gc worker handles {} regions in {} ms",
                     mc,
                     elapsed,
-                    metrics.write_versions.load(Ordering::Relaxed),
-                    metrics.default_versions.load(Ordering::Relaxed),
                 );
                 sender.send((sk, ek)).unwrap();
             });
@@ -143,7 +173,7 @@ impl RunnableWithTimer<MvccGcTask, ()> for MvccGcRunner {
 
 const COLLECT_TASK_INTERVAL: Duration = Duration::from_secs(60);
 const CONTIGUOUS_REGION_GC_THRESHOLD: usize = 16;
-const CONCURRENCY: usize = 4;
+const CONCURRENCY: usize = 3;
 
 fn insert_range(
     map: &mut BTreeMap<Vec<u8>, (Vec<u8>, usize)>,

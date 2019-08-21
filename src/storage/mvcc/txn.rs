@@ -687,8 +687,8 @@ impl WriteCompactionFilter {
             key_prefix: vec![],
             remove_older: false,
 
-            _min_level: 0,
-            _max_level: 100,
+            _min_level: 100,
+            _max_level: 0,
             versions: 0,
             rows: 0,
             stale_versions: 0,
