@@ -221,11 +221,8 @@ impl Tracker {
                 .inc_by(self.total_perf_stats.block_read_byte as i64);
         });
 
-        tls_collect_cf_stats(
-            self.req_ctx.context.get_region_id(),
-            self.req_ctx.tag,
-            &total_storage_stats,
-        );
+        tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
+        tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);
 
         self.current_stage = TrackerState::Tracked;
     }
