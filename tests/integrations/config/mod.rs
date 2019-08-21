@@ -589,3 +589,12 @@ fn test_error_on_unrecognized_config() {
         assert!(result.is_err());
     }
 }
+
+#[test]
+#[should_panic(expected = "unknown field `unknown-field` for key `rocksdb.defaultcf`")]
+fn test_short_error_msg_on_unrecognized_config() {
+    use std::io::Write;
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    writeln!(file, "[rocksdb.defaultcf]\nunknown-field = 123").unwrap();
+    TiKvConfig::from_file(file.path());
+}

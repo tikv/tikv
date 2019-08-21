@@ -1459,10 +1459,25 @@ impl TiKvConfig {
             Ok(::toml::from_str(&s)?)
         })()
         .unwrap_or_else(|e| {
+            let mut err_msg = e.to_string();
+            // As of 1.0.99, serde will dump all possible fields when an unknown
+            // field is encountered. Some structures like the DefaultCfConfig
+            // and DbConfig contains dozens of items, such that when an error
+            // happens the error  message becomes extremely long. Listing the
+            // known fields also confused many users thinking those are the
+            // _unknown_ fields instead. Therefore we remove the list of known
+            // fields here. Unfortunately, serde stringifies the error message,
+            // so we can only perform the inaccurate string manipulation here.
+            if err_msg.starts_with("unknown field ") {
+                let re =
+                    ::regex::Regex::new(r", expected (?:one of )?`[^`]+`(?:(?:,| or) `[^`]+`)*")
+                        .unwrap();
+                err_msg = re.replace(&err_msg, "").into_owned();
+            }
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 path.as_ref().display(),
-                e
+                err_msg,
             );
         })
     }
