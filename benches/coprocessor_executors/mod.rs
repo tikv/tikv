@@ -15,7 +15,7 @@ mod util;
 
 fn main() {
     let mut cpu_set = nix::sched::CpuSet::new();
-    cpu_set.set(19).unwrap();
+    cpu_set.set(0).unwrap();
     nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set).unwrap();
 
     let mut c = criterion::Criterion::default()
