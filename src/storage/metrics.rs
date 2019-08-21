@@ -243,4 +243,6 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref GC_DELETED_VERSIONS: IntCounter =
+        register_int_counter!("tikv_gc_deleted_versions", "GC Deleted versions").unwrap();
 }

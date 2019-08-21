@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::raftstore::store::keys::{data_end_key, data_key};
-use crate::storage::mvcc::{init_metrics, init_mvcc_gc_db, init_safe_point, GcMetrics};
+use crate::storage::mvcc::{init_mvcc_gc_db, init_safe_point};
 use engine::rocks::util::{compact_range, get_cf_handle};
 use engine::rocks::DB;
 use engine::util::get_range_properties_cf;
@@ -37,7 +37,6 @@ impl Display for MvccGcTask {
 pub struct MvccGcRunner {
     db: Arc<DB>,
     safe_point: Arc<AtomicU64>,
-    metrics: Arc<GcMetrics>,
     tasks: BTreeMap<Vec<u8>, (Vec<u8>, usize)>,
     running_tasks: HashMap<Vec<u8>, Vec<u8>>,
     sender: SyncSender<(Vec<u8>, Vec<u8>)>,
@@ -49,14 +48,11 @@ impl MvccGcRunner {
         init_mvcc_gc_db(Arc::clone(&db));
         let safe_point = Arc::new(AtomicU64::new(0));
         init_safe_point(Arc::clone(&safe_point));
-        let metrics = Arc::new(GcMetrics::default());
-        init_metrics(Arc::clone(&metrics));
 
         let (tx, rx) = mpsc::sync_channel(CONCURRENCY);
         MvccGcRunner {
             db,
             safe_point,
-            metrics,
             tasks: BTreeMap::new(),
             running_tasks: HashMap::new(),
             sender: tx,
@@ -132,11 +128,7 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
                 let handle = get_cf_handle(&db, CF_WRITE).unwrap();
                 compact_range(&db, handle, Some(&sk), Some(&ek), false, 1);
                 let elapsed = duration_to_ms(start_time.elapsed());
-                info!(
-                    "gc worker handles {} regions in {} ms",
-                    mc,
-                    elapsed,
-                );
+                info!("gc worker handles {} regions in {} ms", mc, elapsed,);
                 sender.send((sk, ek)).unwrap();
             });
             // Avoid 2 compaction filter uses 1 metrics.

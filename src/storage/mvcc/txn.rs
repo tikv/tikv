@@ -8,6 +8,7 @@ use super::{Error, Result};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    GC_DELETED_VERSIONS,
 };
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
@@ -624,7 +625,7 @@ use engine::rocks::{
     CompactionFilterFactory, DBCompactionFilter, Writable, WriteBatch, WriteOptions, DB,
 };
 use std::ffi::CString;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct WriteCompactionFilterFactory;
@@ -644,10 +645,9 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         let name = CString::new("write_compaction_filter").unwrap();
         let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone);
         let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone);
-        let metrics = METRICS.lock().unwrap().as_ref().map(Arc::clone);
-        match (safe_point, db, metrics) {
-            (Some(sp), Some(db), Some(m)) => {
-                let filter = Box::new(WriteCompactionFilter::new(sp, db, m));
+        match (safe_point, db) {
+            (Some(sp), Some(db)) => {
+                let filter = Box::new(WriteCompactionFilter::new(sp, db));
                 unsafe { new_compaction_filter_raw(name, true, filter) }
             }
             _ => std::ptr::null_mut(),
@@ -658,7 +658,6 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 struct WriteCompactionFilter {
     safe_point: Arc<AtomicU64>,
     db: Arc<DB>,
-    metrics: Arc<GcMetrics>,
     max_level: usize,
     write_batch: WriteBatch,
 
@@ -675,13 +674,12 @@ struct WriteCompactionFilter {
 }
 
 impl WriteCompactionFilter {
-    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>, metrics: Arc<GcMetrics>) -> Self {
+    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>) -> Self {
         let cf_handle = get_cf_handle(&db, CF_WRITE).unwrap();
         let max_level = db.get_options_cf(cf_handle).get_num_levels() - 1;
         WriteCompactionFilter {
             safe_point,
             db,
-            metrics,
             max_level,
             write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
             key_prefix: vec![],
@@ -705,15 +703,11 @@ impl WriteCompactionFilter {
             self.db.write_opt(&self.write_batch, &opts).unwrap();
             self.write_batch.clear();
         }
-        self.metrics
-            .default_versions
-            .fetch_add(1, Ordering::Relaxed);
     }
 }
 
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
-        error!("WriteCompactionFilter is dropped");
         if !self.write_batch.is_empty() {
             let mut opts = WriteOptions::new();
             opts.set_sync(true);
@@ -729,6 +723,8 @@ impl Drop for WriteCompactionFilter {
             "min_level" => self._min_level,
             "max_level" => self._max_level,
         );
+        GC_DELETED_VERSIONS.inc_by(self.deleted as i64);
+        error!("WriteCompactionFilter is dropped");
     }
 }
 
@@ -758,7 +754,6 @@ impl CompactionFilter for WriteCompactionFilter {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
-            self.rows += 1;
         }
 
         if commit_ts <= safe_point {
@@ -775,12 +770,14 @@ impl CompactionFilter for WriteCompactionFilter {
                     self.remove_older = true;
                     filtered = level == self.max_level;
                 }
-                WriteType::Put => self.remove_older = true,
+                WriteType::Put => {
+                    self.remove_older = true;
+                    self.rows += 1;
+                }
             }
         }
 
         if filtered && commit_ts <= safe_point {
-            self.metrics.write_versions.fetch_add(1, Ordering::Relaxed);
             if !has_short {
                 let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
                 self.delete_default_key(key.as_encoded());
@@ -797,12 +794,6 @@ impl CompactionFilter for WriteCompactionFilter {
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 16 * 1024;
 
-#[derive(Default)]
-pub struct GcMetrics {
-    pub write_versions: AtomicUsize,
-    pub default_versions: AtomicUsize,
-}
-
 pub fn init_mvcc_gc_db(db: Arc<DB>) {
     let mut mvcc_gc_db = MVCC_GC_DB.lock().unwrap();
     *mvcc_gc_db = Some(db);
@@ -813,15 +804,9 @@ pub fn init_safe_point(safe_point: Arc<AtomicU64>) {
     *sp = Some(safe_point);
 }
 
-pub fn init_metrics(metrics: Arc<GcMetrics>) {
-    let mut m = METRICS.lock().unwrap();
-    *m = Some(metrics);
-}
-
 lazy_static! {
     static ref SAFE_POINT: Mutex<Option<Arc<AtomicU64>>> = Mutex::new(None);
     static ref MVCC_GC_DB: Mutex<Option<Arc<DB>>> = Mutex::new(None);
-    static ref METRICS: Mutex<Option<Arc<GcMetrics>>> = Mutex::new(None);
 }
 
 #[cfg(test)]
@@ -1753,7 +1738,7 @@ mod tests {
         assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
     }
 
-    use super::{init_metrics, init_mvcc_gc_db, init_safe_point, GcMetrics};
+    use super::{init_metrics, init_mvcc_gc_db, init_safe_point};
     use engine::rocks::util::{compact_range, get_cf_handle};
     use engine::rocks::DB;
     use std::sync::atomic::AtomicU64;
@@ -1762,7 +1747,6 @@ mod tests {
     fn init_compaction_filter_deps(safe_point: Arc<AtomicU64>, db: Arc<DB>) {
         init_safe_point(safe_point);
         init_mvcc_gc_db(db);
-        init_metrics(Arc::new(GcMetrics::default()));
     }
 
     #[test]

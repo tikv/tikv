@@ -13,8 +13,7 @@ pub use self::reader::EntryScanner;
 pub use self::reader::MvccReader;
 pub use self::reader::{Scanner, ScannerBuilder};
 pub use self::txn::{
-    init_metrics, init_mvcc_gc_db, init_safe_point, GcMetrics, MvccTxn,
-    WriteCompactionFilterFactory, MAX_TXN_WRITE_SIZE,
+    init_mvcc_gc_db, init_safe_point, MvccTxn, WriteCompactionFilterFactory, MAX_TXN_WRITE_SIZE,
 };
 pub use self::write::{Write, WriteType};
 
