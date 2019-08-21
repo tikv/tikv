@@ -8,7 +8,7 @@ use std::{i64, u64};
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use super::{check_fsp, Decimal};
+use super::{check_fsp, Decimal, Json};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::codec::mysql::MAX_FSP;
@@ -29,6 +29,7 @@ const MAX_HOURS: u32 = 838;
 const MAX_MINUTES: u32 = 59;
 const MAX_SECONDS: u32 = 59;
 const MAX_MICROS: u32 = 999_999;
+const MAX_DURATION_VALUE: u32 = MAX_HOURS * 10000 + MAX_MINUTES * 100 + MAX_SECONDS;
 
 #[inline]
 fn check_hour(hour: u32) -> Result<u32> {
@@ -243,7 +244,6 @@ mod parser {
                 >> (neg, [day, hhmmss[0], hhmmss[1], hhmmss[2], fraction])
         )
     }
-
 } /* parser */
 
 bitfield! {
@@ -666,6 +666,37 @@ impl Duration {
         }
         buf
     }
+
+    pub fn from_i64(ctx: &mut EvalContext, mut n: i64, fsp: u8) -> Result<Duration> {
+        use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
+
+        if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
+            // FIXME: parse as `DateTime` if `n >= 10000000000`
+            ctx.handle_overflow_err(Error::overflow("Duration", &n.to_string()))?;
+            let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
+            return Ok(max);
+        }
+
+        let negative = n < 0;
+        if negative {
+            n = -n;
+        }
+        if n / 10000 > i64::from(MAX_HOURS) || n % 100 >= 60 || (n / 100) % 100 >= 60 {
+            return Err(Error::Eval(
+                format!("invalid time format: '{}'", n),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ));
+        }
+        let dur = Duration::new(
+            negative,
+            (n / 10000) as u32,
+            ((n / 100) % 100) as u32,
+            (n % 100) as u32,
+            0,
+            fsp,
+        );
+        Ok(dur)
+    }
 }
 
 impl ConvertTo<f64> for Duration {
@@ -680,6 +711,14 @@ impl ConvertTo<Decimal> for Duration {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         self.to_numeric_string().parse()
+    }
+}
+
+impl ConvertTo<Json> for Duration {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        let d = self.maximize_fsp();
+        Ok(Json::String(d.to_string()))
     }
 }
 
@@ -974,7 +1013,7 @@ mod tests {
         ];
         for (s, fsp, expect) in cases {
             let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
-            let du = t.to_duration().unwrap();
+            let du: Duration = t.convert(&mut ctx).unwrap();
             let get: Decimal = du.convert(&mut ctx).unwrap();
             assert_eq!(
                 get,
@@ -999,7 +1038,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
             let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
-            let du = t.to_duration().unwrap();
+            let du: Duration = t.convert(&mut ctx).unwrap();
             let get: f64 = du.convert(&mut ctx).unwrap();
             assert!(
                 (expect - get).abs() < EPSILON,
