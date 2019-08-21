@@ -26,14 +26,6 @@ use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, FutureWorker, Stopped};
 use tokio_core::reactor::Handle;
 
-/// The leader of the region containing the LEADER_KEY is the leader of deadlock detector.
-const LEADER_KEY: &[u8] = b"";
-
-/// Returns true if the region containing the LEADER_KEY.
-fn is_leader_region(region: &'_ Region) -> bool {
-    region.get_start_key() <= LEADER_KEY && LEADER_KEY < region.get_end_key()
-}
-
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
     ts: u64,
@@ -115,6 +107,7 @@ impl DetectTable {
         }
 
         if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
+            ERROR_COUNTER_VEC.deadlock.inc();
             return Some(deadlock_key_hash);
         }
         self.register(txn_ts, lock_ts, lock_hash);
@@ -172,7 +165,7 @@ impl DetectTable {
     }
 
     /// Removes the corresponding wait_for_entry.
-    pub fn clean_up_wait_for(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
+    fn clean_up_wait_for(&mut self, txn_ts: u64, lock_ts: u64, lock_hash: u64) {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_ts) {
                 if locks.remove(lock_hash) {
@@ -187,13 +180,13 @@ impl DetectTable {
     }
 
     /// Removes the entries of the transaction.
-    pub fn clean_up(&mut self, txn_ts: u64) {
+    fn clean_up(&mut self, txn_ts: u64) {
         self.wait_for_map.remove(&txn_ts);
         TASK_COUNTER_VEC.clean_up.inc();
     }
 
     /// Clears the whole detect table.
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.wait_for_map.clear();
     }
 
@@ -214,6 +207,39 @@ impl DetectTable {
             }
             self.wait_for_map.retain(|_, wait_for| !wait_for.is_empty());
             self.last_active_expire = self.now;
+        }
+    }
+}
+
+/// The leader of the region containing the LEADER_KEY is the leader of deadlock detector.
+const LEADER_KEY: &[u8] = b"";
+
+/// Returns true if the region containing the LEADER_KEY.
+fn is_leader_region(region: &'_ Region) -> bool {
+    region.get_start_key() <= LEADER_KEY
+        && (region.get_end_key().is_empty() || LEADER_KEY < region.get_end_key())
+}
+
+/// The role of the detector.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Role {
+    /// The node is the leader of the detector.
+    Leader,
+    /// The node is a follower of the leader.
+    Follower,
+}
+
+impl Default for Role {
+    fn default() -> Role {
+        Role::Follower
+    }
+}
+
+impl From<StateRole> for Role {
+    fn from(role: StateRole) -> Role {
+        match role {
+            StateRole::Leader => Role::Leader,
+            _ => Role::Follower,
         }
     }
 }
@@ -241,7 +267,7 @@ pub enum Task {
     /// a `ChangeRole` task will be scheduled.
     ///
     /// It's the only way to change the node from leader to follower, and vice versa.
-    ChangeRole(StateRole),
+    ChangeRole(Role),
 }
 
 impl Display for Task {
@@ -300,7 +326,7 @@ impl Scheduler {
         });
     }
 
-    pub fn change_role(&self, role: StateRole) {
+    fn change_role(&self, role: Role) {
         self.notify_scheduler(Task::ChangeRole(role));
     }
 }
@@ -316,25 +342,29 @@ impl Coprocessor for Scheduler {}
 impl RoleObserver for Scheduler {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
         if is_leader_region(ctx.region()) {
-            self.change_role(role)
+            self.change_role(role.into());
         }
     }
 }
 
-/// Creates the `Scheduler` and registers it to the CoprocessorHost.
-pub fn register_role_change_observer(host: &mut CoprocessorHost, worker: &FutureWorker<Task>) {
+/// Creates a `Scheduler` of the worker and registers it to the `CoprocessorHost` to observe
+/// the role change events of the leader region.
+pub fn register_detector_role_change_observer(
+    host: &mut CoprocessorHost,
+    worker: &FutureWorker<Task>,
+) {
     let scheduler = Scheduler::new(worker.scheduler());
     host.registry.register_role_observer(1, Box::new(scheduler));
 }
 
 struct Inner {
-    /// The role of the deadlock detector. Default is `StateRole::Follower`.
-    role: StateRole,
+    /// The role of the deadlock detector. Default is `Role::Follower`.
+    role: Role,
 
     detect_table: DetectTable,
 }
 
-/// Detector is used to detect deadlock between transactions. There is a leader
+/// Detector is used to detect deadlocks between transactions. There is a leader
 /// in the cluster which collects all `wait_for_entry` from other followers.
 pub struct Detector<S: StoreAddrResolver + 'static> {
     /// The store id of the node.
@@ -376,7 +406,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             security_mgr,
             waiter_mgr_scheduler,
             inner: Rc::new(RefCell::new(Inner {
-                role: StateRole::Follower,
+                role: Role::Follower,
                 detect_table: DetectTable::new(Duration::from_millis(cfg.wait_for_lock_timeout)),
             })),
         }
@@ -384,11 +414,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
     /// Returns true if it is the leader of the deadlock detector.
     fn is_leader(&self) -> bool {
-        self.inner.borrow().role == StateRole::Leader
+        self.inner.borrow().role == Role::Leader
     }
 
     /// Resets to the initial state.
-    fn reset(&mut self, role: StateRole) {
+    fn reset(&mut self, role: Role) {
         let mut inner = self.inner.borrow_mut();
         inner.detect_table.clear();
         inner.role = role;
@@ -406,7 +436,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             Ok(None) => {
                 // The leader is gone, reset state.
                 info!("no leader");
-                self.reset(StateRole::Follower);
+                self.reset(Role::Follower);
             }
             Err(e) => {
                 error!("get leader info failed"; "err" => ?e);
@@ -464,12 +494,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     }
 
     /// Resets state if role changes.
-    fn change_role(&mut self, role: StateRole) {
+    fn change_role(&mut self, role: Role) {
         if self.inner.borrow().role != role {
-            if role == StateRole::Leader {
-                info!("became the leader of deadlock detector!"; "self_id" => self.store_id);
-            } else {
-                info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id);
+            match role {
+                Role::Leader => info!("became the leader of deadlock detector!"; "self_id" => self.store_id),
+                Role::Follower => info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id),
             }
         }
         // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when the leader
@@ -576,8 +605,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                 //
                 // Refresh leader info when the connection to the leader is disconnected.
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
-                    // Return if the leader doesn't exist.
-                    return;
+                    break;
                 }
                 if self.send_request_to_leader(handle, tp, txn_ts, lock) {
                     return;
@@ -585,6 +613,8 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                 // Because the client is asynchronous, it won't be closed until failing to send a
                 // request. So retry to refresh the leader info and send it again.
             }
+            // If a request which causes deadlock is dropped, it leads to the waiter timeout.
+            // TiDB will retry to acquire the lock and detect deadlock again.
             warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
             ERROR_COUNTER_VEC.dropped.inc();
         }
@@ -613,7 +643,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
             .and_then(move |mut req| {
                 // It's possible the leader changes after registering this handler.
                 let mut inner = inner.borrow_mut();
-                if inner.role != StateRole::Leader {
+                if inner.role != Role::Leader {
                     ERROR_COUNTER_VEC.not_leader.inc();
                     return Err(Error::Other(box_err!("leader changed")));
                 }
@@ -661,13 +691,8 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         );
     }
 
-    fn handle_change_role(&mut self, role: StateRole) {
+    fn handle_change_role(&mut self, role: Role) {
         debug!("handle change role"; "role" => ?role);
-        let role = match role {
-            StateRole::Leader => StateRole::Leader,
-            // Change Follower|Candidate|PreCandidate to Follower.
-            _ => StateRole::Follower,
-        };
         self.change_role(role);
     }
 }

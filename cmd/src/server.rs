@@ -31,8 +31,8 @@ use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
 use tikv::storage::lock_manager::{
-    register_role_change_observer, Detector, DetectorScheduler, Service as DeadlockService,
-    WaiterManager, WaiterMgrScheduler,
+    register_detector_role_change_observer, Detector, DetectorScheduler,
+    Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
 };
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
@@ -290,7 +290,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Register the role change observer of the deadlock detector.
     if cfg.pessimistic_txn.enabled {
-        register_role_change_observer(&mut coprocessor_host, detector_worker.as_ref().unwrap());
+        register_detector_role_change_observer(
+            &mut coprocessor_host,
+            detector_worker.as_ref().unwrap(),
+        );
     }
 
     node.start(

@@ -371,7 +371,6 @@ impl FutureRunnable<Task> for WaiterManager {
                 deadlock_key_hash,
             } => {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
-                TASK_COUNTER_VEC.deadlock.inc();
             }
         }
     }
