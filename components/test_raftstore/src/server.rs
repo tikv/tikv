@@ -6,6 +6,8 @@ use std::time::Duration;
 use std::{thread, usize};
 
 use grpcio::{EnvBuilder, Error as GrpcError};
+use kvproto::debugpb::create_debug;
+use kvproto::import_sstpb::create_import_sst;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
@@ -20,6 +22,7 @@ use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::resolve::{self, Task as ResolveTask};
+use tikv::server::service::DebugService;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
 use tikv::server::Result as ServerResult;
@@ -123,7 +126,7 @@ impl Simulator for ServerCluster {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
-        let sim_router = SimulateTransport::new(raft_router);
+        let sim_router = SimulateTransport::new(raft_router.clone());
 
         let raft_engine = RaftKv::new(sim_router.clone());
 
@@ -153,6 +156,8 @@ impl Simulator for ServerCluster {
             Arc::clone(&engines.kv),
             Arc::clone(&importer),
         );
+        // Create Debug service.
+        let debug_service = DebugService::new(engines.clone(), raft_router.clone());
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
@@ -164,7 +169,7 @@ impl Simulator for ServerCluster {
         let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {
-            server = Some(Server::new(
+            let mut svr = Server::new(
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
@@ -172,23 +177,25 @@ impl Simulator for ServerCluster {
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
-                Some(engines.clone()),
-                Some(import_service.clone()),
-                None,
-            ));
-            match server {
-                Some(Ok(_)) => break,
-                Some(Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port)))) => {
+            )
+            .unwrap();
+            svr.register_service(create_import_sst(import_service.clone()));
+            svr.register_service(create_debug(debug_service.clone()));
+            match svr.build_and_bind() {
+                Ok(_) => {
+                    server = Some(svr);
+                    break;
+                }
+                Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port))) => {
                     // Servers may meet the error, when we restart them.
                     debug!("fail to create a server: bind fail {:?}", (addr, port));
                     thread::sleep(Duration::from_millis(100));
                     continue;
                 }
-                Some(Err(ref e)) => panic!("fail to create a server: {:?}", e),
-                None => unreachable!(),
+                Err(ref e) => panic!("fail to create a server: {:?}", e),
             }
         }
-        let mut server = server.unwrap().unwrap();
+        let mut server = server.unwrap();
         let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();

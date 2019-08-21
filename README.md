@@ -2,12 +2,13 @@
 
 [![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
 [![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
-![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
-TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+TiKV is an open-source, distributed, and transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
-The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
+The design of TiKV ('Ti' stands for titanium) is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in academia in recent years, such as the Raft consensus algorithm.
+
+If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ![cncf_logo](images/cncf.png)
 
@@ -39,9 +40,9 @@ TiKV has the following key features:
 
     Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transactions, support for RDBMS, and NoSQL design patterns.
 
-## Docs
+## Documentation
 
-For instructions on deployment, configuration, and maintenance of TiKV, see our Documentation on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) or on our [website](https://tikv.org/docs/3.0/tasks/getting-started/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
+For instructions on deployment, configuration, and maintenance of TiKV, see our documentation on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) or on our [website](https://tikv.org/docs/3.0/tasks/getting-started/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
 
 > **Note:**
 >
@@ -103,113 +104,6 @@ These are the clients for TiKV:
 
 If you want to try the Go client, see [Try Two Types of APIs](docs/reference/clients/go-client-api.md).
 
-## Setting up a development workspace
-
-The TiKV codebase is primarily written in Rust, but has components written in C++ (RocksDB) and Go (gRPC). To provide consistency and avoid opinion-based arguments, we make extensive use of linters and automated formatting tools. Additionally, due to Rust's youth we are currently utilizing nightly builds which provide access to many useful features.
-
-### Checking your prerequisites
-
-To build TiKV you'll need to at least have the following installed:
-
-* `git` - Version control
-* `rustup` - Rust toolchain manager
-* `awk` - Pattern scanning/processing language
-* `cmake` - Build tool (required for gRPC)
-* `make` - Build tool (run common workflows)
-* `llvm` and `clang` - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb)
-
-### Getting the repository
-
-```
-git clone https://github.com/tikv/tikv.git
-cd tikv
-# Future instructions assume you are in this repository
-```
-
-### Configuring your Rust toolchain
-
-`rustup` is an official toolchain manager for Rust, similar to `rvm` or `rbenv` from the Ruby world.
-
-TiKV uses the version of the Rust toolchain specified in `rust-toolchain`. `rustup` and `cargo` will automatically utilize this file. We also make use of the `rustfmt` and `clippy` components.
-
-```bash
-rustup component add rustfmt-preview
-```
-
-### Building & testing
-
-While TiKV includes a `Makefile` with common workflows, you are also able to use `cargo` as you would in a normal Rust project.
-
-At this point, you can build TiKV:
-
-```bash
-make build
-```
-
-During interactive development, you may prefer using `cargo check`, which will do parse, borrow check, and lint run on your code, but not actually compile it. It is particularly handy alongside `cargo-watch` which will run a command each time you change a file.
-
-```bash
-cargo install cargo-watch
-cargo watch -s "cargo check"
-```
-
-When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with `clippy` enabled, and run tests. This should run without failure before you create a PR.
-
-```bash
-make dev
-```
-
-You can run the full test suite locally, or just run a specific test:
-
-```bash
-# Run the full suite
-make test
-# Run a specific test
-cargo test $TESTNAME
-```
-
-Our CI systems automatically test all the pull requests, so making sure the full suite passes the test before creating your PR is not strictly required. **All merged PRs must have passed CI test.**
-
-Note that, to reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include line numbers only. The easiest way to enable debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo).
-
-```bash
-RUSTFLAGS=-Cdebuginfo=2 make
-RUSTFLAGS=-Cdebuginfo=2 cargo build
-```
-
-When building with make, cargo will automatically use [pipelined][p] compilation to increase the paralellism of the build. To turn on pipelining while using cargo directly,
-set `CARGO_BUILD_PIPELINING=true`:
-
-```bash
-CARGO_BUILD_PIPELINING=true cargo build
-```
-
-[p]: https://internals.rust-lang.org/t/evaluating-pipelined-rustc-compilation/10199
-
-### Getting the rest of the system working
-
-To get [PD](https://github.com/pingcap/pd) working with TiKV, we suggest you follow the instructions in [Deploy TiKV Using Binary Files](docs/how-to/deploy/using-binary.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
-
-### Configuration
-
-Read our configuration guide to learn about various [configuration options](./docs/reference/configuration). Also, here is a [configuration template](./etc/config-template.toml).
-
-## Contributing
-
-Contributions are welcome! See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
-
-For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level.
-
-If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on.
-
-The TiKV team actively develops and maintains a bunch of dependencies used in TiKV, which you may be also interested in:
-
-- [rust-prometheus](https://github.com/pingcap/rust-prometheus): The Prometheus client for Rust, our metrics collecting and reporting library
-- [rust-rocksdb](https://github.com/pingcap/rust-rocksdb): Our RocksDB binding and wrapper for Rust
-- [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
-- [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
-- [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
-
 ## Communication
 
 Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT.md). Here is an excerpt:
@@ -234,10 +128,10 @@ Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invit
 
 ### WeChat
 
-The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
+The TiKV community is also available on WeChat. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
 
 - WeChat ID (**Required**)
-- PR you submitted to TiKV Repos (**Required**)
+- A contribution you've made to TiKV, such as a PR (**Required**)
 - Other basic information
 
 We will invite you in right away.

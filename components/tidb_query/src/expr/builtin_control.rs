@@ -218,7 +218,7 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
+    use tipb::{Expr, ExprType, ScalarFuncSig};
 
     use crate::codec::mysql::{Duration, Json, Time};
     use crate::codec::Datum;
@@ -531,5 +531,4 @@ mod tests {
             assert_eq!(res, exp);
         }
     }
-
 }

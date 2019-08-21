@@ -7,7 +7,7 @@ use std::{cmp, u8};
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeTp;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
 
 use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
@@ -410,7 +410,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
 mod tests {
     use std::i64;
 
-    use tipb::schema::ColumnInfo;
+    use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
     use tikv_util::collections::{HashMap, HashSet};

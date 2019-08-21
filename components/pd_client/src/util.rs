@@ -16,10 +16,9 @@ use grpcio::{
     Result as GrpcResult,
 };
 use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
+    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient, RegionHeartbeatRequest,
     RegionHeartbeatResponse, ResponseHeader,
 };
-use kvproto::pdpb_grpc::PdClient;
 use tokio_timer::timer::Handle;
 
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
@@ -468,13 +467,13 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         return Ok(());
     }
     let err = header.get_error();
-    match err.get_field_type() {
-        ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
-        ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
-        ErrorType::INCOMPATIBLE_VERSION => Err(Error::Incompatible),
-        ErrorType::STORE_TOMBSTONE => Err(Error::StoreTombstone(err.get_message().to_owned())),
-        ErrorType::REGION_NOT_FOUND => Err(Error::RegionNotFound(vec![])),
-        ErrorType::UNKNOWN => Err(box_err!(err.get_message())),
-        ErrorType::OK => Ok(()),
+    match err.get_type() {
+        ErrorType::AlreadyBootstrapped => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
+        ErrorType::NotBootstrapped => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
+        ErrorType::IncompatibleVersion => Err(Error::Incompatible),
+        ErrorType::StoreTombstone => Err(Error::StoreTombstone(err.get_message().to_owned())),
+        ErrorType::RegionNotFound => Err(Error::RegionNotFound(vec![])),
+        ErrorType::Unknown => Err(box_err!(err.get_message())),
+        ErrorType::Ok => Ok(()),
     }
 }

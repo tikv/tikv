@@ -1,7 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use regex::Error as RegexpError;
-use serde_json::error::Error as SerdeError;
 use std::error::Error as StdError;
 use std::fmt::Display;
 use std::io;
@@ -9,9 +7,12 @@ use std::num::ParseFloatError;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
-use tipb::expression::ScalarFuncSig;
-use tipb::select;
 
+use regex::Error as RegexpError;
+use serde_json::error::Error as SerdeError;
+use tipb::{self, ScalarFuncSig};
+
+pub const ERR_M_BIGGER_THAN_D: i32 = 1427;
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_REGEXP: i32 = 1139;
 pub const ZLIB_LENGTH_CORRUPTED: i32 = 1258;
@@ -43,7 +44,7 @@ quick_error! {
             description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
-        Eval(s: String,code:i32) {
+        Eval(s: String, code:i32) {
             description("evaluation failed")
             display("{}", s)
         }
@@ -69,6 +70,14 @@ impl Error {
 
     pub fn truncated() -> Error {
         Error::Eval("Data Truncated".into(), WARN_DATA_TRUNCATED)
+    }
+
+    pub fn m_bigger_than_d(column: impl Display) -> Error {
+        let msg = format!(
+            "For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column {}').",
+            column
+        );
+        Error::Eval(msg, ERR_M_BIGGER_THAN_D)
     }
 
     pub fn cast_neg_int_as_unsigned() -> Error {
@@ -135,9 +144,9 @@ impl Error {
     }
 }
 
-impl From<Error> for select::Error {
-    fn from(error: Error) -> select::Error {
-        let mut err = select::Error::default();
+impl From<Error> for tipb::Error {
+    fn from(error: Error) -> tipb::Error {
+        let mut err = tipb::Error::default();
         err.set_code(error.code());
         err.set_msg(format!("{:?}", error));
         err
@@ -179,6 +188,12 @@ impl From<RegexpError> for Error {
     fn from(err: RegexpError) -> Error {
         let msg = format!("Got error '{:.64}' from regexp", err.description());
         Error::Eval(msg, ERR_REGEXP)
+    }
+}
+
+impl From<Box<codec::Error>> for Error {
+    fn from(err: Box<codec::Error>) -> Error {
+        box_err!("codec:{:?}", err)
     }
 }
 

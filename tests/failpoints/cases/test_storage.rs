@@ -7,7 +7,7 @@ use std::time::Duration;
 use fail;
 use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 
 use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
 use test_storage::new_raft_engine;

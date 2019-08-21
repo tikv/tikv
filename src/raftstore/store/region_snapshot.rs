@@ -598,7 +598,6 @@ mod tests {
         check_seek_result(&snap, Some(b"a00"), Some(b"a15"), &seek_table);
     }
 
-    #[allow(clippy::type_complexity)]
     #[test]
     fn test_iterate() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
