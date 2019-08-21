@@ -665,9 +665,11 @@ struct WriteCompactionFilter {
     key_prefix: Vec<u8>,
     remove_older: bool,
 
+    _min_level: usize,
+    _max_level: usize,
     versions: usize,
+    rows: usize,
     stale_versions: usize,
-    stale_rows: usize,
     deleted: usize,
     skipped: usize, // can't delete because it's not the last level.
 }
@@ -685,9 +687,11 @@ impl WriteCompactionFilter {
             key_prefix: vec![],
             remove_older: false,
 
+            _min_level: 0,
+            _max_level: 100,
             versions: 0,
+            rows: 0,
             stale_versions: 0,
-            stale_rows: 0,
             deleted: 0,
             skipped: 0,
         }
@@ -719,9 +723,11 @@ impl Drop for WriteCompactionFilter {
             "WriteCompactionFilter finished";
             "versions" => self.versions,
             "stale_versions" => self.stale_versions,
-            "stale_rows" => self.stale_rows,
+            "rows" => self.rows,
             "deleted" => self.deleted,
             "skipped" => self.skipped,
+            "min_level" => self._min_level,
+            "max_level" => self._max_level,
         );
     }
 }
@@ -738,22 +744,25 @@ impl CompactionFilter for WriteCompactionFilter {
         let safe_point = self.safe_point.load(Ordering::Acquire);
         assert!(safe_point > 0);
 
-        self.versions += 1;
+        self._min_level = std::cmp::min(self._min_level, level);
+        self._max_level = std::cmp::max(self._max_level, level);
 
-        let key_prefix = match Key::split_on_ts_for(key) {
-            Ok((_, ts)) if ts > safe_point => return false,
-            Ok((key, _)) => key,
+        let (key_prefix, commit_ts) = match Key::split_on_ts_for(key) {
+            Ok((key, ts)) => (key, ts),
             // Invalid MVCC keys, don't touch them.
             Err(_) => return false,
         };
 
-        self.stale_versions += 1;
-
+        self.versions += 1;
         if self.key_prefix != key_prefix {
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
-            self.stale_rows += 1;
+            self.rows += 1;
+        }
+
+        if commit_ts <= safe_point {
+            self.stale_versions += 1;
         }
 
         let mut filtered = self.remove_older;
@@ -765,15 +774,12 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Delete => {
                     self.remove_older = true;
                     filtered = level == self.max_level;
-                    if !filtered {
-                        self.skipped += 1;
-                    }
                 }
                 WriteType::Put => self.remove_older = true,
             }
         }
 
-        if filtered {
+        if filtered && commit_ts <= safe_point {
             self.metrics.write_versions.fetch_add(1, Ordering::Relaxed);
             if !has_short {
                 let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
@@ -781,8 +787,11 @@ impl CompactionFilter for WriteCompactionFilter {
             }
             self.deleted += 1;
         }
+        if commit_ts <= safe_point && !filtered && write_type == WriteType::Delete {
+            self.skipped += 1;
+        }
 
-        filtered
+        filtered && commit_ts <= safe_point
     }
 }
 
@@ -1764,12 +1773,14 @@ mod tests {
         must_commit(&engine, b"key", 101, 102);
         must_prewrite_put(&engine, b"key", b"value", b"key", 201);
         must_commit(&engine, b"key", 201, 202);
+        must_get(&engine, b"key", 102, b"value");
+        must_get(&engine, b"key", 202, b"value");
 
         let kv = Arc::clone(&engine.get_rocksdb());
         init_compaction_filter_deps(Arc::new(AtomicU64::new(150)), Arc::clone(&kv));
         let handle = get_cf_handle(&kv, "write").unwrap();
         compact_range(&kv, handle, None, None, false, 1);
         must_get_none(&engine, b"key", 101);
-        must_get(&engine, b"key", 201, b"value");
+        must_get(&engine, b"key", 202, b"value");
     }
 }
