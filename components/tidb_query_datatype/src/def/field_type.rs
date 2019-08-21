@@ -195,6 +195,7 @@ pub trait FieldTypeAccessor {
     }
 
     /// Whether the flag contains `FieldTypeFlag::UNSIGNED`
+    #[inline]
     fn is_unsigned(&self) -> bool {
         self.flag().contains(FieldTypeFlag::UNSIGNED)
     }
