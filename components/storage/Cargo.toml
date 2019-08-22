@@ -4,9 +4,6 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[features]
-s3 = ["rusoto_core", "rusoto_s3", "rusoto_credential"]
-
 [dependencies]
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
@@ -16,9 +13,3 @@ tempfile = "3.0"
 rand = "0.6.5"
 url = "2.0"
 
-rusoto_core = { version = "0.40.0", optional = true }
-rusoto_s3 = { version = "0.40.0", optional = true }
-rusoto_credential = { version = "0.40.0", optional = true }
-
-[dev-dependencies]
-rusoto_mock = "0.40.0"
