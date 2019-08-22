@@ -16,10 +16,9 @@ pub struct CopLocalMetrics {
     pub local_copr_req_histogram_vec: LocalHistogramVec,
     pub local_copr_req_handle_time: LocalHistogramVec,
     pub local_copr_req_wait_time: LocalHistogramVec,
-    pub local_copr_req_error: LocalIntCounterVec,
     pub local_copr_scan_keys: LocalHistogramVec,
-    pub local_copr_scan_details: LocalIntCounterVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
+    local_scan_details: HashMap<&'static str, Statistics>,
     local_cop_flow_stats: HashMap<u64, FlowStatistics>,
 }
 
@@ -32,14 +31,12 @@ thread_local! {
                 COPR_REQ_HANDLE_TIME.local(),
             local_copr_req_wait_time:
                 COPR_REQ_WAIT_TIME.local(),
-            local_copr_req_error:
-                COPR_REQ_ERROR.local(),
             local_copr_scan_keys:
                 COPR_SCAN_KEYS.local(),
-            local_copr_scan_details:
-                COPR_SCAN_DETAILS.local(),
             local_copr_rocksdb_perf_counter:
                 COPR_ROCKSDB_PERF_COUNTER.local(),
+            local_scan_details:
+                HashMap::default(),
             local_cop_flow_stats:
                 HashMap::default(),
         }
@@ -74,49 +71,50 @@ pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
         .build()
 }
 
-#[inline]
 fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
-        let mut cop_metrics = m.borrow_mut();
-        cop_metrics.local_copr_req_histogram_vec.flush();
-        cop_metrics.local_copr_req_handle_time.flush();
-        cop_metrics.local_copr_req_wait_time.flush();
-        cop_metrics.local_copr_scan_keys.flush();
-        cop_metrics.local_copr_rocksdb_perf_counter.flush();
-        cop_metrics.local_copr_scan_details.flush();
+        let mut m = m.borrow_mut();
+        m.local_copr_req_histogram_vec.flush();
+        m.local_copr_req_handle_time.flush();
+        m.local_copr_req_wait_time.flush();
+        m.local_copr_scan_keys.flush();
+        m.local_copr_rocksdb_perf_counter.flush();
+
+        for (cmd, stat) in m.local_scan_details.drain() {
+            for (cf, cf_details) in stat.details().iter() {
+                for (tag, count) in cf_details.iter() {
+                    COPR_SCAN_DETAILS
+                        .with_label_values(&[cmd, *cf, *tag])
+                        .inc_by(*count as i64);
+                }
+            }
+        }
 
         // Report PD metrics
-        if cop_metrics.local_cop_flow_stats.is_empty() {
+        if m.local_cop_flow_stats.is_empty() {
             // Stats to report to PD is empty, ignore.
             return;
         }
 
         let mut read_stats = HashMap::default();
-        mem::swap(&mut read_stats, &mut cop_metrics.local_cop_flow_stats);
+        mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
 
         reporter.report_read_stats(read_stats);
     });
 }
 
-pub fn tls_collect_cf_stats(region_id: u64, type_str: &str, stats: &Statistics) {
-    // cf statistics group by type
-    for (cf, details) in stats.details() {
-        for (tag, count) in details {
-            TLS_COP_METRICS.with(|m| {
-                m.borrow_mut()
-                    .local_copr_scan_details
-                    .with_label_values(&[type_str, cf, tag])
-                    .inc_by(count as i64);
-            });
-        }
-    }
-    // flow statistics group by region
-    tls_collect_read_flow(region_id, stats);
+pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
+    TLS_COP_METRICS.with(|m| {
+        m.borrow_mut()
+            .local_scan_details
+            .entry(cmd)
+            .or_insert_with(Default::default)
+            .add(stats);
+    });
 }
 
-#[inline]
-pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
+pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     TLS_COP_METRICS.with(|m| {
         let map = &mut m.borrow_mut().local_cop_flow_stats;
         let flow_stats = map
