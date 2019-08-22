@@ -12,6 +12,7 @@ use crate::storage::{
 };
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
+use tikv_util::time::Instant;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -635,19 +636,17 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
-        info!(
-            "WriteCompactionFilterFactory::create_compaction_filter is called";
-            "manual" => context.is_manual_compaction(),
-        );
-        if !context.is_manual_compaction() {
-            return std::ptr::null_mut();
-        }
         let name = CString::new("write_compaction_filter").unwrap();
         let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone);
         let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone);
         match (safe_point, db) {
             (Some(sp), Some(db)) => {
-                let filter = Box::new(WriteCompactionFilter::new(sp, db));
+                let ek = context.end_key();
+                let max_delete = match Key::split_on_ts_for(ek) {
+                    Ok((k, _)) => k.to_vec(),
+                    _ => vec![],
+                };
+                let filter = Box::new(WriteCompactionFilter::new(sp, db, max_delete));
                 unsafe { new_compaction_filter_raw(name, true, filter) }
             }
             _ => std::ptr::null_mut(),
@@ -659,39 +658,40 @@ struct WriteCompactionFilter {
     safe_point: Arc<AtomicU64>,
     db: Arc<DB>,
     max_level: usize,
-    write_batch: WriteBatch,
+    max_delete: Vec<u8>,
 
+    write_batch: WriteBatch,
     key_prefix: Vec<u8>,
     remove_older: bool,
 
-    _min_level: usize,
-    _max_level: usize,
     versions: usize,
     rows: usize,
     stale_versions: usize,
     deleted: usize,
     skipped: usize, // can't delete because it's not the last level.
+    start: Instant,
 }
 
 impl WriteCompactionFilter {
-    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>) -> Self {
+    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>, max_delete: Vec<u8>) -> Self {
         let cf_handle = get_cf_handle(&db, CF_WRITE).unwrap();
         let max_level = db.get_options_cf(cf_handle).get_num_levels() - 1;
         WriteCompactionFilter {
             safe_point,
             db,
             max_level,
+            max_delete,
+
             write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
             key_prefix: vec![],
             remove_older: false,
 
-            _min_level: 100,
-            _max_level: 0,
             versions: 0,
             rows: 0,
             stale_versions: 0,
             deleted: 0,
             skipped: 0,
+            start: Instant::now_coarse(),
         }
     }
 
@@ -714,17 +714,14 @@ impl Drop for WriteCompactionFilter {
             self.db.write_opt(&self.write_batch, &opts).unwrap();
         }
         info!(
-            "WriteCompactionFilter finished";
+            "WriteCompactionFilter uses {}s", self.start.elapsed_secs();
             "versions" => self.versions,
             "stale_versions" => self.stale_versions,
             "rows" => self.rows,
             "deleted" => self.deleted,
             "skipped" => self.skipped,
-            "min_level" => self._min_level,
-            "max_level" => self._max_level,
         );
         GC_DELETED_VERSIONS.inc_by(self.deleted as i64);
-        error!("WriteCompactionFilter is dropped");
     }
 }
 
@@ -738,10 +735,9 @@ impl CompactionFilter for WriteCompactionFilter {
         _: &mut bool,
     ) -> bool {
         let safe_point = self.safe_point.load(Ordering::Acquire);
-        assert!(safe_point > 0);
-
-        self._min_level = std::cmp::min(self._min_level, level);
-        self._max_level = std::cmp::max(self._max_level, level);
+        if safe_point == 0 {
+            return false;
+        }
 
         let (key_prefix, commit_ts) = match Key::split_on_ts_for(key) {
             Ok((key, ts)) => (key, ts),
@@ -768,7 +764,7 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Rollback | WriteType::Lock => filtered = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    filtered = level == self.max_level;
+                    filtered = (level == self.max_level) & (self.key_prefix != self.max_delete);
                 }
                 WriteType::Put => {
                     self.remove_older = true;

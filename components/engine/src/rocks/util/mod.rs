@@ -26,7 +26,7 @@ use crate::rocks::set_external_sst_file_global_seq_no;
 use crate::rocks::supported_compression;
 use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
-    DBBottommostLevelCompaction, DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
+    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
 use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
 use tikv_util::file::calc_crc32;
@@ -452,8 +452,6 @@ pub fn compact_range(
     compact_opts.set_max_subcompactions(max_subcompactions as i32);
     compact_opts.set_change_level(true);
     compact_opts.set_target_level(6);
-    compact_opts
-        .set_bottommost_level_compaction(DBBottommostLevelCompaction::Force);
     db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
 }
 
