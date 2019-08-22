@@ -126,6 +126,7 @@ impl FuturePool {
         R::Error: Send + 'static,
     {
         self.gate_spawn()?;
+
         let future = self.wrap_user_future(future_fn);
         Ok(self.pool.spawn_handle(future))
     }
