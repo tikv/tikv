@@ -8,10 +8,10 @@ use std::{i64, u64};
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use super::{check_fsp, Decimal, Json};
+use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
-use crate::codec::mysql::{DEFAULT_FSP, MAX_FSP};
+use crate::codec::mysql::MAX_FSP;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -700,38 +700,34 @@ impl Duration {
     }
 }
 
-impl ConvertTo<i64> for Duration {
-    fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
-        let dur = (*self).round_frac(DEFAULT_FSP)?;
-        let dec: Decimal = dur.convert(ctx)?;
-        // TODO, The err handle is not same as TiDB does,
-        //  TiDB return the err directly, however,
-        //  I think we should handle it using ctx.
-        dec.as_i64().into_result(ctx)
+impl ConvertTo<Decimal> for Duration {
+    /// This function should not return err,
+    /// if it return err, then the err is because of bug.
+    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
+        match self.to_numeric_string().parse::<Decimal>() {
+            Ok(val) => Ok(val),
+            // TODO, here should return `other_err!("unreachable Duration::as_decimal, err is {}", e)`
+            //  however, here's Result's error is codec::error, so I can't return this error
+            Err(e) => Err(e),
+        }
     }
 }
 
 impl ConvertTo<f64> for Duration {
-    #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
-        let r: Decimal = <Duration as ConvertTo<Decimal>>::convert(self, ctx)?;
-        let r = <Decimal as ConvertTo<f64>>::convert(&r, ctx)?;
-        Ok(r)
-    }
-}
-
-impl ConvertTo<Decimal> for Duration {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        self.to_numeric_string().parse()
-    }
-}
-
-impl ConvertTo<Json> for Duration {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        let d = self.maximize_fsp();
-        Ok(Json::String(d.to_string()))
+        let s = self.to_numeric_string();
+        match s.parse::<f64>() {
+            // TODO, here should return `other_err!("unreachable Duration::as_decimal, err is {}", e)`
+            //  however, here's Result's error is codec::error, so I can't return this error
+            Err(e) => Err(e.into()),
+            Ok(val) => {
+                if val.is_infinite() {
+                    // TODO, TiDB's overflow has no overflow detail message
+                    ctx.handle_overflow_err(Error::overflow("", ""))?;
+                }
+                Ok(val)
+            }
+        }
     }
 }
 
@@ -1029,11 +1025,11 @@ mod tests {
             let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: Decimal = du.convert(&mut ctx).unwrap();
+            let expect = Decimal::from_bytes(expect.as_bytes()).unwrap().unwrap();
             assert_eq!(
-                get,
-                expect.as_bytes().convert(&mut ctx).unwrap(),
-                "convert duration {} to decimal",
-                s
+                get, expect,
+                "convert duration {} to decimal, got: {}, expect: {}",
+                s, get, expect,
             );
         }
     }

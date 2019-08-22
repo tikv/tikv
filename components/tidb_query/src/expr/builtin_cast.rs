@@ -198,7 +198,7 @@ impl ScalarFunc {
         if self.children[0].field_type().is_hybrid() {
             return self.children[0].eval_real(ctx, row);
         }
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let val: Cow<[u8]> = try_opt!(self.children[0].eval_string(ctx, row));
         let res = val.convert(ctx)?;
         Ok(Some(produce_float_with_specified_tp(
             ctx,
@@ -208,13 +208,10 @@ impl ScalarFunc {
     }
 
     pub fn cast_time_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let res = val.convert(ctx)?;
-        Ok(Some(produce_float_with_specified_tp(
-            ctx,
-            &self.field_type,
-            res,
-        )?))
+        let val: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let val: Decimal = val.convert(ctx)?;
+        let val: f64 = val.convert(ctx)?;
+        Ok(Some(val))
     }
 
     pub fn cast_duration_as_real(
@@ -268,7 +265,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
-        let res: Decimal = val.convert(ctx)?;
+        let res: Decimal = Decimal::from_f64(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(res))
             .map(Some)
     }
@@ -331,7 +328,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let val: f64 = val.convert(ctx)?;
-        let dec: Decimal = val.convert(ctx)?;
+        let dec = Decimal::from_f64(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
     }
@@ -1056,9 +1053,8 @@ mod tests {
         }
     }
 
-    fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
-        use crate::codec::convert::ConvertTo;
-        let val = f.convert(ctx)?;
+    fn f64_to_decimal(_ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
+        let val = Decimal::from_f64(f)?;
         Ok(val)
     }
 

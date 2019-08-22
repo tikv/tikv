@@ -17,7 +17,6 @@ use tikv_util::codec::number::NumberEncoder;
 use tikv_util::escape;
 
 use crate::codec::convert::{self, ConvertTo};
-use crate::codec::data_type::*;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -1516,13 +1515,6 @@ impl Decimal {
         Res::Ok(x)
     }
 
-    /// `as_i64_with_ctx` returns int part of the decimal.
-    pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> Result<i64> {
-        let res = self.as_i64();
-        ctx.handle_truncate(res.is_truncated())?;
-        res.into()
-    }
-
     /// `as_u64` returns int part of the decimal
     pub fn as_u64(&self) -> Res<u64> {
         if self.negative {
@@ -1549,6 +1541,15 @@ impl Decimal {
 
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
+    }
+
+    pub fn from_bytes_with_ctx(s: &[u8], ctx: &mut EvalContext) -> Result<Decimal> {
+        Decimal::from_bytes(s)?.into_result(ctx)
+    }
+
+    pub fn from_f64(val: f64) -> Result<Decimal> {
+        let r = val.to_string();
+        Decimal::from_str(r.as_str())
     }
 
     fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
@@ -1709,22 +1710,22 @@ enable_conv_for_int!(i8, i64);
 enable_conv_for_int!(usize, u64);
 enable_conv_for_int!(isize, i64);
 
-impl ConvertTo<f64> for Decimal {
-    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        match self.to_string().parse::<f64>() {
-            Ok(val) => Ok(val),
-            // TODO, TiDB's overflow err no specified err detail, too
-            Err(_) => Err(Error::overflow("", "")),
-        }
+impl ConvertTo<i64> for Decimal {
+    /// Port from MyDecimal::ToInt,
+    /// expect that it handle err using ctx.
+    fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
+        self.as_i64().into_result(ctx)
     }
 }
 
-impl ConvertTo<Json> for Decimal {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
-        let val: f64 = self.convert(ctx)?;
-        Ok(Json::Double(val))
+impl ConvertTo<f64> for Decimal {
+    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+        let r = self.to_string().parse::<f64>();
+        match r {
+            // TODO, TiDB return ErrOverflow directly
+            Err(_) => Err(Error::overflow("", "")),
+            Ok(val) => Ok(val),
+        }
     }
 }
 
@@ -1755,48 +1756,6 @@ impl From<u64> for Decimal {
             x /= u64::from(WORD_BASE);
         }
         d
-    }
-}
-
-impl ConvertTo<Decimal> for f64 {
-    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        let s = self.to_string();
-        // Decimal::from_str use Decimal::from_bytes
-        // like TiDB's MyDecimal::FromFloat64 does,
-        // so it is ok to use Decimal::from_str
-        Decimal::from_str(s.as_str())
-    }
-}
-
-impl ConvertTo<Decimal> for &[u8] {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let dec = match Decimal::from_bytes(self)? {
-            Res::Ok(d) => d,
-            Res::Overflow(d) => {
-                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))?;
-                d
-            }
-            Res::Truncated(d) => {
-                ctx.handle_truncate(true)?;
-                d
-            }
-        };
-        Ok(dec)
-    }
-}
-
-impl ConvertTo<Decimal> for std::borrow::Cow<'_, [u8]> {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        self.as_ref().convert(ctx)
-    }
-}
-
-impl ConvertTo<Decimal> for Bytes {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        self.as_slice().convert(ctx)
     }
 }
 
@@ -2805,7 +2764,6 @@ mod tests {
         }
     }
 
-
     #[test]
     #[rustfmt::skip]
     fn test_string() {
@@ -2863,25 +2821,25 @@ mod tests {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
-            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
-            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e -1", Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001", Res::Ok("10")),
             (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
             (WORD_BUF_LEN, b"1e1073741823",
              Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
             (WORD_BUF_LEN, b"-1e1073741823",
              Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
-            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            (WORD_BUF_LEN, b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
              Res::Overflow("0")),
-            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+            (WORD_BUF_LEN, b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
              Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
-            // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
-            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
-            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
-            // with word_buf_len 1
-            (1,b"123450000098765",Res::Overflow("98765")),
-            (1,b"123450.000098765", Res::Truncated("123450")),
+// The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
+            (WORD_BUF_LEN, b"1eabc", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e 1ddd", Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e - 1", Res::Ok("1")),
+// with word_buf_len 1
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {
@@ -2890,7 +2848,7 @@ mod tests {
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
 
-        // error cases
+// error cases
         let cases = vec![b"1e18446744073709551620"];
         for case in cases {
             assert!(Decimal::from_bytes(case).is_err());
@@ -3500,36 +3458,24 @@ mod tests {
     #[test]
     fn test_bytes_to_decimal() {
         let cases: Vec<(&[u8], Decimal)> = vec![
-            (
-                b"123456.1",
-                ConvertTo::<Decimal>::convert(&123456.1, &mut EvalContext::default()).unwrap(),
-            ),
-            (
-                b"-123456.1",
-                ConvertTo::<Decimal>::convert(&-123456.1, &mut EvalContext::default()).unwrap(),
-            ),
+            (b"123456.1", Decimal::from_f64(123456.1).unwrap()),
+            (b"-123456.1", Decimal::from_f64(-123456.1).unwrap()),
             (b"123456", Decimal::from(123456)),
             (b"-123456", Decimal::from(-123456)),
         ];
         let mut ctx = EvalContext::default();
         for (s, expect) in cases {
-            let got: Decimal = s.convert(&mut ctx).unwrap();
+            let got = Decimal::from_bytes_with_ctx(s, &mut ctx).unwrap();
             assert_eq!(got, expect, "from {:?}, expect: {} got: {}", s, expect, got);
         }
-
         // OVERFLOWING
         let big = (0..85).map(|_| '9').collect::<String>();
-        let val: Result<Decimal> = big.as_bytes().convert(&mut ctx);
-        assert!(
-            val.is_err(),
-            "expected error, but got {:?}",
-            val.unwrap().to_string()
-        );
+        let val = Decimal::from_bytes_with_ctx(big.as_bytes(), &mut ctx);
+        assert!(val.is_err(), "expected error, but got {:?}", val);
         assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
-
         // OVERFLOW_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-        let val: Decimal = big.as_bytes().convert(&mut ctx).unwrap();
+        let val = Decimal::from_bytes_with_ctx(big.as_bytes(), &mut ctx).unwrap();
         let max = max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0);
         assert_eq!(
             val,

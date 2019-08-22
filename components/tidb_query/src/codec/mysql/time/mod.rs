@@ -19,7 +19,7 @@ use tikv_util::codec::BytesSlice;
 
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use crate::codec::mysql::{self, Decimal, Json};
+use crate::codec::mysql::{self, Decimal};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -794,42 +794,6 @@ impl Time {
     }
 }
 
-impl ConvertTo<f64> for Time {
-    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        if self.is_zero() {
-            return Ok(0f64);
-        }
-        let f: f64 = box_try!(self.to_numeric_string().parse());
-        Ok(f)
-    }
-}
-
-impl ConvertTo<Decimal> for Time {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        if self.is_zero() {
-            return Ok(0.into());
-        }
-
-        self.to_numeric_string().parse()
-    }
-}
-
-impl ConvertTo<Json> for Time {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        let s = if self.time_type == TimeType::DateTime || self.time_type == TimeType::Timestamp {
-            // TODO: avoid this clone
-            let mut val = self.clone();
-            val.fsp = mysql::MAX_FSP as u8;
-            val.to_string()
-        } else {
-            self.to_string()
-        };
-        Ok(Json::String(s))
-    }
-}
-
 impl ConvertTo<MyDuration> for Time {
     fn convert(&self, _: &mut EvalContext) -> Result<MyDuration> {
         if self.is_zero() {
@@ -838,6 +802,19 @@ impl ConvertTo<MyDuration> for Time {
         let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC
             + i64::from(self.time.nanosecond());
         MyDuration::from_nanos(nanos, self.fsp as i8)
+    }
+}
+
+impl ConvertTo<Decimal> for Time {
+    /// This function should not return err,
+    /// **if it return err, then the err is because of bug**
+    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
+        match self.to_numeric_string().parse() {
+            Ok(val) => Ok(val),
+            // TODO, here should return `other_err!("unreachable Duration::as_decimal, err is {}", e)`
+            //  however, here's Result's error is codec::error, so I can't return this error
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -990,7 +967,6 @@ mod tests {
     use super::*;
 
     use std::cmp::Ordering;
-    use std::f64::EPSILON;
 
     use chrono::{Duration, Local};
 
@@ -1325,12 +1301,8 @@ mod tests {
         for (s, fsp, expect) in cases {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
             let get: Decimal = t.convert(&mut ctx).unwrap();
-            assert_eq!(
-                get,
-                expect.as_bytes().convert(&mut ctx).unwrap(),
-                "convert datetime {} to decimal",
-                s
-            );
+            let expect = Decimal::from_bytes(expect.as_bytes()).unwrap().unwrap();
+            assert_eq!(get, expect, "convert datetime {} to decimal", s);
         }
     }
 
@@ -1387,30 +1359,6 @@ mod tests {
                 res = format!("{}", dec.unwrap());
                 assert_eq!(res, date_dec);
             });
-        }
-    }
-
-    #[test]
-    fn test_convert_to_f64() {
-        let cases = vec![
-            ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),
-            ("2012-12-31 11:30:45.123456", 6, 20121231113045.123456f64),
-            ("2012-12-31 11:30:45.123456", 0, 20121231113045f64),
-            ("2012-12-31 11:30:45.999999", 0, 20121231113046f64),
-            ("2017-01-05 08:40:59.575601", 0, 20170105084100f64),
-            ("2017-01-05 23:59:59.575601", 0, 20170106000000f64),
-            ("0000-00-00 00:00:00", 6, 0f64),
-        ];
-        let mut ctx = EvalContext::default();
-        for (s, fsp, expect) in cases {
-            let t = Time::parse_utc_datetime(s, fsp).unwrap();
-            let get: f64 = t.convert(&mut ctx).unwrap();
-            assert!(
-                (expect - get).abs() < EPSILON,
-                "expect: {}, got: {}",
-                expect,
-                get
-            );
         }
     }
 

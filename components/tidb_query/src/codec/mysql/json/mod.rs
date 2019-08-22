@@ -27,7 +27,7 @@ use tikv_util::is_even;
 use super::super::datum::Datum;
 use super::super::{Error, Result};
 use crate::codec::convert::ConvertTo;
-use crate::codec::data_type::{Decimal, Real};
+use crate::codec::data_type::Decimal;
 use crate::expr::EvalContext;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
@@ -89,47 +89,52 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     Ok(Json::Object(map))
 }
 
-impl ConvertTo<i64> for Json {
-    // Casts json to int has different behavior in TiDB/MySQL when the json
-    // value is a `Json::Double` and we will keep compatible with TiDB
-    // **Note**: select cast(cast('4.5' as json) as signed)
-    // TiDB:  5
-    // MySQL: 4
-    fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
+impl Json {
+    /// Port from TiDB's types.ConvertJSONToInt
+    fn as_int_with_ctx(&self, ctx: &mut EvalContext, is_res_unsigned: bool) -> Result<i64> {
         let d = match *self {
             Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0,
             Json::Boolean(true) => 1,
             Json::I64(d) => d,
             Json::U64(d) => d as i64,
-            Json::Double(d) => d.convert(ctx)?,
-            Json::String(ref s) => s.as_bytes().convert(ctx)?,
+            Json::Double(d) => {
+                if is_res_unsigned {
+                    let r: u64 = d.convert(ctx)?;
+                    r as i64
+                } else {
+                    d.convert(ctx)?
+                }
+            }
+            Json::String(ref s) => {
+                let bs = s.as_bytes();
+                if is_res_unsigned {
+                    let r: u64 = bs.convert(ctx)?;
+                    r as i64
+                } else {
+                    bs.convert(ctx)?
+                }
+            }
         };
         Ok(d)
+    }
+}
+
+impl ConvertTo<i64> for Json {
+    /// Port from TiDB's types.ConvertJSONToInt
+    fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
+        self.as_int_with_ctx(ctx, false)
     }
 }
 
 impl ConvertTo<u64> for Json {
-    // Casts json to int has different behavior in TiDB/MySQL when the json
-    // value is a `Json::Double` and we will keep compatible with TiDB
-    // **Note**: select cast(cast('4.5' as json) as signed)
-    // TiDB:  5
-    // MySQL: 4
+    /// Port from TiDB's types.ConvertJSONToInt
     fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
-        let d = match *self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0u64,
-            Json::Boolean(true) => 1u64,
-            Json::I64(d) => d as u64,
-            Json::U64(d) => d,
-            Json::Double(d) => d.convert(ctx)?,
-            Json::String(ref s) => s.as_bytes().convert(ctx)?,
-        };
-        Ok(d)
+        self.as_int_with_ctx(ctx, true).map(|x| x as u64)
     }
 }
 
 impl ConvertTo<f64> for Json {
-    ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
-    #[inline]
+    /// Port from TiDB's types.ConvertJSONToFloat
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let d = match *self {
             Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0f64,
@@ -137,7 +142,7 @@ impl ConvertTo<f64> for Json {
             Json::I64(d) => d as f64,
             Json::U64(d) => d as f64,
             Json::Double(d) => d,
-            Json::String(ref s) => s.as_bytes().convert(ctx)?,
+            Json::String(ref s) => s.as_str().convert(ctx)?,
         };
         Ok(d)
     }
@@ -145,42 +150,27 @@ impl ConvertTo<f64> for Json {
 
 impl ConvertTo<Decimal> for Json {
     #[inline]
+    /// Port from TiDB's types.ConvertJSONToDecimal
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         match self {
-            Json::String(s) => match Decimal::from_str(s.as_str()) {
-                Ok(d) => Ok(d),
-                Err(e) => {
-                    ctx.handle_truncate_err(e)?;
-                    Ok(Decimal::zero())
+            Json::String(s) => {
+                match Decimal::from_str(s.as_str()) {
+                    Ok(d) => Ok(d),
+                    Err(e) => {
+                        ctx.handle_truncate_err(e)?;
+                        // TODO, if TiDB's MyDecimal::FromString return err,
+                        //  it may has res. However, if TiKV's Decimal::from_str
+                        //  return err, it has no res, so I return zero here,
+                        //  but it may different from TiDB's MyDecimal::FromString
+                        Ok(Decimal::zero())
+                    }
                 }
-            },
+            }
             _ => {
-                let r: f64 = <Json as ConvertTo<f64>>::convert(self, ctx)?;
-                <f64 as ConvertTo<Decimal>>::convert(&r, ctx)
+                let r: f64 = self.convert(ctx)?;
+                Decimal::from_f64(r)
             }
         }
-    }
-}
-
-impl ConvertTo<Json> for i64 {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        Ok(Json::I64(*self))
-    }
-}
-
-impl ConvertTo<Json> for f64 {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        Ok(Json::Double(*self))
-    }
-}
-
-impl ConvertTo<Json> for Real {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
-        Ok(Json::Double(self.into_inner()))
     }
 }
 
@@ -253,8 +243,32 @@ mod tests {
         }
     }
 
+    // TODO, add more test case
     #[test]
-    fn test_cast_to_real() {
+    fn test_as_int_with_ctx() {
+        let test_cases = vec![
+            ("{}", 0),
+            ("[]", 0),
+            ("3", 3),
+            ("-3", -3),
+            ("4.5", 5),
+            ("true", 1),
+            ("false", 0),
+            ("null", 0),
+            (r#""hello""#, 0),
+            (r#""1234""#, 1234),
+        ];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
+        for (jstr, exp) in test_cases {
+            let json: Json = jstr.parse().unwrap();
+            let get: i64 = json.as_int_with_ctx(&mut ctx, false).unwrap();
+            assert_eq!(get, exp, "json.as_f64 get: {}, exp: {}", get, exp);
+        }
+    }
+
+    // TODO, add more test case
+    #[test]
+    fn test_as_f64_with_ctx() {
         let test_cases = vec![
             ("{}", 0f64),
             ("[]", 0f64),

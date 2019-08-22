@@ -7,6 +7,7 @@ mod util;
 use self::util::ReadLiteralExt;
 use failure::Error;
 use std::io::Cursor;
+use tidb_query::codec::mysql::Decimal;
 
 #[inline(always)]
 pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
@@ -102,10 +103,6 @@ impl<T: ReadLiteralExt> ReadAsDecimalRoundMode for T {}
 
 #[inline(always)]
 pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
-    use tidb_query::codec::convert::ConvertTo;
-    use tidb_query::codec::data_type::Decimal;
-    use tidb_query::expr::EvalContext;
-
     fn fuzz(lhs: &Decimal, rhs: &Decimal, cursor: &mut Cursor<&[u8]>) -> Result<(), Error> {
         let _ = lhs.clone().abs();
         let _ = lhs.ceil();
@@ -136,9 +133,8 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
     }
 
     let mut cursor = Cursor::new(data);
-    let mut ctx = EvalContext::default();
-    let decimal1: Decimal = cursor.read_as_f64()?.convert(&mut ctx)?;
-    let decimal2: Decimal = cursor.read_as_f64()?.convert(&mut ctx)?;
+    let decimal1 = Decimal::from_f64(cursor.read_as_f64()?)?;
+    let decimal2 = Decimal::from_f64(cursor.read_as_f64()?)?;
     let _ = fuzz(&decimal1, &decimal2, &mut cursor);
     let _ = fuzz(&decimal2, &decimal1, &mut cursor);
     Ok(())
@@ -158,7 +154,7 @@ impl<T: ReadLiteralExt> ReadAsTimeType for T {}
 
 fn fuzz_time(t: tidb_query::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Result<(), Error> {
     use tidb_query::codec::convert::ConvertTo;
-    use tidb_query::codec::data_type::{Decimal, Duration};
+    use tidb_query::codec::data_type::Duration;
     use tidb_query::codec::mysql::TimeEncoder;
     use tidb_query::expr::EvalContext;
 
@@ -174,9 +170,6 @@ fn fuzz_time(t: tidb_query::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Re
     let _ = v.encode_time(&t);
 
     let mut ctx = EvalContext::default();
-    let _: i64 = t.convert(&mut ctx)?;
-    let _: u64 = t.convert(&mut ctx)?;
-    let _: f64 = t.convert(&mut ctx)?;
     let _: Decimal = t.convert(&mut ctx)?;
     let _: Duration = t.convert(&mut ctx)?;
     Ok(())
@@ -211,7 +204,6 @@ fn fuzz_duration(
     mut cursor: Cursor<&[u8]>,
 ) -> Result<(), Error> {
     use tidb_query::codec::convert::ConvertTo;
-    use tidb_query::codec::mysql::decimal::Decimal;
     use tidb_query::codec::mysql::DurationEncoder;
     use tidb_query::expr::EvalContext;
 

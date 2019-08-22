@@ -341,9 +341,8 @@ mod tests {
         assert_eq!(v, Datum::F64(res));
     }
 
-    fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
-        use crate::codec::convert::ConvertTo;
-        let val = f.convert(ctx)?;
+    fn f64_to_decimal(_ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
+        let val = Decimal::from_f64(f)?;
         Ok(val)
     }
 

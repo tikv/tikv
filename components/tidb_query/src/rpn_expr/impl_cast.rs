@@ -19,13 +19,7 @@ use crate::Result;
 
 // TODO: This function supports some internal casts performed by TiKV. However it would be better
 //  to be done in TiDB.
-//
-// If these is no cast_x_as_y in this file, then call these cast_x_as_y,
-// otherwise, call cast_any_as_any::<xxx>.convert instead.
-//
 /// Gets the cast function between specified data types.
-///
-
 pub fn get_cast_fn_rpn_node(
     from_field_type: &FieldType,
     to_field_type: FieldType,
@@ -171,12 +165,12 @@ fn cast_real_as_int(
         Some(val) => {
             let val = val.into_inner();
             if !is_field_type_unsigned(extra.ret_field_type) {
-                let val: i64 = <f64 as ConvertTo<i64>>::convert(&val, ctx)?;
+                let val: i64 = val.convert(ctx)?;
                 Ok(Some(val))
             } else if in_union(&extra.implicit_args) && val < 0f64 {
                 Ok(Some(0))
             } else {
-                let val: u64 = <f64 as ConvertTo<u64>>::convert(&val, ctx)?;
+                let val: u64 = val.convert(ctx)?;
                 Ok(Some(val as i64))
             }
         }
@@ -194,13 +188,14 @@ fn cast_string_as_int(
     match val {
         None => Ok(None),
         Some(val) => {
+            // TODO, in TiDB',s if `b.args[0].GetType().Hybrid()`,
+            //  then it will return res from EvalInt() directly.
             let is_unsigned = is_field_type_unsigned(extra.ret_field_type);
             let val = get_valid_utf8_prefix(ctx, val.as_slice())?;
             let val = val.trim();
             let neg = val.starts_with('-');
             if !neg {
-                let r: crate::codec::error::Result<u64> =
-                    <&str as ConvertTo<u64>>::convert(&val, ctx);
+                let r: crate::codec::error::Result<u64> = val.convert(ctx);
                 match r {
                     Ok(x) => {
                         if !is_unsigned && x > std::i64::MAX as u64 {
@@ -214,8 +209,7 @@ fn cast_string_as_int(
             } else if in_union(extra.implicit_args) && is_unsigned {
                 Ok(Some(0))
             } else {
-                let r: crate::codec::error::Result<i64> =
-                    <&str as ConvertTo<i64>>::convert(&val, ctx);
+                let r: crate::codec::error::Result<i64> = val.convert(ctx);
                 match r {
                     Ok(x) => {
                         if is_unsigned {
@@ -306,7 +300,10 @@ fn cast_duration_as_int(ctx: &mut EvalContext, val: &Option<Duration>) -> Result
     match val {
         None => Ok(None),
         // TODO, in the convert, we handle err using ctx, however, TiDB doesn't
-        Some(val) => Ok(Some(<Duration as ConvertTo<i64>>::convert(val, ctx)?)),
+        Some(val) => {
+            let d: Decimal = val.convert(ctx)?;
+            Ok(Some(d.convert(ctx)?))
+        }
     }
 }
 
@@ -322,9 +319,11 @@ fn cast_json_as_int(
         None => Ok(None),
         Some(j) => {
             if is_field_type_unsigned(extra.ret_field_type) {
-                Ok(Some(<Json as ConvertTo<u64>>::convert(&j, ctx)? as i64))
+                let r: u64 = j.convert(ctx)?;
+                Ok(Some(r as i64))
             } else {
-                Ok(Some(<Json as ConvertTo<i64>>::convert(&j, ctx)?))
+                let r: i64 = j.convert(ctx)?;
+                Ok(Some(r))
             }
         }
     }
@@ -397,7 +396,7 @@ fn cast_string_as_real(
         Some(val) => {
             // TODO, in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
             //  then return evalReal directly
-            let mut r: f64 = <Bytes as ConvertTo<f64>>::convert(val, ctx)?;
+            let mut r: f64 = val.as_slice().convert(ctx)?;
             if is_field_type_unsigned(extra.ret_field_type)
                 && in_union(extra.implicit_args)
                 && r < 0f64
@@ -427,7 +426,8 @@ fn cast_decimal_as_real(
             {
                 Ok(Real::new(0f64).ok())
             } else {
-                Ok(Real::new(<Decimal as ConvertTo<f64>>::convert(val, ctx)?).ok())
+                let r: f64 = val.convert(ctx)?;
+                Ok(Real::new(r).ok())
             }
         }
     }
@@ -440,7 +440,8 @@ fn cast_duration_as_real(ctx: &mut EvalContext, val: &Option<Duration>) -> Resul
     match val {
         None => Ok(None),
         Some(val) => {
-            let val: f64 = <Duration as ConvertTo<f64>>::convert(val, ctx)?;
+            let val: Decimal = val.convert(ctx)?;
+            let val: f64 = val.convert(ctx)?;
             Ok(Real::new(val).ok())
         }
     }
@@ -452,7 +453,7 @@ fn cast_duration_as_real(ctx: &mut EvalContext, val: &Option<Duration>) -> Resul
 fn cast_json_as_real(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option<Real>> {
     match val {
         None => Ok(None),
-        Some(j) => Ok(Real::new(<Json as ConvertTo<f64>>::convert(&j, ctx)?).ok()),
+        Some(j) => Ok(Real::new(j.convert(ctx)?).ok()),
     }
 }
 
@@ -644,7 +645,7 @@ fn cast_real_as_decimal(
             let res = if in_union(extra.implicit_args) && val < 0f64 {
                 Decimal::zero()
             } else {
-                <f64 as ConvertTo<Decimal>>::convert(&val, ctx)?
+                Decimal::from_f64(val)?
             };
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
@@ -708,7 +709,7 @@ fn cast_duration_as_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            let dec: Decimal = <Duration as ConvertTo<Decimal>>::convert(val, ctx)?;
+            let dec: Decimal = val.convert(ctx)?;
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 dec,
@@ -729,7 +730,7 @@ fn cast_json_as_decimal(
     match val {
         None => Ok(None),
         Some(j) => {
-            let d: Decimal = <Json as ConvertTo<Decimal>>::convert(j, ctx)?;
+            let d: Decimal = j.convert(ctx)?;
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 d,
@@ -931,7 +932,7 @@ fn cast_decimal_as_json(ctx: &mut EvalContext, val: &Option<Decimal>) -> Result<
         None => Ok(None),
         Some(val) => {
             // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
-            let r: crate::codec::Result<f64> = <Decimal as ConvertTo<f64>>::convert(val, ctx);
+            let r: crate::codec::Result<f64> = val.convert(ctx);
             match r {
                 // TODO, in TiDB, they return isNull(true) and err at the same time,
                 //  however, we can't

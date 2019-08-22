@@ -47,7 +47,7 @@ impl AsMySQLBool for Real {
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        let r = <Bytes as ConvertTo<i64>>::convert(self, context)?;
+        let r: i64 = self.as_slice().convert(context)?;
         Ok(!self.is_empty() && r != 0)
     }
 }

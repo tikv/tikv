@@ -16,8 +16,10 @@ use super::mysql::{
     JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{Error, Result};
-use crate::codec::convert::ConvertTo;
+use crate::codec::convert::{ConvertTo, ToInt};
+use crate::codec::mysql::RoundMode;
 use crate::expr::EvalContext;
+use tidb_query_datatype::FieldTypeTp;
 
 pub const NIL_FLAG: u8 = 0;
 pub const BYTES_FLAG: u8 = 1;
@@ -163,11 +165,16 @@ impl Datum {
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
-            Datum::Bytes(ref bs) => cmp_f64(<Vec<u8> as ConvertTo<f64>>::convert(bs, ctx)?, f),
+            Datum::Bytes(ref bs) => cmp_f64(bs.as_slice().convert(ctx)?, f),
             Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
-            Datum::Time(ref t) => cmp_f64(t.convert(ctx)?, f),
-            Datum::Json(ref json) => Datum::F64(f).cmp_json(ctx, json),
+            Datum::Time(ref t) => {
+                // TODO, here is not exactly same as TiDB's
+                let r: Decimal = t.convert(ctx)?;
+                let r: f64 = r.convert(ctx)?;
+                cmp_f64(r, f)
+            }
+            Datum::Json(_) => Ok(Ordering::Less),
         }
     }
 
@@ -206,6 +213,7 @@ impl Datum {
                 Ok(d.cmp(dec))
             }
             _ => {
+                // TODO, here is not same as TiDB's
                 let f = dec.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
@@ -232,7 +240,8 @@ impl Datum {
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
             _ => {
-                let f = time.convert(ctx)?;
+                let f: Decimal = time.convert(ctx)?;
+                let f: f64 = f.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -268,12 +277,16 @@ impl Datum {
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
             Datum::Bytes(ref bs) => {
-                let r: i64 = <Vec<u8> as ConvertTo<i64>>::convert(bs, ctx)?;
+                // TODO, here is not same TiDB's
+                let r: i64 = bs.as_slice().convert(ctx)?;
                 Some(!bs.is_empty() && r != 0)
             }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
-            Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
+            Datum::Dec(d) => {
+                let r: f64 = d.convert(ctx)?;
+                Some(r.round() != 0f64)
+            }
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
@@ -314,9 +327,18 @@ impl Datum {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
             Datum::F64(f) => Ok(f),
-            Datum::Bytes(bs) => bs.convert(ctx),
-            Datum::Time(t) => t.convert(ctx),
-            Datum::Dur(d) => d.convert(ctx),
+            Datum::Bytes(bs) => bs.as_slice().convert(ctx),
+            Datum::Time(t) => {
+                let r: Decimal = t.convert(ctx)?;
+                // in TiDB, they return the err directly,
+                // however, the code here in early version use ctx to handle err,
+                // so here use ctx to handle err.
+                r.convert(ctx)
+            }
+            Datum::Dur(d) => {
+                let r: Decimal = d.convert(ctx)?;
+                r.convert(ctx)
+            }
             Datum::Dec(d) => d.convert(ctx),
             Datum::Json(j) => j.convert(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
@@ -328,12 +350,36 @@ impl Datum {
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => Ok(u as i64),
+            Datum::U64(u) => u.to_int(ctx, FieldTypeTp::LongLong),
             Datum::F64(f) => f.convert(ctx),
-            Datum::Bytes(bs) => bs.convert(ctx),
-            Datum::Time(t) => t.convert(ctx),
-            Datum::Dur(d) => d.convert(ctx),
-            Datum::Dec(d) => d.as_i64_with_ctx(ctx),
+            Datum::Bytes(bs) => bs.as_slice().convert(ctx),
+            Datum::Time(t) => {
+                let mut t = t.clone();
+                t.round_frac(DEFAULT_FSP)?;
+                let d: Decimal = t.convert(ctx)?;
+                // TODO
+                //  In TiDB, if Decimal::ToInt has err return, they has res too.
+                //  however, we had handled err using ctx in `convert`,
+                //  so I think it is ok to returning err directly
+                let r: i64 = d.convert(ctx)?;
+                // because FieldTypeTp is LongLong, so convertIntToInt do nothing
+                Ok(r)
+            }
+            Datum::Dur(d) => {
+                let d = d.round_frac(DEFAULT_FSP)?;
+                let d: Decimal = d.convert(ctx)?;
+                // TODO, here is not exactly same as TiDB
+                let d: i64 = d.convert(ctx)?;
+                // because FieldTypeTp is LongLong, so convertIntToInt do nothing
+                Ok(d)
+            }
+            Datum::Dec(d) => {
+                let r = d.round(0, RoundMode::HalfEven);
+                // TODO, here is not exactly same as TiDB
+                let dec = r.into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", ""))?;
+                let val: i64 = dec.convert(ctx)?;
+                Ok(val)
+            }
             Datum::Json(j) => j.convert(ctx),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
@@ -375,7 +421,7 @@ impl Datum {
     pub fn into_arith(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => ConvertTo::<f64>::convert(&bs, ctx).map(From::from),
+            Datum::Bytes(bs) => ConvertTo::<f64>::convert(&bs.as_slice(), ctx).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec: Decimal = t.convert(ctx)?;
@@ -428,7 +474,6 @@ impl Datum {
             Datum::U64(d) => Ok(Json::U64(d)),
             Datum::F64(d) => Ok(Json::Double(d)),
             Datum::Dec(d) => {
-                // TODO: remove the `cast_as_json` method
                 let ff = d.convert(&mut EvalContext::default())?;
                 Ok(Json::Double(ff))
             }
@@ -466,16 +511,16 @@ impl Datum {
     /// Try its best effort to convert into a decimal datum.
     /// source function name is `ConvertDatumToDecimal`.
     fn coerce_to_dec(self) -> Result<Datum> {
-        let dec = match self {
+        let dec: Decimal = match self {
             Datum::I64(i) => i.into(),
             Datum::U64(u) => u.into(),
             Datum::F64(f) => {
                 // FIXME: the `EvalContext` should be passed from caller
-                <f64 as ConvertTo<Decimal>>::convert(&f, &mut EvalContext::default())?
+                Decimal::from_f64(f)?
             }
             Datum::Bytes(ref bs) => {
                 // FIXME: the `EvalContext` should be passed from caller
-                bs.convert(&mut EvalContext::default())?
+                Decimal::from_bytes(bs.as_slice())?.into_result(&mut EvalContext::default())?
             }
             d @ Datum::Dec(_) => return Ok(d),
             _ => return Err(box_err!("failed to convert {} to decimal", self)),
@@ -1047,7 +1092,7 @@ mod tests {
             ],
             vec![
                 Datum::U64(1),
-                Datum::Dec(2.3.convert(&mut EvalContext::default()).unwrap()),
+                Datum::Dec(Decimal::from_f64(2.3).unwrap()),
                 Datum::Dec("-34".parse().unwrap()),
             ],
             vec![
@@ -1652,7 +1697,7 @@ mod tests {
                 Some(true),
             ),
             (
-                Datum::Dec(0.1415926.convert(&mut EvalContext::default()).unwrap()),
+                Datum::Dec(Decimal::from_f64(0.1415926).unwrap()),
                 Some(false),
             ),
             (Datum::Dec(0u64.into()), Some(false)),
@@ -1866,7 +1911,16 @@ mod tests {
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
-            let got = d.into_i64(&mut ctx).unwrap();
+            let d2 = d.clone();
+            let got = d.into_i64(&mut ctx);
+            assert!(
+                got.is_ok(),
+                "datum: {}, got: {:?}, expect: {}",
+                d2,
+                got,
+                exp
+            );
+            let got = got.unwrap();
             assert_eq!(got, exp);
         }
     }

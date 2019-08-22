@@ -10,6 +10,7 @@ use rand_xorshift::XorShiftRng;
 use time;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
+use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
 
@@ -55,7 +56,8 @@ impl ScalarFunc {
     pub fn ceil_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.ceil().into();
-        d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
+        d.and_then(|dec| ConvertTo::<i64>::convert(&dec, ctx))
+            .map(Some)
     }
 
     #[inline]
@@ -84,7 +86,8 @@ impl ScalarFunc {
     pub fn floor_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.floor().into();
-        d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
+        d.and_then(|dec| ConvertTo::<i64>::convert(&dec, ctx))
+            .map(Some)
     }
 
     #[inline]

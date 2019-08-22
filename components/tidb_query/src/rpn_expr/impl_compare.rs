@@ -512,10 +512,9 @@ mod tests {
 
     #[test]
     fn test_compare_decimal() {
-        use crate::codec::convert::ConvertTo;
         use crate::expr::EvalContext;
-        fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
-            let val = f.convert(ctx)?;
+        fn f64_to_decimal(_ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
+            let val = Decimal::from_f64(f)?;
             Ok(val)
         }
         let mut ctx = EvalContext::default();
