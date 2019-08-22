@@ -11,7 +11,7 @@ use tikv_util::codec::BytesSlice;
 use super::{check_fsp, Decimal, Json};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
-use crate::codec::mysql::MAX_FSP;
+use crate::codec::mysql::{DEFAULT_FSP, MAX_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -99,7 +99,7 @@ mod parser {
             if buf.len() <= 7 {
                 Ok(buf_to_int(buf))
             } else {
-                Err(Error::truncated_wrong_val("TIME DIGITS", 7))
+                Err(Error::truncated_wrong_val("TIME DIGITS", &7))
             }
         })
     }
@@ -459,6 +459,7 @@ impl Duration {
     /// Parses the time form a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
+    // TODO, this func is NOT same as TiDB's ParseDuration
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
 
@@ -468,7 +469,7 @@ impl Duration {
 
         let (mut neg, [mut day, mut hour, mut minute, mut second, micros]) =
             self::parser::parse(input, fsp)
-                .map_err(|_| Error::truncated_wrong_val("time", format!("{:?}", input)))?
+                .map_err(|_| Error::truncated_wrong_val("time", &format!("{:?}", input)))?
                 .1;
 
         if day.is_some() && hour.is_none() {
@@ -699,11 +700,23 @@ impl Duration {
     }
 }
 
+impl ConvertTo<i64> for Duration {
+    fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
+        let dur = (*self).round_frac(DEFAULT_FSP)?;
+        let dec: Decimal = dur.convert(ctx)?;
+        // TODO, The err handle is not same as TiDB does,
+        //  TiDB return the err directly, however,
+        //  I think we should handle it using ctx.
+        dec.as_i64().into_result(ctx)
+    }
+}
+
 impl ConvertTo<f64> for Duration {
     #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        let val = self.to_numeric_string().parse()?;
-        Ok(val)
+    fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
+        let r: Decimal = <Duration as ConvertTo<Decimal>>::convert(self, ctx)?;
+        let r = <Decimal as ConvertTo<f64>>::convert(&r, ctx)?;
+        Ok(r)
     }
 }
 
@@ -771,6 +784,7 @@ impl Ord for Duration {
 }
 
 impl<T: Write> DurationEncoder for T {}
+
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: Duration) -> Result<()> {
         self.encode_i64(v.to_nanos())?;

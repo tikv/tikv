@@ -7,7 +7,6 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
 use std::{i64, str};
 
-use tidb_query_datatype::FieldTypeTp;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::{number, BytesSlice};
 use tikv_util::escape;
@@ -17,7 +16,7 @@ use super::mysql::{
     JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{Error, Result};
-use crate::codec::convert::{ConvertTo, ToInt};
+use crate::codec::convert::ConvertTo;
 use crate::expr::EvalContext;
 
 pub const NIL_FLAG: u8 = 0;
@@ -164,7 +163,7 @@ impl Datum {
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
-            Datum::Bytes(ref bs) => cmp_f64(bs.convert(ctx)?, f),
+            Datum::Bytes(ref bs) => cmp_f64(<Vec<u8> as ConvertTo<f64>>::convert(bs, ctx)?, f),
             Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
             Datum::Time(ref t) => cmp_f64(t.convert(ctx)?, f),
@@ -269,7 +268,8 @@ impl Datum {
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
             Datum::Bytes(ref bs) => {
-                Some(!bs.is_empty() && bs.to_int(ctx, FieldTypeTp::LongLong)? != 0)
+                let r: i64 = <Vec<u8> as ConvertTo<i64>>::convert(bs, ctx)?;
+                Some(!bs.is_empty() && r != 0)
             }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
@@ -326,16 +326,15 @@ impl Datum {
     /// `into_i64` converts self into i64.
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
-        let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
-            Datum::U64(u) => u.to_int(ctx, tp),
-            Datum::F64(f) => f.to_int(ctx, tp),
-            Datum::Bytes(bs) => bs.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Time(t) => t.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Dur(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Dec(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Json(j) => j.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::U64(u) => Ok(u as i64),
+            Datum::F64(f) => f.convert(ctx),
+            Datum::Bytes(bs) => bs.convert(ctx),
+            Datum::Time(t) => t.convert(ctx),
+            Datum::Dur(d) => d.convert(ctx),
+            Datum::Dec(d) => d.as_i64_with_ctx(ctx),
+            Datum::Json(j) => j.convert(ctx),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
@@ -472,7 +471,7 @@ impl Datum {
             Datum::U64(u) => u.into(),
             Datum::F64(f) => {
                 // FIXME: the `EvalContext` should be passed from caller
-                f.convert(&mut EvalContext::default())?
+                <f64 as ConvertTo<Decimal>>::convert(&f, &mut EvalContext::default())?
             }
             Datum::Bytes(ref bs) => {
                 // FIXME: the `EvalContext` should be passed from caller

@@ -50,6 +50,7 @@ impl Json {
 }
 
 impl Eq for Json {}
+
 impl Ord for Json {
     fn cmp(&self, right: &Json) -> Ordering {
         self.partial_cmp(right).unwrap()

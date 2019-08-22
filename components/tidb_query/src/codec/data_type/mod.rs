@@ -10,15 +10,16 @@ mod vector;
 pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
+
 pub use crate::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
 
-use tidb_query_datatype::{EvalType, FieldTypeTp};
+use tidb_query_datatype::EvalType;
 
-use crate::codec::convert::ToInt;
+use crate::codec::convert::ConvertTo;
 use crate::expr::EvalContext;
 use crate::Result;
 
@@ -46,7 +47,8 @@ impl AsMySQLBool for Real {
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        Ok(!self.is_empty() && self.to_int(context, FieldTypeTp::LongLong)? != 0)
+        let r = <Bytes as ConvertTo<i64>>::convert(self, context)?;
+        Ok(!self.is_empty() && r != 0)
     }
 }
 

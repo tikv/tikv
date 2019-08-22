@@ -1,13 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+//! This file contain util function to impl cast_x_as_y for `rpn_expr/mpl_cast.rs` and `expr/builtin_cast.rs`
 
 use std::borrow::Cow;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_datatype::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
+use tidb_query_datatype::{self, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
 use tipb::FieldType;
 
-use super::mysql::{Res, RoundMode, DEFAULT_FSP};
+use super::mysql::{RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
 use crate::codec::data_type::*;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
@@ -17,6 +18,9 @@ use crate::expr::EvalContext;
 use crate::expr::Flag;
 
 /// A trait for converting a value to an `Int`.
+///
+/// The overflow and truncated err had handle by ctx,
+/// so if you get an err, needn't to handle it by ctx one more time.
 pub trait ToInt {
     /// Converts the given value to an `i64`
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64>;
@@ -60,28 +64,6 @@ where
         // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
         let val = box_try!(Real::new(val));
         Ok(val)
-    }
-}
-
-impl<T> ConvertTo<String> for T
-where
-    T: ToString + Evaluable,
-{
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<String> {
-        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string())
-    }
-}
-
-impl<T> ConvertTo<Bytes> for T
-where
-    T: ToString + Evaluable,
-{
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
-        Ok(self.to_string().into_bytes())
     }
 }
 
@@ -151,27 +133,32 @@ pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
 /// `truncate_f64` (`TruncateFloat` in TiDB) tries to truncate f.
 /// If the result exceeds the max/min float that flen/decimal
 /// allowed, returns the max/min float allowed.
-pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
+// TODO, check this func
+pub fn truncate_f64(ctx: &mut EvalContext, mut f: f64, flen: u8, decimal: u8) -> Result<f64> {
     if f.is_nan() {
-        return Res::Overflow(0f64);
+        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
+        return Ok(0f64);
     }
     let shift = 10u64.pow(u32::from(decimal)) as f64;
-    let maxf = 10u64.pow(u32::from(flen - decimal)) as f64 - 1.0 / shift;
-    if f.is_finite() {
+    let max_f = 10u64.pow(u32::from(flen - decimal)) as f64 - 1.0 / shift;
+
+    if !f.is_infinite() {
         let tmp = f * shift;
         if tmp.is_finite() {
             f = tmp.round() / shift
         }
-    };
-
-    if f > maxf {
-        return Res::Overflow(maxf);
     }
 
-    if f < -maxf {
-        return Res::Overflow(-maxf);
+    if f > max_f {
+        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
+        return Ok(max_f);
     }
-    Res::Ok(f)
+
+    if f < -max_f {
+        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
+        return Ok(-max_f);
+    }
+    Ok(f)
 }
 
 /// Returns an overflowed error.
@@ -184,85 +171,46 @@ macro_rules! overflow {
     }};
 }
 
-impl ToInt for i64 {
-    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        let lower_bound = integer_signed_lower_bound(tp);
-        // https://dev.mysql.com/doc/refman/8.0/en/out-of-range-and-overflow.html
-        if *self < lower_bound {
-            ctx.handle_overflow_err(overflow!(self, lower_bound))?;
-            return Ok(lower_bound);
-        }
-        let upper_bound = integer_signed_upper_bound(tp);
-        if *self > upper_bound {
-            ctx.handle_overflow_err(overflow!(self, upper_bound))?;
-            return Ok(upper_bound);
-        }
-        Ok(*self)
-    }
-
-    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        if *self < 0 && ctx.should_clip_to_zero() {
-            ctx.handle_overflow_err(overflow!(self, 0))?;
-            return Ok(0);
-        }
-
-        let upper_bound = integer_unsigned_upper_bound(tp);
-        if *self as u64 > upper_bound {
-            ctx.handle_overflow_err(overflow!(self, upper_bound))?;
-            return Ok(upper_bound);
-        }
-        Ok(*self as u64)
-    }
-}
-
-impl ToInt for u64 {
-    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        let upper_bound = integer_signed_upper_bound(tp);
-        if *self > upper_bound as u64 {
-            ctx.handle_overflow_err(overflow!(self, upper_bound))?;
-            return Ok(upper_bound);
-        }
-        Ok(*self as i64)
-    }
-
-    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let upper_bound = integer_unsigned_upper_bound(tp);
-        if *self > upper_bound {
-            ctx.handle_overflow_err(overflow!(self, upper_bound))?;
-            return Ok(upper_bound);
-        }
-        Ok(*self)
-    }
-}
-
 impl ToInt for f64 {
+    /// Port from TiDB's types.ConvertFloatToInt,
+    /// except that here we handle overflow using ctx,
+    /// but not return overflow err directly.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
+        #![allow(clippy::float_cmp)]
         let val = (*self).round();
         let lower_bound = integer_signed_lower_bound(tp);
         if val < lower_bound as f64 {
-            ctx.handle_overflow_err(overflow!(val, lower_bound))?;
+            ctx.handle_overflow_err(overflow!(val, tp))?;
             return Ok(lower_bound);
         }
 
         let upper_bound = integer_signed_upper_bound(tp);
-        if val > upper_bound as f64 {
-            ctx.handle_overflow_err(overflow!(val, upper_bound))?;
-            return Ok(upper_bound);
+        let ub_f64 = upper_bound as f64;
+        // according to https://github.com/pingcap/tidb/pull/5247
+        if val >= ub_f64 {
+            if val == ub_f64 {
+                return Ok(upper_bound);
+            } else {
+                ctx.handle_overflow_err(overflow!(val, tp))?;
+                return Ok(upper_bound);
+            }
         }
         Ok(val as i64)
     }
 
+    /// Port from types.ConvertFloatToUint,
+    /// except that here we handle overflow using ctx,
+    /// but not return overflow err directly.
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = (*self).round();
         if val < 0f64 {
-            ctx.handle_overflow_err(overflow!(val, 0))?;
+            ctx.handle_overflow_err(overflow!(val, tp))?;
             if ctx.should_clip_to_zero() {
-                return Ok(0);
-            } else {
-                return Ok(val as i64 as u64);
+                return Ok(0u64);
             }
+            // recall that, `f64 as u64` is different from `f64 as i64 as u64`
+            return Ok(val as i64 as u64);
         }
-
         let upper_bound = integer_unsigned_upper_bound(tp);
         if val > upper_bound as f64 {
             ctx.handle_overflow_err(overflow!(val, upper_bound))?;
@@ -287,33 +235,50 @@ impl ToInt for Real {
 impl ToInt for &[u8] {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
-        let s = s.trim();
-        let vs = get_valid_int_prefix(ctx, s)?;
-        let val = vs.parse::<i64>();
-        match val {
-            Ok(val) => val.to_int(ctx, tp),
-            Err(_) => {
-                ctx.handle_overflow_err(Error::overflow("BIGINT", &vs))?;
-                let val = if vs.starts_with('-') {
-                    integer_signed_lower_bound(tp)
-                } else {
-                    integer_signed_upper_bound(tp)
-                };
-                Ok(val)
-            }
-        }
+        s.to_int(ctx, tp)
     }
 
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
-        let vs = get_valid_int_prefix(ctx, s)?;
-        let val = vs.parse::<u64>();
-        match val {
-            Ok(val) => val.to_uint(ctx, tp),
+        s.to_uint(ctx, tp)
+    }
+}
+
+impl ToInt for &str {
+    /// Converts the given value to an `i64`
+    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
+        let s = self.trim();
+        let s = get_valid_int_prefix(ctx, s)?;
+        match s.parse::<i64>() {
+            Ok(val) => Ok(val),
             Err(_) => {
-                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &vs))?;
-                let val = integer_unsigned_upper_bound(tp);
-                Ok(val)
+                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", s.to_string()))?;
+                // in TiDB, the strconv.ParseInt return i64::MAX or i64::MIN when overflow,
+                // according to  strconv.ParseInt's doc:
+                // if the value corresponding to s cannot be represented by a signed integer of the given size,
+                // the returned value is the maximum magnitude integer of the appropriate bitSize and sign
+                if s.starts_with('-') {
+                    Ok(integer_signed_lower_bound(tp))
+                } else {
+                    Ok(integer_signed_upper_bound(tp))
+                }
+            }
+        }
+    }
+
+    /// Converts the given value to an `u64`
+    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
+        let s = self.trim();
+        let s = get_valid_int_prefix(ctx, s)?;
+        match s.parse::<u64>() {
+            Ok(v) => Ok(v),
+            Err(_) => {
+                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", s))?;
+                // in TiDB, the strconv.ParseUint return u64::MAX when non-negative number overflow,
+                // according to  strconv.ParseInt's doc:
+                // if the value corresponding to s cannot be represented by a signed integer of the given size,
+                // the returned value is the maximum magnitude integer of the appropriate bitSize and sign
+                Ok(integer_unsigned_upper_bound(tp))
             }
         }
     }
@@ -339,104 +304,29 @@ impl ToInt for Bytes {
     }
 }
 
-impl ToInt for Decimal {
-    #[inline]
-    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        // TODO: avoid this clone
-        let dec = round_decimal_with_ctx(ctx, self.clone())?;
-        let val = dec.as_i64_with_ctx(ctx)?;
-        val.to_int(ctx, tp)
-    }
-
-    #[inline]
-    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        // TODO: avoid this clone
-        let dec = round_decimal_with_ctx(ctx, self.clone())?;
-        decimal_as_u64(ctx, dec, tp)
-    }
-}
-
 impl ToInt for DateTime {
     #[inline]
-    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
+    fn to_int(&self, ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<i64> {
         // TODO: avoid this clone after refactor the `Time`
         let mut t = self.clone();
         t.round_frac(DEFAULT_FSP)?;
         let dec: Decimal = t.convert(ctx)?;
         let val = dec.as_i64_with_ctx(ctx)?;
-        val.to_int(ctx, tp)
+        Ok(val)
     }
 
     #[inline]
-    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
+    fn to_uint(&self, ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<u64> {
         // TODO: avoid this clone after refactor the `Time`
         let mut t = self.clone();
         t.round_frac(DEFAULT_FSP)?;
         let dec: Decimal = t.convert(ctx)?;
-        decimal_as_u64(ctx, dec, tp)
-    }
-}
-
-impl ToInt for Duration {
-    #[inline]
-    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        let dur = (*self).round_frac(DEFAULT_FSP)?;
-        let dec: Decimal = dur.convert(ctx)?;
-        let val = dec.as_i64_with_ctx(ctx)?;
-        val.to_int(ctx, tp)
-    }
-
-    #[inline]
-    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let dur = (*self).round_frac(DEFAULT_FSP)?;
-        let dec: Decimal = dur.convert(ctx)?;
-        decimal_as_u64(ctx, dec, tp)
-    }
-}
-
-impl ToInt for Json {
-    #[inline]
-    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        // Casts json to int has different behavior in TiDB/MySQL when the json
-        // value is a `Json::Double` and we will keep compatible with TiDB
-        // **Note**: select cast(cast('4.5' as json) as signed)
-        // TiDB:  5
-        // MySQL: 4
-        let val = match *self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => Ok(0),
-            Json::Boolean(true) => Ok(1),
-            Json::I64(d) => Ok(d),
-            Json::U64(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Json::Double(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Json::String(ref s) => s.as_bytes().to_int(ctx, FieldTypeTp::LongLong),
-        }?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(val)
-        } else {
-            val.to_int(ctx, tp)
-        }
-    }
-
-    #[inline]
-    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        let val = match *self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => Ok(0u64),
-            Json::Boolean(true) => Ok(1u64),
-            Json::I64(d) => d.to_uint(ctx, FieldTypeTp::LongLong),
-            Json::U64(d) => Ok(d),
-            Json::Double(d) => d.to_uint(ctx, FieldTypeTp::LongLong),
-            Json::String(ref s) => s.as_bytes().to_uint(ctx, FieldTypeTp::LongLong),
-        }?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(val)
-        } else {
-            val.to_uint(ctx, tp)
-        }
+        decimal_as_u64(ctx, &dec)
     }
 }
 
 #[inline]
-fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&'a str> {
+pub fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&'a str> {
     let valid = match str::from_utf8(bytes) {
         Ok(s) => s,
         Err(err) => {
@@ -448,16 +338,11 @@ fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&
     Ok(valid)
 }
 
-fn round_decimal_with_ctx(ctx: &mut EvalContext, dec: Decimal) -> Result<Decimal> {
-    dec.round(0, RoundMode::HalfEven)
-        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", ""))
-}
-
 #[inline]
-fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Result<u64> {
-    dec.as_u64()
-        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", dec))?
-        .to_uint(ctx, tp)
+fn decimal_as_u64(ctx: &mut EvalContext, dec: &Decimal) -> Result<u64> {
+    let r = dec.as_u64();
+    let r = r.into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", dec))?;
+    Ok(r)
 }
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
@@ -524,7 +409,7 @@ pub fn produce_dec_with_specified_tp(
     mut dec: Decimal,
     ft: &FieldType,
 ) -> Result<Decimal> {
-    let (flen, decimal) = (ft.as_accessor().flen(), ft.as_accessor().decimal());
+    let (flen, decimal) = (ft.flen(), ft.decimal());
     if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
         if flen < decimal {
             return Err(Error::m_bigger_than_d(""));
@@ -566,6 +451,34 @@ pub fn produce_dec_with_specified_tp(
     } else {
         Ok(dec)
     }
+}
+
+/// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
+/// a new float64 according to `flen` and `decimal` in `self.tp`.
+/// TODO port tests from tidb(tidb haven't implemented now)
+pub fn produce_float_with_specified_tp(
+    ctx: &mut EvalContext,
+    tp: &FieldType,
+    num: f64,
+) -> Result<f64> {
+    let flen = tp.as_accessor().flen();
+    let decimal = tp.as_accessor().decimal();
+    let ul = tidb_query_datatype::UNSPECIFIED_LENGTH;
+
+    let res = if flen != ul && decimal != ul {
+        assert!(flen < std::u8::MAX as isize && decimal < std::u8::MAX as isize);
+        truncate_f64(ctx, num, flen as u8, decimal as u8)?
+    } else {
+        num
+    };
+
+    if tp.as_accessor().flag().contains(FieldTypeFlag::UNSIGNED) && res < 0f64 {
+        let tmp_tp = tp.tp();
+        ctx.handle_overflow_err(overflow!(res, tmp_tp))?;
+        return Ok(0f64);
+    }
+
+    Ok(res)
 }
 
 /// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in TiDB) produces
@@ -619,7 +532,7 @@ pub fn produce_str_with_specified_tp<'a>(
         let mut res = s.into_owned();
         truncate_binary(&mut res, flen as isize);
         Ok(Cow::Owned(res))
-    } else if ft.as_accessor().tp() == FieldTypeTp::String
+    } else if ft.tp() == FieldTypeTp::String
         && s.len() < flen
         && ft.is_binary_string_like()
         && pad_zero
@@ -638,8 +551,7 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
         return;
     }
     let flen = flen as usize;
-    if ft.as_accessor().tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen
-    {
+    if ft.tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
         // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
         s.resize(flen, 0);
     }
@@ -662,11 +574,23 @@ impl ConvertTo<f64> for u64 {
 impl ConvertTo<f64> for &[u8] {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let s = str::from_utf8(self)?.trim();
+        <&str as ConvertTo<f64>>::convert(&s, ctx)
+    }
+}
+
+impl ConvertTo<f64> for &str {
+    // Port from TiDB's StrToFloat(in types/convert.go)
+    fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
+        let s = self.trim();
+        // TODO, this is not exactly same as TiDB's impl
+        //  however, the get_valid_float_prefix had handled err using `ctx`,
+        //  so I think it is right to handle it like this
         let vs = get_valid_float_prefix(ctx, s)?;
         match vs.parse::<f64>() {
             Ok(val) => {
+                // In rust's parse, if the number is out of range, it will return Ok but the res is inf
                 if val.is_infinite() {
-                    ctx.handle_overflow_err(Error::overflow("DOUBLE", &vs))?;
+                    ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
                     if val.is_sign_negative() {
                         return Ok(std::f64::MIN);
                     } else {
@@ -675,7 +599,8 @@ impl ConvertTo<f64> for &[u8] {
                 }
                 Ok(val)
             }
-            Err(err) => Err(box_err!("parse float err: {}", err)),
+            // if reaches here, it means our code has bug
+            Err(err) => Err(box_err!("parse float err: {}, this is a bug", err)),
         }
     }
 }
@@ -952,79 +877,13 @@ mod tests {
     use std::{f64, i64, isize, u64};
 
     use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+    use crate::codec::mysql::Res;
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
+
     use tidb_query_datatype::Collation;
 
     use super::*;
-
-    #[test]
-    fn test_int_to_int() {
-        let tests: Vec<(i64, FieldTypeTp, Option<i64>)> = vec![
-            (123, FieldTypeTp::Tiny, Some(123)),
-            (-123, FieldTypeTp::Tiny, Some(-123)),
-            (256, FieldTypeTp::Tiny, None),
-            (-257, FieldTypeTp::Tiny, None),
-            (123, FieldTypeTp::Short, Some(123)),
-            (-123, FieldTypeTp::Short, Some(-123)),
-            (65536, FieldTypeTp::Short, None),
-            (-65537, FieldTypeTp::Short, None),
-            (123, FieldTypeTp::Int24, Some(123)),
-            (-123, FieldTypeTp::Int24, Some(-123)),
-            (8388610, FieldTypeTp::Int24, None),
-            (-8388610, FieldTypeTp::Int24, None),
-            (8388610, FieldTypeTp::Long, Some(8388610)),
-            (-8388610, FieldTypeTp::Long, Some(-8388610)),
-            (4294967297, FieldTypeTp::Long, None),
-            (-4294967297, FieldTypeTp::Long, None),
-            (8388610, FieldTypeTp::LongLong, Some(8388610)),
-            (-8388610, FieldTypeTp::LongLong, Some(-8388610)),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (from, tp, to) in tests {
-            let r = from.to_int(&mut ctx, tp);
-            match to {
-                Some(to) => assert_eq!(to, r.unwrap()),
-                None => assert!(
-                    r.is_err(),
-                    "from: {}, to tp: {} should be overflow",
-                    from,
-                    tp
-                ),
-            }
-        }
-    }
-
-    #[test]
-    fn test_uint_into_int() {
-        let tests: Vec<(u64, FieldTypeTp, Option<i64>)> = vec![
-            (123, FieldTypeTp::Tiny, Some(123)),
-            (256, FieldTypeTp::Tiny, None),
-            (123, FieldTypeTp::Short, Some(123)),
-            (65536, FieldTypeTp::Short, None),
-            (123, FieldTypeTp::Int24, Some(123)),
-            (8388610, FieldTypeTp::Int24, None),
-            (8388610, FieldTypeTp::Long, Some(8388610)),
-            (4294967297, FieldTypeTp::Long, None),
-            (4294967297, FieldTypeTp::LongLong, Some(4294967297)),
-            (u64::MAX, FieldTypeTp::LongLong, None),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (from, tp, to) in tests {
-            let r = from.to_int(&mut ctx, tp);
-            match to {
-                Some(to) => assert_eq!(to, r.unwrap()),
-                None => assert!(
-                    r.is_err(),
-                    "from: {}, to tp: {} should be overflow",
-                    from,
-                    tp
-                ),
-            }
-        }
-    }
 
     #[test]
     fn test_float_to_int() {
@@ -1140,32 +999,6 @@ mod tests {
             let val = raw.clone().to_int(&mut ctx, tp);
             assert_eq!(val.unwrap(), dst);
             assert_eq!(ctx.warnings.warning_cnt, 1);
-        }
-
-        // int_to_int
-        let cases: Vec<(i64, i64, FieldTypeTp)> = vec![
-            (12345, 127, FieldTypeTp::Tiny),
-            (-12345, -128, FieldTypeTp::Tiny),
-            (123456, 32767, FieldTypeTp::Short),
-            (-123456, -32768, FieldTypeTp::Short),
-            (83886078, 8388607, FieldTypeTp::Int24),
-            (-83886078, -8388608, FieldTypeTp::Int24),
-            (i64::MAX, 2147483647, FieldTypeTp::Long),
-            (i64::MIN, -2147483648, FieldTypeTp::Long),
-        ];
-        for (raw, dst, tp) in cases {
-            test_overflow(raw, dst, tp);
-        }
-
-        // uint_to_int
-        let cases: Vec<(u64, i64, FieldTypeTp)> = vec![
-            (12345, 127, FieldTypeTp::Tiny),
-            (123456, 32767, FieldTypeTp::Short),
-            (83886078, 8388607, FieldTypeTp::Int24),
-            (u64::MAX, 2147483647, FieldTypeTp::Long),
-        ];
-        for (raw, dst, tp) in cases {
-            test_overflow(raw, dst, tp);
         }
 
         // float_to_int
@@ -1295,104 +1128,6 @@ mod tests {
                 Err(e) => assert!(e.is_overflow()),
                 res => panic!("expect convert {:?} to overflow, but got {:?}", bs, res),
             };
-        }
-    }
-
-    #[test]
-    fn test_cast_to_int() {
-        let test_cases = vec![
-            ("{}", 0),
-            ("[]", 0),
-            ("3", 3),
-            ("-3", -3),
-            ("4.1", 4),
-            ("4.5", 5),
-            ("true", 1),
-            ("false", 0),
-            ("null", 0),
-            (r#""hello""#, 0),
-            (r#""1234""#, 1234),
-        ];
-
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
-        for (jstr, exp) in test_cases {
-            let json: Json = jstr.parse().unwrap();
-            let get = json.to_int(&mut ctx, FieldTypeTp::LongLong).unwrap();
-            assert_eq!(get, exp, "json.as_i64 get: {}, exp: {}", get, exp);
-        }
-    }
-
-    #[test]
-    fn test_int_to_uint() {
-        let tests: Vec<(i64, FieldTypeTp, Option<u64>)> = vec![
-            (123, FieldTypeTp::Tiny, Some(123)),
-            (256, FieldTypeTp::Tiny, None),
-            (123, FieldTypeTp::Short, Some(123)),
-            (65536, FieldTypeTp::Short, None),
-            (123, FieldTypeTp::Int24, Some(123)),
-            (16777216, FieldTypeTp::Int24, None),
-            (16777216, FieldTypeTp::Long, Some(16777216)),
-            (4294967297, FieldTypeTp::Long, None),
-            (8388610, FieldTypeTp::LongLong, Some(8388610)),
-            (-1, FieldTypeTp::LongLong, Some(u64::MAX)),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (from, tp, to) in tests {
-            let r = from.to_uint(&mut ctx, tp);
-            match to {
-                Some(to) => assert_eq!(to, r.unwrap()),
-                None => assert!(
-                    r.is_err(),
-                    "from: {}, to tp: {} should be overflow",
-                    from,
-                    tp
-                ),
-            }
-        }
-
-        // SHOULD_CLIP_TO_ZERO
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IN_INSERT_STMT)));
-        let r = (-12345 as i64).to_uint(&mut ctx, FieldTypeTp::LongLong);
-        assert!(r.is_err());
-
-        // SHOULD_CLIP_TO_ZERO | OVERFLOW_AS_WARNING
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
-            Flag::IN_INSERT_STMT | Flag::OVERFLOW_AS_WARNING,
-        )));
-        let r = (-12345 as i64)
-            .to_uint(&mut ctx, FieldTypeTp::LongLong)
-            .unwrap();
-        assert_eq!(r, 0);
-    }
-
-    #[test]
-    fn test_uint_into_uint() {
-        let tests: Vec<(u64, FieldTypeTp, Option<u64>)> = vec![
-            (123, FieldTypeTp::Tiny, Some(123)),
-            (256, FieldTypeTp::Tiny, None),
-            (123, FieldTypeTp::Short, Some(123)),
-            (65536, FieldTypeTp::Short, None),
-            (123, FieldTypeTp::Int24, Some(123)),
-            (16777216, FieldTypeTp::Int24, None),
-            (8388610, FieldTypeTp::Long, Some(8388610)),
-            (4294967297, FieldTypeTp::Long, None),
-            (4294967297, FieldTypeTp::LongLong, Some(4294967297)),
-            (u64::MAX, FieldTypeTp::LongLong, Some(u64::MAX)),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (from, tp, to) in tests {
-            let r = from.to_uint(&mut ctx, tp);
-            match to {
-                Some(to) => assert_eq!(to, r.unwrap()),
-                None => assert!(
-                    r.is_err(),
-                    "from: {}, to tp: {} should be overflow",
-                    from,
-                    tp
-                ),
-            }
         }
     }
 
@@ -1527,31 +1262,6 @@ mod tests {
             assert_eq!(ctx.warnings.warning_cnt, 1);
         }
 
-        // int_to_uint
-        let cases: Vec<(i64, u64, FieldTypeTp)> = vec![
-            (12345, 255, FieldTypeTp::Tiny),
-            (-1, 255, FieldTypeTp::Tiny),
-            (123456, 65535, FieldTypeTp::Short),
-            (-1, 65535, FieldTypeTp::Short),
-            (16777216, 16777215, FieldTypeTp::Int24),
-            (i64::MAX, 4294967295, FieldTypeTp::Long),
-            (i64::MIN, u64::from(u32::MAX), FieldTypeTp::Long),
-        ];
-        for (raw, dst, tp) in cases {
-            test_overflow(raw, dst, tp);
-        }
-
-        // uint_to_uint
-        let cases: Vec<(u64, u64, FieldTypeTp)> = vec![
-            (12345, 255, FieldTypeTp::Tiny),
-            (123456, 65535, FieldTypeTp::Short),
-            (16777216, 16777215, FieldTypeTp::Int24),
-            (u64::MAX, 4294967295, FieldTypeTp::Long),
-        ];
-        for (raw, dst, tp) in cases {
-            test_overflow(raw, dst, tp);
-        }
-
         // float_to_uint
         let cases: Vec<(f64, u64, FieldTypeTp)> = vec![
             (255.5, 255, FieldTypeTp::Tiny),
@@ -1609,29 +1319,6 @@ mod tests {
         let val = bs.to_uint(&mut ctx, FieldTypeTp::LongLong);
         assert_eq!(val.unwrap(), 123);
         assert_eq!(ctx.warnings.warnings.len(), 1);
-    }
-
-    #[test]
-    fn test_cast_to_uint() {
-        let test_cases = vec![
-            ("{}", 0u64),
-            ("[]", 0u64),
-            ("3", 3u64),
-            ("4.1", 4u64),
-            ("4.5", 5u64),
-            ("true", 1u64),
-            ("false", 0u64),
-            ("null", 0u64),
-            (r#""hello""#, 0u64),
-            (r#""1234""#, 1234u64),
-        ];
-
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
-        for (jstr, exp) in test_cases {
-            let json: Json = jstr.parse().unwrap();
-            let get = json.to_uint(&mut ctx, FieldTypeTp::LongLong).unwrap();
-            assert_eq!(get, exp, "json.as_u64 get: {}, exp: {}", get, exp);
-        }
     }
 
     #[test]
@@ -1856,9 +1543,21 @@ mod tests {
             (1.36, 10, 2, Res::Ok(1.36)),
             (f64::NAN, 10, 1, Res::Overflow(0f64)),
         ];
+
         for (f, flen, decimal, exp) in cases {
-            let res = truncate_f64(f, flen, decimal);
-            assert_eq!(res, exp);
+            let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
+            let mut ctx = EvalContext::new(Arc::new(cfg));
+            let res = truncate_f64(&mut ctx, f, flen, decimal);
+            match exp {
+                Res::Overflow(d) => {
+                    assert_eq!(ctx.warnings.warning_cnt, 1);
+                    assert_eq!(res.unwrap(), d);
+                }
+                Res::Ok(d) => {
+                    assert_eq!(res.unwrap(), d);
+                }
+                _ => panic!(),
+            }
         }
     }
 
@@ -1883,7 +1582,7 @@ mod tests {
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
-        let mut ft = FieldType::default();
+        let mut ft = FieldType::new();
 
         for (s, char_num, cs) in cases {
             ft.set_charset(cs.to_string());
@@ -1919,7 +1618,7 @@ mod tests {
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
-        let mut ft = FieldType::default();
+        let mut ft = FieldType::new();
         <FieldType as FieldTypeAccessor>::set_tp(&mut ft, FieldTypeTp::String);
         <FieldType as FieldTypeAccessor>::set_collation(&mut ft, Collation::Binary);
 
@@ -1970,7 +1669,7 @@ mod tests {
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
-        let mut ft = FieldType::default();
+        let mut ft = FieldType::new();
 
         for (dec, flen, decimal, want) in cases {
             ft.set_flen(flen);

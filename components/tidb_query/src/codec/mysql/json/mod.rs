@@ -20,6 +20,8 @@ pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
+
 use tikv_util::is_even;
 
 use super::super::datum::Datum;
@@ -87,6 +89,44 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     Ok(Json::Object(map))
 }
 
+impl ConvertTo<i64> for Json {
+    // Casts json to int has different behavior in TiDB/MySQL when the json
+    // value is a `Json::Double` and we will keep compatible with TiDB
+    // **Note**: select cast(cast('4.5' as json) as signed)
+    // TiDB:  5
+    // MySQL: 4
+    fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
+        let d = match *self {
+            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0,
+            Json::Boolean(true) => 1,
+            Json::I64(d) => d,
+            Json::U64(d) => d as i64,
+            Json::Double(d) => d.convert(ctx)?,
+            Json::String(ref s) => s.as_bytes().convert(ctx)?,
+        };
+        Ok(d)
+    }
+}
+
+impl ConvertTo<u64> for Json {
+    // Casts json to int has different behavior in TiDB/MySQL when the json
+    // value is a `Json::Double` and we will keep compatible with TiDB
+    // **Note**: select cast(cast('4.5' as json) as signed)
+    // TiDB:  5
+    // MySQL: 4
+    fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
+        let d = match *self {
+            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0u64,
+            Json::Boolean(true) => 1u64,
+            Json::I64(d) => d as u64,
+            Json::U64(d) => d,
+            Json::Double(d) => d.convert(ctx)?,
+            Json::String(ref s) => s.as_bytes().convert(ctx)?,
+        };
+        Ok(d)
+    }
+}
+
 impl ConvertTo<f64> for Json {
     ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
     #[inline]
@@ -104,11 +144,21 @@ impl ConvertTo<f64> for Json {
 }
 
 impl ConvertTo<Decimal> for Json {
-    /// Converts a `Json` to a `Decimal`
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let f: f64 = self.convert(ctx)?;
-        f.convert(ctx)
+        match self {
+            Json::String(s) => match Decimal::from_str(s.as_str()) {
+                Ok(d) => Ok(d),
+                Err(e) => {
+                    ctx.handle_truncate_err(e)?;
+                    Ok(Decimal::zero())
+                }
+            },
+            _ => {
+                let r: f64 = <Json as ConvertTo<f64>>::convert(self, ctx)?;
+                <f64 as ConvertTo<Decimal>>::convert(&r, ctx)
+            }
+        }
     }
 }
 
