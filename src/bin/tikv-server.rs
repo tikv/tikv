@@ -56,7 +56,7 @@ use std::usize;
 use clap::{App, Arg};
 use fs2::FileExt;
 
-use tikv::config::{check_and_persist_critical_config, TiKvConfig};
+use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
@@ -316,6 +316,13 @@ fn main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("config-check")
+                .required(false)
+                .long("config-check")
+                .takes_value(false)
+                .help("Check config file validity and exit"),
+        )
+        .arg(
             Arg::with_name("addr")
                 .short("A")
                 .long("addr")
@@ -423,8 +430,12 @@ fn main() {
 
     overwrite_config_with_cmd_args(&mut config, &matches);
 
-    if let Err(e) = check_and_persist_critical_config(&config) {
-        fatal!("check critical config failed, error {:?}", e);
+    if matches.is_present("config-check") {
+        validate_and_persist_config(&mut config, false);
+        println!("config check successful");
+        process::exit(0)
+    } else {
+        validate_and_persist_config(&mut config, true);
     }
 
     // Sets the global logger ASAP.
@@ -436,10 +447,6 @@ fn main() {
     // Print version information.
     util::print_tikv_info();
 
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {:?}", e);
-    }
     info!(
         "using config: {}",
         serde_json::to_string_pretty(&config).unwrap()
