@@ -123,6 +123,7 @@ fn test_serde_custom_tikv_config() {
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
+        region_split_check_keys_diff: 60000,
         region_compact_check_interval: ReadableDuration::secs(12),
         clean_stale_peer_delay: ReadableDuration::secs(13),
         region_compact_check_step: 1_234,

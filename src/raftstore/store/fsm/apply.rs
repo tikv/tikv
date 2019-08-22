@@ -978,6 +978,7 @@ impl ApplyDelegate {
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
+                    self.metrics.keys_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
                 }
                 ExecResult::PrepareMerge { ref region, .. } => {
@@ -1162,6 +1163,7 @@ impl ApplyDelegate {
         let key = keys::data_key(key);
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
+        self.metrics.keys_diff_hint += 1;
         if !req.get_put().get_cf().is_empty() {
             let cf = req.get_put().get_cf();
             // TODO: don't allow write preseved cfs.
@@ -1204,6 +1206,7 @@ impl ApplyDelegate {
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
         self.metrics.size_diff_hint -= key.len() as i64;
+        self.metrics.keys_diff_hint -= 1;
         let resp = Response::default();
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
@@ -2332,6 +2335,8 @@ impl Debug for Msg {
 pub struct ApplyMetrics {
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: i64,
+    /// an inaccurate difference in region keys number since last reset.
+    pub keys_diff_hint: i64,
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
 
@@ -3470,6 +3475,7 @@ mod tests {
         assert!(apply_res.metrics.written_bytes >= 5);
         assert_eq!(apply_res.metrics.written_keys, 2);
         assert_eq!(apply_res.metrics.size_diff_hint, 5);
+        assert_eq!(apply_res.metrics.keys_diff_hint, 1);
         assert_eq!(apply_res.metrics.lock_cf_written_bytes, 5);
         let lock_handle = engines.kv.cf_handle(CF_LOCK).unwrap();
         assert_eq!(
@@ -3525,6 +3531,7 @@ mod tests {
         assert_eq!(apply_res.metrics.lock_cf_written_bytes, 3);
         assert_eq!(apply_res.metrics.delete_keys_hint, 2);
         assert_eq!(apply_res.metrics.size_diff_hint, -9);
+        assert_eq!(apply_res.metrics.keys_diff_hint, -3);
 
         let delete_entry = EntryBuilder::new(6, 3)
             .delete(b"k5")

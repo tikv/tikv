@@ -1657,6 +1657,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
                 new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
+                new_peer.peer.keys_diff_hint = self.ctx.cfg.region_split_check_keys_diff;
             }
             let mailbox = BasicMailbox::new(sender, new_peer);
             self.ctx.router.register(new_region_id, mailbox);
@@ -1995,6 +1996,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
         self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
+        self.fsm.peer.keys_diff_hint = self.ctx.cfg.region_split_check_keys_diff;
         if self.fsm.peer.is_leader() {
             info!(
                 "notify pd with merge";
@@ -2568,6 +2570,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.peer.approximate_size.is_some()
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
+            && self.fsm.peer.keys_diff_hint < self.ctx.cfg.region_split_check_keys_diff
         {
             return;
         }
@@ -2581,6 +2584,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
         }
         self.fsm.peer.size_diff_hint = 0;
+        self.fsm.peer.keys_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
         self.register_split_region_check_tick();
     }
@@ -2896,6 +2900,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ingest_sst_result(&mut self, ssts: Vec<SstMeta>) {
         for sst in &ssts {
+            // since keys_diff_hint is not accurate, so we just skip calculate it here for now.
             self.fsm.peer.size_diff_hint += sst.get_length();
         }
         self.register_split_region_check_tick();

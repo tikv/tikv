@@ -216,6 +216,11 @@
 ## 32MB during checking and set it back to the default value in normal operations.
 # region-split-check-diff = "6MB"
 
+## The threshold of triggering Region split check.
+## When Region keys number change exceeds this config, TiKV will check whether the Region should be split
+## or not.
+# region-split-check-keys-diff = "60000"
+
 ## The interval of triggering Region split check.
 # split-region-check-tick-interval = "10s"
 

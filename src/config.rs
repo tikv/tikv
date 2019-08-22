@@ -1278,6 +1278,7 @@ impl TiKvConfig {
         self.storage.validate()?;
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
+        self.raft_store.region_split_check_keys_diff = self.coprocessor.region_split_keys / 16;
         self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
             config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
         } else {
