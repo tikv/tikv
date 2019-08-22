@@ -905,8 +905,6 @@ impl<T: std::io::Write> TimeEncoder for T {}
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
     fn encode_time(&mut self, v: &Time) -> Result<()> {
-        use num::ToPrimitive;
-
         if !v.is_zero() {
             self.encode_u16(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
@@ -930,8 +928,6 @@ pub trait TimeEncoder: NumberEncoder {
 impl Time {
     /// `decode` decodes time encoded by `encode_time` for Chunk format.
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
-        use num_traits::FromPrimitive;
-
         let year = i32::from(number::decode_u16(data)?);
         let (month, day, hour, minute, second) = if data.len() >= 5 {
             (
