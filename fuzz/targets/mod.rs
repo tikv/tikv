@@ -177,7 +177,6 @@ fn fuzz_time(t: tidb_query::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Re
     let _: i64 = t.convert(&mut ctx)?;
     let _: u64 = t.convert(&mut ctx)?;
     let _: f64 = t.convert(&mut ctx)?;
-    let _: Vec<u8> = t.convert(&mut ctx)?;
     let _: Decimal = t.convert(&mut ctx)?;
     let _: Duration = t.convert(&mut ctx)?;
     Ok(())
