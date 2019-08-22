@@ -33,7 +33,8 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/yiwu-arbug/rust-rocksdb.git"
+branch = "upgrade_master"
 package = "rocksdb"
 
 [dev-dependencies]
