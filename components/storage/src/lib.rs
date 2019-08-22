@@ -3,7 +3,7 @@
 //! External storage support.
 //!
 //! This crate define an abstraction of external storage. Currently, it
-//! supports local storage and S3(Simple Storage Service) storage
+//! supports local storage.
 
 #[macro_use(slog_error, slog_info, slog_debug)]
 extern crate slog;
