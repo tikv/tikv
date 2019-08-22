@@ -196,7 +196,7 @@ fn test_auto_aplit_region_with_keys<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut num_keys = 0;
     cluster.engines[&store_id]
         .kv
-        .scan(&data_key(b""), &data_key(middle_key), false, |k, v| {
+        .scan(&data_key(b""), &data_key(middle_key), false, |_k, _v| {
             num_keys += 1;
             Ok(true)
         })
