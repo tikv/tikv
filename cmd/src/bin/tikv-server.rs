@@ -6,7 +6,7 @@
 use std::process;
 
 use clap::{crate_authors, crate_version, App, Arg};
-use cmd::setup::validate_config;
+use cmd::setup::validate_and_persist_config;
 use tikv::config::TiKvConfig;
 
 fn main() {
@@ -149,11 +149,11 @@ fn main() {
     cmd::setup::overwrite_config_with_cmd_args(&mut config, &matches);
 
     if matches.is_present("config-check") {
-        validate_config(&mut config, false);
+        validate_and_persist_config(&mut config, false);
         println!("config check successful");
         process::exit(0)
     } else {
-        validate_config(&mut config, true);
+        validate_and_persist_config(&mut config, true);
     }
 
     cmd::server::run_tikv(config);
