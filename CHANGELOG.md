@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.3]
+
++ Exclude shared block cache from core dump [#5322](https://github.com/tikv/tikv/pull/5322)
+
 ## [3.0.2]
 
 + Fix the bug that TiKV panics if the Raft Log is not written in time [#5160](https://github.com/tikv/tikv/pull/5160)
@@ -12,7 +16,6 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Improve the accuracy of the Region size in TiKV Control [#5195](https://github.com/tikv/tikv/pull/5195)
 + Improve the performance of the deadlock detector for pessimistic locks [#5192](https://github.com/tikv/tikv/pull/5192)
 + Improve the performance of GC in the Titan storage engine [#5197](https://github.com/tikv/tikv/pull/5197)
-+ Exclude shared block cache from core dump [#5322](https://github.com/tikv/tikv/pull/5322)
 
 ## [3.0.1]
 + Engine
