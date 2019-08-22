@@ -12,6 +12,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Improve the accuracy of the Region size in TiKV Control [#5195](https://github.com/tikv/tikv/pull/5195)
 + Improve the performance of the deadlock detector for pessimistic locks [#5192](https://github.com/tikv/tikv/pull/5192)
 + Improve the performance of GC in the Titan storage engine [#5197](https://github.com/tikv/tikv/pull/5197)
++ Exclude shared block cache from core dump [#5322](https://github.com/tikv/tikv/pull/5322)
 
 ## [3.0.1]
 + Engine
