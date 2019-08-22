@@ -664,6 +664,7 @@ struct WriteCompactionFilter {
     key_prefix: Vec<u8>,
     remove_older: bool,
 
+    level: usize,
     versions: usize,
     rows: usize,
     stale_versions: usize,
@@ -686,6 +687,7 @@ impl WriteCompactionFilter {
             key_prefix: vec![],
             remove_older: false,
 
+            level: 0,
             versions: 0,
             rows: 0,
             stale_versions: 0,
@@ -715,6 +717,7 @@ impl Drop for WriteCompactionFilter {
         }
         info!(
             "WriteCompactionFilter uses {}s", self.start.elapsed_secs();
+            "level" => self.level,
             "versions" => self.versions,
             "stale_versions" => self.stale_versions,
             "rows" => self.rows,
@@ -734,6 +737,7 @@ impl CompactionFilter for WriteCompactionFilter {
         _: &mut Vec<u8>,
         _: &mut bool,
     ) -> bool {
+        self.level = level;
         let safe_point = self.safe_point.load(Ordering::Acquire);
         if safe_point == 0 {
             return false;

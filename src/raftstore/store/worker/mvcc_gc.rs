@@ -11,8 +11,8 @@ use std::time::Duration;
 use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::raftstore::store::keys::{data_end_key, data_key};
 use crate::storage::mvcc::{init_mvcc_gc_db, init_safe_point};
-use engine::rocks::util::{compact_range, get_cf_handle};
-use engine::rocks::DB;
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::{CompactOptions, DB};
 use engine::util::get_range_properties_cf;
 use engine::CF_WRITE;
 use tikv_util::time::{duration_to_ms, Instant};
@@ -65,11 +65,6 @@ impl MvccGcRunner {
         timer.add_task(COLLECT_TASK_INTERVAL, ());
         timer
     }
-
-    // fn compact(&self, start_key: &[u8], end_key: &[u8]) {
-    //     let handle = get_cf_handle(&self.db, CF_WRITE).unwrap();
-    //     compact_range(&self.db, handle, Some(start_key), Some(end_key), false, 2);
-    // }
 }
 
 impl Runnable<MvccGcTask> for MvccGcRunner {
@@ -126,7 +121,14 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
             thread::spawn(move || {
                 let start_time = Instant::now();
                 let handle = get_cf_handle(&db, CF_WRITE).unwrap();
-                compact_range(&db, handle, Some(&sk), Some(&ek), false, 1);
+                let mut compact_opts = CompactOptions::new();
+                compact_opts.set_exclusive_manual_compaction(false);
+                compact_opts.set_max_subcompactions(3);
+                compact_opts.set_change_level(true);
+                compact_opts.set_target_level(6);
+                compact_opts.set_first_level(1);
+                db.compact_range_cf_opt(handle, &compact_opts, Some(&sk), Some(&ek));
+
                 let elapsed = duration_to_ms(start_time.elapsed());
                 info!("gc worker handles {} regions in {} ms", mc, elapsed,);
                 sender.send((sk, ek)).unwrap();
@@ -165,7 +167,7 @@ impl RunnableWithTimer<MvccGcTask, ()> for MvccGcRunner {
 
 const COLLECT_TASK_INTERVAL: Duration = Duration::from_secs(60);
 const CONTIGUOUS_REGION_GC_THRESHOLD: usize = 16;
-const CONCURRENCY: usize = 3;
+const CONCURRENCY: usize = 1;
 
 fn insert_range(
     map: &mut BTreeMap<Vec<u8>, (Vec<u8>, usize)>,
