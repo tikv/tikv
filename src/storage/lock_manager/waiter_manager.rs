@@ -251,12 +251,12 @@ impl WaiterManager {
     }
 
     fn handle_wait_for(&mut self, handle: &Handle, is_first_lock: bool, waiter: Waiter) {
-        let lock = waiter.lock.clone();
+        let lock = waiter.lock;
         let start_ts = waiter.start_ts;
 
         // If it is the first lock, deadlock never occur
         if !is_first_lock {
-            self.detector_scheduler.detect(start_ts, lock.clone());
+            self.detector_scheduler.detect(start_ts, lock);
         }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
@@ -267,7 +267,7 @@ impl WaiterManager {
                 .then(move |_| {
                     wait_table
                         .borrow_mut()
-                        .remove_waiter(start_ts, lock.clone())
+                        .remove_waiter(start_ts, lock)
                         .and_then(|waiter| {
                             // The corresponding `WaitForEntry` in deadlock detector
                             // will be removed by expiration.
@@ -289,7 +289,7 @@ impl WaiterManager {
 
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             self.detector_scheduler
-                .clean_up_wait_for(waiter.start_ts, waiter.lock.clone());
+                .clean_up_wait_for(waiter.start_ts, waiter.lock);
             if self.wake_up_delay_duration > 0 {
                 // Sleep a little so the transaction with small start_ts will more likely get the lock.
                 let when = Instant::now()
@@ -371,7 +371,6 @@ impl FutureRunnable<Task> for WaiterManager {
                 deadlock_key_hash,
             } => {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
-                TASK_COUNTER_VEC.deadlock.inc();
             }
         }
     }
