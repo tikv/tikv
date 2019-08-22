@@ -9,7 +9,6 @@ use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
-use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::raftstore::store::Callback;

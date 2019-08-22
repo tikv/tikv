@@ -33,7 +33,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         use tidb_query_datatype::FieldTypeAccessor;
         assert_eq!(aggr_def.get_tp(), ExprType::First);
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let eval_type = EvalType::try_from(child.get_field_type().tp()).unwrap();
+        let eval_type = EvalType::try_from(child.get_field_type().as_accessor().tp()).unwrap();
 
         // FIRST outputs one column with the same type as its child
         out_schema.push(aggr_def.take_field_type());

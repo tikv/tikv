@@ -3,13 +3,18 @@
 use std::borrow::Cow;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
-use tidb_query_datatype::{self, FieldTypeTp};
+use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
+use tipb::FieldType;
 
 use super::mysql::{Res, RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
 use crate::codec::data_type::*;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
+use crate::codec::mysql::charset;
+use crate::codec::mysql::decimal::max_or_min_dec;
 use crate::expr::EvalContext;
+use crate::expr::Flag;
 
 /// A trait for converting a value to an `Int`.
 pub trait ToInt {
@@ -143,7 +148,7 @@ pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
     }
 }
 
-/// `truncate_f64` (`TruncateFloat` in tidb) tries to truncate f.
+/// `truncate_f64` (`TruncateFloat` in TiDB) tries to truncate f.
 /// If the result exceeds the max/min float that flen/decimal
 /// allowed, returns the max/min float allowed.
 pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
@@ -514,6 +519,132 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     r.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", ""))
 }
 
+pub fn produce_dec_with_specified_tp(
+    ctx: &mut EvalContext,
+    mut dec: Decimal,
+    ft: &FieldType,
+) -> Result<Decimal> {
+    let (flen, decimal) = (ft.as_accessor().flen(), ft.as_accessor().decimal());
+    if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
+        if flen < decimal {
+            return Err(Error::m_bigger_than_d(""));
+        }
+        let (prec, frac) = dec.prec_and_frac();
+        let (prec, frac) = (prec as isize, frac as isize);
+        if !dec.is_zero() && prec - frac > flen - decimal {
+            // select (cast 111 as decimal(1)) causes a warning in MySQL.
+            ctx.handle_overflow_err(Error::overflow(
+                "Decimal",
+                &format!("({}, {})", flen, decimal),
+            ))?;
+            dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
+        } else if frac != decimal {
+            let old = dec.clone();
+            let rounded = dec
+                .round(decimal as i8, RoundMode::HalfEven)
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("Decimal", &format!("({}, {})", flen, decimal)),
+                )?;
+            if !rounded.is_zero() && frac > decimal && rounded != old {
+                if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
+                    || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
+                {
+                    ctx.warnings.append_warning(Error::truncated());
+                } else {
+                    // although according to tidb,
+                    // we should handler overflow after handle_truncate,
+                    // however, no overflow err will return by handle_truncate
+                    ctx.handle_truncate(true)?;
+                }
+            }
+            dec = rounded
+        }
+    };
+    if ft.is_unsigned() && dec.is_negative() {
+        Ok(Decimal::zero())
+    } else {
+        Ok(dec)
+    }
+}
+
+/// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in TiDB) produces
+/// a new string according to `flen` and `chs`.
+///
+/// # Panics
+///
+/// The s must represent a valid str, otherwise, panic!
+pub fn produce_str_with_specified_tp<'a>(
+    ctx: &mut EvalContext,
+    s: Cow<'a, [u8]>,
+    ft: &FieldType,
+    pad_zero: bool,
+) -> Result<Cow<'a, [u8]>> {
+    let (flen, chs) = (ft.flen(), ft.get_charset());
+    if flen < 0 {
+        return Ok(s);
+    }
+    let flen = flen as usize;
+    // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
+    // char count and truncate to flen chars if it is too long.
+    if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
+        let truncate_info = {
+            // In TiDB's version, the param `s` is a string,
+            // so we can unwrap directly here because we need the `s` represent a valid str
+            let s: &str = std::str::from_utf8(s.as_ref()).unwrap();
+            let mut indices = s.char_indices().skip(flen);
+            indices.next().map(|(truncate_pos, _)| {
+                let char_count = flen + 1 + indices.count();
+                (char_count, truncate_pos)
+            })
+        };
+        if truncate_info.is_none() {
+            return Ok(s);
+        }
+        let (char_count, truncate_pos) = truncate_info.unwrap();
+        ctx.handle_truncate_err(Error::data_too_long(format!(
+            "Data Too Long, field len {}, data len {}",
+            flen, char_count
+        )))?;
+
+        let mut res = s.into_owned();
+        truncate_binary(&mut res, truncate_pos as isize);
+        Ok(Cow::Owned(res))
+    } else if s.len() > flen {
+        ctx.handle_truncate_err(Error::data_too_long(format!(
+            "Data Too Long, field len {}, data len {}",
+            flen,
+            s.len()
+        )))?;
+        let mut res = s.into_owned();
+        truncate_binary(&mut res, flen as isize);
+        Ok(Cow::Owned(res))
+    } else if ft.as_accessor().tp() == FieldTypeTp::String
+        && s.len() < flen
+        && ft.is_binary_string_like()
+        && pad_zero
+    {
+        let mut s = s.into_owned();
+        s.resize(flen, 0);
+        Ok(Cow::Owned(s))
+    } else {
+        Ok(s)
+    }
+}
+
+pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
+    let flen = ft.flen();
+    if flen < 0 {
+        return;
+    }
+    let flen = flen as usize;
+    if ft.as_accessor().tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen
+    {
+        // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
+        s.resize(flen, 0);
+    }
+}
+
 impl ConvertTo<f64> for i64 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
@@ -823,6 +954,7 @@ mod tests {
     use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
+    use tidb_query_datatype::Collation;
 
     use super::*;
 
@@ -1727,6 +1859,126 @@ mod tests {
         for (f, flen, decimal, exp) in cases {
             let res = truncate_f64(f, flen, decimal);
             assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_produce_str_with_specified_tp() {
+        let cases = vec![
+            // branch 1
+            ("世界，中国", 1, charset::CHARSET_UTF8),
+            ("世界，中国", 2, charset::CHARSET_UTF8),
+            ("世界，中国", 3, charset::CHARSET_UTF8),
+            ("世界，中国", 4, charset::CHARSET_UTF8),
+            ("世界，中国", 5, charset::CHARSET_UTF8),
+            ("世界，中国", 6, charset::CHARSET_UTF8),
+            // branch 2
+            ("世界，中国", 1, charset::CHARSET_ASCII),
+            ("世界，中国", 2, charset::CHARSET_ASCII),
+            ("世界，中国", 3, charset::CHARSET_ASCII),
+            ("世界，中国", 4, charset::CHARSET_ASCII),
+            ("世界，中国", 5, charset::CHARSET_ASCII),
+            ("世界，中国", 6, charset::CHARSET_ASCII),
+        ];
+
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::default();
+
+        for (s, char_num, cs) in cases {
+            ft.set_charset(cs.to_string());
+            ft.set_flen(char_num);
+            let bs = s.as_bytes();
+            let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, false);
+            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+            let p = r.unwrap();
+
+            if cs == charset::CHARSET_UTF8MB4 || cs == charset::CHARSET_UTF8 {
+                let ns: String = s.chars().take(char_num as usize).collect();
+                assert_eq!(p.as_ref(), ns.as_bytes(), "{}, {}, {}", s, char_num, cs);
+            } else {
+                assert_eq!(
+                    p.as_ref(),
+                    &bs[..(char_num as usize)],
+                    "{}, {}, {}",
+                    s,
+                    char_num,
+                    cs
+                );
+            }
+        }
+
+        let cases = vec![
+            // branch 3
+            ("世界，中国", 20, charset::CHARSET_ASCII),
+            ("世界，中国", 30, charset::CHARSET_ASCII),
+            ("世界，中国", 50, charset::CHARSET_ASCII),
+        ];
+
+        use tidb_query_datatype::FieldTypeAccessor;
+
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::default();
+        <FieldType as FieldTypeAccessor>::set_tp(&mut ft, FieldTypeTp::String);
+        <FieldType as FieldTypeAccessor>::set_collation(&mut ft, Collation::Binary);
+
+        for (s, char_num, cs) in cases {
+            ft.set_charset(cs.to_string());
+            ft.set_flen(char_num);
+            let bs = s.as_bytes();
+            let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, true);
+            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+
+            let p = r.unwrap();
+            assert_eq!(p.len(), char_num as usize, "{}, {}, {}", s, char_num, cs);
+        }
+    }
+
+    #[test]
+    fn test_produce_dec_with_specified_tp() {
+        use std::str::FromStr;
+
+        let cases = vec![
+            // branch 1
+            (
+                Decimal::from_str("11.1").unwrap(),
+                2,
+                2,
+                max_or_min_dec(false, 2u8, 2u8),
+            ),
+            (
+                Decimal::from_str("-111.1").unwrap(),
+                2,
+                2,
+                max_or_min_dec(true, 2u8, 2u8),
+            ),
+            // branch 2
+            (
+                Decimal::from_str("-1111.1").unwrap(),
+                5,
+                1,
+                Decimal::from_str("-1111.1").unwrap(),
+            ),
+            (
+                Decimal::from_str("-111.111").unwrap(),
+                5,
+                2,
+                Decimal::from_str("-111.11").unwrap(),
+            ),
+        ];
+
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::default();
+
+        for (dec, flen, decimal, want) in cases {
+            ft.set_flen(flen);
+            ft.set_decimal(decimal);
+            let nd = produce_dec_with_specified_tp(&mut ctx, dec.clone(), &ft);
+            assert!(nd.is_ok());
+            let nd = nd.unwrap();
+            assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
         }
     }
 }
