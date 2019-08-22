@@ -220,7 +220,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 } else {
                     with_tls_engine(|engine| self.process_write(engine, snapshot, task))
                 };
-                tls_add_statistics(tag.get_str(), &statistics);
+                tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
                     timer,
                     "[region {}] scheduler handle command: {}, ts: {}",
