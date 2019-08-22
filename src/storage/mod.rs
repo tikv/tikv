@@ -867,7 +867,7 @@ impl<E: Engine> Storage<E> {
                                     r
                                 });
 
-                            tls_collect_scan_count(CMD, &statistics);
+                            tls_collect_scan_details(CMD, &statistics);
                             tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                             result
@@ -927,7 +927,7 @@ impl<E: Engine> Storage<E> {
                                 .collect();
 
                             tls_collect_key_reads(CMD, kv_pairs.len());
-                            tls_collect_scan_count(CMD, &statistics);
+                            tls_collect_scan_details(CMD, &statistics);
                             tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                             Ok(kv_pairs)
@@ -996,7 +996,7 @@ impl<E: Engine> Storage<E> {
                             let res = scanner.scan(limit);
 
                             let statistics = scanner.take_statistics();
-                            tls_collect_scan_count(CMD, &statistics);
+                            tls_collect_scan_details(CMD, &statistics);
                             tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                             res.map_err(Error::from).map(|results| {
@@ -1721,7 +1721,7 @@ impl<E: Engine> Storage<E> {
                                 CMD,
                                 statistics.write.flow_stats.read_keys as usize,
                             );
-                            tls_collect_scan_count(CMD, &statistics);
+                            tls_collect_scan_details(CMD, &statistics);
                             future::result(result)
                         })
                     })
@@ -1847,7 +1847,7 @@ impl<E: Engine> Storage<E> {
                                 CMD,
                                 statistics.write.flow_stats.read_keys as usize,
                             );
-                            tls_collect_scan_count(CMD, &statistics);
+                            tls_collect_scan_details(CMD, &statistics);
                             future::ok(result)
                         })
                     })
