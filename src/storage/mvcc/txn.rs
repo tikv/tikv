@@ -421,7 +421,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 // A pessimistic lock cannot be committed.
                 if lock.lock_type == LockType::Pessimistic {
                     error!(
-                        "trying to committing a pessimistic lock";
+                        "trying to commit a pessimistic lock";
                         "key" => %key,
                         "start_ts" => self.start_ts,
                         "commit_ts" => commit_ts,

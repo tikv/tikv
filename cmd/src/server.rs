@@ -30,7 +30,8 @@ use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
 use tikv::storage::lock_manager::{
-    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
+    register_detector_role_change_observer, Detector, DetectorScheduler,
+    Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
 };
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
@@ -277,6 +278,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
     region_info_accessor.start();
 
+    // Register the role change observer of the deadlock detector.
+    if cfg.pessimistic_txn.enabled {
+        register_detector_role_change_observer(
+            &mut coprocessor_host,
+            detector_worker.as_ref().unwrap(),
+        );
+    }
+
     node.start(
         engines.clone(),
         trans,
@@ -320,10 +329,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
         let detector_runner = Detector::new(
             node.id(),
-            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
-            Arc::clone(&security_mgr),
             pd_client,
             resolver,
+            Arc::clone(&security_mgr),
+            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
             &cfg.pessimistic_txn,
         );
         waiter_mgr_worker
