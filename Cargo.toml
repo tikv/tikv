@@ -14,7 +14,7 @@ publish = false
 [features]
 default = ["tikv_alloc/default"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
-jemalloc = ["tikv_alloc/jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
