@@ -22,14 +22,12 @@ use self::engine_metrics::{
     ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 use crate::rocks::load_latest_options;
-use crate::rocks::set_external_sst_file_global_seq_no;
 use crate::rocks::supported_compression;
 use crate::rocks::{
     CColumnFamilyDescriptor, CompactOptions, CompactionOptions, DBCompressionType, DBOptions, Env,
     Range, RocksCFOptions, SliceTransform, DB,
 };
 use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
-use tikv_util::file::calc_crc32;
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
@@ -529,7 +527,7 @@ pub fn compact_files_in_range_cf(
 /// 3. If the file has been ingested to `RocksDB`, we should not modified the
 ///    global seqno directly, because that may corrupt RocksDB's data.
 #[cfg(target_os = "linux")]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
+pub fn prepare_file_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
     use std::os::linux::fs::MetadataExt;
 
     let path = path.as_ref().to_str().unwrap();
@@ -555,55 +553,13 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone:
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
+pub fn prepare_file_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
     let path = path.as_ref().to_str().unwrap();
     let clone = clone.as_ref().to_str().unwrap();
     if !Path::new(clone).exists() {
         copy_and_sync(path, clone)
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
     }
-    Ok(())
-}
-
-pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
-    db: &DB,
-    cf: &str,
-    path: P,
-    expected_size: u64,
-    expected_checksum: u32,
-) -> Result<()> {
-    let path = path.as_ref().to_str().unwrap();
-    let f = File::open(path)?;
-
-    let meta = f.metadata()?;
-    if meta.len() != expected_size {
-        return Err(Error::Engine(format!(
-            "invalid size {} for {}, expected {}",
-            meta.len(),
-            path,
-            expected_size
-        )));
-    }
-
-    let checksum = calc_crc32(path)?;
-    if checksum == expected_checksum {
-        return Ok(());
-    }
-
-    // RocksDB may have modified the global seqno.
-    let cf_handle = get_cf_handle(db, cf)?;
-    set_external_sst_file_global_seq_no(db, cf_handle, path, 0)?;
-    f.sync_all()
-        .map_err(|e| format!("sync {}: {:?}", path, e))?;
-
-    let checksum = calc_crc32(path)?;
-    if checksum != expected_checksum {
-        return Err(Error::Engine(format!(
-            "invalid checksum {} for {}, expected {}",
-            checksum, path, expected_checksum
-        )));
-    }
-
     Ok(())
 }
 
@@ -790,12 +746,12 @@ mod tests {
 
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
-        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        prepare_file_for_ingestion(&sst_path, &sst_clone).unwrap();
         validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         // If we prepare again, it will use hard link too.
-        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        prepare_file_for_ingestion(&sst_path, &sst_clone).unwrap();
         validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
@@ -806,7 +762,7 @@ mod tests {
 
         // The second ingestion will copy sst_path to sst_clone.
         check_hard_link(&sst_path, 2);
-        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
+        prepare_file_for_ingestion(&sst_path, &sst_clone).unwrap();
         validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);

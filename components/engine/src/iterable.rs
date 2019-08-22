@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tikv_util::keybuilder::KeyBuilder;
+
 use crate::*;
 
 #[derive(Clone, PartialEq)]
@@ -41,4 +43,70 @@ pub trait Iterable {
     fn iterator_cf(&self, cf: &str) -> Result<Self::Iter> {
         self.iterator_cf_opt(&IterOptions::default(), cf)
     }
+
+    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
+    {
+        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
+        scan_impl(self.iterator_opt(&iter_opt)?, start_key, f)
+    }
+
+    // like `scan`, only on a specific column family.
+    fn scan_cf<F>(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        fill_cache: bool,
+        f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
+    {
+        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
+        scan_impl(self.iterator_cf_opt(&iter_opt, cf)?, start_key, f)
+    }
+
+    // Seek the first key >= given key, if no found, return None.
+    fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let mut iter = self.iterator()?;
+        iter.seek(SeekKey::Key(key));
+        if iter.valid() {
+            Ok(Some((iter.key()?.to_vec(), iter.value()?.to_vec())))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // Seek the first key >= given key, if no found, return None.
+    fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let mut iter = self.iterator_cf(cf)?;
+        iter.seek(SeekKey::Key(key));
+        if iter.valid() {
+            Ok(Some((iter.key()?.to_vec(), iter.value()?.to_vec())))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn scan_impl<Iter: Iterator, F>(mut it: Iter, start_key: &[u8], mut f: F) -> Result<()>
+where
+    F: FnMut(&[u8], &[u8]) -> Result<bool>,
+{
+    it.seek(SeekKey::Key(start_key));
+    while it.valid() {
+        let r = f(it.key()?, it.value()?)?;
+
+        if !r || !it.next() {
+            break;
+        }
+    }
+
+    it.status().map_err(From::from)
 }

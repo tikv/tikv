@@ -17,12 +17,47 @@ impl RocksWriteBatch {
         }
     }
 
+    pub fn with_capacity(db: Arc<DB>, cap: usize) -> RocksWriteBatch {
+        RocksWriteBatch {
+            db,
+            wb: WriteBatch::with_capacity(cap),
+        }
+    }
+
     pub fn raw_ref(&self) -> &WriteBatch {
         &self.wb
     }
 }
 
-impl crate::WriteBatch for RocksWriteBatch {}
+impl crate::WriteBatch for RocksWriteBatch {
+    fn data_size(&self) -> usize {
+        self.wb.data_size()
+    }
+
+    fn count(&self) -> usize {
+        self.wb.count()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.wb.is_empty()
+    }
+
+    fn clear(&self) {
+        self.wb.clear();
+    }
+
+    fn set_save_point(&mut self) {
+        self.wb.set_save_point();
+    }
+
+    fn pop_save_point(&mut self) -> Result<()> {
+        self.wb.pop_save_point().map_err(Error::Engine)
+    }
+
+    fn rollback_to_save_point(&mut self) -> Result<()> {
+        self.wb.rollback_to_save_point().map_err(Error::Engine)
+    }
+}
 
 impl Mutable for RocksWriteBatch {
     fn put_value_opt(&self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {

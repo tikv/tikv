@@ -30,12 +30,4 @@ pub trait Mutable {
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         self.delete_cf_opt(&WriteOptions::default(), cf, key)
     }
-
-    fn put_msg<M: protobuf::Message>(&self, key: &[u8], m: &M) -> Result<()> {
-        self.put_value(key, &m.write_to_bytes()?)
-    }
-
-    fn put_msg_cf<M: protobuf::Message>(&self, cf: &str, key: &[u8], m: &M) -> Result<()> {
-        self.put_value_cf(cf, key, &m.write_to_bytes()?)
-    }
 }

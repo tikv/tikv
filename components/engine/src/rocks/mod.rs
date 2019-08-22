@@ -32,7 +32,8 @@ pub use engine_rocksdb::{
     WriteStallCondition, WriteStallInfo, DB,
 };
 pub use engine_rocksdb::{
-    ColumnFamilyOptions as RocksCFOptions, ReadOptions as RocksReadOptions,
+    ColumnFamilyOptions as RocksCFOptions,
+    IngestExternalFileOptions as RocksIngestExternalFileOptions, ReadOptions as RocksReadOptions,
     SeekKey as RocksSeekKey, WriteOptions as RocksWriteOptions,
 };
 
@@ -62,23 +63,23 @@ mod tests {
 
         let snap = Snapshot::new(Arc::clone(&engine));
 
-        let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
+        let mut r1: Region = util::get_msg(&engine, key).unwrap().unwrap();
         assert_eq!(r, r1);
-        let r1_cf: Region = engine.get_msg_cf(cf, key).unwrap().unwrap();
+        let r1_cf: Region = util::get_msg_cf(&engine, cf, key).unwrap().unwrap();
         assert_eq!(r, r1_cf);
 
-        let mut r2: Region = snap.get_msg(key).unwrap().unwrap();
+        let mut r2: Region = util::get_msg(&snap, key).unwrap().unwrap();
         assert_eq!(r, r2);
-        let r2_cf: Region = snap.get_msg_cf(cf, key).unwrap().unwrap();
+        let r2_cf: Region = util::get_msg_cf(&snap, cf, key).unwrap().unwrap();
         assert_eq!(r, r2_cf);
 
         r.set_id(11);
         engine.put_msg(key, &r).unwrap();
-        r1 = engine.get_msg(key).unwrap().unwrap();
-        r2 = snap.get_msg(key).unwrap().unwrap();
+        r1 = util::get_msg(&engine, key).unwrap().unwrap();
+        r2 = util::get_msg(&snap, key).unwrap().unwrap();
         assert_ne!(r1, r2);
 
-        let b: Option<Region> = engine.get_msg(b"missing_key").unwrap();
+        let b: Option<Region> = util::get_msg(&engine, b"missing_key").unwrap();
         assert!(b.is_none());
     }
 

@@ -17,8 +17,6 @@ extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::sync::Arc;
-
 pub mod util;
 
 mod errors;
@@ -36,20 +34,26 @@ mod engine;
 pub use crate::engine::*;
 mod options;
 pub use crate::options::*;
+use crate::rocks::Rocks;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
+
+// In our tests, we found that if the batch size is too large, running delete_all_in_range will
+// reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
 pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
 #[derive(Clone, Debug)]
-pub struct Engines<E: KVEngine> {
-    pub kv: Arc<E>,
-    pub raft: Arc<E>,
+pub struct KvEngines<E: KvEngine> {
+    pub kv: E,
+    pub raft: E,
     pub shared_block_cache: bool,
 }
 
-impl<E: KVEngine> Engines<E> {
-    pub fn new(kv_engine: Arc<E>, raft_engine: Arc<E>, shared_block_cache: bool) -> Self {
-        Engines {
+pub type Engines = KvEngines<Rocks>;
+
+impl<E: KvEngine> KvEngines<E> {
+    pub fn new(kv_engine: E, raft_engine: E, shared_block_cache: bool) -> Self {
+        KvEngines {
             kv: kv_engine,
             raft: raft_engine,
             shared_block_cache,

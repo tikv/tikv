@@ -19,17 +19,23 @@ impl Default for ReadOptions {
 }
 
 #[derive(Clone)]
-pub struct WriteOptions {}
+pub struct WriteOptions {
+    pub sync: bool,
+}
 
 impl WriteOptions {
     pub fn new() -> WriteOptions {
-        WriteOptions {}
+        WriteOptions { sync: false }
+    }
+
+    pub fn set_sync(&mut self, sync: bool) {
+        self.sync = sync;
     }
 }
 
 impl Default for WriteOptions {
     fn default() -> WriteOptions {
-        WriteOptions {}
+        WriteOptions { sync: false }
     }
 }
 
@@ -86,12 +92,12 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn set_fill_cache(&mut self, v: bool) {
+    pub fn fill_cache(&mut self, v: bool) {
         self.fill_cache = v;
     }
 
     #[inline]
-    pub fn set_key_only(&mut self, v: bool) {
+    pub fn key_only(&mut self, v: bool) {
         self.key_only = v;
     }
 
@@ -158,8 +164,8 @@ impl Default for IterOptions {
 }
 
 pub struct DeleteRangeOptions {
-    use_delete_files: bool,
-    use_delete_range: bool,
+    pub use_delete_files: bool,
+    pub use_delete_range: bool,
 }
 
 impl DeleteRangeOptions {
@@ -170,20 +176,12 @@ impl DeleteRangeOptions {
         }
     }
 
-    pub fn set_use_delete_files(&mut self, v: bool) {
+    pub fn use_delete_files(&mut self, v: bool) {
         self.use_delete_files = v;
     }
 
-    pub fn get_use_delete_files(&self) -> bool {
-        self.use_delete_files
-    }
-
-    pub fn set_use_delete_range(&mut self, v: bool) {
+    pub fn use_delete_range(&mut self, v: bool) {
         self.use_delete_range = v;
-    }
-
-    pub fn get_use_delete_range(&self) -> bool {
-        self.use_delete_range
     }
 }
 
@@ -196,4 +194,22 @@ impl Default for DeleteRangeOptions {
     }
 }
 
-pub struct DataFileMeta {}
+pub struct IngestExternalFileOptions {
+    pub move_files: bool,
+}
+
+impl IngestExternalFileOptions {
+    pub fn new() -> IngestExternalFileOptions {
+        IngestExternalFileOptions { move_files: false }
+    }
+
+    pub fn move_files(&mut self, v: bool) {
+        self.move_files = v;
+    }
+}
+
+impl Default for IngestExternalFileOptions {
+    fn default() -> IngestExternalFileOptions {
+        IngestExternalFileOptions { move_files: false }
+    }
+}

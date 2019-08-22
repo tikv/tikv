@@ -1,18 +1,33 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Debug, Formatter};
+use std::ops::Deref;
 use std::sync::Arc;
 
-use super::{util, RocksIterator, RocksReadOptions, UnsafeSnap, DB};
+use super::{util, CFHandle, RocksIterator, RocksReadOptions, UnsafeSnap, DB};
 use crate::options::*;
 use crate::rocks::DBIterator;
-use crate::{Iterable, Peekable, Result, Snapshot};
+use crate::{Error, Iterable, Peekable, Result, Snapshot};
 
 pub struct RocksSnapshot {
     // TODO: use reference.
     db: Arc<DB>,
     snap: UnsafeSnap,
 }
+
+#[derive(Clone)]
+pub struct SyncRocksSnapshot(Arc<RocksSnapshot>);
+
+impl Deref for SyncRocksSnapshot {
+    type Target = RocksSnapshot;
+
+    fn deref(&self) -> &RocksSnapshot {
+        &self.0
+    }
+}
+
+unsafe impl Send for RocksSnapshot {}
+unsafe impl Sync for RocksSnapshot {}
 
 impl RocksSnapshot {
     pub fn new(db: Arc<DB>) -> Self {
@@ -23,9 +38,29 @@ impl RocksSnapshot {
             }
         }
     }
+
+    pub fn into_sync(self) -> SyncRocksSnapshot {
+        SyncRocksSnapshot(Arc::new(self))
+    }
+
+    pub fn cf_names(&self) -> Vec<&str> {
+        self.db.cf_names()
+    }
+
+    pub fn cf_handle(&self, cf: &str) -> Result<&CFHandle> {
+        super::util::get_cf_handle(&self.db, cf).map_err(Error::from)
+    }
+
+    pub fn get_db(&self) -> Arc<DB> {
+        Arc::clone(&self.db)
+    }
 }
 
-impl Snapshot for RocksSnapshot {}
+impl Snapshot for RocksSnapshot {
+    fn cf_names(&self) -> Vec<&str> {
+        self.db.cf_names()
+    }
+}
 
 impl Debug for RocksSnapshot {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {

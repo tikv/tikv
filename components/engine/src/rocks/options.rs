@@ -3,6 +3,7 @@
 use crate::options::*;
 
 pub use super::{RocksCFOptions, RocksReadOptions, RocksWriteOptions};
+use crate::rocks::RocksIngestExternalFileOptions;
 
 impl From<ReadOptions> for RocksReadOptions {
     fn from(_opts: ReadOptions) -> Self {
@@ -18,8 +19,9 @@ impl From<&ReadOptions> for RocksReadOptions {
 }
 
 impl From<WriteOptions> for RocksWriteOptions {
-    fn from(_opts: WriteOptions) -> Self {
-        let r = RocksWriteOptions::default();
+    fn from(opts: WriteOptions) -> Self {
+        let mut r = RocksWriteOptions::default();
+        r.set_sync(opts.sync);
         r
     }
 }
@@ -67,6 +69,20 @@ impl From<CFOptions> for RocksCFOptions {
 
 impl From<&CFOptions> for RocksCFOptions {
     fn from(opts: &CFOptions) -> Self {
+        opts.clone().into()
+    }
+}
+
+impl From<IngestExternalFileOptions> for RocksIngestExternalFileOptions {
+    fn from(opts: IngestExternalFileOptions) -> Self {
+        let mut r = RocksIngestExternalFileOptions::new();
+        r.move_files(opts.move_files);
+        r
+    }
+}
+
+impl From<&IngestExternalFileOptions> for RocksIngestExternalFileOptions {
+    fn from(opts: &IngestExternalFileOptions) -> Self {
         opts.clone().into()
     }
 }
