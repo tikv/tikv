@@ -370,7 +370,7 @@ mod tests {
             [Some(1), Some(5), None, None, Some(42)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[2, 0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
@@ -386,7 +386,7 @@ mod tests {
             val.vector_value().unwrap().logical_rows(),
             logical_rows.as_slice()
         );
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Single column node but row numbers in `eval()` does not match column length, should panic.
@@ -434,7 +434,7 @@ mod tests {
             [Some(42), Some(42), Some(42), Some(42)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2, 3]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Unary function (argument is scalar)
@@ -464,7 +464,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Unary function (argument is vector)
@@ -498,7 +498,7 @@ mod tests {
             [None, Some(6)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Unary function (argument is raw column). The column should be decoded.
@@ -573,7 +573,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are vector, scalar)
@@ -611,7 +611,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are scalar, vector)
@@ -649,7 +649,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are vector, vector)
@@ -746,7 +746,7 @@ mod tests {
             [Some(49)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Ternary function (arguments are vector, scalar, vector)
@@ -782,7 +782,7 @@ mod tests {
             [Some(-10), Some(-2), Some(8)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     // Comprehensive expression:
@@ -871,7 +871,7 @@ mod tests {
             [Real::new(146.0).ok(), Real::new(25.0).ok(),]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Unary function, but supplied zero arguments. Should panic.
@@ -1042,7 +1042,7 @@ mod tests {
             [Some(574), Some(-13)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     #[bench]

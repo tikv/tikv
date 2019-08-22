@@ -25,7 +25,7 @@ use tikv_util::is_even;
 use super::super::datum::Datum;
 use super::super::{Error, Result};
 use crate::codec::convert::ConvertTo;
-use crate::codec::data_type::Decimal;
+use crate::codec::data_type::{Decimal, Real};
 use crate::expr::EvalContext;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
@@ -109,6 +109,28 @@ impl ConvertTo<Decimal> for Json {
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         let f: f64 = self.convert(ctx)?;
         f.convert(ctx)
+    }
+}
+
+impl ConvertTo<Json> for i64 {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        Ok(Json::I64(*self))
+    }
+}
+
+impl ConvertTo<Json> for f64 {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        Ok(Json::Double(*self))
+    }
+}
+
+impl ConvertTo<Json> for Real {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
+        Ok(Json::Double(self.into_inner()))
     }
 }
 
