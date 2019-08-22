@@ -641,12 +641,13 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone);
         match (safe_point, db) {
             (Some(sp), Some(db)) => {
+                let output_level = context.output_level();
                 let ek = context.end_key();
                 let max_delete = match Key::split_on_ts_for(ek) {
                     Ok((k, _)) => k.to_vec(),
                     _ => vec![],
                 };
-                let filter = Box::new(WriteCompactionFilter::new(sp, db, max_delete));
+                let filter = Box::new(WriteCompactionFilter::new(sp, db, output_level, max_delete));
                 unsafe { new_compaction_filter_raw(name, true, filter) }
             }
             _ => std::ptr::null_mut(),
@@ -658,6 +659,7 @@ struct WriteCompactionFilter {
     safe_point: Arc<AtomicU64>,
     db: Arc<DB>,
     max_level: usize,
+    output_level: usize,
     max_delete: Vec<u8>,
 
     write_batch: WriteBatch,
@@ -674,13 +676,19 @@ struct WriteCompactionFilter {
 }
 
 impl WriteCompactionFilter {
-    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>, max_delete: Vec<u8>) -> Self {
+    fn new(
+        safe_point: Arc<AtomicU64>,
+        db: Arc<DB>,
+        output_level: usize,
+        max_delete: Vec<u8>,
+    ) -> Self {
         let cf_handle = get_cf_handle(&db, CF_WRITE).unwrap();
         let max_level = db.get_options_cf(cf_handle).get_num_levels() - 1;
         WriteCompactionFilter {
             safe_point,
             db,
             max_level,
+            output_level,
             max_delete,
 
             write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
@@ -717,6 +725,7 @@ impl Drop for WriteCompactionFilter {
         }
         info!(
             "WriteCompactionFilter uses {}s", self.start.elapsed_secs();
+            "output_level" => self.output_level,
             "level" => self.level,
             "versions" => self.versions,
             "stale_versions" => self.stale_versions,
@@ -768,7 +777,8 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Rollback | WriteType::Lock => filtered = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    filtered = (level == self.max_level) & (self.key_prefix != self.max_delete);
+                    filtered =
+                        self.output_level == self.max_level && self.key_prefix != self.max_delete;
                 }
                 WriteType::Put => {
                     self.remove_older = true;

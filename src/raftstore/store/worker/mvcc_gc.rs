@@ -12,7 +12,7 @@ use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::raftstore::store::keys::{data_end_key, data_key};
 use crate::storage::mvcc::{init_mvcc_gc_db, init_safe_point};
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::{CompactOptions, DB};
+use engine::rocks::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine::util::get_range_properties_cf;
 use engine::CF_WRITE;
 use tikv_util::time::{duration_to_ms, Instant};
@@ -123,10 +123,12 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
                 let handle = get_cf_handle(&db, CF_WRITE).unwrap();
                 let mut compact_opts = CompactOptions::new();
                 compact_opts.set_exclusive_manual_compaction(false);
-                compact_opts.set_max_subcompactions(3);
+                compact_opts.set_max_subcompactions(1);
                 compact_opts.set_change_level(true);
                 compact_opts.set_target_level(6);
-                compact_opts.set_first_level(1);
+                compact_opts.set_first_level(5); // only touch the last 2 level.
+                // Compaction from L5 to L6 has already cleaned all delete flags.
+                compact_opts.set_bottommost_level_compaction(DBBottommostLevelCompaction::Skip);
                 db.compact_range_cf_opt(handle, &compact_opts, Some(&sk), Some(&ek));
 
                 let elapsed = duration_to_ms(start_time.elapsed());
