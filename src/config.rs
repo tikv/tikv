@@ -31,7 +31,6 @@ use crate::raftstore::coprocessor::properties::{
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
-use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
@@ -45,6 +44,7 @@ use engine::rocks::util::{
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use pd_client::Config as PdConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
 
@@ -1028,7 +1028,7 @@ pub mod log_level_serde {
 
 macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
-        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+        #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
         #[serde(deny_unknown_fields)]
         #[serde(rename_all = "kebab-case")]
@@ -1043,15 +1043,36 @@ macro_rules! readpool_config {
         }
 
         impl $struct_name {
-            pub fn build_config(&self) -> readpool::Config {
-                readpool::Config {
-                    high_concurrency: self.high_concurrency,
-                    normal_concurrency: self.normal_concurrency,
-                    low_concurrency: self.low_concurrency,
-                    max_tasks_per_worker_high: self.max_tasks_per_worker_high,
-                    max_tasks_per_worker_normal: self.max_tasks_per_worker_normal,
-                    max_tasks_per_worker_low: self.max_tasks_per_worker_low,
-                    stack_size: self.stack_size,
+            /// Builds configurations for low, normal and high priority pools.
+            pub fn to_future_pool_configs(&self) -> Vec<future_pool::Config> {
+                vec![
+                    future_pool::Config {
+                        workers: self.low_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_low,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                    future_pool::Config {
+                        workers: self.normal_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_normal,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                    future_pool::Config {
+                        workers: self.high_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_high,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                ]
+            }
+
+            pub fn default_for_test() -> Self {
+                Self {
+                    high_concurrency: 2,
+                    normal_concurrency: 2,
+                    low_concurrency: 2,
+                    max_tasks_per_worker_high: 2000,
+                    max_tasks_per_worker_normal: 2000,
+                    max_tasks_per_worker_low: 2000,
+                    stack_size: ReadableSize::mb(1),
                 }
             }
 
@@ -1163,6 +1184,14 @@ macro_rules! readpool_config {
 
 const DEFAULT_STORAGE_READPOOL_CONCURRENCY: usize = 4;
 
+// Assume a request can be finished in 1ms, a request at position x will wait about
+// 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
+// backoff. So when it needs to wait for more than 2 seconds, return error won't causse
+// larger latency.
+const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 as usize * 1000;
+
+const DEFAULT_READPOOL_STACK_SIZE_MB: u64 = 10;
+
 readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
@@ -1171,10 +1200,10 @@ impl Default for StorageReadPoolConfig {
             high_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
             normal_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
             low_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            max_tasks_per_worker_high: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_normal: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_low: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
+            max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
         }
     }
 }
@@ -1182,12 +1211,12 @@ impl Default for StorageReadPoolConfig {
 const DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY: usize = 8;
 
 readpool_config!(
-    CoprocessorReadPoolConfig,
+    CoprReadPoolConfig,
     coprocessor_read_pool_test,
     "coprocessor"
 );
 
-impl Default for CoprocessorReadPoolConfig {
+impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = sys_info::cpu_num().unwrap();
         let concurrency = if cpu_num > 8 {
@@ -1199,10 +1228,10 @@ impl Default for CoprocessorReadPoolConfig {
             high_concurrency: concurrency,
             normal_concurrency: concurrency,
             low_concurrency: concurrency,
-            max_tasks_per_worker_high: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_normal: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_low: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
+            max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
         }
     }
 }
@@ -1213,7 +1242,7 @@ impl Default for CoprocessorReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: StorageReadPoolConfig,
-    pub coprocessor: CoprocessorReadPoolConfig,
+    pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
