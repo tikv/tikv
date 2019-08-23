@@ -21,8 +21,6 @@ use tikv_util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
-pub const REGION_MAX_KEYS: u64 = 500;
-pub const REGION_SPLIT_KEYS: u64 = 300;
 
 fn test_base_split_region<T, F>(cluster: &mut Cluster<T>, split: F, right_derive: bool)
 where
