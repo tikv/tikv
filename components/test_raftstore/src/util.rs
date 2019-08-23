@@ -623,6 +623,9 @@ pub fn put_cf_kvs<T: Simulator>(
         rng.fill_bytes(&mut value);
         cluster.must_put_cf(cf, &key, &value);
         n += 1;
+        if n % 100 == 0 {
+            cluster.must_flush_cf(cf, true);
+        }
     }
     cluster.must_flush_cf(cf, true);
     key

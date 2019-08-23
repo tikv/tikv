@@ -149,72 +149,6 @@ fn test_server_split_region_twice() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-fn test_auto_aplit_region_with_keys<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.coprocessor.region_max_keys = REGION_MAX_KEYS;
-    cluster.cfg.coprocessor.region_split_keys = REGION_SPLIT_KEYS;
-
-    let check_keys_diff = cluster.cfg.raft_store.region_split_check_keys_diff;
-    let mut range = 1..;
-
-    cluster.run();
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-
-    let region = pd_client.get_region(b"").unwrap();
-
-    let last_key = put_kvs(cluster, REGION_SPLIT_KEYS, &mut range);
-
-    thread::sleep(Duration::from_secs(1));
-
-    let target = pd_client.get_region(&last_key).unwrap();
-
-    assert_eq!(region, target);
-
-    let max_key = put_cf_kvs(
-        cluster,
-        CF_WRITE,
-        REGION_MAX_KEYS - REGION_SPLIT_KEYS + check_keys_diff,
-        &mut range,
-    );
-
-    thread::sleep(Duration::from_secs(1));
-
-    let left = pd_client.get_region(b"").unwrap();
-    let right = pd_client.get_region(&max_key).unwrap();
-
-    assert_ne!(left, right);
-    assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(right.get_start_key(), left.get_end_key());
-    assert_eq!(region.get_end_key(), right.get_end_key());
-    assert_eq!(pd_client.get_region(&max_key).unwrap(), right);
-    assert_eq!(pd_client.get_region(left.get_end_key()).unwrap(), right);
-
-    let middle_key = left.get_end_key();
-    let leader = cluster.leader_of_region(left.get_id()).unwrap();
-    let store_id = leader.get_store_id();
-    let mut num_keys = 0;
-    cluster.engines[&store_id]
-        .kv
-        .scan(&data_key(b""), &data_key(middle_key), false, |_k, _v| {
-            num_keys += 1;
-            Ok(true)
-        })
-        .expect("");
-    assert!(num_keys <= REGION_SPLIT_KEYS);
-    // although num keys may be smaller than REGION_SPLIT_KEYS, but the diff should
-    // be small.
-    assert!(num_keys > REGION_SPLIT_KEYS - 10);
-
-    let epoch = left.get_region_epoch().clone();
-    let get = new_request(left.get_id(), epoch, vec![new_get_cmd(&max_key)], false);
-    let resp = cluster
-        .call_command_on_leader(get, Duration::from_secs(5))
-        .unwrap();
-    assert!(resp.get_header().has_error());
-    assert!(resp.get_header().get_error().has_key_not_in_region());
-}
-
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.coprocessor.region_max_size = ReadableSize(REGION_MAX_SIZE);
@@ -613,8 +547,8 @@ fn test_server_split_with_stale_peer() {
 }
 
 fn test_split_region_diff_keys_check<T: Simulator>(cluster: &mut Cluster<T>) {
-    let region_max_keys = 2000;
-    let region_split_keys = 1000;
+    let region_max_keys = 200;
+    let region_split_keys = 100;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.region_split_check_keys_diff = 10;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
@@ -631,7 +565,7 @@ fn test_split_region_diff_keys_check<T: Simulator>(cluster: &mut Cluster<T>) {
         put_kvs(cluster, region_max_keys, &mut range);
     }
 
-    let min_region_cnt = (region_max_keys * 9) / region_split_keys + 2;
+    let min_region_cnt = (region_max_keys * 10 - region_max_keys) / region_split_keys + 1;
     let mut try_cnt = 0;
     loop {
         sleep_ms(20);
@@ -698,6 +632,8 @@ fn test_server_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     test_split_region_diff_check(&mut cluster);
+    cluster = new_server_cluster(0, count);
+    test_split_region_diff_keys_check(&mut cluster);
 }
 
 #[test]
@@ -705,6 +641,8 @@ fn test_node_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_node_cluster(0, count);
     test_split_region_diff_check(&mut cluster);
+    cluster = new_node_cluster(0, count);
+    test_split_region_diff_keys_check(&mut cluster);
 }
 
 fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
