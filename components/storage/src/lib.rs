@@ -9,6 +9,8 @@
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 use std::io::{self, Read};
 use std::path::Path;
