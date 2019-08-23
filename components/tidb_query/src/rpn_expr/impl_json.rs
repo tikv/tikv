@@ -32,8 +32,6 @@ fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Replace)
 }
 
-/// TODO: think about can macros be used in this function.
-/// TODO: make clear how json handles None.
 #[inline]
 fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
     // args >= 2
@@ -50,17 +48,18 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     for chunk in args[1..].chunks(2) {
         let path: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
         let value: &Option<Json> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
-        // TODO: simplify these code.
-        if path.is_none() {
-            return Ok(None);
-        }
-        let path = path.as_ref().unwrap().to_owned();
-        let value = value.as_ref().map_or(Json::None, |json| json.to_owned());
+
+        let path = match path.as_ref() {
+            None => return Ok(None),
+            Some(p) => p.to_owned(),
+        };
 
         let json_path = eval_string_and_decode(path)?;
         let path_expr = parse_json_path_expr(&json_path)?;
 
         path_expr_list.push(path_expr);
+
+        let value = value.as_ref().map_or(Json::None, |json| json.to_owned());
         values.push(value);
     }
     base.modify(&path_expr_list, values, mt)?;
