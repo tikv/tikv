@@ -22,7 +22,7 @@ mod local;
 pub use local::LocalStorage;
 
 /// Create a new storage from the given url.
-pub fn create_storage(url: &str) -> io::Result<Arc<dyn Storage>> {
+pub fn create_storage(url: &str) -> io::Result<Arc<dyn ExternalStorage>> {
     let url = Url::parse(url).map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -46,7 +46,7 @@ pub fn create_storage(url: &str) -> io::Result<Arc<dyn Storage>> {
 }
 
 /// An abstraction of an external storage.
-pub trait Storage: Sync + Send + 'static {
+pub trait ExternalStorage: Sync + Send + 'static {
     /// Write all contents of the read to the given path.
     // TODO: should it return a writer?
     fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()>;
@@ -54,7 +54,7 @@ pub trait Storage: Sync + Send + 'static {
     fn read(&self, name: &str) -> io::Result<Box<dyn Read>>;
 }
 
-impl Storage for Arc<dyn Storage> {
+impl ExternalStorage for Arc<dyn ExternalStorage> {
     fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()> {
         (**self).write(name, reader)
     }

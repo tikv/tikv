@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use super::Storage;
+use super::ExternalStorage;
 
 const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
@@ -53,7 +53,7 @@ impl LocalStorage {
     }
 }
 
-impl Storage for LocalStorage {
+impl ExternalStorage for LocalStorage {
     fn write(&self, name: &str, reader: &mut dyn Read) -> io::Result<()> {
         // Storage does not support dir,
         // "a/a.sst", "/" and "" will return an error.
