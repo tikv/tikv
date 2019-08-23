@@ -117,15 +117,15 @@ mod tests {
             .starts_with(LOCAL_STORAGE_TMP_FILE_SUFFIX));
 
         // Test save_file
-        let mut magic_contents = "5678".as_bytes();
-        ls.write("a.log", &mut magic_contents.clone()).unwrap();
+        let magic_contents = b"5678".to_vec();
+        ls.write("a.log", &mut magic_contents.clone().as_slice()).unwrap();
         assert_eq!(fs::read(path.join("a.log")).unwrap(), magic_contents);
 
         // Names contain parent is not allowed.
-        ls.write("a/a.log", &mut magic_contents).unwrap_err();
+        ls.write("a/a.log", &mut magic_contents.clone().as_slice()).unwrap_err();
         // Empty name is not allowed.
-        ls.write("", &mut magic_contents).unwrap_err();
+        ls.write("", &mut magic_contents.clone().as_slice()).unwrap_err();
         // root is not allowed.
-        ls.write("/", &mut magic_contents).unwrap_err();
+        ls.write("/", &mut magic_contents.clone().as_slice()).unwrap_err();
     }
 }
