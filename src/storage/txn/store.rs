@@ -83,14 +83,15 @@ pub trait Scanner: Send {
     fn take_statistics(&mut self) -> Statistics;
 }
 
-// TODO(backup): support read data key.
+/// A transaction entry in underlying storage.
 #[derive(PartialEq, Debug)]
 pub enum TxnEntry {
     Prewrite { default: KvPair, lock: KvPair },
     Commit { default: KvPair, write: KvPair },
-    Rollback { write: KvPair },
+    // TOOD: Add more entry if needed.
 }
 
+// A batch of transaction entries.
 pub struct EntryBatch {
     entries: Vec<TxnEntry>,
 }
@@ -108,6 +109,10 @@ impl EntryBatch {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.len() == 0
     }
 
     pub fn drain(&mut self) -> std::vec::Drain<'_, TxnEntry> {
