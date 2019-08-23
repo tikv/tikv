@@ -15,11 +15,11 @@ use engine::rocks::{
 };
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::debugpb::{self, Db as DBType, *};
+use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
-use protobuf::{self, Message};
+use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
@@ -728,6 +728,7 @@ impl Debugger {
         config_value: &str,
     ) -> Result<()> {
         use super::CONFIG_ROCKSDB_GAUGE;
+
         match module {
             Module::Storage => {
                 if config_name != "block_cache.capacity" {

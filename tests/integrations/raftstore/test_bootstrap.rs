@@ -64,7 +64,7 @@ fn test_node_bootstrap_with_prepared_data() {
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
     bootstrap_with_first_region(Arc::clone(&pd_client)).unwrap();
 
-    // now anthoer node at same time begin bootstrap node, but panic after prepared bootstrap
+    // now another node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
     bootstrap_store(&engines, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();

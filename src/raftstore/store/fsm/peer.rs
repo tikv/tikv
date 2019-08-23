@@ -49,7 +49,8 @@ use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
-    CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
+    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
+    SplitCheckTask,
 };
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
@@ -1527,7 +1528,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         };
         self.fsm.peer.last_compacted_idx = task.end_idx;
         self.fsm.peer.mut_store().compact_to(task.end_idx);
-        if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
+        if let Err(e) = self
+            .ctx
+            .cleanup_scheduler
+            .schedule(CleanupTask::RaftlogGc(task))
+        {
             error!(
                 "failed to schedule compact task";
                 "region_id" => self.fsm.region_id(),
@@ -2896,7 +2901,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_split_region_check_tick();
 
         let task = CleanupSSTTask::DeleteSST { ssts };
-        if let Err(e) = self.ctx.cleanup_sst_scheduler.schedule(task) {
+        if let Err(e) = self
+            .ctx
+            .cleanup_scheduler
+            .schedule(CleanupTask::CleanupSST(task))
+        {
             error!(
                 "schedule to delete ssts";
                 "region_id" => self.fsm.region_id(),
