@@ -27,6 +27,14 @@ pub trait Store: Send {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner>;
+
+    fn entry_scanner(
+        &self,
+        _lower_bound: Option<Key>,
+        _upper_bound: Option<Key>,
+    ) -> Result<Self::Scanner> {
+        Err(box_err!("unimplemented"))
+    }
 }
 
 /// [`Scanner`]s allow retrieving items or batches from a scan result.
@@ -54,8 +62,57 @@ pub trait Scanner: Send {
         Ok(results)
     }
 
+    fn next_entry(&mut self) -> Result<Option<TxnEntry>> {
+        Err(box_err!("unimplemented"))
+    }
+
+    fn scan_entries(&mut self, batch: &mut EntryBatch) -> Result<()> {
+        while batch.entries.len() < batch.entries.capacity() {
+            match self.next_entry() {
+                Ok(Some(entry)) => {
+                    batch.entries.push(entry);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
     /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
+}
+
+// TODO(backup): support read data key.
+#[derive(PartialEq, Debug)]
+pub enum TxnEntry {
+    Prewrite { default: KvPair, lock: KvPair },
+    Commit { default: KvPair, write: KvPair },
+    Rollback { write: KvPair },
+}
+
+pub struct EntryBatch {
+    entries: Vec<TxnEntry>,
+}
+
+impl EntryBatch {
+    pub fn with_capacity(cap: usize) -> EntryBatch {
+        EntryBatch {
+            entries: Vec::with_capacity(cap),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn drain(&mut self) -> std::vec::Drain<'_, TxnEntry> {
+        self.entries.drain(..)
+    }
 }
 
 pub struct SnapshotStore<S: Snapshot> {
@@ -118,6 +175,24 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .build()?;
+
+        Ok(scanner)
+    }
+
+    fn entry_scanner(
+        &self,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> Result<MvccScanner<S>> {
+        // Check request bounds with physical bound
+        self.verify_range(&lower_bound, &upper_bound)?;
+        let scanner =
+            ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
+                .range(lower_bound, upper_bound)
+                .omit_value(false)
+                .fill_cache(self.fill_cache)
+                .isolation_level(self.isolation_level)
+                .build_entry_scanner()?;
 
         Ok(scanner)
     }
