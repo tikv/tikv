@@ -4,72 +4,73 @@
 
 use std::cmp::Ordering;
 
-use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::txn::TxnEntry;
+use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics};
 
 use super::util::CheckLockResult;
 use super::ScannerConfig;
 
-/// This struct can be used to scan keys starting from the given user key (greater than or equal).
-///
-/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
-/// isolation level is SI, locks will be checked first.
+/// A dedicate scanner that outputs content in each CF.
 ///
 /// Use `ScannerBuilder` to build `EntryScanner`.
 ///
 /// Note: The implementation is almost the same as `ForwardScanner`, made a few
 ///       adjustments to output content in each cf.
-pub struct EntryScanner<S: Snapshot> {
+pub struct Scanner<S: Snapshot> {
     cfg: ScannerConfig<S>,
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
     default_cursor: Cursor<S::Iter>,
+    lower_bound: Option<Key>,
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
 }
 
-impl<S: Snapshot> EntryScanner<S> {
+impl<S: Snapshot> TxnEntryScanner for Scanner<S> {
+    fn next_entry(&mut self) -> TxnResult<Option<TxnEntry>> {
+        Ok(self.read_next()?)
+    }
+    fn take_statistics(&mut self) -> Statistics {
+        std::mem::replace(&mut self.statistics, Statistics::default())
+    }
+}
+
+impl<S: Snapshot> Scanner<S> {
     pub fn new(
-        mut cfg: ScannerConfig<S>,
+        cfg: ScannerConfig<S>,
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
-    ) -> Result<EntryScanner<S>> {
-        // Note: Create a default cf cursor will take key range, so we need to
-        //       ensure the default cursor is created after lock and write.
-        let default_cursor = cfg.create_cf_cursor(CF_DEFAULT)?;
-        Ok(EntryScanner {
+        default_cursor: Cursor<S::Iter>,
+        lower_bound: Option<Key>,
+    ) -> Result<Scanner<S>> {
+        Ok(Scanner {
             cfg,
             lock_cursor,
             write_cursor,
             default_cursor,
+            lower_bound,
             statistics: Statistics::default(),
             is_started: false,
         })
     }
 
-    /// Take out and reset the statistics collected so far.
-    pub fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
-    }
-
-    /// Get the next key-value pair, in forward order.
+    /// Get the next txn entry, in forward order.
     pub fn read_next(&mut self) -> Result<Option<TxnEntry>> {
         if !self.is_started {
-            if self.cfg.lower_bound.is_some() {
+            if self.lower_bound.is_some() {
                 // TODO: `seek_to_first` is better, however it has performance issues currently.
                 self.write_cursor.seek(
-                    self.cfg.lower_bound.as_ref().unwrap(),
+                    self.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
                 self.lock_cursor.seek(
-                    self.cfg.lower_bound.as_ref().unwrap(),
+                    self.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.lock,
                 )?;
             } else {
@@ -84,18 +85,7 @@ impl<S: Snapshot> EntryScanner<S> {
         // TODO: We don't need to seek lock CF if isolation level is RC.
 
         loop {
-            // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
-            // the encoded user key we are currently dealing with. It may not have a write, or
-            // may not have a lock. It is not a slice to avoid data being invalidated after
-            // cursor moving.
-            //
-            // `has_write` indicates whether `current_user_key` has at least one corresponding
-            // `write`. If there is one, it is what current write cursor pointing to. The pointed
-            // `write` must be the most recent (i.e. largest `commit_ts`) write of
-            // `current_user_key`.
-            //
-            // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
-            // there is one, it is what current lock cursor pointing to.
+            // The overall implementation is the same as forward scanner.
             let (current_user_key, has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid()? {
                     Some(self.write_cursor.key(&mut self.statistics.write))
@@ -379,7 +369,6 @@ mod tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::Scanner;
     use crate::storage::{Engine, Key, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;

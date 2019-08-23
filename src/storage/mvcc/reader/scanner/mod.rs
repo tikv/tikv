@@ -9,13 +9,13 @@ use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;
-use crate::storage::txn::{Result as TxnResult, TxnEntry};
+use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
     Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
 };
 
 use self::backward::BackwardScanner;
-use self::entry::EntryScanner;
+pub use self::entry::Scanner as EntryScanner;
 use self::forward::ForwardScanner;
 
 /// `Scanner` factory.
@@ -100,21 +100,26 @@ impl<S: Snapshot> ScannerBuilder<S> {
         }
     }
 
-    pub fn build_entry_scanner(mut self) -> Result<Scanner<S>> {
+    pub fn build_entry_scanner(mut self) -> Result<EntryScanner<S>> {
+        let lower_bound = self.lower_bound.clone();
         let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.create_cf_cursor(CF_WRITE)?;
-        Ok(Scanner::Entry(EntryScanner::new(
+        // Note: Create a default cf cursor will take key range, so we need to
+        //       ensure the default cursor is created after lock and write.
+        let default_cursor = self.create_cf_cursor(CF_DEFAULT)?;
+        Ok(EntryScanner::new(
             self.0,
             lock_cursor,
             write_cursor,
-        )?))
+            default_cursor,
+            lower_bound,
+        )?)
     }
 }
 
 pub enum Scanner<S: Snapshot> {
     Forward(ForwardScanner<S>),
     Backward(BackwardScanner<S>),
-    Entry(EntryScanner<S>),
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
@@ -122,14 +127,6 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         match self {
             Scanner::Forward(scanner) => Ok(scanner.read_next()?),
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
-            Scanner::Entry(_) => Err(box_err!("unimplemented")),
-        }
-    }
-    fn next_entry(&mut self) -> TxnResult<Option<TxnEntry>> {
-        match self {
-            Scanner::Forward(_) => Err(box_err!("unimplemented")),
-            Scanner::Backward(_) => Err(box_err!("unimplemented")),
-            Scanner::Entry(scanner) => Ok(scanner.read_next()?),
         }
     }
     /// Take out and reset the statistics collected so far.
@@ -137,7 +134,6 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         match self {
             Scanner::Forward(scanner) => scanner.take_statistics(),
             Scanner::Backward(scanner) => scanner.take_statistics(),
-            Scanner::Entry(scanner) => scanner.take_statistics(),
         }
     }
 }

@@ -3,6 +3,7 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
+use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::{Error as MvccError, MvccReader};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
@@ -27,14 +28,6 @@ pub trait Store: Send {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner>;
-
-    fn entry_scanner(
-        &self,
-        _lower_bound: Option<Key>,
-        _upper_bound: Option<Key>,
-    ) -> Result<Self::Scanner> {
-        Err(box_err!("unimplemented"))
-    }
 }
 
 /// [`Scanner`]s allow retrieving items or batches from a scan result.
@@ -65,6 +58,42 @@ pub trait Scanner: Send {
     fn next_entry(&mut self) -> Result<Option<TxnEntry>> {
         Err(box_err!("unimplemented"))
     }
+
+    fn scan_entries(&mut self, batch: &mut EntryBatch) -> Result<()> {
+        while batch.entries.len() < batch.entries.capacity() {
+            match self.next_entry() {
+                Ok(Some(entry)) => {
+                    batch.entries.push(entry);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    /// Take statistics.
+    fn take_statistics(&mut self) -> Statistics;
+}
+
+pub trait TxnEntryStore: Send {
+    /// The scanner type returned by `scanner()`.
+    type Scanner: TxnEntryScanner;
+
+    /// Retrieve a scanner over the bounds.
+    fn entry_scanner(
+        &self,
+        _lower_bound: Option<Key>,
+        _upper_bound: Option<Key>,
+    ) -> Result<Self::Scanner>;
+}
+
+/// [`TxnEntryScanner`] allows retrieving items or batches from a scan result.
+///
+/// Commonly they are obtained as a result of a
+/// [`entry_scanner`](TxnEntryStore::entry_scanner) operation.
+pub trait TxnEntryScanner: Send {
+    fn next_entry(&mut self) -> Result<Option<TxnEntry>>;
 
     fn scan_entries(&mut self, batch: &mut EntryBatch) -> Result<()> {
         while batch.entries.len() < batch.entries.capacity() {
@@ -183,12 +212,15 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
 
         Ok(scanner)
     }
+}
 
+impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
+    type Scanner = EntryScanner<S>;
     fn entry_scanner(
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
-    ) -> Result<MvccScanner<S>> {
+    ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
         let scanner =
