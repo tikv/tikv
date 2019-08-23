@@ -823,9 +823,17 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
+        let split_keys = if !req.get_split_key().is_empty() {
+            vec![Key::from_raw(req.get_split_key()).into_encoded()]
+        } else {
+            req.take_split_keys()
+                .into_iter()
+                .map(|x| Key::from_raw(&x).into_encoded())
+                .collect()
+        };
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
-            split_keys: vec![Key::from_raw(req.get_split_key()).into_encoded()],
+            split_keys,
             callback: Callback::Write(cb),
         };
 
@@ -842,7 +850,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
                     let admin_resp = v.response.mut_admin_response();
-                    if admin_resp.get_splits().get_regions().len() != 2 {
+                    let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
+                    if regions.len() < 2 {
                         error!(
                             "invalid split response";
                             "region_id" => region_id,
@@ -853,10 +862,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                             admin_resp
                         ));
                     } else {
-                        let mut regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
-                        let mut d = regions.drain(..);
-                        resp.set_left(d.next().unwrap());
-                        resp.set_right(d.next().unwrap());
+                        if regions.len() == 2 {
+                            resp.set_left(regions[0].clone());
+                            resp.set_right(regions[1].clone());
+                        }
+                        resp.set_regions(regions.into());
                     }
                 }
                 resp
