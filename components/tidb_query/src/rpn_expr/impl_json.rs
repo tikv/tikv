@@ -4,7 +4,7 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::json::*;
-use crate::Result;
+use crate::{Error, Result};
 
 #[rpn_fn]
 #[inline]
@@ -33,14 +33,13 @@ fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 }
 
 /// TODO: think about can macros be used in this function.
-/// TODO: implement the functions.
 /// TODO: make clear how json handles None.
 #[inline]
 fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
     // args >= 2
     // base Json argument
     let base: &Option<Json> = Evaluable::borrow_scalar_value_ref(&args[0]);
-    let base = base.as_ref().map_or(Json::None, |json| json.to_owned());
+    let mut base = base.as_ref().map_or(Json::None, |json| json.to_owned());
 
     // args.len() / 2
     let sz = args.len() / 2;
@@ -51,21 +50,22 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     for chunk in args[1..].chunks(2) {
         let path: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
         let value: &Option<Json> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
+        // TODO: simplify these code.
         if path.is_none() {
             return Ok(None);
         }
-        let path = path.unwrap();
+        let path = path.as_ref().unwrap().to_owned();
         let value = value.as_ref().map_or(Json::None, |json| json.to_owned());
 
-        // TODO: check path with
-        let path = PathExpression::try_from(path);
+        let json_path = eval_string_and_decode(path)?;
+        let path_expr = parse_json_path_expr(&json_path)?;
 
-        path_expr_list.push(try_opt!(path));
+        path_expr_list.push(path_expr);
         values.push(value);
     }
     base.modify(&path_expr_list, values, mt)?;
 
-    base
+    Ok(Some(base))
 }
 
 /// validate the arguments are `(&Option<Json>, &[(Option<Bytes>, Option<Json>)])`
@@ -73,15 +73,24 @@ fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     // min_args will be validated before extra_validator, so expr.get_children() must be larger than 2
     super::function::validate_expr_return_type(&children[0], Json::EVAL_TYPE)?;
-    if chunk.len() == 1 {
-        return Err(other_err!(
+    for chunk in children[1..].chunks(2) {
+        if chunk.len() == 1 {
+            return Err(other_err!(
                 "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
             ));
-    } else {
-        super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
-        super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
+        } else {
+            super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
+            super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
+        }
     }
     Ok(())
+}
+
+#[inline]
+fn eval_string_and_decode(b: Bytes) -> Result<String> {
+    String::from_utf8(b)
+        .map_err(crate::codec::Error::from)
+        .map_err(Error::from)
 }
 
 #[rpn_fn]
@@ -94,6 +103,8 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
 
     use tipb::ScalarFuncSig;
@@ -132,44 +143,48 @@ mod tests {
         let cases: Vec<(_, Vec<ScalarValue>, _)> = vec![
             (
                 ScalarFuncSig::JsonSetSig,
-                vec![None::<Json>.into(), None::<Bytes>.into(), None::<Json>.into()],
+                vec![
+                    None::<Json>.into(),
+                    None::<Bytes>.into(),
+                    None::<Json>.into(),
+                ],
                 None::<Json>,
             ),
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
                     Some(Json::I64(9)).into(),
-                    Some(Bytes::from(b"$[1]".to_vec())).into(),
+                    Some(b"$[1]".to_vec()).into(),
                     Some(Json::U64(3)).into(),
                 ],
-                Some(Json::from(r#"[9,3]"#.parse().unwrap())),
+                Some(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonInsertSig,
                 vec![
                     Some(Json::I64(9)).into(),
-                    Some(Bytes::from(b"$[1]".to_vec())).into(),
+                    Some(b"$[1]".to_vec()).into(),
                     Some(Json::U64(3)).into(),
                 ],
-                Some(Json::from(r#"[9,3]"#.parse().unwrap())),
+                Some(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonReplaceSig,
                 vec![
                     Some(Json::I64(9)).into(),
-                    Some(Bytes::from(b"$[1]".to_vec())).into(),
+                    Some(b"$[1]".to_vec()).into(),
                     Some(Json::U64(3)).into(),
                 ],
-                Some(Json::from(r#"9"#.parse().unwrap())),
+                Some(r#"9"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
-                    Some(Json::from(r#"{"a":"x"}"#.parse().unwrap())).into(),
-                    Some(Bytes::from(b"$.a".to_vec())).into(),
+                    Some(Json::from_str(r#"{"a":"x"}"#).unwrap()).into(),
+                    Some(b"$.a".to_vec()).into(),
                     None::<Json>.into(),
                 ],
-                Some(Json::from(r#"{"a":null}"#.parse().unwrap())),
+                Some(r#"{"a":null}"#.parse().unwrap()),
             ),
         ];
         for (sig, args, expect_output) in cases {
