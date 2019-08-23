@@ -245,7 +245,11 @@ fn test_invaild_read_index_when_no_leader() {
         .unwrap();
 
     let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();
-    assert!(resp.get_header().has_error());
+    assert!(resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("can not read index due to no leader"));
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
