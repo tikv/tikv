@@ -62,3 +62,14 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
         (**self).read(name)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_storage() {
+        create_storage("local:///tmp/a").unwrap();
+        assert!(create_storage("invalid").is_err());
+    }
+}

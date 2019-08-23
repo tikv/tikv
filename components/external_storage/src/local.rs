@@ -36,13 +36,13 @@ impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
-        let tmp = base.join(LOCAL_STORAGE_TMP_DIR);
-        maybe_create_dir(&tmp)?;
+        let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
+        maybe_create_dir(&tmp_dir)?;
         let base_dir = Arc::new(File::open(base)?);
         Ok(LocalStorage {
             base: base.to_owned(),
             base_dir,
-            tmp,
+            tmp: tmp_dir,
         })
     }
 
