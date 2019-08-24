@@ -805,5 +805,4 @@ mod tests {
         // `get_txn_commit_info(&key, 30)` stopped at `30_25 PUT`.
         assert_eq!(seek_new - seek_old, 3);
     }
-    }
 }
