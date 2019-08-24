@@ -4,10 +4,11 @@ use std::cell::RefCell;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use crate::server::readpool::{self, Builder, Config, ReadPool};
+use crate::config::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{Engine, FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
+use tikv_util::future_pool::{Builder, Config, FuturePool};
 
 use super::metrics::*;
 use prometheus::local::*;
@@ -44,31 +45,51 @@ thread_local! {
 }
 
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
-    config: &readpool::Config,
+    config: &CoprReadPoolConfig,
     reporter: R,
     engine: E,
-) -> ReadPool {
-    let reporter2 = reporter.clone();
-    let engine = Arc::new(Mutex::new(engine));
+) -> Vec<FuturePool> {
+    let names = vec!["cop-low", "cop-normal", "cop-high"];
+    let configs: Vec<Config> = config.to_future_pool_configs();
+    assert_eq!(configs.len(), 3);
 
-    Builder::from_config(config)
-        .name_prefix("cop")
-        .on_tick(move || tls_flush(&reporter))
-        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-        .before_stop(move || {
-            destroy_tls_engine::<E>();
-            tls_flush(&reporter2)
+    configs
+        .into_iter()
+        .zip(names)
+        .map(|(config, name)| {
+            let reporter = reporter.clone();
+            let reporter2 = reporter.clone();
+            let engine = Arc::new(Mutex::new(engine.clone()));
+            Builder::from_config(config)
+                .name_prefix(name)
+                .on_tick(move || tls_flush(&reporter))
+                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .before_stop(move || {
+                    destroy_tls_engine::<E>();
+                    tls_flush(&reporter2)
+                })
+                .build()
         })
-        .build()
+        .collect()
 }
 
-pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
-    let engine = Arc::new(Mutex::new(engine));
+pub fn build_read_pool_for_test<E: Engine>(
+    config: &CoprReadPoolConfig,
+    engine: E,
+) -> Vec<FuturePool> {
+    let configs: Vec<Config> = config.to_future_pool_configs();
+    assert_eq!(configs.len(), 3);
 
-    Builder::from_config(&Config::default_for_test())
-        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-        .before_stop(|| destroy_tls_engine::<E>())
-        .build()
+    configs
+        .into_iter()
+        .map(|config| {
+            let engine = Arc::new(Mutex::new(engine.clone()));
+            Builder::from_config(config)
+                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .before_stop(|| destroy_tls_engine::<E>())
+                .build()
+        })
+        .collect()
 }
 
 fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
