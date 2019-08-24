@@ -272,7 +272,7 @@ impl<S: Snapshot> MvccReader<S> {
             if commit_ts <= start_ts {
                 break;
             }
-            seek_ts = commit_ts + 1;
+            seek_ts = commit_ts - 1;
         }
         Ok(None)
     }
