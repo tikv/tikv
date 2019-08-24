@@ -771,13 +771,22 @@ mod tests {
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);
+        engine.prewrite_pessimistic_lock(m, k, 45);
+        engine.commit(k, 45, 50);
+
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
-        // Let's assume `50_35 PUT` means a commit version with start ts is 45 and commit ts
+        // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
         // is 50.
-        // Commit versions: [50_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 45).unwrap().unwrap();
+        assert_eq!(commit_ts, 50);
+        assert_eq!(write_type, WriteType::Put);
+
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
         assert_eq!(commit_ts, 40);
         assert_eq!(write_type, WriteType::Put);
