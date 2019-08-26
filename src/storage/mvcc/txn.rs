@@ -421,7 +421,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 // A pessimistic lock cannot be committed.
                 if lock.lock_type == LockType::Pessimistic {
                     error!(
-                        "trying to committing a pessimistic lock";
+                        "trying to commit a pessimistic lock";
                         "key" => %key,
                         "start_ts" => self.start_ts,
                         "commit_ts" => commit_ts,
@@ -674,6 +674,9 @@ mod tests {
 
         must_commit(&engine, k, 5, 10);
         must_written(&engine, k, 5, 10, WriteType::Put);
+        // Delayed prewrite request after committing should do nothing.
+        must_prewrite_put_err(&engine, k, v, k, 5);
+        must_unlocked(&engine, k);
         // Write conflict.
         must_prewrite_lock_err(&engine, k, k, 6);
         must_unlocked(&engine, k);
@@ -817,21 +820,6 @@ mod tests {
         test_mvcc_txn_commit_err_imp(b"k2", &long_value);
     }
 
-    fn test_mvcc_txn_rollback_imp(k: &[u8], v: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        must_prewrite_put(&engine, k, v, k, 5);
-        must_rollback(&engine, k, 5);
-        // rollback should be idempotent
-        must_rollback(&engine, k, 5);
-        // lock should be released after rollback
-        must_unlocked(&engine, k);
-        must_prewrite_lock(&engine, k, k, 10);
-        must_rollback(&engine, k, 10);
-        // data should be dropped after rollback
-        must_get_none(&engine, k, 20);
-    }
-
     #[test]
     fn test_mvcc_txn_rollback_after_commit() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -856,29 +844,44 @@ mod tests {
         must_get(&engine, k, t4, v);
     }
 
+    fn test_mvcc_txn_rollback_imp(k: &[u8], v: &[u8]) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, k, v, k, 5);
+        must_rollback(&engine, k, 5);
+        // Rollback should be idempotent
+        must_rollback(&engine, k, 5);
+        // Lock should be released after rollback
+        must_unlocked(&engine, k);
+        must_prewrite_lock(&engine, k, k, 10);
+        must_rollback(&engine, k, 10);
+        // data should be dropped after rollback
+        must_get_none(&engine, k, 20);
+
+        // Can't rollback committed transaction.
+        must_prewrite_put(&engine, k, v, k, 25);
+        must_commit(&engine, k, 25, 30);
+        must_rollback_err(&engine, k, 25);
+        must_rollback_err(&engine, k, 25);
+
+        // Can't rollback other transaction's lock
+        must_prewrite_delete(&engine, k, k, 35);
+        must_rollback(&engine, k, 34);
+        must_rollback(&engine, k, 36);
+        must_written(&engine, k, 34, 34, WriteType::Rollback);
+        must_written(&engine, k, 36, 36, WriteType::Rollback);
+        must_locked(&engine, k, 35);
+        must_commit(&engine, k, 35, 40);
+        must_get(&engine, k, 39, v);
+        must_get_none(&engine, k, 41);
+    }
+
     #[test]
     fn test_mvcc_txn_rollback() {
         test_mvcc_txn_rollback_imp(b"k", b"v");
 
         let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_rollback_imp(b"k2", &long_value);
-    }
-
-    fn test_mvcc_txn_rollback_err_imp(k: &[u8], v: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        must_prewrite_put(&engine, k, v, k, 5);
-        must_commit(&engine, k, 5, 10);
-        must_rollback_err(&engine, k, 5);
-        must_rollback_err(&engine, k, 5);
-    }
-
-    #[test]
-    fn test_mvcc_txn_rollback_err() {
-        test_mvcc_txn_rollback_err_imp(b"k", b"v");
-
-        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_mvcc_txn_rollback_err_imp(b"k2", &long_value);
     }
 
     #[test]
