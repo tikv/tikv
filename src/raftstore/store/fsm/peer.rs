@@ -1958,10 +1958,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
                 // Send CatchUpLogs back to destroy source apply delegate,
                 // then it will send `LogsUpToDate` to target apply delegate.
-                self.ctx.apply_router.schedule_task(
-                    region_id,
-                    ApplyTask::CatchUpLogs(catch_up_logs),
-                );
+                self.ctx
+                    .apply_router
+                    .schedule_task(region_id, ApplyTask::CatchUpLogs(catch_up_logs));
             }
         }
     }
