@@ -18,7 +18,7 @@ use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode::*, ServerStreamingSink, UnarySink, WriteFlags,
+    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -26,7 +26,6 @@ use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
@@ -72,13 +71,19 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         }
     }
 
-    fn send_fail_status<M>(&self, ctx: RpcContext<'_>, sink: UnarySink<M>, err: Error, code: i32) {
+    fn send_fail_status<M>(
+        &self,
+        ctx: RpcContext<'_>,
+        sink: UnarySink<M>,
+        err: Error,
+        code: RpcStatusCode,
+    ) {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
         ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E> {
+impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
         let future = future_get(&self.storage, req)
@@ -618,7 +623,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
-                let code = GRPC_STATUS_UNKNOWN;
+                let code = RpcStatusCode::UNKNOWN;
                 let msg = Some(format!("{:?}", e));
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
@@ -656,9 +661,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(msg))
+                            RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(GRPC_STATUS_UNKNOWN, None),
+                        Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
                     };
                     sink.fail(status)
                         .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
@@ -693,9 +698,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => {
                             let msg = format!("{:?}", e);
                             error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                            RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(msg))
+                            RpcStatus::new(RpcStatusCode::UNKNOWN, Some(msg))
                         }
-                        Ok(_) => RpcStatus::new(GRPC_STATUS_UNKNOWN, None),
+                        Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN, None),
                     };
                     sink.fail(status).map_err(
                         |e| error!("KvService::batch_raft send response fail"; "err" => ?e),
@@ -717,7 +722,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 SnapTask::Recv { sink, .. } => sink,
                 _ => unreachable!(),
             };
-            let status = RpcStatus::new(GRPC_STATUS_RESOURCE_EXHAUSTED, Some(err_msg));
+            let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, Some(err_msg));
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
     }
@@ -818,14 +823,22 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
+        let split_keys = if !req.get_split_key().is_empty() {
+            vec![Key::from_raw(req.get_split_key()).into_encoded()]
+        } else {
+            req.take_split_keys()
+                .into_iter()
+                .map(|x| Key::from_raw(&x).into_encoded())
+                .collect()
+        };
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
-            split_keys: vec![Key::from_raw(req.get_split_key()).into_encoded()],
+            split_keys,
             callback: Callback::Write(cb),
         };
 
         if let Err(e) = self.ch.casual_send(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), GRPC_STATUS_RESOURCE_EXHAUSTED);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -837,7 +850,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
                     let admin_resp = v.response.mut_admin_response();
-                    if admin_resp.get_splits().get_regions().len() != 2 {
+                    let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
+                    if regions.len() < 2 {
                         error!(
                             "invalid split response";
                             "region_id" => region_id,
@@ -848,10 +862,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                             admin_resp
                         ));
                     } else {
-                        let mut regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
-                        let mut d = regions.drain(..);
-                        resp.set_left(d.next().unwrap());
-                        resp.set_right(d.next().unwrap());
+                        if regions.len() == 2 {
+                            resp.set_left(regions[0].clone());
+                            resp.set_right(regions[1].clone());
+                        }
+                        resp.set_regions(regions.into());
                     }
                 }
                 resp
@@ -896,7 +911,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let (cb, future) = paired_future_callback();
 
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            self.send_fail_status(ctx, sink, Error::from(e), GRPC_STATUS_RESOURCE_EXHAUSTED);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
             return;
         }
 
@@ -982,7 +997,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             })
             .map_err(|e| {
                 let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(GRPC_STATUS_UNKNOWN, msg))
+                GrpcError::RpcFailure(RpcStatus::new(RpcStatusCode::UNKNOWN, msg))
             });
 
         ctx.spawn(sink.send_all(response_retriever).map(|_| ()).map_err(|e| {

@@ -355,9 +355,9 @@ pub mod tests {
     use crate::codec::{datum, table, Datum};
     use crate::storage::fixture::FixtureStorage;
     use kvproto::coprocessor::KeyRange;
-    use std::collections::HashMap;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::collections::HashMap;
     use tipb::ColumnInfo;
     use tipb::TableScan;
     use tipb::{Expr, ExprType};

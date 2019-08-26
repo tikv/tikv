@@ -10,9 +10,8 @@ use uuid::Uuid;
 
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::import_sstpb::*;
-use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
-use kvproto::tikvpb_grpc::*;
+use kvproto::tikvpb::*;
 
 use pd_client::PdClient;
 use test_raftstore::*;
