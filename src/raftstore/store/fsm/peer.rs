@@ -49,8 +49,8 @@ use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
-    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, MvccGcTask, RaftlogGcTask, ReadDelegate, RegionTask,
-    SplitCheckTask,
+    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, MvccGcTask, RaftlogGcTask, ReadDelegate,
+    RegionTask, SplitCheckTask,
 };
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{

@@ -641,9 +641,14 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone);
         match (safe_point, db) {
             (Some(sp), Some(db)) => {
+                let cf_handle = get_cf_handle(&db, CF_WRITE).unwrap();
+                let max_level = db.get_options_cf(cf_handle).get_num_levels() - 1;
                 let output_level = context.output_level();
-                let ek = context.end_key();
-                let max_delete = match Key::split_on_ts_for(ek) {
+                if context.is_manual_compaction() && output_level < max_level {
+                    // For manual compactions, only run the filter for the last level.
+                    return std::ptr::null_mut();
+                }
+                let max_delete = match Key::split_on_ts_for(context.end_key()) {
                     Ok((k, _)) => k.to_vec(),
                     _ => vec![],
                 };
@@ -765,10 +770,11 @@ impl CompactionFilter for WriteCompactionFilter {
             self.remove_older = false;
         }
 
-        if commit_ts <= safe_point {
-            self.stale_versions += 1;
+        if commit_ts > safe_point {
+            return false;
         }
 
+        self.stale_versions += 1;
         let mut filtered = self.remove_older;
         let (write_type, start_ts, has_short) = Write::parse_without_value(value).unwrap();
         if !self.remove_older {
@@ -777,8 +783,11 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Rollback | WriteType::Lock => filtered = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    filtered =
-                        self.output_level == self.max_level && self.key_prefix != self.max_delete;
+                    if self.output_level == self.max_level && self.key_prefix != self.max_delete {
+                        filtered = true;
+                    } else {
+                        self.skipped += 1;
+                    }
                 }
                 WriteType::Put => {
                     self.remove_older = true;
@@ -787,22 +796,19 @@ impl CompactionFilter for WriteCompactionFilter {
             }
         }
 
-        if filtered && commit_ts <= safe_point {
+        if filtered {
             if !has_short {
                 let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
                 self.delete_default_key(key.as_encoded());
             }
             self.deleted += 1;
         }
-        if commit_ts <= safe_point && !filtered && write_type == WriteType::Delete {
-            self.skipped += 1;
-        }
 
-        filtered && commit_ts <= safe_point
+        filtered
     }
 }
 
-const DEFAULT_DELETE_BATCH_SIZE: usize = 16 * 1024;
+const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 
 pub fn init_mvcc_gc_db(db: Arc<DB>) {
     let mut mvcc_gc_db = MVCC_GC_DB.lock().unwrap();
@@ -1748,7 +1754,7 @@ mod tests {
         assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
     }
 
-    use super::{init_metrics, init_mvcc_gc_db, init_safe_point};
+    use super::{init_mvcc_gc_db, init_safe_point};
     use engine::rocks::util::{compact_range, get_cf_handle};
     use engine::rocks::DB;
     use std::sync::atomic::AtomicU64;
@@ -1765,16 +1771,20 @@ mod tests {
 
         must_prewrite_put(&engine, b"key", b"value", b"key", 101);
         must_commit(&engine, b"key", 101, 102);
+        must_prewrite_put(&engine, b"key", b"value", b"key", 103);
+        must_commit(&engine, b"key", 103, 104);
         must_prewrite_put(&engine, b"key", b"value", b"key", 201);
         must_commit(&engine, b"key", 201, 202);
         must_get(&engine, b"key", 102, b"value");
+        must_get(&engine, b"key", 104, b"value");
         must_get(&engine, b"key", 202, b"value");
 
         let kv = Arc::clone(&engine.get_rocksdb());
         init_compaction_filter_deps(Arc::new(AtomicU64::new(150)), Arc::clone(&kv));
         let handle = get_cf_handle(&kv, "write").unwrap();
         compact_range(&kv, handle, None, None, false, 1);
-        must_get_none(&engine, b"key", 101);
+        must_get_none(&engine, b"key", 102);
+        must_get(&engine, b"key", 104, b"value");
         must_get(&engine, b"key", 202, b"value");
     }
 }

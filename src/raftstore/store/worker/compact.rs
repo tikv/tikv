@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// TODO: remove the file.
 #![allow(dead_code)]
 
 use std::collections::VecDeque;

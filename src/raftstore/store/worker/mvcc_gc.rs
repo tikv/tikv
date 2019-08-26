@@ -126,7 +126,8 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
                 compact_opts.set_max_subcompactions(1);
                 compact_opts.set_change_level(true);
                 compact_opts.set_target_level(6);
-                compact_opts.set_first_level(5); // only touch the last 2 level.
+                // Skip memtable and level 0.
+                compact_opts.set_first_level(1);
                 // Compaction from L5 to L6 has already cleaned all delete flags.
                 compact_opts.set_bottommost_level_compaction(DBBottommostLevelCompaction::Skip);
                 db.compact_range_cf_opt(handle, &compact_opts, Some(&sk), Some(&ek));
