@@ -15,22 +15,28 @@ use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::top_n;
 use crate::util::FixtureBuilder;
 
-pub trait TopNBencher {
+pub trait TopNBencher<M>
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str;
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         order_by_expr: &[Expr],
         order_is_desc: &[bool],
         n: usize,
     );
 
-    fn box_clone(&self) -> Box<dyn TopNBencher>;
+    fn box_clone(&self) -> Box<dyn TopNBencher<M>>;
 }
 
-impl Clone for Box<dyn TopNBencher> {
+impl<M> Clone for Box<dyn TopNBencher<M>>
+where
+    M: criterion::measurement::Measurement,
+{
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
@@ -41,14 +47,17 @@ impl Clone for Box<dyn TopNBencher> {
 /// expression.
 pub struct NormalBencher;
 
-impl TopNBencher for NormalBencher {
+impl<M> TopNBencher<M> for NormalBencher
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str {
         "normal"
     }
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         order_by_expr: &[Expr],
         order_is_desc: &[bool],
@@ -70,7 +79,7 @@ impl TopNBencher for NormalBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn TopNBencher> {
+    fn box_clone(&self) -> Box<dyn TopNBencher<M>> {
         Box::new(Self)
     }
 }
@@ -79,14 +88,17 @@ impl TopNBencher for NormalBencher {
 /// expression.
 pub struct BatchBencher;
 
-impl TopNBencher for BatchBencher {
+impl<M> TopNBencher<M> for BatchBencher
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str {
         "batch"
     }
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         order_by_expr: &[Expr],
         order_is_desc: &[bool],
@@ -108,7 +120,7 @@ impl TopNBencher for BatchBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn TopNBencher> {
+    fn box_clone(&self) -> Box<dyn TopNBencher<M>> {
         Box::new(Self)
     }
 }

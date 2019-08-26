@@ -16,21 +16,27 @@ use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::stream_aggregate;
 use crate::util::FixtureBuilder;
 
-pub trait StreamAggrBencher {
+pub trait StreamAggrBencher<M>
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str;
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
         aggr_expr: &[Expr],
     );
 
-    fn box_clone(&self) -> Box<dyn StreamAggrBencher>;
+    fn box_clone(&self) -> Box<dyn StreamAggrBencher<M>>;
 }
 
-impl Clone for Box<dyn StreamAggrBencher> {
+impl<M> Clone for Box<dyn StreamAggrBencher<M>>
+where
+    M: criterion::measurement::Measurement,
+{
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
@@ -41,14 +47,17 @@ impl Clone for Box<dyn StreamAggrBencher> {
 /// expression.
 pub struct NormalBencher;
 
-impl StreamAggrBencher for NormalBencher {
+impl<M> StreamAggrBencher<M> for NormalBencher
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str {
         "normal"
     }
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
         aggr_expr: &[Expr],
@@ -68,7 +77,7 @@ impl StreamAggrBencher for NormalBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn StreamAggrBencher> {
+    fn box_clone(&self) -> Box<dyn StreamAggrBencher<M>> {
         Box::new(Self)
     }
 }
@@ -77,14 +86,17 @@ impl StreamAggrBencher for NormalBencher {
 /// expression.
 pub struct BatchBencher;
 
-impl StreamAggrBencher for BatchBencher {
+impl<M> StreamAggrBencher<M> for BatchBencher
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str {
         "batch"
     }
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
         aggr_expr: &[Expr],
@@ -104,7 +116,7 @@ impl StreamAggrBencher for BatchBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn StreamAggrBencher> {
+    fn box_clone(&self) -> Box<dyn StreamAggrBencher<M>> {
         Box::new(Self)
     }
 }
