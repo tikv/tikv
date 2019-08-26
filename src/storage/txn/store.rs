@@ -103,7 +103,7 @@ pub enum TxnEntry {
     // TOOD: Add more entry if needed.
 }
 
-// A batch of transaction entries.
+/// A batch of transaction entries.
 pub struct EntryBatch {
     entries: Vec<TxnEntry>,
 }
