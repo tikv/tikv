@@ -239,13 +239,13 @@ mod tests {
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
-    use crate::coprocessor;
+    use crate::config::CoprReadPoolConfig;
+    use crate::coprocessor::{self, readpool_impl};
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::*;
     use crate::raftstore::Result as RaftStoreResult;
     use crate::storage::TestStorageBuilder;
 
-    use crate::coprocessor::readpool_impl;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
@@ -328,7 +328,10 @@ mod tests {
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
-        let cop_read_pool = readpool_impl::build_read_pool_for_test(storage.get_engine());
+        let cop_read_pool = readpool_impl::build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            storage.get_engine(),
+        );
         let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
 
         let addr = Arc::new(Mutex::new(None));

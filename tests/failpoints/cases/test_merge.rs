@@ -225,6 +225,10 @@ fn test_node_merge_catch_up_logs_restart() {
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
 
+    // make sure the peer of left region on engine 3 has caught up logs.
+    cluster.must_put(b"k0", b"v0");
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
             .direction(Direction::Recv)

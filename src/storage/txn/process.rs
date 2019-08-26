@@ -173,17 +173,20 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_err.inc();
 
                 info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                self.take_pool().pool.spawn(move || {
-                    notify_scheduler(
-                        self.take_scheduler(),
-                        Msg::FinishedWithErr {
-                            cid: task.cid,
-                            err: Error::from(err),
-                            tag: task.tag,
-                        },
-                    );
-                    future::ok::<_, ()>(())
-                });
+                self.take_pool()
+                    .pool
+                    .spawn(move || {
+                        notify_scheduler(
+                            self.take_scheduler(),
+                            Msg::FinishedWithErr {
+                                cid: task.cid,
+                                err: Error::from(err),
+                                tag: task.tag,
+                            },
+                        );
+                        future::ok::<_, ()>(())
+                    })
+                    .unwrap();
             }
         }
     }
@@ -201,32 +204,35 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         }
         let sched_pool = self.clone_pool();
         let readonly = task.cmd.readonly();
-        sched_pool.pool.spawn(move || {
-            fail_point!("scheduler_async_snapshot_finish");
+        sched_pool
+            .pool
+            .spawn(move || {
+                fail_point!("scheduler_async_snapshot_finish");
 
-            let read_duration = Instant::now_coarse();
+                let read_duration = Instant::now_coarse();
 
-            let region_id = task.region_id;
-            let ts = task.ts;
-            let timer = SlowTimer::new();
+                let region_id = task.region_id;
+                let ts = task.ts;
+                let timer = SlowTimer::new();
 
-            let statistics = if readonly {
-                self.process_read(snapshot, task)
-            } else {
-                with_tls_engine(|engine| self.process_write(engine, snapshot, task))
-            };
-            tls_add_statistics(tag.get_str(), &statistics);
-            slow_log!(
-                timer,
-                "[region {}] scheduler handle command: {}, ts: {}",
-                region_id,
-                tag,
-                ts
-            );
+                let statistics = if readonly {
+                    self.process_read(snapshot, task)
+                } else {
+                    with_tls_engine(|engine| self.process_write(engine, snapshot, task))
+                };
+                tls_collect_scan_details(tag.get_str(), &statistics);
+                slow_log!(
+                    timer,
+                    "[region {}] scheduler handle command: {}, ts: {}",
+                    region_id,
+                    tag,
+                    ts
+                );
 
-            tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
-            future::ok::<_, ()>(())
-        });
+                tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
+                future::ok::<_, ()>(())
+            })
+            .unwrap();
     }
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
@@ -295,21 +301,24 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     let sched_pool = self.take_pool();
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        sched_pool.pool.spawn(move || {
-                            notify_scheduler(
-                                sched,
-                                Msg::WriteFinished {
-                                    cid,
-                                    pr,
-                                    result,
-                                    tag,
-                                },
-                            );
-                            KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                .get(tag)
-                                .observe(rows as f64);
-                            future::ok::<_, ()>(())
-                        })
+                        sched_pool
+                            .pool
+                            .spawn(move || {
+                                notify_scheduler(
+                                    sched,
+                                    Msg::WriteFinished {
+                                        cid,
+                                        pr,
+                                        result,
+                                        tag,
+                                    },
+                                );
+                                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                    .get(tag)
+                                    .observe(rows as f64);
+                                future::ok::<_, ()>(())
+                            })
+                            .unwrap()
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
