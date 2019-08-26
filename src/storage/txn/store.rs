@@ -66,8 +66,8 @@ pub trait TxnEntryStore: Send {
     /// Retrieve a scanner over the bounds.
     fn entry_scanner(
         &self,
-        _lower_bound: Option<Key>,
-        _upper_bound: Option<Key>,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
     ) -> Result<Self::Scanner>;
 }
 
