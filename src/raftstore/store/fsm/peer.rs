@@ -1862,17 +1862,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
         }
         let target = state.get_target().get_id();
+        let commit = state.get_commit();
         self.fsm.peer.pending_merge_state = Some(state);
         self.notify_prepare_merge();
 
         if let Some(logs_up_to_date) = self.fsm.peer.catch_up_logs.take() {
             // Send CatchUpLogs back to destroy source apply delegate,
             // then it will send `LogsUpToDate` to target apply delegate.
+            let mut req = CommitMergeRequest::new();
+            req.set_commit(commit);
             self.ctx.apply_router.schedule_task(
                 region.get_id(),
                 ApplyTask::CatchUpLogs(CatchUpLogs {
                     target_region_id: target,
-                    merge: CommitMergeRequest::new(),
+                    merge: req,
                     logs_up_to_date,
                 }),
             );
@@ -1957,11 +1960,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // then it will send `LogsUpToDate` to target apply delegate.
                 self.ctx.apply_router.schedule_task(
                     region_id,
-                    ApplyTask::CatchUpLogs(CatchUpLogs {
-                        target_region_id: catch_up_logs.target_region_id,
-                        merge: CommitMergeRequest::new(),
-                        logs_up_to_date: catch_up_logs.logs_up_to_date,
-                    }),
+                    ApplyTask::CatchUpLogs(catch_up_logs),
                 );
             }
         }
