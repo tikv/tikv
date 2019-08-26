@@ -110,7 +110,7 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
 }
 
 #[rustfmt::skip]
-fn map_pb_fn_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
+fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
     let children = expr.get_children();
     Ok(match value {

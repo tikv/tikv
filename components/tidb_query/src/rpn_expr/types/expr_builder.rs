@@ -28,7 +28,7 @@ impl RpnExpressionBuilder {
 
         match c.get_tp() {
             ExprType::ScalarFunc => {
-                super::super::map_pb_fn_to_rpn_func(c)?;
+                super::super::map_expr_node_to_rpn_func(c)?;
                 for n in c.get_children() {
                     RpnExpressionBuilder::check_expr_tree_supported(n)?;
                 }
@@ -81,7 +81,7 @@ impl RpnExpressionBuilder {
             tree_node,
             &mut expr_nodes,
             time_zone,
-            super::super::map_pb_fn_to_rpn_func,
+            super::super::map_expr_node_to_rpn_func,
             max_columns,
         )?;
         Ok(RpnExpression::from(expr_nodes))
