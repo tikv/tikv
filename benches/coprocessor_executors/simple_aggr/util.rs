@@ -16,15 +16,21 @@ use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::simple_aggregate;
 use crate::util::FixtureBuilder;
 
-pub trait SimpleAggrBencher {
+pub trait SimpleAggrBencher<M>
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str;
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &[Expr]);
+    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, aggr_expr: &[Expr]);
 
-    fn box_clone(&self) -> Box<dyn SimpleAggrBencher>;
+    fn box_clone(&self) -> Box<dyn SimpleAggrBencher<M>>;
 }
 
-impl Clone for Box<dyn SimpleAggrBencher> {
+impl<M> Clone for Box<dyn SimpleAggrBencher<M>>
+where
+    M: criterion::measurement::Measurement,
+{
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
@@ -35,12 +41,15 @@ impl Clone for Box<dyn SimpleAggrBencher> {
 /// giving aggregate expression.
 pub struct NormalBencher;
 
-impl SimpleAggrBencher for NormalBencher {
+impl<M> SimpleAggrBencher<M> for NormalBencher
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str {
         "normal"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &[Expr]) {
+    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, aggr_expr: &[Expr]) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             let meta = simple_aggregate(aggr_expr).take_aggregation();
             let src = fb.clone().build_normal_fixture_executor();
@@ -56,7 +65,7 @@ impl SimpleAggrBencher for NormalBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn SimpleAggrBencher> {
+    fn box_clone(&self) -> Box<dyn SimpleAggrBencher<M>> {
         Box::new(Self)
     }
 }
@@ -65,12 +74,15 @@ impl SimpleAggrBencher for NormalBencher {
 /// expression.
 pub struct BatchBencher;
 
-impl SimpleAggrBencher for BatchBencher {
+impl<M> SimpleAggrBencher<M> for BatchBencher
+where
+    M: criterion::measurement::Measurement,
+{
     fn name(&self) -> &'static str {
         "batch"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &[Expr]) {
+    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, aggr_expr: &[Expr]) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
             Box::new(
@@ -85,7 +97,7 @@ impl SimpleAggrBencher for BatchBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn SimpleAggrBencher> {
+    fn box_clone(&self) -> Box<dyn SimpleAggrBencher<M>> {
         Box::new(Self)
     }
 }
