@@ -74,11 +74,12 @@ pub trait IBenchCase {
 }
 
 impl<I, M, F> IBenchCase for InnerBenchCase<I, M, F>
-    where
-        M: criterion::measurement::Measurement + 'static,
-        F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static {
-    type M=M;
-    type I=I;
+where
+    M: criterion::measurement::Measurement + 'static,
+    F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
+{
+    type M = M;
+    type I = I;
 
     fn get_fn(&self) -> Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static> {
         Box::new(self.f.clone())
@@ -89,20 +90,29 @@ impl<I, M, F> IBenchCase for InnerBenchCase<I, M, F>
     }
 }
 
-pub struct BenchCase<I, M> where
-    M: criterion::measurement::Measurement + 'static {
-    inner: Box<dyn IBenchCase<I=I, M=M>>
+pub struct BenchCase<I, M>
+where
+    M: criterion::measurement::Measurement + 'static,
+{
+    inner: Box<dyn IBenchCase<I = I, M = M>>,
 }
 
-impl<I, M> BenchCase<I, M> where M: criterion::measurement::Measurement + 'static, I: 'static {
-    pub fn new<F>(name: &'static str, f: F) -> Self where F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static {
+impl<I, M> BenchCase<I, M>
+where
+    M: criterion::measurement::Measurement + 'static,
+    I: 'static,
+{
+    pub fn new<F>(name: &'static str, f: F) -> Self
+    where
+        F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
+    {
         Self {
             inner: Box::new(InnerBenchCase {
                 _phantom_input: PhantomData,
                 _phantom_measurement: PhantomData,
                 name,
                 f,
-            })
+            }),
         }
     }
 
@@ -115,10 +125,10 @@ impl<I, M> BenchCase<I, M> where M: criterion::measurement::Measurement + 'stati
     }
 }
 
-
 impl<I, M> PartialEq for BenchCase<I, M>
-    where
-        M: criterion::measurement::Measurement + 'static, I: 'static
+where
+    M: criterion::measurement::Measurement + 'static,
+    I: 'static,
 {
     fn eq(&self, other: &Self) -> bool {
         self.get_name().eq(other.get_name())
@@ -126,8 +136,9 @@ impl<I, M> PartialEq for BenchCase<I, M>
 }
 
 impl<I, M> PartialOrd for BenchCase<I, M>
-    where
-        M: criterion::measurement::Measurement + 'static, I: 'static
+where
+    M: criterion::measurement::Measurement + 'static,
+    I: 'static,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.get_name().partial_cmp(other.get_name())
@@ -135,8 +146,9 @@ impl<I, M> PartialOrd for BenchCase<I, M>
 }
 
 impl<I, M> Ord for BenchCase<I, M>
-    where
-        M: criterion::measurement::Measurement + 'static, I: 'static
+where
+    M: criterion::measurement::Measurement + 'static,
+    I: 'static,
 {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.get_name().cmp(other.get_name())
@@ -144,7 +156,8 @@ impl<I, M> Ord for BenchCase<I, M>
 }
 
 impl<I, M> Eq for BenchCase<I, M>
-    where
-        M: criterion::measurement::Measurement, I: 'static
+where
+    M: criterion::measurement::Measurement,
+    I: 'static,
 {
 }
