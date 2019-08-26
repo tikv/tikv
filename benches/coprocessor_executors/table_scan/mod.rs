@@ -294,7 +294,11 @@ where
     for case in cases {
         let mut group = c.benchmark_group(case.get_name());
         for input in inputs.iter() {
-            group.bench_with_input(criterion::BenchmarkId::from_parameter(input), input, case.get_fn()); // TODO: add parameter for each bench
+            group.bench_with_input(
+                criterion::BenchmarkId::from_parameter(input),
+                input,
+                case.get_fn(),
+            ); // TODO: add parameter for each bench
         }
         group.finish();
     }
