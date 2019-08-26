@@ -790,8 +790,6 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::EPSILON;
-
     use super::*;
     use crate::codec::data_type::DateTime;
     use crate::expr::EvalContext;
@@ -1014,31 +1012,6 @@ mod tests {
                 get, expect,
                 "convert duration {} to decimal, got: {}, expect: {}",
                 s, get, expect,
-            );
-        }
-    }
-
-    #[test]
-    fn test_to_f64() {
-        let cases = vec![
-            ("2012-12-31 11:30:45.123456", 4, 113045.1235f64),
-            ("2012-12-31 11:30:45.123456", 6, 113045.123456f64),
-            ("2012-12-31 11:30:45.123456", 0, 113045f64),
-            ("2012-12-31 11:30:45.999999", 0, 113046f64),
-            ("2017-01-05 08:40:59.575601", 0, 084100f64),
-            ("2017-01-05 23:59:59.575601", 0, 0f64),
-            ("0000-00-00 00:00:00", 6, 0f64),
-        ];
-        let mut ctx = EvalContext::default();
-        for (s, fsp, expect) in cases {
-            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
-            let du: Duration = t.convert(&mut ctx).unwrap();
-            let get: f64 = du.convert(&mut ctx).unwrap();
-            assert!(
-                (expect - get).abs() < EPSILON,
-                "expect: {}, got: {}",
-                expect,
-                get
             );
         }
     }
