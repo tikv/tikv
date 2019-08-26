@@ -277,30 +277,35 @@ pub trait ConvertTo<T> {
 }
 
 impl ConvertTo<i64> for f64 {
+    /// Port from TiDB's TiDB's types.ConvertFloatToInt
     fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
         self.to_int(ctx, FieldTypeTp::LongLong)
     }
 }
 
 impl ConvertTo<u64> for f64 {
+    /// Port from TiDB's types.ConvertFloatToUint
     fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
         self.to_uint(ctx, FieldTypeTp::LongLong)
     }
 }
 
 impl ConvertTo<i64> for Real {
+    /// Port from TiDB's TiDB's types.ConvertFloatToInt
     fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
         self.into_inner().convert(ctx)
     }
 }
 
 impl ConvertTo<u64> for Real {
+    /// Port from TiDB's types.ConvertFloatToUint
     fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
         self.into_inner().convert(ctx)
     }
 }
 
 impl ConvertTo<i64> for &[u8] {
+    /// Port from TiDB's types.StrToInt
     fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
         s.convert(ctx)
@@ -308,6 +313,7 @@ impl ConvertTo<i64> for &[u8] {
 }
 
 impl ConvertTo<u64> for &[u8] {
+    /// Port from TiDB's types.StrToUint
     fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
         s.convert(ctx)
@@ -357,40 +363,30 @@ impl ConvertTo<u64> for &str {
 }
 
 impl ConvertTo<i64> for Bytes {
+    /// Port from TiDB's types.StrToInt
     fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
         self.as_slice().convert(ctx)
     }
 }
 
 impl ConvertTo<u64> for Bytes {
+    /// Port from TiDB's types.StrToUint
     fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
         self.as_slice().convert(ctx)
     }
 }
 
 impl ConvertTo<i64> for Cow<'_, [u8]> {
+    /// Port from TiDB's types.StrToInt
     fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
         self.as_ref().convert(ctx)
     }
 }
 
 impl ConvertTo<u64> for Cow<'_, [u8]> {
+    /// Port from TiDB's types.StrToUint
     fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
         self.as_ref().convert(ctx)
-    }
-}
-
-impl ConvertTo<f64> for i64 {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        Ok(*self as f64)
-    }
-}
-
-impl ConvertTo<f64> for u64 {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        Ok(*self as f64)
     }
 }
 
@@ -441,12 +437,14 @@ impl ConvertTo<f64> for &str {
 }
 
 impl ConvertTo<f64> for Bytes {
+    /// Port from TiDB's types.StrToFloat
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         self.as_slice().convert(ctx)
     }
 }
 
 impl ConvertTo<f64> for Cow<'_, [u8]> {
+    /// Port from TiDB's types.StrToFloat
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         self.as_ref().convert(ctx)
     }

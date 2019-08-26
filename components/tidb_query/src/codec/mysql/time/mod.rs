@@ -795,10 +795,17 @@ impl Time {
 }
 
 impl ConvertTo<MyDuration> for Time {
+    /// Port from TiDB's Time::ConvertToDuration
     fn convert(&self, _: &mut EvalContext) -> Result<MyDuration> {
         if self.is_zero() {
             return Ok(MyDuration::zero());
         }
+        // recall that the `DateTime::nanosecond`,
+        // returns the number of nanoseconds since the whole non-leap second.
+        // The range from 1,000,000,000 to 1,999,999,999 represents the leap second.
+        //
+        // for example,
+        // the `2019-08-26 10:28:15.878852367 UTC`'s nanosecond is `878852367`
         let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC
             + i64::from(self.time.nanosecond());
         MyDuration::from_nanos(nanos, self.fsp as i8)
@@ -808,6 +815,8 @@ impl ConvertTo<MyDuration> for Time {
 impl ConvertTo<Decimal> for Time {
     /// This function should not return err,
     /// **if it return err, then the err is because of bug**
+    ///
+    /// Port from TiDB's Time::ToNumber
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         match self.to_numeric_string().parse() {
             Ok(val) => Ok(val),

@@ -1719,6 +1719,7 @@ impl ConvertTo<i64> for Decimal {
 }
 
 impl ConvertTo<f64> for Decimal {
+    /// Port from TiDB's MyDecimal::ToFloat64
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         let r = self.to_string().parse::<f64>();
         match r {

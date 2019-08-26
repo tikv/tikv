@@ -703,30 +703,14 @@ impl Duration {
 impl ConvertTo<Decimal> for Duration {
     /// This function should not return err,
     /// if it return err, then the err is because of bug.
+    ///
+    /// Port from TiDB' Duration::ToNumber
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         match self.to_numeric_string().parse::<Decimal>() {
             Ok(val) => Ok(val),
             // TODO, here should return `other_err!("unreachable Duration::as_decimal, err is {}", e)`
             //  however, here's Result's error is codec::error, so I can't return this error
             Err(e) => Err(e),
-        }
-    }
-}
-
-impl ConvertTo<f64> for Duration {
-    fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
-        let s = self.to_numeric_string();
-        match s.parse::<f64>() {
-            // TODO, here should return `other_err!("unreachable Duration::as_decimal, err is {}", e)`
-            //  however, here's Result's error is codec::error, so I can't return this error
-            Err(e) => Err(e.into()),
-            Ok(val) => {
-                if val.is_infinite() {
-                    // TODO, TiDB's overflow has no overflow detail message
-                    ctx.handle_overflow_err(Error::overflow("", ""))?;
-                }
-                Ok(val)
-            }
         }
     }
 }
