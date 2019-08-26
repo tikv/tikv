@@ -326,6 +326,8 @@ fn test_stale_read_during_merging() {
 
 #[test]
 fn test_read_index_when_transfer_leader_2() {
+    let _guard = crate::setup();
+
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.

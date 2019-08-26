@@ -18,7 +18,7 @@ use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 
-use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary};
+use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
@@ -134,7 +134,7 @@ struct GCRunner<E: Engine> {
 
     ratio_threshold: f64,
 
-    stats: StatisticsSummary,
+    stats: Statistics,
 }
 
 impl<E: Engine> GCRunner<E> {
@@ -149,7 +149,7 @@ impl<E: Engine> GCRunner<E> {
             local_storage,
             raft_store_router,
             ratio_threshold,
-            stats: StatisticsSummary::default(),
+            stats: Statistics::default(),
         }
     }
 
@@ -208,7 +208,7 @@ impl<E: Engine> GCRunner<E> {
                     Ok((keys, next))
                 })
         };
-        self.stats.add_statistics(reader.get_statistics());
+        self.stats.add(reader.get_statistics());
         res
     }
 
@@ -249,7 +249,7 @@ impl<E: Engine> GCRunner<E> {
                 break;
             }
         }
-        self.stats.add_statistics(&txn.take_statistics());
+        self.stats.add(&txn.take_statistics());
 
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
@@ -424,12 +424,12 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     }
 
     fn on_tick(&mut self) {
-        let stats = mem::replace(&mut self.stats, StatisticsSummary::default());
-        for (cf, details) in stats.stat.details() {
-            for (tag, count) in details {
+        let stats = mem::replace(&mut self.stats, Statistics::default());
+        for (cf, details) in stats.details().iter() {
+            for (tag, count) in details.iter() {
                 GC_KEYS_COUNTER_VEC
-                    .with_label_values(&[cf, tag])
-                    .inc_by(count as i64);
+                    .with_label_values(&[cf, *tag])
+                    .inc_by(*count as i64);
             }
         }
     }

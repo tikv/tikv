@@ -87,7 +87,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker_low: 2500,
             stack_size: ReadableSize::mb(20),
         },
-        coprocessor: CoprocessorReadPoolConfig {
+        coprocessor: CoprReadPoolConfig {
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
@@ -485,6 +485,7 @@ fn test_serde_custom_tikv_config() {
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
+            memory_allocator: Some(String::from("nodump")),
         },
     };
     value.coprocessor = CopConfig {

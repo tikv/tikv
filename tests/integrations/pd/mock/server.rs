@@ -6,14 +6,13 @@ use std::time::Duration;
 
 use futures::{Future, Sink, Stream};
 use grpcio::{
-    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*,
+    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use pd_client::Error as PdError;
 use tikv_util::security::*;
 
 use kvproto::pdpb::*;
-use kvproto::pdpb_grpc::{self, Pd};
 
 use super::mocker::*;
 
@@ -62,7 +61,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
-        let service = pdpb_grpc::create_pd(self.mocker.clone());
+        let service = create_pd(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
@@ -123,15 +122,17 @@ fn hijack_unary<F, R, C: PdMocker>(
                 .map_err(move |err| error!("failed to reply: {:?}", err)),
         ),
         Some(Err(err)) => {
-            let status = RpcStatus::new(GRPC_STATUS_UNKNOWN, Some(format!("{:?}", err)));
+            let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
             ctx.spawn(
                 sink.fail(status)
                     .map_err(move |err| error!("failed to reply: {:?}", err)),
             );
         }
         _ => {
-            let status =
-                RpcStatus::new(GRPC_STATUS_UNIMPLEMENTED, Some("Unimplemented".to_owned()));
+            let status = RpcStatus::new(
+                RpcStatusCode::UNIMPLEMENTED,
+                Some("Unimplemented".to_owned()),
+            );
             ctx.spawn(
                 sink.fail(status)
                     .map_err(move |err| error!("failed to reply: {:?}", err)),
