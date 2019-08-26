@@ -749,9 +749,15 @@ impl DebugExecutor for DebugClient {
         }
     }
 
-    fn dump_store_info(&self) {}
+    fn dump_store_info(&self) {
+        ve1!("This command is only for local mode");
+        process::exit(-1);
+    }
 
-    fn dump_cluster_info(&self) {}
+    fn dump_cluster_info(&self) {
+        ve1!("This command is only for local mode");
+        process::exit(-1);
+    }
 }
 
 impl DebugExecutor for Debugger {
