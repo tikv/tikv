@@ -750,8 +750,9 @@ impl DebugExecutor for DebugClient {
     }
 
     fn dump_store_info(&self) {
-        ve1!("This command is only for local mode");
-        process::exit(-1);
+        let mut req = GetStoreIdRequest::default();
+        let resp = self.unwrap_or_else(|e| perror_and_exit("DebugClient::get_store_info", e));
+        v1!("{}", resp.get_store_id())
     }
 
     fn dump_cluster_info(&self) {
