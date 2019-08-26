@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod backward;
-mod entry;
 mod forward;
+mod txn_entry;
 mod util;
 
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -15,8 +15,8 @@ use crate::storage::{
 };
 
 use self::backward::BackwardScanner;
-pub use self::entry::Scanner as EntryScanner;
 use self::forward::ForwardScanner;
+pub use self::txn_entry::Scanner as EntryScanner;
 
 /// `Scanner` factory.
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);

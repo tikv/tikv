@@ -55,23 +55,6 @@ pub trait Scanner: Send {
         Ok(results)
     }
 
-    fn next_entry(&mut self) -> Result<Option<TxnEntry>> {
-        Err(box_err!("unimplemented"))
-    }
-
-    fn scan_entries(&mut self, batch: &mut EntryBatch) -> Result<()> {
-        while batch.entries.len() < batch.entries.capacity() {
-            match self.next_entry() {
-                Ok(Some(entry)) => {
-                    batch.entries.push(entry);
-                }
-                Ok(None) => break,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
-
     /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
 }
