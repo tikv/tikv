@@ -977,7 +977,7 @@ mod tests {
             Ok(Some(a.unwrap().into_inner() as i64))
         }
 
-        fn fn_mapper(expr: &Expr, _children: &[Expr]) -> Result<RpnFnMeta> {
+        fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
             // fn_a: CastIntAsInt
             // fn_b: CastIntAsReal
             // fn_c: CastIntAsString

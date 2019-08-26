@@ -110,8 +110,9 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
 }
 
 #[rustfmt::skip]
-fn map_pb_fn_to_rpn_func(expr: &Expr, children: &[Expr]) -> Result<RpnFnMeta> {
+fn map_pb_fn_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
+    let children = expr.get_children();
     Ok(match value {
         ScalarFuncSig::LtInt => map_int_sig(value, children, compare_mapper::<CmpOpLT>)?,
         ScalarFuncSig::LtReal => compare_fn_meta::<BasicComparer<Real, CmpOpLT>>(),
@@ -288,7 +289,7 @@ fn map_pb_fn_to_rpn_func(expr: &Expr, children: &[Expr]) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsDecimal |
         ScalarFuncSig::CastJsonAsTime |
         ScalarFuncSig::CastJsonAsDuration |
-        ScalarFuncSig::CastJsonAsJson => map_cast_func(expr, children)?,
+        ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

@@ -157,7 +157,8 @@ pub fn get_cast_fn_rpn_node(
 }
 
 /// Gets the RPN function meta
-pub fn map_cast_func(expr: &Expr, children: &[Expr]) -> Result<RpnFnMeta> {
+pub fn map_cast_func(expr: &Expr) -> Result<RpnFnMeta> {
+    let children = expr.get_children();
     if children.len() != 1 {
         return Err(other_err!(
             "Unexpected arguments: sig {:?} with {} args",
