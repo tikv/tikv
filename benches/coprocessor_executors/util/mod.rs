@@ -82,7 +82,7 @@ where
     type I = I;
 
     fn get_fn(&self) -> Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static> {
-        Box::new(self.f.clone())
+        Box::new(self.f)
     }
 
     fn get_name(&self) -> &'static str {
