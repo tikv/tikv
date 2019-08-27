@@ -40,9 +40,10 @@ pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
 
     Ok(args[1..]
         .iter()
-        .try_fold(base_json, move |base, json_to_merge| match json_to_merge {
-            None => None,
-            Some(v) => Some(base.merge(v.to_owned())),
+        .try_fold(base_json, move |base, json_to_merge| {
+            json_to_merge
+                .as_ref()
+                .map(|json| base.merge(json.to_owned()))
         }))
 }
 
