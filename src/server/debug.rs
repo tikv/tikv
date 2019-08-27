@@ -13,7 +13,7 @@ use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
-use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
+use engine::{self, Engines, IterOptions, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
@@ -462,7 +462,7 @@ impl Debugger {
 
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(
+        let readopts = IterOptions::new(
             Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
             Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
@@ -915,7 +915,7 @@ impl MvccChecker {
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
-            let readopts = IterOption::new(
+            let readopts = IterOptions::new(
                 Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
@@ -1183,7 +1183,7 @@ impl MvccInfoIterator {
             } else {
                 Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
             };
-            let readopts = IterOption::new(None, to, false).build_read_opts();
+            let readopts = IterOptions::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from));

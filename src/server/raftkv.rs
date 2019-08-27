@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use engine::rocks::TablePropertiesCollection;
 use engine::CfName;
-use engine::IterOption;
+use engine::IterOptions;
 use engine::Peekable;
 use engine::CF_DEFAULT;
 use kvproto::errorpb;
@@ -379,7 +379,7 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
@@ -389,7 +389,7 @@ impl Snapshot for RegionSnapshot {
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOptions,
         mode: ScanMode,
     ) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(

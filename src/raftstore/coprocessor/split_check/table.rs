@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use engine::rocks::{SeekKey, DB};
 use engine::CF_WRITE;
-use engine::{IterOption, Iterable};
+use engine::{IterOptions, Iterable};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
@@ -172,7 +172,7 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
 
-    let iter_opt = IterOption::new(
+    let iter_opt = IterOptions::new(
         Some(KeyBuilder::from_vec(start_key, 0, 0)),
         Some(KeyBuilder::from_vec(end_key, 0, 0)),
         false,

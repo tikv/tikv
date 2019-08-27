@@ -2,7 +2,7 @@
 
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use engine::{
-    self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
+    self, Error as EngineError, IterOptions, Peekable, Result as EngineResult, Snapshot,
     SyncSnapshot,
 };
 use kvproto::metapb::Region;
@@ -44,11 +44,11 @@ impl RegionSnapshot {
         &self.region
     }
 
-    pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
+    pub fn iter(&self, iter_opt: IterOptions) -> RegionIterator {
         RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
     }
 
-    pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator> {
+    pub fn iter_cf(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator> {
         Ok(RegionIterator::new_cf(
             &self.snap,
             Arc::clone(&self.region),
@@ -65,7 +65,7 @@ impl RegionSnapshot {
     {
         let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
         let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
@@ -83,7 +83,7 @@ impl RegionSnapshot {
     {
         let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
         let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
+        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
@@ -165,7 +165,7 @@ pub struct RegionIterator {
     end_key: Vec<u8>,
 }
 
-fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
     let region_start_key = keys::enc_start_key(region);
     if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
@@ -177,7 +177,7 @@ fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     }
 }
 
-fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_upper_bound(iter_opt: &mut IterOptions, region: &Region) {
     let region_end_key = keys::enc_end_key(region);
     if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
@@ -191,7 +191,7 @@ fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
-    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
+    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOptions) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
@@ -209,7 +209,7 @@ impl RegionIterator {
     pub fn new_cf(
         snap: &Snapshot,
         region: Arc<Region>,
-        mut iter_opt: IterOption,
+        mut iter_opt: IterOptions,
         cf: &str,
     ) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
@@ -504,7 +504,7 @@ mod tests {
             Option<(&[u8], &[u8])>,
             Option<(&[u8], &[u8])>,
         )>| {
-            let iter_opt = IterOption::new(
+            let iter_opt = IterOptions::new(
                 lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 true,
@@ -624,7 +624,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let mut iter = snap.iter(IterOption::default());
+        let mut iter = snap.iter(IterOptions::default());
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(data.len(), 5);
         assert_eq!(data, base_data);
 
-        let mut iter = snap.iter(IterOption::default());
+        let mut iter = snap.iter(IterOptions::default());
         assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first());
@@ -666,7 +666,7 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(IterOption::new(
+        let mut iter = snap.iter(IterOptions::new(
             None,
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
@@ -690,7 +690,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
-        let it = snap.iter(IterOption::default());
+        let it = snap.iter(IterOptions::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter
             .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
@@ -741,7 +741,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
-        let it = snap.iter(IterOption::default());
+        let it = snap.iter(IterOptions::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter
             .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
@@ -791,7 +791,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engines);
 
         let snap = RegionSnapshot::new(&store);
-        let mut iter_opt = IterOption::default();
+        let mut iter_opt = IterOptions::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
         assert!(iter.seek_to_last());

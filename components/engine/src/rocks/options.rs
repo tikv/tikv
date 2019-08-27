@@ -32,8 +32,8 @@ impl From<&WriteOptions> for RocksWriteOptions {
     }
 }
 
-impl From<IterOptions> for RocksReadOptions {
-    fn from(opts: IterOptions) -> Self {
+impl From<IterOptionss> for RocksReadOptions {
+    fn from(opts: IterOptionss) -> Self {
         let mut r = RocksReadOptions::default();
         r.fill_cache(opts.fill_cache);
         if opts.key_only {
@@ -54,8 +54,8 @@ impl From<IterOptions> for RocksReadOptions {
     }
 }
 
-impl From<&IterOptions> for RocksReadOptions {
-    fn from(opts: &IterOptions) -> Self {
+impl From<&IterOptionss> for RocksReadOptions {
+    fn from(opts: &IterOptionss) -> Self {
         opts.clone().into()
     }
 }

@@ -55,7 +55,7 @@ impl Default for CFOptions {
 }
 
 #[derive(Clone)]
-pub struct IterOptions {
+pub struct IterOptionss {
     pub lower_bound: Option<KeyBuilder>,
     pub upper_bound: Option<KeyBuilder>,
     pub prefix_same_as_start: bool,
@@ -64,13 +64,13 @@ pub struct IterOptions {
     pub seek_mode: SeekMode,
 }
 
-impl IterOptions {
+impl IterOptionss {
     pub fn new(
         lower_bound: Option<KeyBuilder>,
         upper_bound: Option<KeyBuilder>,
         fill_cache: bool,
-    ) -> IterOptions {
-        IterOptions {
+    ) -> IterOptionss {
+        IterOptionss {
             lower_bound,
             upper_bound,
             prefix_same_as_start: false,
@@ -81,7 +81,7 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn use_prefix_seek(mut self) -> IterOptions {
+    pub fn use_prefix_seek(mut self) -> IterOptionss {
         self.seek_mode = SeekMode::Prefix;
         self
     }
@@ -144,15 +144,15 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOptions {
+    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOptionss {
         self.prefix_same_as_start = enable;
         self
     }
 }
 
-impl Default for IterOptions {
-    fn default() -> IterOptions {
-        IterOptions {
+impl Default for IterOptionss {
+    fn default() -> IterOptionss {
+        IterOptionss {
             lower_bound: None,
             upper_bound: None,
             prefix_same_as_start: false,

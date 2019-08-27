@@ -3,7 +3,7 @@
 use crate::storage::kv::Result;
 use crate::storage::{Cursor, Key, ScanMode, Snapshot};
 use engine::CfName;
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{IterOptions, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
 
 /// A handy utility to build a snapshot cursor according to various configurations.
@@ -85,7 +85,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         } else {
             None
         };
-        let mut iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
+        let mut iter_opt = IterOptions::new(l_bound, u_bound, self.fill_cache);
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }

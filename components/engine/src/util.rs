@@ -7,7 +7,7 @@ use crate::{rocks, Peekable};
 use crate::{Mutable, CF_LOCK};
 
 use super::{Error, Result};
-use super::{IterOptions, MAX_DELETE_BATCH_SIZE};
+use super::{IterOptionss, MAX_DELETE_BATCH_SIZE};
 use tikv_util::keybuilder::KeyBuilder;
 
 pub fn get_msg<M: protobuf::Message + Default, T: Peekable>(
@@ -104,7 +104,7 @@ pub fn delete_all_in_range_cf(
     } else {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
         let end = KeyBuilder::from_slice(end_key, 0, 0);
-        let mut iter_opt = IterOptions::new(Some(start), Some(end), false);
+        let mut iter_opt = IterOptionss::new(Some(start), Some(end), false);
         if db.is_titan() {
             // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
             // to avoid referring to missing blob files.

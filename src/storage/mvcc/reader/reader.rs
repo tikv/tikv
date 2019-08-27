@@ -7,7 +7,7 @@ use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{IterOptions, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use tikv_util::keybuilder::KeyBuilder;
@@ -73,7 +73,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(Some(vec![]));
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, self.fill_cache);
+            let iter_opt = IterOptions::new(None, None, self.fill_cache);
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
@@ -93,7 +93,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, true);
+            let iter_opt = IterOptions::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
@@ -131,7 +131,7 @@ impl<S: Snapshot> MvccReader<S> {
     pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
-                let iter_opt = IterOption::new(None, None, self.fill_cache);
+                let iter_opt = IterOptions::new(None, None, self.fill_cache);
                 let iter = self
                     .snapshot
                     .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
@@ -139,7 +139,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
         } else {
             // use prefix bloom filter
-            let iter_opt = IterOption::default()
+            let iter_opt = IterOptions::default()
                 .use_prefix_seek()
                 .set_prefix_same_as_start(true);
             let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
@@ -289,7 +289,7 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(())
     }
 
-    fn gen_iter_opt(&self) -> IterOption {
+    fn gen_iter_opt(&self) -> IterOptions {
         let l_bound = if let Some(ref b) = self.lower_bound {
             let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
             Some(builder)
@@ -302,7 +302,7 @@ impl<S: Snapshot> MvccReader<S> {
         } else {
             None
         };
-        IterOption::new(l_bound, u_bound, true)
+        IterOptions::new(l_bound, u_bound, true)
     }
 
     /// Return the first committed key for which `start_ts` equals to `ts`
@@ -367,7 +367,7 @@ impl<S: Snapshot> MvccReader<S> {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let iter_opt = IterOption::new(None, None, self.fill_cache);
+        let iter_opt = IterOptions::new(None, None, self.fill_cache);
         let scan_mode = self.get_scan_mode(false);
         let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
         let mut keys = vec![];

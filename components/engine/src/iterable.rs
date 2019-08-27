@@ -33,15 +33,15 @@ pub trait Iterator {
 pub trait Iterable {
     type Iter: Iterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iter>;
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iter>;
+    fn iterator_opt(&self, opts: &IterOptionss) -> Result<Self::Iter>;
+    fn iterator_cf_opt(&self, opts: &IterOptionss, cf: &str) -> Result<Self::Iter>;
 
     fn iterator(&self) -> Result<Self::Iter> {
-        self.iterator_opt(&IterOptions::default())
+        self.iterator_opt(&IterOptionss::default())
     }
 
     fn iterator_cf(&self, cf: &str) -> Result<Self::Iter> {
-        self.iterator_cf_opt(&IterOptions::default(), cf)
+        self.iterator_cf_opt(&IterOptionss::default(), cf)
     }
 
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
@@ -50,7 +50,7 @@ pub trait Iterable {
     {
         let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
         let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
-        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
+        let iter_opt = IterOptionss::new(Some(start), Some(end), fill_cache);
         scan_impl(self.iterator_opt(&iter_opt)?, start_key, f)
     }
 
@@ -68,7 +68,7 @@ pub trait Iterable {
     {
         let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
         let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
-        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
+        let iter_opt = IterOptionss::new(Some(start), Some(end), fill_cache);
         scan_impl(self.iterator_cf_opt(&iter_opt, cf)?, start_key, f)
     }
 

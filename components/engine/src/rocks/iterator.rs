@@ -51,4 +51,4 @@ impl<'a> From<SeekKey<'a>> for RocksSeekKey<'a> {
     }
 }
 
-pub struct IterOptions {}
+pub struct IterOptionss {}

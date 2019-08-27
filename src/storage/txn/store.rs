@@ -309,7 +309,7 @@ mod tests {
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
     };
-    use engine::IterOption;
+    use engine::IterOptions;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -449,7 +449,7 @@ mod tests {
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOption, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
+        fn iter(&self, _: IterOptions, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
             Ok(Cursor::new(
                 MockRangeSnapshotIter::default(),
                 ScanMode::Forward,
@@ -458,7 +458,7 @@ mod tests {
         fn iter_cf(
             &self,
             _: CfName,
-            _: IterOption,
+            _: IterOptions,
             _: ScanMode,
         ) -> EngineResult<Cursor<Self::Iter>> {
             Ok(Cursor::new(
