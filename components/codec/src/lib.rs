@@ -21,9 +21,8 @@ pub mod number;
 
 pub mod prelude {
     pub use super::buffer::{BufferReader, BufferWriter};
-    pub use super::byte::{
-        CompactByteDecoder, CompactByteEncoder, MemComparableByteDecoder, MemComparableByteEncoder,
-    };
+    pub use super::byte::{CompactByteDecoder, CompactByteEncoder};
+    pub use super::byte::{MemComparableByteDecoder, MemComparableByteEncoder};
     pub use super::number::{NumberDecoder, NumberEncoder};
 }
 
