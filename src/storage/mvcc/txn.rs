@@ -104,8 +104,16 @@ impl<S: Snapshot> MvccTxn<S> {
         primary: Vec<u8>,
         ttl: u64,
         short_value: Option<Value>,
+        txn_size: u64,
     ) {
-        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, short_value).to_bytes();
+        let lock = Lock::new(
+            lock_type,
+            primary,
+            self.start_ts,
+            ttl,
+            short_value,
+            txn_size,
+        ).to_bytes();
         self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
@@ -173,6 +181,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         primary: lock.primary,
                         ts: lock.ts,
                         ttl: lock.ttl,
+                        txn_size: options.txn_size,
                     });
                 }
                 // No need to overwrite the lock and data.
@@ -191,7 +200,14 @@ impl<S: Snapshot> MvccTxn<S> {
         };
 
         if value.is_some() && is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
+            self.lock_key(
+                key,
+                lock_type,
+                primary.to_vec(),
+                options.lock_ttl,
+                value,
+                options.txn_size,
+            );
         } else {
             self.lock_key(
                 key.clone(),
@@ -199,6 +215,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 None,
+                options.txn_size,
             );
             if value.is_some() {
                 let ts = self.start_ts;

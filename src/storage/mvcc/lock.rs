@@ -14,7 +14,7 @@
 use super::super::types::Value;
 use super::{Error, Result};
 use byteorder::ReadBytesExt;
-use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX};
 use util::codec::bytes::{self, BytesEncoder};
 use util::codec::number::{self, MAX_VAR_U64_LEN, NumberEncoder};
 
@@ -63,6 +63,7 @@ pub struct Lock {
     pub ts: u64,
     pub ttl: u64,
     pub short_value: Option<Value>,
+    pub txn_size: u64,
 }
 
 impl Lock {
@@ -72,6 +73,7 @@ impl Lock {
         ts: u64,
         ttl: u64,
         short_value: Option<Value>,
+        txn_size: u64,
     ) -> Lock {
         Lock {
             lock_type,
@@ -79,6 +81,7 @@ impl Lock {
             ts,
             ttl,
             short_value,
+            txn_size,
         }
     }
 
@@ -94,6 +97,10 @@ impl Lock {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);
             b.extend_from_slice(v);
+        }
+        if self.txn_size > 0 {
+            b.push(TXN_SIZE_PREFIX);
+            b.encode_u64(self.txn_size).unwrap();
         }
         b
     }
@@ -112,26 +119,37 @@ impl Lock {
         };
 
         if b.is_empty() {
-            return Ok(Lock::new(lock_type, primary, ts, ttl, None));
+            return Ok(Lock::new(lock_type, primary, ts, ttl, None, 0));
         }
 
-        let flag = b.read_u8()?;
-        assert_eq!(
-            flag, SHORT_VALUE_PREFIX,
-            "invalid flag [{:?}] in write",
-            flag
-        );
-
-        let len = b.read_u8()?;
-        if len as usize != b.len() {
-            panic!(
-                "short value len [{}] not equal to content len [{}]",
-                len,
-                b.len()
-            );
+        let mut short_value = None;
+        let mut txn_size: u64 = 0;
+        while !b.is_empty() {
+            match b.read_u8()? {
+                SHORT_VALUE_PREFIX => {
+                    let len = b.read_u8()?;
+                    if b.len() < len as usize {
+                        panic!(
+                            "content len [{}] shorter than short value len [{}]",
+                            b.len(),
+                            len,
+                        );
+                    }
+                    short_value = Some(b[..len as usize].to_vec());
+                    b = &b[len as usize..];
+                }
+                TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
+                flag => panic!("invalid flag [{:?}] in lock", flag),
+            }
         }
-
-        Ok(Lock::new(lock_type, primary, ts, ttl, Some(b.to_vec())))
+        Ok(Lock::new(
+            lock_type,
+            primary,
+            ts,
+            ttl,
+            short_value,
+            txn_size,
+        ))
     }
 }
 
@@ -186,13 +204,23 @@ mod tests {
     fn test_lock() {
         // Test `Lock::to_bytes()` and `Lock::parse()` works as a pair.
         let mut locks = vec![
-            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0),
             Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1,
                 10,
                 Some(b"short_value".to_vec()),
+                0,
+            ),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 16),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                1,
+                10,
+                Some(b"short_value".to_vec()),
+                16,
             ),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
@@ -210,6 +238,7 @@ mod tests {
             1,
             10,
             Some(b"short_value".to_vec()),
+            0,
         );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
