@@ -410,43 +410,45 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn get_store_id(
+    fn get_store_info(
         &mut self,
         ctx: RpcContext<'_>,
-        req: GetRegionPropertiesRequest,
-        sink: UnarySink<GetRegionPropertiesResponse>,
+        _req: GetStoreInfoRequest,
+        sink: UnarySink<GetStoreInfoResponse>,
     ) {
         const TAG: &str = "debug_get_store_id";
         let debugger = self.debugger.clone();
 
         let f = self
             .pool
-            .spawn_fn(move || debugger.get_store_id())
-            .map(|store_id| {
-                let mut resp = GetRegionPropertiesResponse::default();
-                resp.mut_props().push(store_id);
-                resp
+            .spawn_fn(move || {
+                let mut resp = GetStoreInfoResponse::default();
+                if let Ok(store_id) = debugger.get_store_id() {
+                    resp.set_store_id(store_id);
+                }
+                Ok(resp)
             });
 
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn get_cluster_id(
+    fn get_cluster_info(
         &mut self,
         ctx: RpcContext<'_>,
-        req: GetRegionPropertiesRequest,
-        sink: UnarySink<GetRegionPropertiesResponse>,
+        _req: GetClusterInfoRequest,
+        sink: UnarySink<GetClusterInfoResponse>,
     ) {
         const TAG: &str = "debug_get_cluster_id";
         let debugger = self.debugger.clone();
 
         let f = self
             .pool
-            .spawn_fn(move || debugger.get_cluster_id())
-            .map(|cluster_id| {
-                let mut resp = GetRegionPropertiesResponse::default();
-                resp.mut_props().push(cluster_id);
-                resp
+            .spawn_fn(move || {
+                let mut resp = GetClusterInfoResponse::default();
+                if let Ok(cluster_id) = debugger.get_cluster_id() {
+                    resp.set_cluster_id(cluster_id);
+                }
+                Ok(resp)
             });
 
         self.handle_response(ctx, sink, f, TAG);
