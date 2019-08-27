@@ -307,8 +307,7 @@ fn test_node_merge_catch_up_logs_leader_election() {
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
 
-
-// Test if merge is working properly if no need to catch up logs, 
+// Test if merge is working properly if no need to catch up logs,
 // also there may be a propose of compact log after prepare merge is proposed.
 #[test]
 fn test_node_merge_catch_up_logs_no_need() {
@@ -375,7 +374,7 @@ fn test_node_merge_catch_up_logs_no_need() {
     fail::remove("on_handle_catch_up_logs_for_merge");
     fail::remove("after_handle_catch_up_logs_for_merge");
     thread::sleep(Duration::from_millis(50));
-    
+
     fail::remove("on_handle_apply_1000_1003");
 
     // the source region should be merged and the peer should be destroyed.
