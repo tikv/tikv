@@ -4,8 +4,11 @@
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
+#[macro_use]
+extern crate serde_derive;
 
 #[macro_use]
 pub mod setup;
+pub mod config;
 pub mod server;
 pub mod signal_handler;
