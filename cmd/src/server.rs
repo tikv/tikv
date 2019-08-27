@@ -39,14 +39,11 @@ use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
 use tikv_util::worker::FutureWorker;
 
-use crate::config::{check_critical_config, Config};
+use crate::config::Config;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 pub fn run_tikv(mut cfg: Config) {
-    if let Err(e) = check_critical_config(&cfg) {
-        fatal!("critical config check failed: {}", e);
-    }
     let config = &mut cfg.tikv_cfg;
 
     // Sets the global logger ASAP.
