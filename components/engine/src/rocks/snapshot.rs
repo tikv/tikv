@@ -4,7 +4,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use super::{util, CFHandle, RocksIterator, RocksReadOptions, UnsafeSnap, DB};
+use super::{util, CFHandle, Iterator, RawReadOptions, UnsafeSnap, DB};
 use crate::options::*;
 use crate::rocks::DBIterator;
 use crate::{Error, Iterable, Peekable, Result, Snapshot};
@@ -13,17 +13,6 @@ pub struct RocksSnapshot {
     // TODO: use reference.
     db: Arc<DB>,
     snap: UnsafeSnap,
-}
-
-#[derive(Clone)]
-pub struct SyncRocksSnapshot(Arc<RocksSnapshot>);
-
-impl Deref for SyncRocksSnapshot {
-    type Target = RocksSnapshot;
-
-    fn deref(&self) -> &RocksSnapshot {
-        &self.0
-    }
 }
 
 unsafe impl Send for RocksSnapshot {}
@@ -77,18 +66,18 @@ impl Drop for RocksSnapshot {
 }
 
 impl Iterable for RocksSnapshot {
-    type Iter = RocksIterator;
+    type Iter = Iterator;
 
-    fn iterator_opt(&self, opts: &IterOptionss) -> Result<Self::Iter> {
-        let mut opt: RocksReadOptions = opts.into();
+    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iter> {
+        let mut opt: RawReadOptions = opts.into();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
         Ok(DBIterator::new(self.db.clone(), opt))
     }
 
-    fn iterator_cf_opt(&self, opts: &IterOptionss, cf: &str) -> Result<Self::Iter> {
-        let mut opt: RocksReadOptions = opts.into();
+    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iter> {
+        let mut opt: RawReadOptions = opts.into();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
@@ -98,8 +87,8 @@ impl Iterable for RocksSnapshot {
 }
 
 impl Peekable for RocksSnapshot {
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        let mut opt: RocksReadOptions = opts.into();
+    fn get_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let mut opt: RawReadOptions = opts.into();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
@@ -107,18 +96,30 @@ impl Peekable for RocksSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn get_value_cf_opt(
-        &self,
-        opts: &ReadOptions,
-        cf: &str,
-        key: &[u8],
-    ) -> Result<Option<Vec<u8>>> {
-        let mut opt: RocksReadOptions = opts.into();
+    fn get_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let mut opt: RawReadOptions = opts.into();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
         let handle = util::get_cf_handle(self.db.as_ref(), cf)?;
         let v = self.db.get_cf_opt(handle, key, &opt)?;
         Ok(v.map(|v| v.to_vec()))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SyncRocksSnapshot(Arc<RocksSnapshot>);
+
+impl Deref for SyncRocksSnapshot {
+    type Target = RocksSnapshot;
+
+    fn deref(&self) -> &RocksSnapshot {
+        &self.0
+    }
+}
+
+impl SyncRocksSnapshot {
+    pub fn new(db: Arc<DB>) -> SyncRocksSnapshot {
+        SyncRocksSnapshot(Arc::new(RocksSnapshot::new(db)))
     }
 }

@@ -483,7 +483,7 @@ mod tests {
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{Key, Mutation, Options};
     use engine::rocks::util::CFOptions;
-    use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
+    use engine::rocks::{self, DBOptions, RawCFOptions as ColumnFamilyOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;

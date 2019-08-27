@@ -33,7 +33,7 @@ pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
-        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+        let res = engine.get_cf(cf, &keys::data_key(key)).unwrap();
         if value.is_some() && res.is_some() {
             assert_eq!(value.unwrap(), &*res.unwrap());
             return;
@@ -44,7 +44,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         thread::sleep(Duration::from_millis(20));
     }
     debug!("last try to get {}", hex::encode_upper(key));
-    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+    let res = engine.get_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {

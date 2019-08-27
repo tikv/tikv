@@ -1,9 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::rocks::{
+    DBIterator, RawSeekKey as SeekKey, Snapshot, SyncSnapshot, TablePropertiesCollection, DB,
+};
 use engine::{
-    self, Error as EngineError, IterOptions, Peekable, Result as EngineResult, Snapshot,
-    SyncSnapshot,
+    self, Error as EngineError, IterOptions, Iterable, Peekable, ReadOptions,
+    Result as EngineResult,
 };
 use kvproto::metapb::Region;
 use std::sync::Arc;
@@ -131,7 +133,7 @@ impl Clone for RegionSnapshot {
 }
 
 impl Peekable for RegionSnapshot {
-    fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    fn get_opt(&self, opts: &ReadOptions, key: &[u8]) -> EngineResult<Option<Vec<u8>>> {
         engine::util::check_key_in_range(
             key,
             self.region.get_id(),
@@ -139,10 +141,15 @@ impl Peekable for RegionSnapshot {
             self.region.get_end_key(),
         )?;
         let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key)
+        self.snap.get_opt(opts, &data_key)
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    fn get_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> EngineResult<Option<Vec<u8>>> {
         engine::util::check_key_in_range(
             key,
             self.region.get_id(),
@@ -150,7 +157,7 @@ impl Peekable for RegionSnapshot {
             self.region.get_end_key(),
         )?;
         let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key)
+        self.snap.get_cf_opt(opts, cf, &data_key)
     }
 }
 
@@ -196,7 +203,7 @@ impl RegionIterator {
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.db_iterator(iter_opt);
+        let iter = snap.iterator_opt(&iter_opt).unwrap();
         RegionIterator {
             iter,
             valid: false,
@@ -216,7 +223,7 @@ impl RegionIterator {
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
+        let iter = snap.iterator_cf_opt(&iter_opt, cf).unwrap();
         RegionIterator {
             iter,
             valid: false,
@@ -322,7 +329,7 @@ impl RegionIterator {
     pub fn status(&self) -> Result<()> {
         self.iter
             .status()
-            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(|e| EngineError::Engine(e))
             .map_err(From::from)
     }
 
@@ -480,10 +487,10 @@ mod tests {
         let v3 = snap.get_msg(key3).expect("");
         assert_eq!(v3, Some(r));
 
-        let v0 = snap.get_value(b"key0").expect("");
+        let v0 = snap.get(b"key0").expect("");
         assert!(v0.is_none());
 
-        let v4 = snap.get_value(b"key5");
+        let v4 = snap.get(b"key5");
         assert!(v4.is_err());
     }
 

@@ -367,7 +367,7 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
         )));
-        let v = box_try!(self.get_value(key.as_encoded()));
+        let v = box_try!(Peekable::get(self, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -375,7 +375,7 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        let v = box_try!(Peekable::get_cf(self, cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 

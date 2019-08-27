@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use crate::raftstore::{Error, Result};
-use engine::Engines;
+use engine::rocks::Snapshot as EngineSnapshot;
 use engine::CF_RAFT;
-use engine::{Peekable, Snapshot as EngineSnapshot};
+use engine::{Engines, Peekable};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -1521,7 +1521,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let task = RaftlogGcTask {
-            raft_engine: Arc::clone(&self.fsm.peer.get_store().get_raft_engine()),
+            raft_engine: self.fsm.peer.get_store().get_raft_engine().get_sync_db(),
             region_id: self.fsm.peer.get_store().get_region_id(),
             start_idx: self.fsm.peer.last_compacted_idx,
             end_idx: state.get_index() + 1,

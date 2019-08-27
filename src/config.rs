@@ -14,8 +14,8 @@ use std::path::Path;
 use std::usize;
 
 use engine::rocks::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
+    BlockBasedOptions, Cache, CompactionPriority, DBCompactionStyle, DBCompressionType, DBOptions,
+    DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions, RawCFOptions as ColumnFamilyOptions,
     TitanDBOptions,
 };
 use slog;

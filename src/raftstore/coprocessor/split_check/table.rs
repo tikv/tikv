@@ -2,9 +2,9 @@
 
 use std::cmp::Ordering;
 
-use engine::rocks::{SeekKey, DB};
+use engine::rocks::{DBIterator, RawSeekKey as SeekKey, DB};
+use engine::IterOptions;
 use engine::CF_WRITE;
-use engine::{IterOptions, Iterable};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
@@ -17,6 +17,7 @@ use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
 };
 use super::Host;
+use engine::rocks::util::get_cf_handle;
 
 #[derive(Default)]
 pub struct Checker {
@@ -177,7 +178,8 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
         Some(KeyBuilder::from_vec(end_key, 0, 0)),
         false,
     );
-    let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
+    let handle = box_try!(get_cf_handle(db, CF_WRITE));
+    let mut iter = DBIterator::new_cf(db, &handle, iter_opt.into());
 
     // the last key
     if iter.seek(SeekKey::End) {

@@ -11,11 +11,10 @@ use std::sync::Arc;
 use std::{cmp, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::rocks;
-use engine::rocks::Writable;
-use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
-use engine::Engines;
-use engine::{util as engine_util, Mutable, Peekable};
+use engine::rocks::{Snapshot, WriteBatch};
+use engine::{
+    DeleteRangeOptions, Engines, KvEngine, Mutable, Peekable, WriteBatch as _, WriteOptions,
+};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
@@ -347,7 +346,7 @@ impl ApplyContext {
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &ApplyDelegate) {
         if self.kv_wb.is_none() {
-            self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            self.kv_wb = Some(self.engines.kv.write_batch(DEFAULT_APPLY_WB_SIZE));
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
@@ -361,7 +360,7 @@ impl ApplyContext {
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
+            delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
         // force it call `prepare_for` automatically.
@@ -387,7 +386,7 @@ impl ApplyContext {
             write_opts.set_sync(need_sync);
             self.engines
                 .kv
-                .write_opt(self.kv_wb(), &write_opts)
+                .write_opt(&write_opts, self.kv_wb())
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
@@ -395,7 +394,7 @@ impl ApplyContext {
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                self.kv_wb = Some(self.engines.kv.write_batch(DEFAULT_APPLY_WB_SIZE));
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
                 self.kv_wb().clear();
@@ -412,7 +411,7 @@ impl ApplyContext {
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
         if !delegate.pending_remove {
-            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
+            delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
         }
         self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
@@ -753,22 +752,18 @@ impl ApplyDelegate {
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, engines: &Engines, wb: &WriteBatch) {
-        rocks::util::get_cf_handle(&engines.kv, CF_RAFT)
-            .map_err(From::from)
-            .and_then(|handle| {
-                wb.put_msg_cf(
-                    handle,
-                    &keys::apply_state_key(self.region.get_id()),
-                    &self.apply_state,
-                )
-            })
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to save apply state to write batch, error: {:?}",
-                    self.tag, e
-                );
-            });
+    fn write_apply_state(&self, wb: &WriteBatch) {
+        wb.put_msg_cf(
+            CF_RAFT,
+            &keys::apply_state_key(self.region.get_id()),
+            &self.apply_state,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "{} failed to save apply state to write batch, error: {:?}",
+                self.tag, e
+            );
+        });
     }
 
     fn handle_raft_entry_normal(
@@ -1170,18 +1165,16 @@ impl ApplyDelegate {
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            rocks::util::get_cf_handle(&ctx.engines.kv, cf)
-                .and_then(|handle| ctx.kv_wb().put_cf(handle, &key, value).map_err(Into::into))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to write ({}, {}) to cf {}: {:?}",
-                        self.tag,
-                        hex::encode_upper(&key),
-                        escape(value),
-                        cf,
-                        e
-                    )
-                });
+            ctx.kv_wb().put_cf(cf, &key, value).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to write ({}, {}) to cf {}: {:?}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    escape(value),
+                    cf,
+                    e
+                )
+            });
         } else {
             ctx.kv_wb().put(&key, value).unwrap_or_else(|e| {
                 panic!(
@@ -1208,16 +1201,14 @@ impl ApplyDelegate {
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            rocks::util::get_cf_handle(&ctx.engines.kv, cf)
-                .and_then(|handle| ctx.kv_wb().delete_cf(handle, &key).map_err(Into::into))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete {}: {}",
-                        self.tag,
-                        hex::encode_upper(&key),
-                        e
-                    )
-                });
+            ctx.kv_wb().delete_cf(cf, &key).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete {}: {}",
+                    self.tag,
+                    hex::encode_upper(&key),
+                    e
+                )
+            });
 
             if cf == CF_LOCK {
                 // delete is a kind of write for RocksDB.
@@ -1273,17 +1264,17 @@ impl ApplyDelegate {
         if ALL_CFS.iter().find(|x| **x == cf).is_none() {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
-        let handle = rocks::util::get_cf_handle(&ctx.engines.kv, cf).unwrap();
 
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
+            let mut opts = DeleteRangeOptions::default();
+            opts.use_delete_files(true);
+            opts.use_delete_range(false);
             ctx.engines
                 .kv
-                .delete_files_in_range_cf(
-                    handle, &start_key, &end_key, /* include_end */ false,
-                )
+                .delete_all_in_range_cf(&opts, cf, &start_key, &end_key)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
@@ -1295,23 +1286,21 @@ impl ApplyDelegate {
                 });
 
             // Delete all remaining keys.
-            engine_util::delete_all_in_range_cf(
-                &ctx.engines.kv,
-                cf,
-                &start_key,
-                &end_key,
-                use_delete_range,
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
-                    cf,
-                    e
-                );
-            });
+            opts.use_delete_files(false);
+            opts.use_delete_range(use_delete_range);
+            ctx.engines
+                .kv
+                .delete_all_in_range_cf(&opts, cf, &start_key, &end_key)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        cf,
+                        e
+                    );
+                });
         }
 
         // TODO: Should this be executed when `notify_only` is set?
@@ -1535,7 +1524,7 @@ impl ApplyDelegate {
             PeerState::Normal
         };
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        if let Err(e) = write_peer_state(&ctx.engines.kv, kv_wb_mut, &region, state, None) {
+        if let Err(e) = write_peer_state(kv_wb_mut, &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -1642,7 +1631,6 @@ impl ApplyDelegate {
             derived.set_end_key(keys.front().unwrap().to_vec());
             regions.push(derived.clone());
         }
-        let kv = &ctx.engines.kv;
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
@@ -1659,8 +1647,8 @@ impl ApplyDelegate {
             {
                 peer.set_id(*peer_id);
             }
-            write_peer_state(kv, kv_wb_mut, &new_region, PeerState::Normal, None)
-                .and_then(|_| write_initial_apply_state(kv, kv_wb_mut, new_region.get_id()))
+            write_peer_state(kv_wb_mut, &new_region, PeerState::Normal, None)
+                .and_then(|_| write_initial_apply_state(kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} fails to save split region {:?}: {:?}",
@@ -1673,7 +1661,7 @@ impl ApplyDelegate {
             derived.set_start_key(keys.pop_front().unwrap());
             regions.push(derived.clone());
         }
-        write_peer_state(kv, kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
         let mut resp = AdminResponse::default();
@@ -1726,7 +1714,6 @@ impl ApplyDelegate {
         merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
         write_peer_state(
-            &ctx.engines.kv,
             ctx.kv_wb.as_mut().unwrap(),
             &region,
             PeerState::Merging,
@@ -1874,15 +1861,13 @@ impl ApplyDelegate {
         } else {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
-        let kv = &ctx.engines.kv;
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None)
+        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
                 let mut merging_state = MergeState::default();
                 merging_state.set_target(self.region.clone());
                 write_peer_state(
-                    kv,
                     kv_wb_mut,
                     source_region,
                     PeerState::Tombstone,
@@ -1935,9 +1920,8 @@ impl ApplyDelegate {
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
-        let kv = &ctx.engines.kv;
         let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        write_peer_state(kv, kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
                 "{} failed to rollback merge {:?}: {:?}",
                 self.tag, rollback, e
@@ -2036,7 +2020,7 @@ impl ApplyDelegate {
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: Snapshot::new(Arc::clone(&ctx.engines.kv)),
+                snap: ctx.engines.kv.snapshot(),
             }),
         ))
     }
@@ -2259,8 +2243,8 @@ impl GenSnapTask {
             // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
             // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
-            raft_snap: Snapshot::new(engines.raft.clone()),
-            kv_snap: Snapshot::new(engines.kv.clone()),
+            raft_snap: engines.raft.snapshot(),
+            kv_snap: engines.kv.snapshot(),
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
@@ -2607,10 +2591,9 @@ impl ApplyFsm {
                 apply_ctx.timer = Some(SlowTimer::new());
             }
             if apply_ctx.kv_wb.is_none() {
-                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                apply_ctx.kv_wb = Some(apply_ctx.engines.kv.write_batch(DEFAULT_APPLY_WB_SIZE));
             }
-            self.delegate
-                .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+            self.delegate.write_apply_state(apply_ctx.kv_wb());
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
@@ -3605,7 +3588,7 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        check_db_range(&engines.kv, sst_range);
+        check_db_range(engines.kv.as_ref(), sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);

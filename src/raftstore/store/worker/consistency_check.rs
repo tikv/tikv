@@ -7,8 +7,9 @@ use crc::crc32::{self, Digest, Hasher32};
 use kvproto::metapb::Region;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use engine::rocks::Snapshot;
 use engine::CF_RAFT;
-use engine::{Iterable, Peekable, Snapshot};
+use engine::{Iterable, Peekable};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
@@ -94,7 +95,7 @@ impl<C: CasualRouter> Runner<C> {
         // Computes the hash from the Region state too.
         let region_state_key = keys::region_state_key(region_id);
         digest.write(&region_state_key);
-        match snap.get_value_cf(CF_RAFT, &region_state_key) {
+        match snap.get_cf(CF_RAFT, &region_state_key) {
             Err(e) => {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])

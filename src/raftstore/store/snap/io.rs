@@ -6,8 +6,8 @@ use std::{fs, usize};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::{
-    IngestExternalFileOptions, Snapshot as DbSnapshot, SstWriter, SstWriterBuilder, Writable,
-    WriteBatch, DB,
+    RawIngestExternalFileOptions as IngestExternalFileOptions, RawWriteBatch as WriteBatch,
+    Snapshot as DbSnapshot, SstWriter, SstWriterBuilder, Writable, DB,
 };
 use engine::{CfName, Iterable};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};

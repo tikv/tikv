@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{DBIterator, RocksSeekKey, DB};
+use super::{DBIterator, RawSeekKey, DB};
 use crate::{Error, Iterator, Result, SeekKey};
 use std::sync::Arc;
 
@@ -41,14 +41,12 @@ impl Iterator for RocksIterator {
     }
 }
 
-impl<'a> From<SeekKey<'a>> for RocksSeekKey<'a> {
+impl<'a> From<SeekKey<'a>> for RawSeekKey<'a> {
     fn from(key: SeekKey<'a>) -> Self {
         match key {
-            SeekKey::Start => RocksSeekKey::Start,
-            SeekKey::End => RocksSeekKey::End,
-            SeekKey::Key(k) => RocksSeekKey::Key(k),
+            SeekKey::Start => RawSeekKey::Start,
+            SeekKey::End => RawSeekKey::End,
+            SeekKey::Key(k) => RawSeekKey::Key(k),
         }
     }
 }
-
-pub struct IterOptionss {}

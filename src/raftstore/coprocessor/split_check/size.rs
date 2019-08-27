@@ -5,9 +5,9 @@ use std::mem;
 use std::sync::Mutex;
 
 use engine::rocks;
-use engine::rocks::DB;
+use engine::rocks::{Range, DB};
+use engine::util;
 use engine::LARGE_CFS;
-use engine::{util, Range};
 use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
@@ -350,7 +350,7 @@ pub mod tests {
     };
     use crate::storage::Key;
     use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions, Writable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;

@@ -6,9 +6,8 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
-use engine::rocks::DBIterator;
-use engine::{CfName, CF_WRITE, LARGE_CFS};
-use engine::{IterOptions, Iterable, DB};
+use engine::rocks::{DBIterator, DB};
+use engine::{CfName, IterOptions, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -21,6 +20,7 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
+use engine::rocks::util::get_cf_handle;
 
 #[derive(PartialEq, Eq)]
 pub struct KeyEntry {
@@ -87,7 +87,8 @@ impl<'a> MergedIterator<'a> {
                 Some(KeyBuilder::from_slice(end_key, 0, 0)),
                 fill_cache,
             );
-            let mut iter = db.new_iterator_cf(cf, iter_opt)?;
+            let handle = get_cf_handle(db, cf)?;
+            let mut iter = DBIterator::new_cf(db, handle, iter_opt.into());
             if iter.seek(start_key.into()) {
                 heap.push(KeyEntry::new(
                     iter.key().to_vec(),

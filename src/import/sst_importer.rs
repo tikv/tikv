@@ -9,8 +9,9 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-use engine::rocks::util::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use engine::rocks::{IngestExternalFileOptions, DB};
+use engine::rocks::util::prepare_file_for_ingestion;
+use engine::rocks::Rocks;
+use engine::{IngestExternalFileOptions, KvEngine};
 
 use super::{Error, Result};
 
@@ -52,7 +53,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest(&self, meta: &SstMeta, db: &DB) -> Result<()> {
+    pub fn ingest(&self, meta: &SstMeta, db: &Rocks) -> Result<()> {
         match self.dir.ingest(meta, db) {
             Ok(_) => {
                 info!("ingest"; "meta" => ?meta);
@@ -141,16 +142,15 @@ impl ImportDir {
         Ok(path)
     }
 
-    fn ingest(&self, meta: &SstMeta, db: &DB) -> Result<()> {
+    fn ingest(&self, meta: &SstMeta, db: &Rocks) -> Result<()> {
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        prepare_sst_for_ingestion(&path.save, &path.clone)?;
-        validate_sst_for_ingestion(db, cf, &path.clone, meta.get_length(), meta.get_crc32())?;
+        prepare_file_for_ingestion(&path.save, &path.clone)?;
+        db.validate_file_for_ingestion(cf, &path.clone, meta.get_length(), meta.get_crc32())?;
 
-        let handle = get_cf_handle(db, cf)?;
         let mut opts = IngestExternalFileOptions::new();
         opts.move_files(true);
-        db.ingest_external_file_cf(handle, &opts, &[path.clone.to_str().unwrap()])?;
+        db.ingest_external_file_cf(&opts, cf, &[path.clone.to_str().unwrap()])?;
         Ok(())
     }
 

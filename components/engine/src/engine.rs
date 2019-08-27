@@ -20,7 +20,7 @@ pub trait WriteBatch: Mutable {
     fn rollback_to_save_point(&mut self) -> Result<()>;
 }
 
-pub trait KvEngine: Peekable + Iterable + Send + Sync + Clone {
+pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone {
     type Snap: Snapshot;
     type Batch: WriteBatch;
 
@@ -28,8 +28,8 @@ pub trait KvEngine: Peekable + Iterable + Send + Sync + Clone {
     fn write(&self, wb: &Self::Batch) -> Result<()> {
         self.write_opt(&WriteOptions::default(), wb)
     }
-    fn write_batch(&self, cap: usize) -> Result<Self::Batch>;
-    fn snapshot(&self) -> Result<Self::Snap>;
+    fn write_batch(&self, cap: usize) -> Self::Batch;
+    fn snapshot(&self) -> Self::Snap;
     fn sync(&self) -> Result<()>;
     fn cf_names(&self) -> Vec<&str>;
     fn delete_all_in_range(
@@ -60,7 +60,7 @@ pub trait KvEngine: Peekable + Iterable + Send + Sync + Clone {
         files: &[&str],
     ) -> Result<()>;
 
-    fn validate_sst_for_ingestion<P: AsRef<Path>>(
+    fn validate_file_for_ingestion<P: AsRef<Path>>(
         &self,
         cf: &str,
         path: P,

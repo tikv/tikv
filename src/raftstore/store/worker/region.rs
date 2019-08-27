@@ -10,10 +10,9 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::rocks::Writable;
-use engine::WriteBatch;
+use engine::rocks::{RawWriteBatch as WriteBatch, Snapshot, Writable};
 use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
+use engine::{util as engine_util, Engines, Peekable};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -290,7 +289,7 @@ impl SnapContext {
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
         box_try!(engine_util::delete_all_in_range(
-            &self.engines.kv,
+            &self.engines.kv.as_ref(),
             &start_key,
             &end_key,
             self.use_delete_range
@@ -322,7 +321,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: Arc::clone(&self.engines.kv),
+            db: self.engines.kv.get_sync_db(),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -330,11 +329,18 @@ impl SnapContext {
         s.apply(options)?;
 
         let wb = WriteBatch::default();
+        let kv_db = self.engines.kv.as_ref();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
-        box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
+        let handle = box_try!(rocks::util::get_cf_handle(kv_db, CF_RAFT));
+        box_try!(engine_util::put_msg_cf(
+            kv_db,
+            &wb,
+            CF_RAFT,
+            &region_key,
+            &region_state
+        ));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(&wb).unwrap_or_else(|e| {
+        kv_db.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -389,7 +395,7 @@ impl SnapContext {
     ) {
         if use_delete_files {
             if let Err(e) =
-                engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
+                engine_util::delete_all_files_in_range(self.engines.kv.as_ref(), start_key, end_key)
             {
                 error!(
                     "failed to delete files in range";
@@ -402,7 +408,7 @@ impl SnapContext {
             }
         }
         if let Err(e) = engine_util::delete_all_in_range(
-            &self.engines.kv,
+            self.engines.kv.as_ref(),
             start_key,
             end_key,
             self.use_delete_range,
@@ -503,9 +509,11 @@ impl SnapContext {
                 continue;
             }
 
-            let handle = rocks::util::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = rocks::util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
-                let options = self.engines.kv.get_options_cf(handle);
+            let handle = rocks::util::get_cf_handle(self.engines.kv.as_ref(), cf).unwrap();
+            if let Some(n) =
+                rocks::util::get_cf_num_files_at_level(self.engines.kv.as_ref(), handle, 0)
+            {
+                let options = self.engines.kv.as_ref().get_options_cf(handle);
                 let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
                 // Leave enough buffer to tolerate heavy write workload,
                 // which may flush some memtables in a short time.
@@ -671,7 +679,9 @@ mod tests {
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::{keys, SnapKey, SnapManager};
     use engine::rocks;
-    use engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
+    use engine::rocks::{
+        RawCFOptions as ColumnFamilyOptions, RawWriteBatch as WriteBatch, Snapshot, Writable,
+    };
     use engine::Engines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
@@ -820,8 +830,8 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    raft_snap: Snapshot::new(engines.raft.clone()),
-                    kv_snap: Snapshot::new(engines.kv.clone()),
+                    raft_snap: Snapshot::new(engines.raft.get_sync_db()),
+                    kv_snap: Snapshot::new(engines.kv.get_sync_db()),
                     notifier: tx,
                 })
                 .unwrap();

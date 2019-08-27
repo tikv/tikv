@@ -6,9 +6,8 @@ use super::peer_storage::{
 };
 use super::util::new_peer;
 use crate::raftstore::Result;
-use engine::rocks;
-use engine::rocks::Writable;
-use engine::{Engines, Iterable, Mutable, WriteBatch, DB};
+use engine::rocks::Rocks;
+use engine::{Engines, Iterable, KvEngine, Mutable};
 use engine::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
@@ -26,7 +25,7 @@ pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Re
 }
 
 // check no any data in range [start_key, end_key)
-fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
+fn is_range_empty(engine: &Rocks, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
     let mut count: u32 = 0;
     engine.scan_cf(cf, start_key, end_key, false, |_, _| {
         count += 1;
@@ -65,15 +64,14 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let mut state = RegionLocalState::default();
     state.set_region(region.clone());
 
-    let wb = WriteBatch::default();
-    box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
-    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    box_try!(wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state));
-    write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
-    engines.write_kv(&wb)?;
+    let kv_wb = engines.kv.write_batch(0);
+    box_try!(kv_wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
+    box_try!(kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));
+    write_initial_apply_state(&kv_wb, region.get_id())?;
+    engines.write_kv(&kv_wb)?;
     engines.sync_kv()?;
 
-    let raft_wb = WriteBatch::default();
+    let raft_wb = engines.raft.write_batch(0);
     write_initial_raft_state(&raft_wb, region.get_id())?;
     engines.write_raft(&raft_wb)?;
     engines.sync_raft()?;
@@ -85,13 +83,12 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
     box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
     engines.sync_raft()?;
 
-    let wb = WriteBatch::default();
-    box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
+    let kv_wb = engines.kv.write_batch(0);
+    box_try!(kv_wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
     // should clear raft initial state too.
-    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    box_try!(wb.delete_cf(handle, &keys::region_state_key(region_id)));
-    box_try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
-    engines.write_kv(&wb)?;
+    box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
+    box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
+    engines.write_kv(&kv_wb)?;
     engines.sync_kv()?;
     Ok(())
 }
@@ -119,7 +116,7 @@ mod tests {
     fn test_bootstrap() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let raft_path = path.path().join("raft");
-        let kv_engine = Arc::new(
+        let kv_engine = Rocks(Arc::new(
             rocks::util::new_engine(
                 path.path().to_str().unwrap(),
                 None,
@@ -127,17 +124,13 @@ mod tests {
                 None,
             )
             .unwrap(),
-        );
-        let raft_engine = Arc::new(
+        ));
+        let raft_engine = Rocks(Arc::new(
             rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                 .unwrap(),
-        );
+        ));
         let shared_block_cache = false;
-        let engines = Engines::new(
-            Arc::clone(&kv_engine),
-            Arc::clone(&raft_engine),
-            shared_block_cache,
-        );
+        let engines = Engines::new(kv_engine.clone(), raft_engine.clone(), shared_block_cache);
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
@@ -145,21 +138,18 @@ mod tests {
 
         assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
         assert!(kv_engine
-            .get_value(keys::PREPARE_BOOTSTRAP_KEY)
+            .get(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_some());
         assert!(kv_engine
-            .get_value_cf(CF_RAFT, &keys::region_state_key(1))
+            .get_cf(CF_RAFT, &keys::region_state_key(1))
             .unwrap()
             .is_some());
         assert!(kv_engine
-            .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
+            .get_cf(CF_RAFT, &keys::apply_state_key(1))
             .unwrap()
             .is_some());
-        assert!(raft_engine
-            .get_value(&keys::raft_state_key(1))
-            .unwrap()
-            .is_some());
+        assert!(raft_engine.get(&keys::raft_state_key(1)).unwrap().is_some());
 
         assert!(clear_prepare_bootstrap_key(&engines).is_ok());
         assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());

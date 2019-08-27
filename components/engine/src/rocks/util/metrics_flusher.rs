@@ -30,8 +30,8 @@ impl MetricsFlusher {
     }
 
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let db = self.engines.kv.clone();
-        let raft_db = self.engines.raft.clone();
+        let db = self.engines.kv.get_sync_db();
+        let raft_db = self.engines.raft.get_sync_db();
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
         let shared_block_cache = self.engines.shared_block_cache;
@@ -87,7 +87,7 @@ mod tests {
     use super::*;
     use crate::rocks;
     use crate::rocks::util::CFOptions;
-    use crate::rocks::{ColumnFamilyOptions, DBOptions};
+    use crate::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions};
     use crate::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use std::path::Path;
     use std::sync::Arc;
@@ -119,7 +119,7 @@ mod tests {
                 .unwrap(),
         );
         let shared_block_cache = false;
-        let engines = Engines::new(engine, raft_engine, shared_block_cache);
+        let engines = Engines::new(Rocks(engine), Rocks(raft_engine), shared_block_cache);
         let mut metrics_flusher = MetricsFlusher::new(engines, Duration::from_millis(100));
 
         if let Err(e) = metrics_flusher.start() {

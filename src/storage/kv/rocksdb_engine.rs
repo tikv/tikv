@@ -5,13 +5,14 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use engine::rocks;
 use engine::rocks::util::CFOptions;
-use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
-use engine::Engines;
+use engine::rocks::{
+    DBIterator, RawCFOptions as ColumnFamilyOptions, RawSeekKey as SeekKey, Rocks, Writable, DB,
+};
 use engine::Error as EngineError;
+use engine::{rocks, KvEngine, Mutable};
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::{IterOptions, Peekable};
+use engine::{Engines, IterOptions, Iterable, Peekable};
 #[cfg(feature = "failpoints")]
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
@@ -26,7 +27,7 @@ use super::{
     ScanMode, Snapshot,
 };
 
-pub use engine::SyncSnapshot as RocksSnapshot;
+pub use engine::rocks::SyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -52,7 +53,7 @@ impl Runnable<Task> for Runner {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
             Task::Snapshot(cb) => cb((
                 CbContext::new(),
-                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
+                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv.get_sync_db()))),
             )),
         }
     }
@@ -100,7 +101,9 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
+        let db = Rocks(Arc::new(rocks::util::new_engine(
+            &path, None, cfs, cfs_opts,
+        )?));
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
         let engines = Engines::new(db.clone(), db, shared_block_cache);
@@ -113,7 +116,7 @@ impl RocksEngine {
     }
 
     pub fn get_rocksdb(&self) -> Arc<DB> {
-        Arc::clone(&self.engines.kv)
+        self.engines.kv.get_sync_db()
     }
 
     pub fn stop(&self) {
@@ -197,7 +200,7 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::default();
+    let wb = engine.kv.write_batch(0);
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -206,8 +209,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.delete(k.as_encoded())
                 } else {
                     trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.delete_cf(handle, k.as_encoded())
+                    wb.delete_cf(cf, k.as_encoded())
                 }
             }
             Modify::Put(cf, k, v) => {
@@ -216,8 +218,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.put(k.as_encoded(), &v)
                 } else {
                     trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.put_cf(handle, k.as_encoded(), &v)
+                    wb.put_cf(cf, k.as_encoded(), &v)
                 }
             }
             Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
@@ -229,8 +230,10 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     "notify_only" => notify_only,
                 );
                 if !notify_only {
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
-                    wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                    let handle = rocks::util::get_cf_handle(engine.kv.as_ref(), cf)?;
+                    wb.as_ref()
+                        .delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                        .map_err(|e| EngineError::Engine(e))
                 } else {
                     Ok(())
                 }
@@ -275,19 +278,19 @@ impl Snapshot for RocksSnapshot {
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
-        let v = box_try!(self.get_value(key.as_encoded()));
+        let v = box_try!(self.deref().get(key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        let v = box_try!(self.deref().get_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
-        let iter = self.db_iterator(iter_opt);
+        let iter = self.iterator_opt(&iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 
@@ -298,7 +301,7 @@ impl Snapshot for RocksSnapshot {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
-        let iter = self.db_iterator_cf(cf, iter_opt)?;
+        let iter = self.iterator_cf_opt(&iter_opt, cf)?;
         Ok(Cursor::new(iter, mode))
     }
 }
@@ -337,7 +340,7 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
 
     fn status(&self) -> Result<()> {
         DBIterator::status(self)
-            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(|e| EngineError::Engine(e))
             .map_err(From::from)
     }
 

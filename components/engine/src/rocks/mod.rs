@@ -8,11 +8,11 @@ pub mod util;
 mod db;
 pub use self::db::*;
 mod snapshot;
-pub use self::snapshot::*;
+pub use self::snapshot::{RocksSnapshot as Snapshot, SyncRocksSnapshot as SyncSnapshot};
 mod writebatch;
-pub use self::writebatch::*;
+pub use self::writebatch::RocksWriteBatch as WriteBatch;
 mod iterator;
-pub use self::iterator::*;
+pub use self::iterator::RocksIterator as Iterator;
 mod options;
 pub use self::options::*;
 
@@ -20,27 +20,25 @@ pub use engine_rocksdb::rocksdb_options::UnsafeSnap;
 pub use engine_rocksdb::{
     load_latest_options, rocksdb::supported_compression, run_ldb_tool,
     set_external_sst_file_global_seq_no, BlockBasedOptions, CColumnFamilyDescriptor, CFHandle,
-    Cache, ColumnFamilyOptions, CompactOptions, CompactionJobInfo, CompactionOptions,
-    CompactionPriority, DBBottommostLevelCompaction, DBCompactionStyle, DBCompressionType,
-    DBEntryType, DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode,
-    DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
-    EnvOptions, EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData,
-    IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, MemoryAllocator, PerfContext,
-    Range, RateLimiter, ReadOptions, SeekKey, SequentialFile, SliceTransform,
+    Cache, CompactOptions, CompactionJobInfo, CompactionOptions, CompactionPriority,
+    DBBottommostLevelCompaction, DBCompactionStyle, DBCompressionType, DBEntryType, DBIterator,
+    DBOptions, DBRateLimiterMode, DBRecoveryMode, DBStatisticsHistogramType,
+    DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env, EnvOptions, EventListener,
+    ExternalSstFileInfo, FlushJobInfo, HistogramData, IngestionInfo, Kv, LRUCacheOptions,
+    MemoryAllocator, PerfContext, Range, RateLimiter, SequentialFile, SliceTransform,
     TablePropertiesCollection, TablePropertiesCollector, TablePropertiesCollectorFactory,
-    TitanBlobIndex, TitanDBOptions, UserCollectedProperties, Writable, WriteBatch, WriteOptions,
+    TitanBlobIndex, TitanDBOptions, UserCollectedProperties, Writable, WriteBatch as RawWriteBatch,
     WriteStallCondition, WriteStallInfo, DB,
 };
 pub use engine_rocksdb::{
-    ColumnFamilyOptions as RocksCFOptions,
-    IngestExternalFileOptions as RocksIngestExternalFileOptions, ReadOptions as RocksReadOptions,
-    SeekKey as RocksSeekKey, WriteOptions as RocksWriteOptions,
+    ColumnFamilyOptions as RawCFOptions, IngestExternalFileOptions as RawIngestExternalFileOptions,
+    ReadOptions as RawReadOptions, SeekKey as RawSeekKey, WriteOptions as RawWriteOptions,
 };
 
 #[cfg(test)]
 mod tests {
-    use super::Snapshot;
-    use crate::rocks::{util, Writable};
+    use super::{KvEngine, Snapshot};
+    use crate::rocks::{util, Rocks, Writable};
     use crate::{Iterable, Mutable, Peekable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
@@ -50,8 +48,9 @@ mod tests {
     fn test_base() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine =
-            Arc::new(util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap());
+        let engine = Rocks(Arc::new(
+            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+        ));
 
         let mut r = Region::default();
         r.set_id(10);
@@ -61,7 +60,7 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         engine.put_msg_cf(handle, key, &r).unwrap();
 
-        let snap = Snapshot::new(Arc::clone(&engine));
+        let snap = engine.snapshot();
 
         let mut r1: Region = util::get_msg(&engine, key).unwrap().unwrap();
         assert_eq!(r, r1);
@@ -87,23 +86,25 @@ mod tests {
     fn test_peekable() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap();
+        let engine = Rocks(Arc::new(
+            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+        ));
 
         engine.put(b"k1", b"v1").unwrap();
-        let handle = engine.cf_handle("cf").unwrap();
-        engine.put_cf(handle, b"k1", b"v2").unwrap();
+        engine.put_cf(cf, b"k1", b"v2").unwrap();
 
-        assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
-        assert!(engine.get_value_cf("foo", b"k1").is_err());
-        assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
+        assert_eq!(&*engine.get(b"k1").unwrap().unwrap(), b"v1");
+        assert!(engine.get_cf("foo", b"k1").is_err());
+        assert_eq!(&*engine.get_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 
     #[test]
     fn test_scan() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine =
-            Arc::new(util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap());
+        let engine = Rocks(Arc::new(
+            util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+        ));
         let handle = engine.cf_handle(cf).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();

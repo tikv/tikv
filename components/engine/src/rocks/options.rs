@@ -2,39 +2,39 @@
 
 use crate::options::*;
 
-pub use super::{RocksCFOptions, RocksReadOptions, RocksWriteOptions};
-use crate::rocks::RocksIngestExternalFileOptions;
+pub use super::{RawCFOptions, RawReadOptions, RawWriteOptions};
+use crate::rocks::RawIngestExternalFileOptions;
 
-impl From<ReadOptions> for RocksReadOptions {
+impl From<ReadOptions> for RawReadOptions {
     fn from(_opts: ReadOptions) -> Self {
-        let r = RocksReadOptions::default();
+        let r = RawReadOptions::default();
         r
     }
 }
 
-impl From<&ReadOptions> for RocksReadOptions {
+impl From<&ReadOptions> for RawReadOptions {
     fn from(opts: &ReadOptions) -> Self {
         opts.clone().into()
     }
 }
 
-impl From<WriteOptions> for RocksWriteOptions {
+impl From<WriteOptions> for RawWriteOptions {
     fn from(opts: WriteOptions) -> Self {
-        let mut r = RocksWriteOptions::default();
+        let mut r = RawWriteOptions::default();
         r.set_sync(opts.sync);
         r
     }
 }
 
-impl From<&WriteOptions> for RocksWriteOptions {
+impl From<&WriteOptions> for RawWriteOptions {
     fn from(opts: &WriteOptions) -> Self {
         opts.clone().into()
     }
 }
 
-impl From<IterOptionss> for RocksReadOptions {
-    fn from(opts: IterOptionss) -> Self {
-        let mut r = RocksReadOptions::default();
+impl From<IterOptions> for RawReadOptions {
+    fn from(opts: IterOptions) -> Self {
+        let mut r = RawReadOptions::default();
         r.fill_cache(opts.fill_cache);
         if opts.key_only {
             r.set_titan_key_only(true);
@@ -54,34 +54,34 @@ impl From<IterOptionss> for RocksReadOptions {
     }
 }
 
-impl From<&IterOptionss> for RocksReadOptions {
-    fn from(opts: &IterOptionss) -> Self {
+impl From<&IterOptions> for RawReadOptions {
+    fn from(opts: &IterOptions) -> Self {
         opts.clone().into()
     }
 }
 
-impl From<CFOptions> for RocksCFOptions {
+impl From<CFOptions> for RawCFOptions {
     fn from(_opts: CFOptions) -> Self {
-        let r = RocksCFOptions::default();
+        let r = RawCFOptions::default();
         r
     }
 }
 
-impl From<&CFOptions> for RocksCFOptions {
+impl From<&CFOptions> for RawCFOptions {
     fn from(opts: &CFOptions) -> Self {
         opts.clone().into()
     }
 }
 
-impl From<IngestExternalFileOptions> for RocksIngestExternalFileOptions {
+impl From<IngestExternalFileOptions> for RawIngestExternalFileOptions {
     fn from(opts: IngestExternalFileOptions) -> Self {
-        let mut r = RocksIngestExternalFileOptions::new();
+        let mut r = RawIngestExternalFileOptions::new();
         r.move_files(opts.move_files);
         r
     }
 }
 
-impl From<&IngestExternalFileOptions> for RocksIngestExternalFileOptions {
+impl From<&IngestExternalFileOptions> for RawIngestExternalFileOptions {
     fn from(opts: &IngestExternalFileOptions) -> Self {
         opts.clone().into()
     }

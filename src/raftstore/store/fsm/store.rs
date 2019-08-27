@@ -2,8 +2,8 @@
 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
-use engine::rocks::CompactionJobInfo;
-use engine::{WriteBatch, WriteOptions, DB};
+use engine::rocks::{CompactionJobInfo, WriteBatch, DB};
+use engine::{KvEngine, WriteBatch as _, WriteOptions};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -483,13 +483,13 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx
                 .engines
                 .kv
-                .write_opt(&self.poll_ctx.kv_wb, &write_opts)
+                .write_opt(&write_opts, &self.poll_ctx.kv_wb)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
-                self.poll_ctx.kv_wb = WriteBatch::with_capacity(4 * 1024);
+                self.poll_ctx.kv_wb = self.poll_ctx.engines.kv.write_batch(4 * 1024);
             } else {
                 self.poll_ctx.kv_wb.clear();
             }
@@ -501,13 +501,13 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx
                 .engines
                 .raft
-                .write_opt(&self.poll_ctx.raft_wb, &write_opts)
+                .write_opt(&write_opts, &self.poll_ctx.raft_wb)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
-                self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);
+                self.poll_ctx.raft_wb = self.poll_ctx.engines.raft.write_batch(4 * 1024);
             } else {
                 self.poll_ctx.raft_wb.clear();
             }
@@ -705,7 +705,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
-        let kv_engine = Arc::clone(&self.engines.kv);
+        let kv_engine = self.engines.kv.clone();
         let store_id = self.store.get_id();
         let mut total_count = 0;
         let mut tombstone_count = 0;
@@ -713,8 +713,8 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut region_peers = vec![];
 
         let t = Instant::now();
-        let mut kv_wb = WriteBatch::default();
-        let mut raft_wb = WriteBatch::default();
+        let mut kv_wb = self.engines.kv.write_batch(0);
+        let mut raft_wb = self.engines.raft.write_batch(0);
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
@@ -774,11 +774,11 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
         if !kv_wb.is_empty() {
             self.engines.kv.write(&kv_wb).unwrap();
-            self.engines.kv.sync_wal().unwrap();
+            self.engines.kv.sync().unwrap();
         }
         if !raft_wb.is_empty() {
             self.engines.raft.write(&raft_wb).unwrap();
-            self.engines.raft.sync_wal().unwrap();
+            self.engines.raft.sync().unwrap();
         }
 
         // schedule applying snapshot after raft writebatch were written.
@@ -830,8 +830,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
             .unwrap();
         let key = keys::region_state_key(region.get_id());
-        let handle = rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
-        kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
+        kv_wb.put_msg_cf(CF_RAFT, &key, origin_state).unwrap();
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
@@ -848,7 +847,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocks::util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
+        rocks::util::roughly_cleanup_ranges(&self.engines.kv.as_ref(), &ranges)?;
 
         info!(
             "cleans up garbage data";
@@ -892,8 +891,8 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
-            kv_wb: WriteBatch::default(),
-            raft_wb: WriteBatch::with_capacity(4 * 1024),
+            kv_wb: self.engines.kv.write_batch(0),
+            raft_wb: self.engines.raft.write_batch(4 * 1024),
             pending_count: 0,
             sync_log: false,
             has_ready: false,
@@ -1063,7 +1062,7 @@ impl RaftBatchSystem {
             .spawn("apply".to_owned(), apply_poller_builder);
 
         let split_check_runner = SplitCheckRunner::new(
-            Arc::clone(&engines.kv),
+            engines.kv.get_sync_db(),
             self.router.clone(),
             Arc::clone(&workers.coprocessor_host),
         );
@@ -1079,7 +1078,7 @@ impl RaftBatchSystem {
         let timer = RegionRunner::new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
-        let compact_runner = CompactRunner::new(Arc::clone(&engines.kv));
+        let compact_runner = CompactRunner::new(engines.kv.get_sync_db());
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         let cleanup_sst_runner = CleanupSSTRunner::new(
             store.get_id(),
@@ -1095,7 +1094,7 @@ impl RaftBatchSystem {
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
-            Arc::clone(&engines.kv),
+            engines.kv.get_sync_db(),
             workers.pd_worker.scheduler(),
         );
         box_try!(workers.pd_worker.start(pd_runner));
@@ -1473,7 +1472,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return;
         }
 
-        if rocks::util::auto_compactions_is_disabled(&self.ctx.engines.kv) {
+        if rocks::util::auto_compactions_is_disabled(self.ctx.engines.kv.as_ref()) {
             debug!(
                 "skip compact check when disabled auto compactions";
                 "store_id" => self.fsm.store.id,
@@ -1595,7 +1594,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         );
 
         let store_info = StoreInfo {
-            engine: Arc::clone(&self.ctx.engines.kv),
+            engine: self.ctx.engines.kv.get_sync_db(),
             capacity: self.ctx.cfg.capacity.0,
         };
 

@@ -13,9 +13,10 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
 use crc::crc32::{self, Digest, Hasher32};
-use engine::rocks::util::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use engine::rocks::Snapshot as DbSnapshot;
+use engine::rocks::util::prepare_file_for_ingestion;
 use engine::rocks::DB;
+use engine::rocks::{Rocks, Snapshot as DbSnapshot};
+use engine::KvEngine;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -557,9 +558,9 @@ impl Snap {
             if plain_file_used(cf_file.cf) {
                 check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
             } else {
-                prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
-                validate_sst_for_ingestion(
-                    &kv_engine,
+                prepare_file_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
+                let kv_engine: &Rocks = kv_engine.as_ref();
+                kv_engine.validate_file_for_ingestion(
                     cf_file.cf,
                     &cf_file.clone_path,
                     cf_file.size,

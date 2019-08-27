@@ -722,8 +722,8 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::rocks::{DBEntryType, TablePropertiesCollector};
+    use engine::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions, Writable};
     use rand::Rng;
     use tempfile::Builder;
     use test::Bencher;

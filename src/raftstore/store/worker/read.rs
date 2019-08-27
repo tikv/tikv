@@ -20,7 +20,7 @@ use crate::raftstore::store::{
     RequestPolicy,
 };
 use crate::raftstore::Result;
-use engine::DB;
+use engine::rocks::DB;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 

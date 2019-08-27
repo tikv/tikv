@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::util::get_fastest_supported_compression_type;
-use super::{ColumnFamilyOptions, DBCompressionType, Env, EnvOptions, ExternalSstFileInfo, DB};
+use super::{DBCompressionType, Env, EnvOptions, ExternalSstFileInfo, RawCFOptions, DB};
 use crate::{CfName, CF_DEFAULT};
 use engine_rocksdb::SstFileWriter;
 
@@ -52,7 +52,7 @@ impl SstWriterBuilder {
                 .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
             db.get_options_cf(handle).clone()
         } else {
-            ColumnFamilyOptions::new()
+            RawCFOptions::new()
         };
         if self.in_memory {
             // Set memenv.

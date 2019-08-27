@@ -10,10 +10,14 @@ use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
-    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv,
+    RawReadOptions as ReadOptions, RawSeekKey as SeekKey, RawWriteBatch as WriteBatch,
+    RawWriteOptions as WriteOptions, Rocks, Writable, WriteBatch as RocksWriteBatch, DB,
 };
-use engine::{self, Engines, IterOptions, Iterable, Mutable, Peekable};
+use engine::{
+    self, Engines, IterOptions, Iterable, KvEngine, Mutable, Peekable,
+    WriteOptions as EngineWriteOptions,
+};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
@@ -162,8 +166,8 @@ impl Debugger {
 
     fn get_db_from_type(&self, db: DBType) -> Result<&DB> {
         match db {
-            DBType::Kv => Ok(&self.engines.kv),
-            DBType::Raft => Ok(&self.engines.raft),
+            DBType::Kv => Ok(self.engines.kv.as_ref()),
+            DBType::Raft => Ok(self.engines.raft.as_ref()),
             _ => Err(box_err!("invalid DBType type")),
         }
     }
@@ -171,7 +175,8 @@ impl Debugger {
     pub fn get(&self, db: DBType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
-        match db.get_value_cf(cf, key) {
+        let handle = get_cf_handle(db, cf).unwrap();
+        match db.get_cf(handle, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
             Ok(None) => Err(Error::NotFound(format!(
                 "value for key {:?} in db {:?}",
@@ -264,7 +269,7 @@ impl Debugger {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
-        MvccInfoIterator::new(&self.engines.kv, start, end, limit)
+        MvccInfoIterator::new(&self.engines.kv.get_sync_db(), start, end, limit)
     }
 
     /// Scan raw keys for given range `[start, end)` in given cf.
@@ -275,7 +280,7 @@ impl Debugger {
         limit: usize,
         cf: &str,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        let db = &self.engines.kv;
+        let db = self.engines.kv.as_ref();
         let cf_handle = get_cf_handle(db, cf).unwrap();
         let mut read_opt = ReadOptions::new();
         read_opt.set_total_order_seek(true);
@@ -283,7 +288,7 @@ impl Debugger {
         if !end.is_empty() {
             read_opt.set_iterate_upper_bound(end.to_vec());
         }
-        let mut iter = db.iter_cf_opt(cf_handle, read_opt);
+        let mut iter = RocksIterator::new_cf(db, &cf_handle, read_opt);
         if !iter.seek_to_first() {
             return Ok(vec![]);
         }
@@ -326,27 +331,27 @@ impl Debugger {
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let store_id = self.get_store_id()?;
         let db = &self.engines.kv;
-        let wb = WriteBatch::default();
+        let wb = db.write_batch(0);
 
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = set_region_tombstone(db.as_ref(), store_id, region, &wb) {
+            if let Err(e) = set_region_tombstone(db, store_id, region, &wb) {
                 errors.push((region_id, e));
             }
         }
 
         if errors.is_empty() {
-            let mut write_opts = WriteOptions::new();
+            let mut write_opts = EngineWriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(&wb, &write_opts));
+            box_try!(db.write_opt(&write_opts, &wb));
         }
         Ok(errors)
     }
 
     pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv;
-        let wb = WriteBatch::default();
+        let wb = db.write_batch(0);
         let mut errors = Vec::with_capacity(regions.len());
         for region_id in regions {
             let key = keys::region_state_key(region_id);
@@ -368,12 +373,12 @@ impl Debugger {
                 continue;
             }
             let region = &region_state.get_region();
-            write_peer_state(db, &wb, region, PeerState::Tombstone, None).unwrap();
+            write_peer_state(&wb, region, PeerState::Tombstone, None).unwrap();
         }
 
-        let mut write_opts = WriteOptions::new();
+        let mut write_opts = EngineWriteOptions::new();
         write_opts.set_sync(true);
-        db.write_opt(&wb, &write_opts).unwrap();
+        db.write_opt(&write_opts, &wb).unwrap();
         Ok(errors)
     }
 
@@ -382,13 +387,13 @@ impl Debugger {
         regions: Vec<Region>,
         read_only: bool,
     ) -> Result<Vec<(u64, Error)>> {
-        let db = &self.engines.kv;
+        let db = self.engines.kv.get_sync_db();
 
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
             if let Err(e) = recover_mvcc_for_range(
-                db,
+                &db,
                 region.get_start_key(),
                 region.get_end_key(),
                 read_only,
@@ -402,7 +407,7 @@ impl Debugger {
     }
 
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
-        let db = self.engines.kv.clone();
+        let db = self.engines.kv.get_sync_db();
 
         v1!("Calculating split keys...");
         let split_keys = divide_db(&db, threads).unwrap().into_iter().map(|k| {
@@ -466,10 +471,9 @@ impl Debugger {
             Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
             Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
-        )
-        .build_read_opts();
-        let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
-        let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
+        );
+        let handle = box_try!(get_cf_handle(&self.engines.kv.as_ref(), CF_RAFT));
+        let mut iter = DBIterator::new_cf(self.engines.kv.get_sync_db(), handle, readopts.into());
         iter.seek(SeekKey::from(from.as_ref()));
 
         let fake_snap_worker = Worker::new("fake-snap-worker");
@@ -551,8 +555,7 @@ impl Debugger {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
         }
-        let wb = WriteBatch::default();
-        let handle = box_try!(get_cf_handle(self.engines.kv.as_ref(), CF_RAFT));
+        let wb = self.engines.kv.write_batch(0);
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         {
@@ -581,7 +584,7 @@ impl Debugger {
                 );
                 // We need to leave epoch untouched to avoid inconsistency.
                 region_state.mut_region().set_peers(new_peers.into());
-                box_try!(wb.put_msg_cf(handle, key, &region_state));
+                box_try!(wb.put_msg_cf(CF_RAFT, key, &region_state));
                 Ok(())
             };
 
@@ -589,7 +592,7 @@ impl Debugger {
                 let kv = &self.engines.kv;
                 for region_id in region_ids {
                     let key = keys::region_state_key(region_id);
-                    if let Some(value) = box_try!(kv.get_value_cf(CF_RAFT, &key)) {
+                    if let Some(value) = box_try!(kv.get_cf(CF_RAFT, &key)) {
                         box_try!(remove_stores(&key, &value));
                     } else {
                         let msg = format!("No such region {} on the store", region_id);
@@ -607,26 +610,25 @@ impl Debugger {
             }
         }
 
-        let mut write_opts = WriteOptions::new();
+        let mut write_opts = EngineWriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.write_opt(&wb, &write_opts));
+        box_try!(self.engines.kv.write_opt(&write_opts, &wb));
         Ok(())
     }
 
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
-        let kv = self.engines.kv.as_ref();
-        let raft = self.engines.raft.as_ref();
+        let kv = &self.engines.kv;
+        let raft = &self.engines.raft;
 
-        let kv_wb = WriteBatch::default();
-        let raft_wb = WriteBatch::default();
-        let kv_handle = box_try!(get_cf_handle(kv, CF_RAFT));
+        let kv_wb = kv.write_batch(0);
+        let raft_wb = raft.write_batch(0);
 
         if region.get_start_key() >= region.get_end_key() && !region.get_end_key().is_empty() {
             return Err(box_err!("Bad region: {:?}", region));
         }
 
-        box_try!(self.engines.kv.scan_cf(
+        box_try!(kv.scan_cf(
             CF_RAFT,
             keys::REGION_META_MIN_KEY,
             keys::REGION_META_MAX_KEY,
@@ -668,14 +670,14 @@ impl Debugger {
                 "Store already has the RegionLocalState".into(),
             ));
         }
-        box_try!(kv_wb.put_msg_cf(kv_handle, &key, &region_state));
+        box_try!(kv_wb.put_msg_cf(CF_RAFT, &key, &region_state));
 
         // RaftApplyState.
         let key = keys::apply_state_key(region_id);
         if box_try!(kv.get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other("Store already has the RaftApplyState".into()));
         }
-        box_try!(write_initial_apply_state(kv, &kv_wb, region_id));
+        box_try!(write_initial_apply_state(&kv_wb, region_id));
 
         // RaftLocalState.
         let key = keys::raft_state_key(region_id);
@@ -684,10 +686,10 @@ impl Debugger {
         }
         box_try!(write_initial_raft_state(&raft_wb, region_id));
 
-        let mut write_opts = WriteOptions::new();
+        let mut write_opts = EngineWriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(kv.write_opt(&kv_wb, &write_opts));
-        box_try!(raft.write_opt(&raft_wb, &write_opts));
+        box_try!(kv.write_opt(&write_opts, &kv_wb));
+        box_try!(raft.write_opt(&write_opts, &raft_wb));
         Ok(())
     }
 
@@ -810,7 +812,7 @@ impl Debugger {
     pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
-        let db = &self.engines.kv;
+        let db = self.engines.kv.as_ref();
 
         let mut num_entries = 0;
         let mut mvcc_properties = MvccProperties::new();
@@ -919,10 +921,10 @@ impl MvccChecker {
                 Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
-            )
-            .build_read_opts();
+            );
+
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
+            let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts.into());
             iter.seek(SeekKey::Start);
             Ok(iter)
         };
@@ -1183,9 +1185,9 @@ impl MvccInfoIterator {
             } else {
                 Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
             };
-            let readopts = IterOptions::new(None, to, false).build_read_opts();
+            let readopts = IterOptions::new(None, to, false);
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
-            let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
+            let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts.into());
             iter.seek(SeekKey::from(from));
             Ok(iter)
         };
@@ -1350,7 +1352,12 @@ fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     }
 }
 
-fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch) -> Result<()> {
+fn set_region_tombstone(
+    db: &Rocks,
+    store_id: u64,
+    region: Region,
+    wb: &RocksWriteBatch,
+) -> Result<()> {
     let id = region.get_id();
     let key = keys::region_state_key(id);
 
@@ -1389,13 +1396,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
         return Err(box_err!("The peer is still in target peers"));
     }
 
-    box_try!(write_peer_state(
-        db,
-        wb,
-        &region,
-        PeerState::Tombstone,
-        None
-    ));
+    box_try!(write_peer_state(wb, &region, PeerState::Tombstone, None));
     Ok(())
 }
 
@@ -1474,7 +1475,7 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec
 mod tests {
     use std::sync::Arc;
 
-    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions, Rocks, Writable};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
@@ -1582,7 +1583,7 @@ mod tests {
     fn new_debugger() -> Debugger {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let engine = Arc::new(
+        let engine = Rocks(Arc::new(
             rocks::util::new_engine_opt(
                 path,
                 DBOptions::new(),
@@ -1594,10 +1595,10 @@ mod tests {
                 ],
             )
             .unwrap(),
-        );
+        ));
 
         let shared_block_cache = false;
-        let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
+        let engines = Engines::new(engine.clone(), engine, shared_block_cache);
         Debugger::new(engines)
     }
 

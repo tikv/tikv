@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use crate::raftstore::store::keys;
 use engine::rocks::Writable;
-use engine::util::MAX_DELETE_BATCH_SIZE;
+use engine::rocks::{RawWriteBatch as WriteBatch, Rocks, DB};
 use engine::Iterable;
-use engine::{WriteBatch, DB};
+use engine::MAX_DELETE_BATCH_SIZE;
 use tikv_util::worker::Runnable;
 
 pub struct Task {
@@ -66,6 +66,7 @@ impl Runner {
         if first_idx == 0 {
             let start_key = keys::raft_log_key(region_id, 0);
             first_idx = end_idx;
+            let raft_engine: &Rocks = raft_engine.as_ref();
             if let Some((k, _)) = box_try!(raft_engine.seek(&start_key)) {
                 first_idx = box_try!(keys::raft_log_index(&k));
             }

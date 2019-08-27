@@ -169,7 +169,7 @@ mod tests {
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::Writable;
-    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions};
     use engine::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;

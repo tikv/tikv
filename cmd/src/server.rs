@@ -6,6 +6,7 @@ use crate::setup::initial_logger;
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
+use engine::rocks::Rocks;
 use engine::Engines;
 use fs2::FileExt;
 use kvproto::deadlock_grpc::create_deadlock;
@@ -178,9 +179,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
+    let engines = Engines::new(
+        Rocks(Arc::new(kv_engine)),
+        Rocks(Arc::new(raft_engine)),
+        cache.is_some(),
+    );
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-    let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+    let local_reader =
+        LocalReader::new(engines.kv.get_sync_db(), store_meta.clone(), router.clone());
     let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
 
     let engine = RaftKv::new(raft_router.clone());
@@ -215,7 +221,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         engine.clone(),
         &cfg.storage,
         storage_read_pool,
-        Some(engines.kv.clone()),
+        Some(engines.kv.get_sync_db()),
         Some(raft_router.clone()),
         waiter_mgr_worker
             .as_ref()
@@ -249,7 +255,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let import_service = ImportSSTService::new(
         cfg.import.clone(),
         raft_router.clone(),
-        engines.kv.clone(),
+        engines.kv.get_sync_db(),
         Arc::clone(&importer),
     );
 

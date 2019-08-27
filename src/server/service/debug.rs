@@ -331,8 +331,8 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
             resp.set_prometheus(metrics::dump());
             if req.get_all() {
                 let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
-                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
+                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv.get_sync_db())));
+                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft.get_sync_db())));
                 resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)

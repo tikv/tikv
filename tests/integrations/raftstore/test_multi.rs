@@ -35,12 +35,10 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
-    cluster.assert_quorum(
-        |engine| match engine.get_value(&keys::data_key(key)).unwrap() {
-            None => false,
-            Some(v) => &*v == value,
-        },
-    );
+    cluster.assert_quorum(|engine| match engine.get(&keys::data_key(key)).unwrap() {
+        None => false,
+        Some(v) => &*v == value,
+    });
 
     cluster.must_delete(key);
     assert_eq!(cluster.must_get(key), None);
@@ -48,7 +46,7 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
-    cluster.assert_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
+    cluster.assert_quorum(|engine| engine.get(&keys::data_key(key)).unwrap().is_none());
 
     // TODO add epoch not match test cases.
 }

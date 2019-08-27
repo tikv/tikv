@@ -2,19 +2,17 @@
 
 use std::u64;
 
-use crate::rocks::{DBIterator, Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use crate::{rocks, Peekable};
-use crate::{Mutable, CF_LOCK};
+use crate::rocks;
+use crate::rocks::util::get_cf_handle;
+use crate::rocks::{DBIterator, Range, RawWriteBatch, TablePropertiesCollection, Writable, DB};
+use crate::CF_LOCK;
 
 use super::{Error, Result};
-use super::{IterOptionss, MAX_DELETE_BATCH_SIZE};
+use super::{IterOptions, MAX_DELETE_BATCH_SIZE};
 use tikv_util::keybuilder::KeyBuilder;
 
-pub fn get_msg<M: protobuf::Message + Default, T: Peekable>(
-    r: &T,
-    key: &[u8],
-) -> Result<Option<M>> {
-    let value = r.get_value(key)?;
+pub fn get_msg<M: protobuf::Message + Default>(db: &DB, key: &[u8]) -> Result<Option<M>> {
+    let value = db.get(key)?;
 
     if value.is_none() {
         return Ok(None);
@@ -25,12 +23,13 @@ pub fn get_msg<M: protobuf::Message + Default, T: Peekable>(
     Ok(Some(m))
 }
 
-pub fn get_msg_cf<M: protobuf::Message + Default, T: Peekable>(
-    r: &T,
+pub fn get_msg_cf<M: protobuf::Message + Default>(
+    db: &DB,
     cf: &str,
     key: &[u8],
 ) -> Result<Option<M>> {
-    let value = r.get_value_cf(cf, key)?;
+    let handle = get_cf_handle(db, cf)?;
+    let value = db.get_cf(handle, key)?;
 
     if value.is_none() {
         return Ok(None);
@@ -41,17 +40,21 @@ pub fn get_msg_cf<M: protobuf::Message + Default, T: Peekable>(
     Ok(Some(m))
 }
 
-pub fn put_msg<M: protobuf::Message, T: Mutable>(r: &T, key: &[u8], m: &M) -> Result<()> {
-    r.put_value(key, &m.write_to_bytes()?)
+pub fn put_msg<M: protobuf::Message>(wb: &RawWriteBatch, key: &[u8], m: &M) -> Result<()> {
+    wb.put(key, &m.write_to_bytes()?)?;
+    Ok(())
 }
 
-pub fn put_msg_cf<M: protobuf::Message, T: Mutable>(
-    r: &T,
+pub fn put_msg_cf<M: protobuf::Message>(
+    db: &DB,
+    wb: &RawWriteBatch,
     cf: &str,
     key: &[u8],
     m: &M,
 ) -> Result<()> {
-    r.put_value_cf(cf, key, &m.write_to_bytes()?)
+    let handle = get_cf_handle(db, cf)?;
+    wb.put_cf(handle, key, &m.write_to_bytes()?)?;
+    Ok(())
 }
 
 /// Check if key in range [`start_key`, `end_key`).
@@ -98,13 +101,13 @@ pub fn delete_all_in_range_cf(
     use_delete_range: bool,
 ) -> Result<()> {
     let handle = rocks::util::get_cf_handle(db, cf)?;
-    let wb = WriteBatch::default();
+    let wb = RawWriteBatch::default();
     if use_delete_range && cf != CF_LOCK {
         wb.delete_range_cf(handle, start_key, end_key)?;
     } else {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
         let end = KeyBuilder::from_slice(end_key, 0, 0);
-        let mut iter_opt = IterOptionss::new(Some(start), Some(end), false);
+        let mut iter_opt = IterOptions::new(Some(start), Some(end), false);
         if db.is_titan() {
             // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
             // to avoid referring to missing blob files.
@@ -167,7 +170,9 @@ mod tests {
 
     use crate::rocks;
     use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
-    use crate::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
+    use crate::rocks::{
+        DBOptions, RawCFOptions as ColumnFamilyOptions, RawSeekKey as SeekKey, Writable,
+    };
     use crate::ALL_CFS;
     use crate::DB;
 

@@ -8,8 +8,8 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
-use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
-use engine::{Engines, Peekable};
+use engine::rocks::{Snapshot, SyncSnapshot, DB};
+use engine::{Engines, KvEngine, Peekable, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -526,11 +526,10 @@ impl Peer {
         );
 
         // Set Tombstone state explicitly
-        let kv_wb = WriteBatch::default();
-        let raft_wb = WriteBatch::default();
+        let kv_wb = ctx.engines.kv.write_batch(0);
+        let raft_wb = ctx.engines.raft.write_batch(0);
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
         write_peer_state(
-            &ctx.engines.kv,
             &kv_wb,
             &region,
             PeerState::Tombstone,
@@ -2244,7 +2243,7 @@ impl Peer {
         read_index: Option<u64>,
     ) -> ReadResponse {
         let mut resp = ReadExecutor::new(
-            ctx.engines.kv.clone(),
+            ctx.engines.kv.get_sync_db(),
             check_epoch,
             false, /* we don't need snapshot time */
         )
@@ -2547,7 +2546,7 @@ impl ReadExecutor {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
             snapshot
-                .get_value_cf(cf, &keys::data_key(key))
+                .get_cf(cf, &keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
@@ -2558,16 +2557,14 @@ impl ReadExecutor {
                     )
                 })
         } else {
-            snapshot
-                .get_value(&keys::data_key(key))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "[region {}] failed to get {}: {:?}",
-                        region.get_id(),
-                        hex::encode_upper(key),
-                        e
-                    )
-                })
+            snapshot.get(&keys::data_key(key)).unwrap_or_else(|e| {
+                panic!(
+                    "[region {}] failed to get {}: {:?}",
+                    region.get_id(),
+                    hex::encode_upper(key),
+                    e
+                )
+            })
         };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
