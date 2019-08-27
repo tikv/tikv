@@ -127,7 +127,7 @@ pub trait ToInt {
 }
 
 impl ToInt for i64 {
-    /// This func check whether the number overflow signed upperBound and lowerBound of `tp`,
+    /// This function check whether the number overflow signed upper bound and lower bound of `tp`,
     /// if overflow, it will handle the overflow using ctx.
     ///
     /// This function port from TiDB's types.ConvertIntToInt,
@@ -148,7 +148,7 @@ impl ToInt for i64 {
         Ok(*self)
     }
 
-    /// This func check whether the number overflow unsigned upperBound of `tp`,
+    /// This function check whether the number overflow unsigned upper bound of `tp`,
     /// if overflow, it will handle the overflow using ctx.
     ///
     /// This function port from TiDB's types.ConvertIntToUint,
@@ -170,7 +170,7 @@ impl ToInt for i64 {
 }
 
 impl ToInt for u64 {
-    /// This func check whether the number overflow signed upperBound and lowerBound of `tp`,
+    /// This function check whether the number overflow signed upper bound and lower bound of `tp`,
     /// if overflow, it will handle the overflow using ctx.
     ///
     /// This function port from TiDB's types.ConvertUintToInt,
@@ -185,7 +185,7 @@ impl ToInt for u64 {
         Ok(*self as i64)
     }
 
-    /// This func check whether the number overflow unsigned upperBound of `tp`,
+    /// This function check whether the number overflow unsigned upper bound of `tp`,
     /// if overflow, it will handle the overflow using ctx.
     ///
     /// This function port from TiDB's types.ConvertUintToUint,
@@ -202,7 +202,7 @@ impl ToInt for u64 {
 }
 
 impl ToInt for f64 {
-    /// This func check whether the number overflow signed upperBound and lowerBound of `tp`,
+    /// This function check whether the number overflow signed upper bound and lower bound of `tp`,
     /// if overflow, it will handle the overflow using ctx.
     ///
     /// This function port from TiDB's types.ConvertFloatToInt,
@@ -231,7 +231,7 @@ impl ToInt for f64 {
         Ok(val as i64)
     }
 
-    /// This func check whether the number overflow unsigned upperBound of `tp`,
+    /// This function check whether the number overflow unsigned upper bound of `tp`,
     /// if overflow, it will handle the overflow using ctx.
     ///
     /// This function port from TiDB's types.ConvertFloatToUint,
@@ -392,7 +392,7 @@ impl ConvertTo<u64> for Cow<'_, [u8]> {
 }
 
 impl ConvertTo<f64> for &[u8] {
-    /// This func getValidFloatPrefix of the str and parse to float,
+    /// This function get valid float prefix of the str and parse it to float,
     /// if the num represent by the str is too large,
     /// it will handle truncated using ctx,
     /// and return f64::MIN or f64::MAX according to whether isNeg of the str
@@ -405,7 +405,7 @@ impl ConvertTo<f64> for &[u8] {
 }
 
 impl ConvertTo<f64> for &str {
-    /// This func parse the str to float,
+    /// This function parse the str to float,
     /// if the num represent by the str is too large,
     /// it will handle truncated using ctx,
     /// and return f64::MIN or f64::MAX according to whether isNeg of the str

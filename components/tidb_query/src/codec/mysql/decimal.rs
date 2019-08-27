@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::ToOwned;
+use std::borrow::{Cow, ToOwned};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -17,6 +17,7 @@ use tikv_util::codec::number::NumberEncoder;
 use tikv_util::escape;
 
 use crate::codec::convert::{self, ConvertTo};
+use crate::codec::data_type::{Bytes, Real};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -1730,6 +1731,61 @@ impl ConvertTo<f64> for Decimal {
     }
 }
 
+impl<T> ConvertTo<Decimal> for T
+where
+    T: Into<Decimal> + Copy,
+{
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
+        Ok((*self).into())
+    }
+}
+
+impl ConvertTo<Decimal> for f64 {
+    /// This function use `Decimal::from_f64` to convert float to Decimal,
+    /// they has no corresponding TiDB function
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
+        Decimal::from_f64(*self)
+    }
+}
+
+impl ConvertTo<Decimal> for Real {
+    /// This function use `Decimal::from_f64` to convert Real to Decimal,
+    /// they has no corresponding TiDB function
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        self.into_inner().convert(ctx)
+    }
+}
+
+impl ConvertTo<Decimal> for &[u8] {
+    /// This function use `Decimal::from_bytes_with_ctx` to convert bytes to Decimal,
+    /// they has no corresponding TiDB function
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        Decimal::from_bytes_with_ctx(self, ctx)
+    }
+}
+
+impl ConvertTo<Decimal> for Cow<'_, [u8]> {
+    /// This function use `Decimal::from_bytes_with_ctx` to convert bytes to Decimal,
+    /// they has no corresponding TiDB function
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        self.as_ref().convert(ctx)
+    }
+}
+
+impl ConvertTo<Decimal> for Bytes {
+    /// This function use `Decimal::from_bytes_with_ctx` to convert bytes to Decimal,
+    /// they has no corresponding TiDB function
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        self.as_slice().convert(ctx)
+    }
+}
+
 impl From<i64> for Decimal {
     fn from(i: i64) -> Decimal {
         let (neg, mut d) = if i < 0 {
@@ -2822,25 +2878,25 @@ mod tests {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
-            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
-            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e -1", Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001", Res::Ok("10")),
             (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
             (WORD_BUF_LEN, b"1e1073741823",
              Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
             (WORD_BUF_LEN, b"-1e1073741823",
              Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
-            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            (WORD_BUF_LEN, b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
              Res::Overflow("0")),
-            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+            (WORD_BUF_LEN, b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
              Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
             // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
-            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
-            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
+            (WORD_BUF_LEN, b"1eabc", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e 1ddd", Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e - 1", Res::Ok("1")),
             // with word_buf_len 1
-            (1,b"123450000098765",Res::Overflow("98765")),
-            (1,b"123450.000098765", Res::Truncated("123450")),
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {

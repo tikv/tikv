@@ -165,7 +165,7 @@ impl Datum {
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
-            Datum::Bytes(ref bs) => cmp_f64(bs.as_slice().convert(ctx)?, f),
+            Datum::Bytes(ref bs) => cmp_f64(bs.convert(ctx)?, f),
             Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
             Datum::Time(ref t) => {
