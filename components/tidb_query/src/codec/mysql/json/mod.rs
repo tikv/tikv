@@ -268,7 +268,7 @@ mod tests {
 
     // TODO, add more test case
     #[test]
-    fn test_as_f64_with_ctx() {
+    fn tes_convert_to_f64() {
         let test_cases = vec![
             ("{}", 0f64),
             ("[]", 0f64),

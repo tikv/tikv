@@ -243,9 +243,10 @@ impl ToInt for f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
             if ctx.should_clip_to_zero() {
                 return Ok(0u64);
+            } else {
+                // recall that, `f64 as u64` is different from `f64 as i64 as u64`
+                return Ok(val as i64 as u64);
             }
-            // recall that, `f64 as u64` is different from `f64 as i64 as u64`
-            return Ok(val as i64 as u64);
         }
         let upper_bound = integer_unsigned_upper_bound(tp);
         if val > upper_bound as f64 {
@@ -321,7 +322,7 @@ impl ConvertTo<u64> for &[u8] {
 }
 
 impl ConvertTo<i64> for &str {
-    /// port from TiDB's types.StrToInt
+    /// Port from TiDB's types.StrToInt
     fn convert(&self, ctx: &mut EvalContext) -> Result<i64> {
         let s = self.trim();
         let s = get_valid_int_prefix(ctx, s)?;
@@ -344,7 +345,7 @@ impl ConvertTo<i64> for &str {
 }
 
 impl ConvertTo<u64> for &str {
-    /// port from TiDB's types.StrToUint
+    /// Port from TiDB's types.StrToUint
     fn convert(&self, ctx: &mut EvalContext) -> Result<u64> {
         let s = self.trim();
         let s = get_valid_int_prefix(ctx, s)?;
@@ -944,46 +945,115 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_float_to_int() {
-        let tests: Vec<(f64, Option<i64>)> = vec![
-            (123.1, Some(123)),
-            (123.6, Some(124)),
-            (-123.1, Some(-123)),
-            (-123.6, Some(-124)),
-            (256.5, Some(257)),
-            (256.1, Some(256)),
-            (256.6, Some(257)),
-            (-256.1, Some(-256)),
-            (-256.6, Some(-257)),
-            (65535.5, Some(65536)),
-            (65536.1, Some(65536)),
-            (65536.5, Some(65537)),
-            (-65536.1, Some(-65536)),
-            (-65536.5, Some(-65537)),
-            (8388610.2, Some(8388610)),
-            (8388610.4, Some(8388610)),
-            (8388610.5, Some(8388611)),
-            (-8388610.4, Some(-8388610)),
-            (-8388610.5, Some(-8388611)),
-            (4294967296.8, Some(4294967297)),
-            (4294967296.8, Some(4294967297)),
-            (4294967297.1, Some(4294967297)),
-            (-4294967296.8, Some(-4294967297)),
-            (-4294967297.1, Some(-4294967297)),
-            (f64::MAX, None),
-            (f64::MIN, None),
+    fn test_int_to_int() {
+        let tests: Vec<(i64, FieldTypeTp, Option<i64>)> = vec![
+            (123, FieldTypeTp::Tiny, Some(123)),
+            (-123, FieldTypeTp::Tiny, Some(-123)),
+            (256, FieldTypeTp::Tiny, None),
+            (-257, FieldTypeTp::Tiny, None),
+            (123, FieldTypeTp::Short, Some(123)),
+            (-123, FieldTypeTp::Short, Some(-123)),
+            (65536, FieldTypeTp::Short, None),
+            (-65537, FieldTypeTp::Short, None),
+            (123, FieldTypeTp::Int24, Some(123)),
+            (-123, FieldTypeTp::Int24, Some(-123)),
+            (8388610, FieldTypeTp::Int24, None),
+            (-8388610, FieldTypeTp::Int24, None),
+            (8388610, FieldTypeTp::Long, Some(8388610)),
+            (-8388610, FieldTypeTp::Long, Some(-8388610)),
+            (4294967297, FieldTypeTp::Long, None),
+            (-4294967297, FieldTypeTp::Long, None),
+            (8388610, FieldTypeTp::LongLong, Some(8388610)),
+            (-8388610, FieldTypeTp::LongLong, Some(-8388610)),
         ];
 
         let mut ctx = EvalContext::default();
-        for (from, to) in tests {
-            let r: Result<i64> = from.convert(&mut ctx);
+        for (from, tp, to) in tests {
+            let r = from.to_int(&mut ctx, tp);
             match to {
                 Some(to) => assert_eq!(to, r.unwrap()),
                 None => assert!(
                     r.is_err(),
-                    "from: {}, res is {:?}, should be overflow",
+                    "from: {}, to tp: {} should be overflow",
                     from,
-                    to
+                    tp
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_uint_into_int() {
+        let tests: Vec<(u64, FieldTypeTp, Option<i64>)> = vec![
+            (123, FieldTypeTp::Tiny, Some(123)),
+            (256, FieldTypeTp::Tiny, None),
+            (123, FieldTypeTp::Short, Some(123)),
+            (65536, FieldTypeTp::Short, None),
+            (123, FieldTypeTp::Int24, Some(123)),
+            (8388610, FieldTypeTp::Int24, None),
+            (8388610, FieldTypeTp::Long, Some(8388610)),
+            (4294967297, FieldTypeTp::Long, None),
+            (4294967297, FieldTypeTp::LongLong, Some(4294967297)),
+            (u64::MAX, FieldTypeTp::LongLong, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (from, tp, to) in tests {
+            let r = from.to_int(&mut ctx, tp);
+            match to {
+                Some(to) => assert_eq!(to, r.unwrap()),
+                None => assert!(
+                    r.is_err(),
+                    "from: {}, to tp: {} should be overflow",
+                    from,
+                    tp
+                ),
+            }
+        }
+    }
+
+
+    #[test]
+    fn test_float_to_int() {
+        let tests: Vec<(f64, FieldTypeTp, Option<i64>)> = vec![
+            (123.1, FieldTypeTp::Tiny, Some(123)),
+            (123.6, FieldTypeTp::Tiny, Some(124)),
+            (-123.1, FieldTypeTp::Tiny, Some(-123)),
+            (-123.6, FieldTypeTp::Tiny, Some(-124)),
+            (256.5, FieldTypeTp::Tiny, None),
+            (256.1, FieldTypeTp::Short, Some(256)),
+            (256.6, FieldTypeTp::Short, Some(257)),
+            (-256.1, FieldTypeTp::Short, Some(-256)),
+            (-256.6, FieldTypeTp::Short, Some(-257)),
+            (65535.5, FieldTypeTp::Short, None),
+            (65536.1, FieldTypeTp::Int24, Some(65536)),
+            (65536.5, FieldTypeTp::Int24, Some(65537)),
+            (-65536.1, FieldTypeTp::Int24, Some(-65536)),
+            (-65536.5, FieldTypeTp::Int24, Some(-65537)),
+            (8388610.2, FieldTypeTp::Int24, None),
+            (8388610.4, FieldTypeTp::Long, Some(8388610)),
+            (8388610.5, FieldTypeTp::Long, Some(8388611)),
+            (-8388610.4, FieldTypeTp::Long, Some(-8388610)),
+            (-8388610.5, FieldTypeTp::Long, Some(-8388611)),
+            (4294967296.8, FieldTypeTp::Long, None),
+            (4294967296.8, FieldTypeTp::LongLong, Some(4294967297)),
+            (4294967297.1, FieldTypeTp::LongLong, Some(4294967297)),
+            (-4294967296.8, FieldTypeTp::LongLong, Some(-4294967297)),
+            (-4294967297.1, FieldTypeTp::LongLong, Some(-4294967297)),
+            (f64::MAX, FieldTypeTp::LongLong, None),
+            (f64::MIN, FieldTypeTp::LongLong, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (from, tp, to) in tests {
+            let r = from.to_int(&mut ctx, tp);
+            match to {
+                Some(to) => assert_eq!(to, r.unwrap()),
+                None => assert!(
+                    r.is_err(),
+                    "from: {}, to tp: {} should be overflow",
+                    from,
+                    tp
                 ),
             }
         }

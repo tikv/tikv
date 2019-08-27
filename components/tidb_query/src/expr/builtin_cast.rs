@@ -79,7 +79,7 @@ impl ScalarFunc {
             _ => false,
         };
         let res = if is_negative {
-            let r: Result<i64> = <&[u8] as ConvertTo<i64>>::convert(&val.as_ref(), ctx);
+            let r: Result<i64> = val.convert(ctx);
             r.map(|v| {
                 // TODO: handle inUnion flag
                 if self
@@ -94,7 +94,7 @@ impl ScalarFunc {
                 v
             })
         } else {
-            let r: Result<u64> = <&[u8] as ConvertTo<u64>>::convert(&val.as_ref(), ctx);
+            let r: Result<u64> = val.convert(ctx);
             r.map(|urs| {
                 if !self
                     .field_type
@@ -149,7 +149,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val: Cow<Json> = try_opt!(self.children[0].eval_json(ctx, row));
-        let res: i64 = <Json as ConvertTo<i64>>::convert(val.as_ref(), ctx)?;
+        let res: i64 = val.as_ref().convert(ctx)?;
         Ok(Some(res))
     }
 
@@ -794,7 +794,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[allow(clippy::inconsistent_digit_grouping)]
-        let time_int = 2012_12_12_12_00_23i64;
+            let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
@@ -919,7 +919,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[allow(clippy::inconsistent_digit_grouping)]
-        let int_t = 2012_12_12_12_00_23u64;
+            let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
