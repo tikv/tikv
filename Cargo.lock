@@ -419,7 +419,7 @@ dependencies = [
 [[package]]
 name = "criterion-cpu-time"
 version = "0.1.0"
-source = "git+https://github.com/YangKeao/criterion-cpu-time.git#85549379010c0e8dcceea781b0918d63d1b23a5a"
+source = "git+https://github.com/YangKeao/criterion-cpu-time.git#caa30929e27549aecab3a255e0a6ee2eeae9d1a2"
 dependencies = [
  "criterion 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.60 (registry+https://github.com/rust-lang/crates.io-index)",
