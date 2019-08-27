@@ -64,11 +64,13 @@ where
     pub f: F,
 }
 
+type BenchFn<M, I>=Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static>;
+
 pub trait IBenchCase {
     type M: criterion::measurement::Measurement + 'static;
     type I;
 
-    fn get_fn(&self) -> Box<dyn Fn(&mut criterion::Bencher<Self::M>, &Self::I) + 'static>;
+    fn get_fn(&self) -> BenchFn<Self::M, Self::I>;
 
     fn get_name(&self) -> &'static str;
 }
@@ -81,7 +83,7 @@ where
     type M = M;
     type I = I;
 
-    fn get_fn(&self) -> Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static> {
+    fn get_fn(&self) -> BenchFn<Self::M, Self::I> {
         Box::new(self.f)
     }
 
@@ -120,7 +122,7 @@ where
         self.inner.get_name()
     }
 
-    pub fn get_fn(&self) -> Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static> {
+    pub fn get_fn(&self) -> BenchFn<M, I> {
         self.inner.get_fn()
     }
 }
