@@ -485,6 +485,7 @@ fn test_serde_custom_tikv_config() {
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
+            memory_allocator: Some(String::from("nodump")),
         },
     };
     value.coprocessor = CopConfig {
