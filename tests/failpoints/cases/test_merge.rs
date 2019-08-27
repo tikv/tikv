@@ -335,7 +335,6 @@ fn test_node_merge_catch_up_logs_no_need() {
     // put some keys to trigger compact raft log
     for i in 2..20 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v");
-        must_get_none(&cluster.get_engine(3), b"k1{}");
     }
 
     // let the peer of left region on store 3 falls behind.
