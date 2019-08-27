@@ -46,6 +46,8 @@ pub struct BatchExecutorsRunner<SS> {
     collect_exec_summary: bool,
 
     exec_stats: ExecuteStats,
+
+    stream_batch_row_limit: usize,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -300,6 +302,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
+
+        stream_batch_row_limit: usize,
+
+        is_streaming: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -347,6 +353,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             config,
             collect_exec_summary,
             exec_stats,
+            stream_batch_row_limit,
         })
     }
 
@@ -455,33 +462,22 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     // TODO: IntervalRange should be placed inside `StreamResponse`.
     // TODO: do not copy from the origin
+    // TODO: remove this
+
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
-        //        let (mut record_cnt, mut finished) = (0, false);
-        //        let mut chunk = Chunk::default();
-        //        while record_cnt < self.batch_row_limit {
-        //            // TODO: move the scan rows here.
-        //            match self.out_most_executor.next_batch()? {
-        //                Some(row) => {
-        //                    self.deadline.check()?;
-        //                    record_cnt += 1;
-        //                    let value = row.get_binary(&self.output_offsets)?;
-        //                    chunk.mut_rows_data().extend_from_slice(&value);
-        //                }
-        //                None => {
-        //                    finished = true;
-        //                    break;
-        //                }
-        //            }
-        //        }
-        //        if record_cnt > 0 {
-        //            let range = self.executor.take_scanned_range();
-        //            return self
-        //                .make_stream_response(chunk)
-        //                .map(|r| (Some((r, range)), finished));
-        //        }
-        //        Ok((None, true))
+
+        let mut _batch_size = BATCH_INITIAL_SIZE;
+        let mut _warnings = self.config.new_eval_warnings();
+        let current_size = 0;
+
+        // TODO: decide how to
+        while current_size < self.stream_batch_row_limit {
+            unimplemented!()
+
+        }
+
         unimplemented!()
     }
 }
