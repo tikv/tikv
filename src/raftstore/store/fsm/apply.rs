@@ -2788,10 +2788,14 @@ impl ApplyRouter {
                     );
                     return;
                 }
-                Msg::CatchUpLogs(cul) => panic!(
-                    "[region {}] is removed before merged, failed to schedule {:?}",
-                    region_id, cul.merge
-                ),
+                Msg::CatchUpLogs(cul) => {
+                    warn!(
+                        "region is removed before merged, are we shutting down?";
+                        "region_id" => region_id,
+                        "merge" => ?cul.merge,
+                    );
+                    return;
+                }
                 #[cfg(test)]
                 Msg::Validate(_, _) => return,
             },
