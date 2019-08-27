@@ -178,6 +178,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let mut options = Options::default();
         options.lock_ttl = req.get_lock_ttl();
         options.skip_constraint_check = req.get_skip_constraint_check();
+        options.txn_size = req.get_txn_size();
 
         let (cb, f) = paired_future_callback();
         let res = self.storage.async_prewrite(
