@@ -1656,7 +1656,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
-                new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
+                new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_size_diff.0;
                 new_peer.peer.keys_diff_hint = self.ctx.cfg.region_split_check_keys_diff;
             }
             let mailbox = BasicMailbox::new(sender, new_peer);
@@ -1995,7 +1995,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
-        self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
+        self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_size_diff.0;
         self.fsm.peer.keys_diff_hint = self.ctx.cfg.region_split_check_keys_diff;
         if self.fsm.peer.is_leader() {
             info!(
@@ -2568,8 +2568,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // If peer says should update approximate size, update region
         // size and check whether the region should split.
         if self.fsm.peer.approximate_size.is_some()
-            && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
-            && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
+            && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_size_diff.0
+            && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_size_diff.0
             && self.fsm.peer.keys_diff_hint < self.ctx.cfg.region_split_check_keys_diff
         {
             return;
@@ -2701,7 +2701,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
         self.fsm.peer.compaction_declined_bytes += declined_bytes;
-        if self.fsm.peer.compaction_declined_bytes >= self.ctx.cfg.region_split_check_diff.0 {
+        if self.fsm.peer.compaction_declined_bytes >= self.ctx.cfg.region_split_check_size_diff.0 {
             UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
         }
         self.register_split_region_check_tick();

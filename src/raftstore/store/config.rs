@@ -50,7 +50,7 @@ pub struct Config {
     pub split_region_check_tick_interval: ReadableDuration,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
-    pub region_split_check_diff: ReadableSize,
+    pub region_split_check_size_diff: ReadableSize,
     /// When keys number change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_keys_diff: u64,
@@ -160,7 +160,7 @@ impl Default for Config {
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
-            region_split_check_diff: split_size / 16,
+            region_split_check_size_diff: split_size / 16,
             region_split_check_keys_diff: split_keys / 16,
             clean_stale_peer_delay: ReadableDuration::minutes(10),
             region_compact_check_interval: ReadableDuration::minutes(5),
@@ -420,8 +420,8 @@ impl Config {
             .with_label_values(&["split_region_check_tick_interval"])
             .set(self.split_region_check_tick_interval.as_secs() as f64);
         metrics
-            .with_label_values(&["region_split_check_diff"])
-            .set(self.region_split_check_diff.0 as f64);
+            .with_label_values(&["region_split_check_size_diff"])
+            .set(self.region_split_check_size_diff.0 as f64);
         metrics
             .with_label_values(&["region_split_check_keys_diff"])
             .set(self.region_split_check_keys_diff as f64);

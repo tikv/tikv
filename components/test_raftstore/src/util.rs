@@ -127,7 +127,7 @@ pub fn new_store_cfg() -> Config {
         abnormal_leader_missing_duration: ReadableDuration::millis(1500),
         peer_stale_state_check_interval: ReadableDuration::secs(1),
         pd_heartbeat_tick_interval: ReadableDuration::millis(20),
-        region_split_check_diff: ReadableSize(10000),
+        region_split_check_size_diff: ReadableSize(10000),
         region_split_check_keys_diff: 1000,
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(250),

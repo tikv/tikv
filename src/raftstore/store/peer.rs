@@ -1493,7 +1493,13 @@ impl Peer {
         self.delete_keys_hint += apply_metrics.delete_keys_hint;
         let size_diff = self.size_diff_hint as i64 + apply_metrics.size_diff_hint;
         self.size_diff_hint = cmp::max(size_diff, 0) as u64;
-        let keys_diff = self.keys_diff_hint as i64 + apply_metrics.keys_diff_hint;
+        // for txn, we only record diff in write cf
+        let keys_diff = self.keys_diff_hint as i64
+            + if apply_metrics.keys_diff_hint_write_cf == 0 {
+                apply_metrics.keys_diff_hint_default_cf
+            } else {
+                apply_metrics.keys_diff_hint_write_cf
+            };
         self.keys_diff_hint = cmp::max(keys_diff, 0) as u64;
 
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {

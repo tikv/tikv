@@ -214,7 +214,7 @@
 ## When Region size change exceeds this config, TiKV will check whether the Region should be split
 ## or not. To reduce the cost of scanning data in the checking process, you can set the value to
 ## 32MB during checking and set it back to the default value in normal operations.
-# region-split-check-diff = "6MB"
+# region-split-check-size-diff = "6MB"
 
 ## The threshold of triggering Region split check.
 ## When Region keys number change exceeds this config, TiKV will check whether the Region should be split

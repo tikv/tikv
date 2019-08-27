@@ -1421,7 +1421,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         } else {
             0
         };
-        if total_bytes_declined < self.ctx.cfg.region_split_check_diff.0
+        if total_bytes_declined < self.ctx.cfg.region_split_check_size_diff.0
             || total_bytes_declined * 10 < event.total_input_bytes
         {
             return;
@@ -1432,13 +1432,13 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .with_label_values(&[&output_level_str])
             .observe(total_bytes_declined as f64);
 
-        // self.cfg.region_split_check_diff.0 / 16 is an experienced value.
+        // self.cfg.region_split_check_size_diff.0 / 16 is an experienced value.
         let mut region_declined_bytes = {
             let meta = self.ctx.store_meta.lock().unwrap();
             calc_region_declined_bytes(
                 event,
                 &meta.region_ranges,
-                self.ctx.cfg.region_split_check_diff.0 / 16,
+                self.ctx.cfg.region_split_check_size_diff.0 / 16,
             )
         };
 
