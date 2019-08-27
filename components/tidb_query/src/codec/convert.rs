@@ -1012,7 +1012,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_float_to_int() {
         let tests: Vec<(f64, FieldTypeTp, Option<i64>)> = vec![

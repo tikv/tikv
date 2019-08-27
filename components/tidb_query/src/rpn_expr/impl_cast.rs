@@ -6,7 +6,7 @@ use std::convert::TryFrom;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_datatype::*;
-use tipb::FieldType;
+use tipb::{Expr, FieldType};
 
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
@@ -14,18 +14,15 @@ use crate::codec::mysql::RoundMode;
 use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::expr::Flag;
-use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra};
+use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
 
-// TODO: This function supports some internal casts performed by TiKV. However it would be better
-//  to be done in TiDB.
-/// Gets the cast function between specified data types.
-pub fn get_cast_fn_rpn_node(
+fn get_cast_fn_rpn_meta(
     from_field_type: &FieldType,
-    to_field_type: FieldType,
-) -> Result<RpnExpressionNode> {
-    let from: EvalType = box_try!(EvalType::try_from(from_field_type.as_accessor().tp()));
-    let to: EvalType = box_try!(EvalType::try_from(to_field_type.as_accessor().tp()));
+    to_field_type: &FieldType,
+) -> Result<RpnFnMeta> {
+    let from = box_try!(EvalType::try_from(from_field_type.as_accessor().tp()));
+    let to = box_try!(EvalType::try_from(to_field_type.as_accessor().tp()));
     let func_meta = match (from, to) {
         // --------------* as int/uint--------------
         (EvalType::Int, EvalType::Int) => cast_int_as_int_fn_meta(),
@@ -105,6 +102,18 @@ pub fn get_cast_fn_rpn_node(
         // --------------bugs--------------
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
+    Ok(func_meta)
+}
+
+/// Gets the cast function between specified data types.
+///
+/// TODO: This function supports some internal casts performed by TiKV. However it would be better
+/// to be done in TiDB.
+pub fn get_cast_fn_rpn_node(
+    from_field_type: &FieldType,
+    to_field_type: FieldType,
+) -> Result<RpnExpressionNode> {
+    let func_meta = get_cast_fn_rpn_meta(from_field_type, &to_field_type)?;
     // This cast function is inserted by `Coprocessor` automatically,
     // the `inUnion` flag always false in this situation. Ideally,
     // the cast function should be inserted by TiDB and pushed down
@@ -115,6 +124,19 @@ pub fn get_cast_fn_rpn_node(
         field_type: to_field_type,
         implicit_args: Vec::new(),
     })
+}
+
+/// Gets the RPN function meta
+pub fn map_cast_func(expr: &Expr) -> Result<RpnFnMeta> {
+    let children = expr.get_children();
+    if children.len() != 1 {
+        return Err(other_err!(
+            "Unexpected arguments: sig {:?} with {} args",
+            expr.get_sig(),
+            children.len()
+        ));
+    }
+    get_cast_fn_rpn_meta(children[0].get_field_type(), expr.get_field_type())
 }
 
 /// Indicates whether the current expression is evaluated in union statement
