@@ -47,6 +47,8 @@ impl Checker {
 
 impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
+        // For txn, only check keys difference in write cf. 
+        // For rawkv, write cf should be empty so only default cf will be checked.
         if self.cf == CF_WRITE && !key.is_commit_version() {
             return false;
         }
