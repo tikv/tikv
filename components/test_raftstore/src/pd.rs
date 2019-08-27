@@ -208,6 +208,7 @@ struct Cluster {
     region_approximate_size: HashMap<u64, u64>,
     region_approximate_keys: HashMap<u64, u64>,
     region_last_report_ts: HashMap<u64, u64>,
+    region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
@@ -240,6 +241,7 @@ impl Cluster {
             region_approximate_size: HashMap::default(),
             region_approximate_keys: HashMap::default(),
             region_last_report_ts: HashMap::default(),
+            region_last_report_term: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
             split_count: 0,
@@ -320,6 +322,10 @@ impl Cluster {
 
     fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
         self.region_last_report_ts.get(&region_id).cloned()
+    }
+
+    fn get_region_last_report_term(&self, region_id: u64) -> Option<u64> {
+        self.region_last_report_term.get(&region_id).cloned()
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -562,7 +568,7 @@ impl Cluster {
 
     fn region_heartbeat(
         &mut self,
-        _term: u64,
+        term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
@@ -585,6 +591,8 @@ impl Cluster {
             .insert(region.get_id(), region_stat.approximate_keys);
         self.region_last_report_ts
             .insert(region.get_id(), region_stat.last_report_ts);
+        self.region_last_report_term
+            .insert(region.get_id(), term);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -938,6 +946,10 @@ impl TestPdClient {
 
     pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_last_report_ts(region_id)
+    }
+
+    pub fn get_region_last_report_term(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_last_report_term(region_id)
     }
 
     pub fn set_gc_safe_point(&self, safe_point: u64) {
