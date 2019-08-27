@@ -2,7 +2,6 @@
 
 use super::setup::*;
 use super::signal_handler;
-use crate::setup::initial_logger;
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
@@ -17,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tikv::config::{check_and_persist_critical_config, TiKvConfig};
+use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -43,10 +42,6 @@ use tikv_util::worker::FutureWorker;
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 pub fn run_tikv(mut config: TiKvConfig) {
-    if let Err(e) = check_and_persist_critical_config(&config) {
-        fatal!("critical config check failed: {}", e);
-    }
-
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -55,11 +50,6 @@ pub fn run_tikv(mut config: TiKvConfig) {
 
     // Print version information.
     tikv::log_tikv_info();
-
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
-    }
     info!(
         "using config";
         "config" => serde_json::to_string(&config).unwrap(),
@@ -187,7 +177,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let engine = RaftKv::new(raft_router.clone());
 
     let storage_read_pool = storage::readpool_impl::build_read_pool(
-        &cfg.readpool.storage.build_config(),
+        &cfg.readpool.storage,
         pd_sender.clone(),
         engine.clone(),
     );
@@ -240,7 +230,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create coprocessor endpoint.
     let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-        &cfg.readpool.coprocessor.build_config(),
+        &cfg.readpool.coprocessor,
         pd_sender.clone(),
         engine.clone(),
     );

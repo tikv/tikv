@@ -13,7 +13,7 @@ use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
 use engine::Engines;
-use tikv::config::TiKvConfig;
+use tikv::config::{CoprReadPoolConfig, StorageReadPoolConfig, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -132,8 +132,10 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool =
-            storage::readpool_impl::build_read_pool_for_test(raft_engine.clone());
+        let storage_read_pool = storage::readpool_impl::build_read_pool_for_test(
+            &StorageReadPoolConfig::default_for_test(),
+            raft_engine.clone(),
+        );
         let store = create_raft_storage(
             RaftKv::new(sim_router.clone()),
             &cfg.storage,
@@ -164,8 +166,10 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool =
-            coprocessor::readpool_impl::build_read_pool_for_test(store.get_engine());
+        let cop_read_pool = coprocessor::readpool_impl::build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            store.get_engine(),
+        );
         let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {

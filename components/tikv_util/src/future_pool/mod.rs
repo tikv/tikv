@@ -6,7 +6,7 @@
 mod builder;
 mod metrics;
 
-pub use self::builder::Builder;
+pub use self::builder::{Builder, Config};
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -132,24 +132,6 @@ impl FuturePool {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Full {
-    pub current_tasks: usize,
-    pub max_tasks: usize,
-}
-
-impl std::fmt::Display for Full {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(fmt, "future pool is full")
-    }
-}
-
-impl std::error::Error for Full {
-    fn description(&self) -> &str {
-        "future pool is full"
-    }
-}
-
 /// Tries to trigger a tick in current thread.
 ///
 /// This function is effective only when it is called in thread pool worker
@@ -167,6 +149,24 @@ fn try_tick_thread(env: &Env) {
             f();
         }
     })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Full {
+    pub current_tasks: usize,
+    pub max_tasks: usize,
+}
+
+impl std::fmt::Display for Full {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(fmt, "future pool is full")
+    }
+}
+
+impl std::error::Error for Full {
+    fn description(&self) -> &str {
+        "future pool is full"
+    }
 }
 
 #[cfg(test)]
