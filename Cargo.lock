@@ -334,6 +334,7 @@ dependencies = [
  "signal 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=91904ade)",
+ "tempfile 3.0.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "tikv 4.0.0-alpha",
  "tikv_util 0.1.0",
  "toml 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",

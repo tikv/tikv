@@ -6,8 +6,8 @@
 use std::process;
 
 use clap::{crate_authors, crate_version, App, Arg};
+use cmd::config::Config;
 use cmd::setup::validate_and_persist_config;
-use tikv::config::TiKvConfig;
 
 fn main() {
     let matches = App::new("TiKV")
@@ -137,14 +137,14 @@ fn main() {
         .get_matches();
 
     if matches.is_present("print-sample-config") {
-        let config = TiKvConfig::default();
+        let config = Config::default();
         println!("{}", toml::to_string_pretty(&config).unwrap());
         process::exit(0);
     }
 
     let mut config = matches
         .value_of("config")
-        .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));
+        .map_or_else(Config::default, |path| Config::from_file(&path));
 
     cmd::setup::overwrite_config_with_cmd_args(&mut config, &matches);
 

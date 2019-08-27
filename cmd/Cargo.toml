@@ -55,3 +55,6 @@ pd_client = { path = "../components/pd_client" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
+
+[dev-dependencies]
+tempfile = "3.0"
