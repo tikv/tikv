@@ -108,6 +108,10 @@ impl RequestHandler for BatchDAGHandler {
         handle_qe_response(self.0.handle_request())
     }
 
+    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
+        handle_qe_stream_response(self.0.handle_streaming_request())
+    }
+
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
         self.0.collect_storage_stats(dest);
     }

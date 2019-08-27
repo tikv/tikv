@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
-use tipb::{Chunk, DagRequest, SelectResponse};
+use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -13,7 +13,7 @@ use super::interface::{BatchExecutor, ExecuteStats};
 use crate::execute_stats::*;
 use crate::expr::EvalConfig;
 use crate::metrics::*;
-use crate::storage::Storage;
+use crate::storage::{IntervalRange, Storage};
 use crate::Result;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
@@ -451,5 +451,37 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {
         self.out_most_executor.collect_storage_stats(dest);
+    }
+
+    // TODO: IntervalRange should be placed inside `StreamResponse`.
+    // TODO: do not copy from the origin
+    pub fn handle_streaming_request(
+        &mut self,
+    ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
+        //        let (mut record_cnt, mut finished) = (0, false);
+        //        let mut chunk = Chunk::default();
+        //        while record_cnt < self.batch_row_limit {
+        //            // TODO: move the scan rows here.
+        //            match self.out_most_executor.next_batch()? {
+        //                Some(row) => {
+        //                    self.deadline.check()?;
+        //                    record_cnt += 1;
+        //                    let value = row.get_binary(&self.output_offsets)?;
+        //                    chunk.mut_rows_data().extend_from_slice(&value);
+        //                }
+        //                None => {
+        //                    finished = true;
+        //                    break;
+        //                }
+        //            }
+        //        }
+        //        if record_cnt > 0 {
+        //            let range = self.executor.take_scanned_range();
+        //            return self
+        //                .make_stream_response(chunk)
+        //                .map(|r| (Some((r, range)), finished));
+        //        }
+        //        Ok((None, true))
+        unimplemented!()
     }
 }
