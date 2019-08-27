@@ -1167,7 +1167,7 @@ impl ApplyDelegate {
         match req.get_put().get_cf() {
             CF_WRITE => self.metrics.keys_diff_hint_write_cf += 1,
             CF_DEFAULT => self.metrics.keys_diff_hint_default_cf += 1,
-            other => {}
+            _ => {}
         };
         if !req.get_put().get_cf().is_empty() {
             let cf = req.get_put().get_cf();

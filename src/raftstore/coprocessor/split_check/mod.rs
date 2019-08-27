@@ -61,7 +61,6 @@ impl Host {
         let mut ob_ctx = ObserverContext::new(region);
         for checker in &mut self.checkers {
             if checker.on_kv(&mut ob_ctx, entry) {
-                println!("on kv done");
                 return true;
             }
         }
