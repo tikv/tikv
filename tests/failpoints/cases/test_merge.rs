@@ -364,8 +364,6 @@ fn test_node_merge_catch_up_logs_no_need() {
     // so now can let apply index make progress.
     fail::remove("apply_after_prepare_merge");
 
-    // let prepare merge not applied to make sure commit merge is called first.
-    fail::cfg("on_handle_apply_1000_1003", "return").unwrap();
     // make sure all the logs are committed, including the compact command
     cluster.clear_send_filters();
     thread::sleep(Duration::from_millis(50));
@@ -374,8 +372,6 @@ fn test_node_merge_catch_up_logs_no_need() {
     fail::remove("on_handle_catch_up_logs_for_merge");
     fail::remove("after_handle_catch_up_logs_for_merge");
     thread::sleep(Duration::from_millis(50));
-
-    fail::remove("on_handle_apply_1000_1003");
 
     // the source region should be merged and the peer should be destroyed.
     assert!(pd_client.check_merged(left.get_id()));
