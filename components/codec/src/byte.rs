@@ -382,7 +382,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size is not enough.
-    fn write_bytes(&mut self, bs: &[u8]) -> Result<()> {
+    fn write_comparable_bytes(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
         if unsafe { unlikely(buf.len() < len) } {
@@ -400,7 +400,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size is not enough.
-    fn write_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
+    fn write_comparable_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
         if unsafe { unlikely(buf.len() < len) } {
@@ -417,7 +417,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
 impl<T: NumberEncoder> MemComparableByteEncoder for T {}
 
 pub trait MemComparableByteDecoder: BufferReader {
-    fn read_bytes(&mut self) -> Result<Vec<u8>> {
+    fn read_comparable_bytes(&mut self) -> Result<Vec<u8>> {
         let mut buf = vec![0; self.bytes().len()];
         let (read, written) = MemComparableByteCodec::try_decode_first(self.bytes(), &mut buf)?;
         self.advance(read);
@@ -456,7 +456,7 @@ impl<T: NumberEncoder> CompactByteEncoder for T {
     #[inline]
     fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         self.write_var_i64(data.len() as i64)?;
-        self.write_all_bytes(data)
+        self.write_bytes(data)
     }
 }
 
@@ -619,7 +619,7 @@ mod tests {
             ),
         ];
         for (src, encoded) in cases {
-            assert_eq!(encoded.as_slice().read_bytes().unwrap(), src);
+            assert_eq!(encoded.as_slice().read_comparable_bytes().unwrap(), src);
         }
     }
 

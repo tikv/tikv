@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::client::Client;
+use super::client::{self, Client};
 use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
@@ -9,7 +9,8 @@ use crate::raftstore::coprocessor::{Coprocessor, CoprocessorHost, ObserverContex
 use crate::server::resolve::StoreAddrResolver;
 use futures::{Future, Sink, Stream};
 use grpcio::{
-    self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink, WriteFlags,
+    self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
+    WriteFlags,
 };
 use kvproto::deadlock::*;
 use kvproto::metapb::Region;
@@ -369,6 +370,8 @@ struct Inner {
 pub struct Detector<S: StoreAddrResolver + 'static> {
     /// The store id of the node.
     store_id: u64,
+    /// Used to create clients to the leader.
+    env: Arc<Environment>,
     /// The leader's id and address if exists.
     leader_info: Option<(u64, String)>,
     /// The connection to the leader.
@@ -399,6 +402,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         assert!(store_id != INVALID_ID);
         Self {
             store_id,
+            env: client::env(),
             leader_info: None,
             leader_client: None,
             pd_client,
@@ -514,7 +518,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         let (leader_id, leader_addr) = self.leader_info.as_ref().unwrap();
         // Create the connection to the leader and registers the callback to receive
         // the deadlock response.
-        let mut leader_client = Client::new(Arc::clone(&self.security_mgr), leader_addr);
+        let mut leader_client = Client::new(
+            Arc::clone(&self.env),
+            Arc::clone(&self.security_mgr),
+            leader_addr,
+        );
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
             let WaitForEntry {
