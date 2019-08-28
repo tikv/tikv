@@ -5,8 +5,12 @@
 #
 # On x86_64 we explicitly set the minimum architecture as "Westmere", a CPU from
 # 2010. We do this because we want to use RocksDB's SSE4.2-optimized Fast_CRC32
-# function, and SSE4.2 was introduced in Westmere, so we might as well use
-# Westmere-level optimizations everywhere.
+# function. That optimization also uses the PCLMUL instruction, and that
+# instruction was introduced in Westmere (where SSE4.2 was introduced in
+# Nehalem), so we might as well use Westmere-level optimizations everywhere.
+#
+# Further, we don't want post-Westmere instructions because of tikv#4999 where
+# a user's KVM environment did not support AVX.
 #
 # The behavior of this file can be controlled with the `OPTIMIZE` environment
 # variable, the possible values of which are:
@@ -99,10 +103,17 @@ ifeq ($(OPTIMIZE),normal)
 # crucial SSE 4.2 optimization that we strongly want to turn on, so Westmere is
 # our baseline CPU.
 
+# FIXME: For gcc we're actually _not_ using -march=westmere, but -march=corei7
+# because the TiKV build machines are running a gcc 4.8.5 that doesn't know the
+# -march=westmere flag. -march=corei7 appears to be equivalent to
+# -march=nehalem, one generation back from westmere. In effect this means that
+# gcc will not have access to the AES instructions, including PCLMUL. The
+# RocksDB usage of PCLMUL is open-coded though, so the Fast_CRC32 optimization
+# still works.
 RUSTFLAGS:=-Ctarget-cpu=westmere $(RUSTFLAGS)
-CXXFLAGS:=-march=westmere $(CXXFLAGS)
+CXXFLAGS:=-march=corei7 $(CXXFLAGS)
 CXXFLAGS:=-mtune=generic $(CXXFLAGS)
-CFLAGS:=-march=westmere $(CFLAGS)
+CFLAGS:=-march=corei7 $(CFLAGS)
 CFLAGS:=-mtune=generic $(CFLAGS)
 # Turning _on_ the portable RocksDB build makes it not pass any -march
 # flags, letting us override -march. Turn on RocksDB SSE explicitly is
