@@ -423,7 +423,7 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
             let mut resp = GetStoreInfoResponse::default();
             match debugger.get_store_id() {
                 Ok(store_id) => resp.set_store_id(store_id),
-                Err => resp.set_store_id(0),
+                Err(_) => resp.set_store_id(0),
             }
             Ok(resp)
         });
@@ -444,7 +444,7 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
             let mut resp = GetClusterInfoResponse::default();
             match debugger.get_cluster_id() {
                 Ok(cluster_id) => resp.set_cluster_id(cluster_id),
-                Err => resp.set_cluster_id(0),
+                Err(_) => resp.set_cluster_id(0),
             }
             Ok(resp)
         });
