@@ -476,7 +476,7 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
 
     // Split region commands
     let key = b"b";
@@ -486,9 +486,8 @@ fn test_split_region() {
     let resp = client.split_region(&req).unwrap();
     assert_eq!(
         Key::from_encoded(resp.get_left().get_end_key().to_vec())
-            .truncate_ts()
+            .into_raw()
             .unwrap()
-            .as_encoded()
             .as_slice(),
         key
     );
@@ -496,6 +495,30 @@ fn test_split_region() {
         resp.get_left().get_end_key(),
         resp.get_right().get_start_key()
     );
+
+    // Batch split region
+    let region_id = resp.get_right().get_id();
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(resp.get_right().get_region_epoch().to_owned());
+    let mut req = SplitRegionRequest::default();
+    req.set_context(ctx);
+    let mut split_keys = vec![b"c".to_vec(), b"d".to_vec(), b"e".to_vec()];
+    req.set_split_keys(split_keys.clone().into());
+    let resp = client.split_region(&req).unwrap();
+    let result_split_keys: Vec<_> = resp
+        .get_regions()
+        .iter()
+        .map(|x| {
+            Key::from_encoded(x.get_start_key().to_vec())
+                .into_raw()
+                .unwrap()
+        })
+        .collect();
+    split_keys.insert(0, b"b".to_vec());
+    assert_eq!(result_split_keys, split_keys);
 }
 
 #[test]

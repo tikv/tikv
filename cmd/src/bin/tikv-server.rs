@@ -5,15 +5,18 @@
 
 use std::process;
 
-use clap::{crate_authors, crate_version, App, Arg};
+use clap::{crate_authors, App, Arg};
+use cmd::setup::validate_and_persist_config;
 use tikv::config::TiKvConfig;
 
 fn main() {
+    let version_info = tikv::tikv_version_info();
+
     let matches = App::new("TiKV")
         .about("A distributed transactional key-value database powered by Rust and Raft")
         .author(crate_authors!())
-        .version(crate_version!())
-        .long_version(tikv::tikv_version_info().as_ref())
+        .version(version_info.as_ref())
+        .long_version(version_info.as_ref())
         .arg(
             Arg::with_name("config")
                 .short("C")
@@ -21,6 +24,13 @@ fn main() {
                 .value_name("FILE")
                 .help("Set the configuration file")
                 .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("config-check")
+                .required(false)
+                .long("config-check")
+                .takes_value(false)
+                .help("Check config file validity and exit"),
         )
         .arg(
             Arg::with_name("log-level")
@@ -139,6 +149,14 @@ fn main() {
         .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));
 
     cmd::setup::overwrite_config_with_cmd_args(&mut config, &matches);
+
+    if matches.is_present("config-check") {
+        validate_and_persist_config(&mut config, false);
+        println!("config check successful");
+        process::exit(0)
+    } else {
+        validate_and_persist_config(&mut config, true);
+    }
 
     cmd::server::run_tikv(config);
 }
