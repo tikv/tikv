@@ -1,11 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::thread;
+use std::time;
 
 use kvproto::kvrpcpb::Context;
+use raft::eraftpb::MessageType;
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
-use std::thread;
-use std::time;
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::{CFStatistics, Key};
@@ -183,6 +186,70 @@ fn test_read_on_replica() {
     // sleep to ensure the follower has received a heartbeat from the leader
     thread::sleep(time::Duration::from_millis(300));
     assert_has(&follower_ctx, &follower_storage, k4, v4);
+}
+
+#[test]
+fn test_invaild_read_index_when_no_leader() {
+    // Initialize cluster
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(3));
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Set region and peers
+    let r1 = cluster.run_conf_change();
+    let p1 = new_peer(1, 1);
+    cluster.must_put(b"k0", b"v0");
+    let p2 = new_peer(2, 2);
+    cluster.pd_client.must_add_peer(r1, p2.clone());
+    let p3 = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(r1, p3.clone());
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    // Transfer leader to p2
+    let region = cluster.get_region(b"k0");
+    cluster.must_transfer_leader(region.get_id(), p2.clone());
+
+    // Delay all raft messages to p1.
+    let heartbeat_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgHeartbeat)
+            .when(Arc::new(AtomicBool::new(true))),
+    );
+    cluster.sim.wl().add_recv_filter(1, heartbeat_filter);
+    let vote_resp_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgRequestVoteResponse)
+            .when(Arc::new(AtomicBool::new(true))),
+    );
+    cluster.sim.wl().add_recv_filter(1, vote_resp_filter);
+
+    // wait for election timeout
+    thread::sleep(time::Duration::from_millis(300));
+    // send read index requests to p1
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    request.mut_header().set_peer(p1.clone());
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request.clone(), cb)
+        .unwrap();
+
+    let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();
+    assert!(resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("can not read index due to no leader"));
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
