@@ -9,7 +9,6 @@ use tikv_util::config::ReadableDuration;
 /// for infinity, logging only every 10th duplicate error.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     /// The PD endpoints for the client.
