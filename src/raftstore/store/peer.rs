@@ -1964,6 +1964,7 @@ impl Peer {
                 &mut err_resp,
                 box_err!("can not read index due to no leader"),
             );
+            poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             cb.invoke_with_response(err_resp);
             return false;
         }
