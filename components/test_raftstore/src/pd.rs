@@ -843,7 +843,7 @@ impl TestPdClient {
         self.must_none_peer(region_id, peer);
     }
 
-    pub fn must_merge(&self, from: u64, target: u64) {
+    pub fn merge_region(&self, from: u64, target: u64) {
         let op = Operator::MergeRegion {
             source_region_id: from,
             target_region_id: target,
@@ -851,6 +851,10 @@ impl TestPdClient {
         };
         self.schedule_operator(from, op.clone());
         self.schedule_operator(target, op);
+    }
+
+    pub fn must_merge(&self, from: u64, target: u64) {
+        self.merge_region(from, target);
 
         for _ in 1..500 {
             sleep_ms(10);
@@ -865,6 +869,10 @@ impl TestPdClient {
             return;
         }
         panic!("region {:?} is still not merged.", region.unwrap());
+    }
+
+    pub fn check_merged(&self, from: u64) -> bool {
+        self.get_region_by_id(from).wait().unwrap().is_none()
     }
 
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
