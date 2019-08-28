@@ -514,7 +514,7 @@ fn notify_deadlock_detector_if_needed(
     is_pessimistic_txn: bool,
     txn_ts: u64,
 ) {
-    if let (Some(detector_scheduler), false) = (detector_scheduler.as_ref(), is_pessimistic_txn) {
+    if let (Some(detector_scheduler), true) = (detector_scheduler.as_ref(), is_pessimistic_txn) {
         detector_scheduler.clean_up(txn_ts);
     }
 }
