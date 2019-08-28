@@ -15,7 +15,7 @@ impl Into<ErrorPb> for Error {
     fn into(self) -> ErrorPb {
         let mut err = ErrorPb::new();
         match self {
-            Error::ClusterID(current, request) => {
+            Error::ClusterID { current, request } => {
                 err.mut_cluster_id_error().set_current(current);
                 err.mut_cluster_id_error().set_request(request);
             }
@@ -37,42 +37,41 @@ impl Into<ErrorPb> for Error {
     }
 }
 
-quick_error! {
-    /// The error type for backup.
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("{}", err)
-        }
-        Rocks(err: String) {
-            from()
-            description("Rocksdb error")
-            display("{}", err)
-        }
-        Io(err: IoError) {
-            from()
-            cause(err)
-            display("{}", err)
-            description(err.description())
-        }
-        Engine(err: EngineError) {
-            from()
-            display("engine error {:?}", err)
-            description("engine error")
-        }
-        Txn(err: TxnError) {
-            from()
-            display("transaction error {:?}", err)
-            description("transaction error")
-        }
-        ClusterID(current: u64, request: u64) {
-            display("current {:?}, request {:?}", current, request)
-            description("cluster ID mismatch")
-        }
-    }
+/// The error type for backup.
+#[derive(Debug, Fail)]
+pub enum Error {
+    #[fail(display = "Other error {}", _0)]
+    Other(Box<dyn error::Error + Sync + Send>),
+    #[fail(display = "RocksDB error {}", _0)]
+    Rocks(String),
+    #[fail(display = "IO error {}", _0)]
+    Io(IoError),
+    #[fail(display = "Engine error {}", _0)]
+    Engine(EngineError),
+    #[fail(display = "Transaction error {}", _0)]
+    Txn(TxnError),
+    #[fail(display = "ClusterID error current {}, request {}", current, request)]
+    ClusterID { current: u64, request: u64 },
+}
+
+macro_rules! impl_from {
+    ($($inner:ty => $container:ident,)+) => {
+        $(
+            impl From<$inner> for Error {
+                fn from(inr: $inner) -> Error {
+                    Error::$container(inr)
+                }
+            }
+        )+
+    };
+}
+
+impl_from! {
+    Box<dyn error::Error + Sync + Send> => Other,
+    String => Rocks,
+    IoError => Io,
+    EngineError => Engine,
+    TxnError => Txn,
 }
 
 pub type Result<T> = result::Result<T, Error>;

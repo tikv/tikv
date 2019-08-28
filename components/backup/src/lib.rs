@@ -22,9 +22,11 @@ extern crate slog;
 #[macro_use]
 extern crate slog_global;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate serde_derive;
+#[macro_use]
+extern crate failure;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 mod errors;
 
