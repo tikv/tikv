@@ -14,6 +14,39 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
         .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
+#[rpn_fn(varg)]
+#[inline]
+fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
+    Ok(Some(Json::Array(
+        args.iter()
+            .map(|json| match json {
+                None => Json::None,
+                Some(json) => json.to_owned(),
+            })
+            .collect(),
+    )))
+}
+
+// According to mysql 5.7,
+// arguments of json_merge should not be less than 2.
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
+    // min_args = 2, so it's ok to call args[0]
+    let base_json = match args[0] {
+        None => return Ok(None),
+        Some(json) => json.to_owned(),
+    };
+
+    Ok(args[1..]
+        .iter()
+        .try_fold(base_json, move |base, json_to_merge| {
+            json_to_merge
+                .as_ref()
+                .map(|json| base.merge(json.to_owned()))
+        }))
+}
+
 #[rpn_fn]
 #[inline]
 fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
@@ -24,16 +57,15 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
 
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_json_type() {
-        use std::str::FromStr;
-
         let cases = vec![
             (None, None),
             (Some(r#"true"#), Some("BOOLEAN")),
@@ -54,6 +86,69 @@ mod tests {
                 .evaluate(ScalarFuncSig::JsonTypeSig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_json_array() {
+        let cases = vec![
+            (vec![], Some(r#"[]"#)),
+            (vec![Some(r#"1"#), None], Some(r#"[1, null]"#)),
+            (
+                vec![
+                    Some(r#"1"#),
+                    None,
+                    Some(r#"2"#),
+                    Some(r#""sdf""#),
+                    Some(r#""k1""#),
+                    Some(r#""v1""#),
+                ],
+                Some(r#"[1, null, 2, "sdf", "k1", "v1"]"#),
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs = vargs
+                .into_iter()
+                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
+                .collect::<Vec<_>>();
+            let expected = expected.map(|s| Json::from_str(s).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonArraySig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
+        }
+    }
+
+    #[test]
+    fn test_json_merge() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some("{}"), Some("[]")], Some("[{}]")),
+            (
+                vec![Some(r#"{}"#), Some(r#"[]"#), Some(r#"3"#), Some(r#""4""#)],
+                Some(r#"[{}, 3, "4"]"#),
+            ),
+            (
+                vec![Some("[1, 2]"), Some("[3, 4]")],
+                Some(r#"[1, 2, 3, 4]"#),
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs = vargs
+                .into_iter()
+                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
+                .collect::<Vec<_>>();
+            let expected = expected.map(|s| Json::from_str(s).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonMergeSig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
         }
     }
 
