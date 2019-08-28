@@ -6,28 +6,22 @@ WORKDIR /tikv
 COPY rust-toolchain ./
 RUN rustup default nightly-2019-07-19
 
-# Install dependencies at first
-COPY Cargo.toml Cargo.lock ./
-
-# Remove fuzz and test workspace, remove profiler feature
-RUN sed -i '/fuzz/d' Cargo.toml && \
-    sed -i '/test\_/d' Cargo.toml && \
-    sed -i '/profiler/d' Cargo.toml
-
 # Use Makefile to build
 COPY Makefile ./
-
-# Remove cmd from dependencies build
-RUN sed -i '/cmd/d' Cargo.toml && \
-    sed -i '/X_PACKAGE/d' Makefile
 
 # For cargo
 COPY scripts/run-cargo.sh ./scripts/run-cargo.sh
 COPY etc/cargo.config.dist ./etc/cargo.config.dist
+
+# Install dependencies at first
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p ./cmd/
+COPY cmd/Cargo.toml ./cmd/
 # Add components Cargo files
 # Notice: every time we add a new component, we must regenerate the dockerfile
 COPY ./components/codec/Cargo.toml ./components/codec/Cargo.toml
 COPY ./components/engine/Cargo.toml ./components/engine/Cargo.toml
+COPY ./components/external_storage/Cargo.toml ./components/external_storage/Cargo.toml
 COPY ./components/log_wrappers/Cargo.toml ./components/log_wrappers/Cargo.toml
 COPY ./components/match_template/Cargo.toml ./components/match_template/Cargo.toml
 COPY ./components/panic_hook/Cargo.toml ./components/panic_hook/Cargo.toml
@@ -44,12 +38,15 @@ RUN sed -i '/profiler/d' ./components/tidb_query/Cargo.toml
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild
-RUN mkdir -p ./src/bin && \
-    echo 'fn main() {}' > ./src/bin/tikv-ctl.rs && \
-    echo 'fn main() {}' > ./src/bin/tikv-server.rs && \
+RUN mkdir -p ./cmd/src/bin && \
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-ctl.rs && \
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs && \
+    echo '' > ./cmd/src/lib.rs && \
+    mkdir -p ./src/ && \
     echo '' > ./src/lib.rs && \
     mkdir ./components/codec/src && echo '' > ./components/codec/src/lib.rs && \
     mkdir ./components/engine/src && echo '' > ./components/engine/src/lib.rs && \
+    mkdir ./components/external_storage/src && echo '' > ./components/external_storage/src/lib.rs && \
     mkdir ./components/log_wrappers/src && echo '' > ./components/log_wrappers/src/lib.rs && \
     mkdir ./components/match_template/src && echo '' > ./components/match_template/src/lib.rs && \
     mkdir ./components/panic_hook/src && echo '' > ./components/panic_hook/src/lib.rs && \
@@ -60,9 +57,18 @@ RUN mkdir -p ./src/bin && \
     mkdir ./components/tikv_alloc/src && echo '' > ./components/tikv_alloc/src/lib.rs && \
     mkdir ./components/tikv_util/src && echo '' > ./components/tikv_util/src/lib.rs && \
     mkdir ./components/tipb_helper/src && echo '' > ./components/tipb_helper/src/lib.rs && \
-    make build_dist_release && \
+    # Remove test dependencies and profile features.
+    for cargotoml in $(find . -name "Cargo.toml"); do \
+        sed -i '/fuzz/d' ${cargotoml} && \
+        sed -i '/test\_/d' ${cargotoml} && \
+        sed -i '/profiling/d' ${cargotoml} && \
+        sed -i '/profiler/d' ${cargotoml} ; \
+    done
+
+RUN make build_dist_release && \
     rm -rf ./target/release/.fingerprint/codec-* && \
     rm -rf ./target/release/.fingerprint/engine-* && \
+    rm -rf ./target/release/.fingerprint/external_storage-* && \
     rm -rf ./target/release/.fingerprint/log_wrappers-* && \
     rm -rf ./target/release/.fingerprint/match_template-* && \
     rm -rf ./target/release/.fingerprint/panic_hook-* && \
@@ -77,15 +83,8 @@ RUN mkdir -p ./src/bin && \
 
 # Build real binaries now
 COPY ./src ./src
+COPY ./cmd/src ./cmd/src
 COPY ./components ./components
-COPY ./cmd ./cmd
-
-# Remove profiling feature and add cmd back
-RUN sed -i '/^profiling/d' ./cmd/Cargo.toml && \
-    sed -i '/"components\/pd_client",/a\ \ "cmd",' Cargo.toml
-
-# Restore Makefile
-COPY Makefile ./
 
 RUN make build_dist_release
 
