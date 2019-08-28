@@ -3,13 +3,14 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
+use protobuf::Message;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
 use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
 
 use tikv_util::deadline::Deadline;
 
 use super::executors::*;
-use super::interface::{BatchExecutor, ExecuteStats};
+use super::interface::{BatchExecuteResult, BatchExecutor, ExecuteStats};
 use crate::execute_stats::*;
 use crate::expr::EvalConfig;
 use crate::metrics::*;
@@ -462,22 +463,111 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     // TODO: IntervalRange should be placed inside `StreamResponse`.
     // TODO: do not copy from the origin
-    // TODO: remove this
-
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
+        let mut chunks: Vec<Chunk> = vec![];
 
-        let mut _batch_size = BATCH_INITIAL_SIZE;
-        let mut _warnings = self.config.new_eval_warnings();
-        let current_size = 0;
+        let mut batch_size = BATCH_INITIAL_SIZE;
+        let mut warnings = self.config.new_eval_warnings();
 
-        // TODO: decide how to
-        while current_size < self.stream_batch_row_limit {
-            unimplemented!()
+        // if the data read finished
+        let mut is_drained = false;
 
+        // TODO: decide how to handle this
+        while chunks.len() < self.stream_batch_row_limit || !is_drained {
+            self.deadline.check()?;
+
+            let mut result = self.out_most_executor.next_batch(batch_size);
+            // fill is_drained
+            match result.is_drained {
+                Err(e) => return Err(e),
+                Ok(f) => is_drained = f,
+            }
+
+            // merge warning
+            warnings.merge(&mut result.warnings);
+
+            // handle chunks here
+            if !result.logical_rows.is_empty() {
+                assert_eq!(
+                    result.physical_columns.columns_len(),
+                    self.out_most_executor.schema().len()
+                );
+                let mut chunk = Chunk::default();
+                {
+                    let data = chunk.mut_rows_data();
+                    // handle logical/physical data
+                    // TODO：now how to handle it in streaming mode
+                    data.reserve(
+                        result
+                            .physical_columns
+                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
+                    );
+                    // Although `schema()` can be deeply nested, it is ok since we process data in
+                    // batch.
+                    result.physical_columns.encode(
+                        &result.logical_rows,
+                        &self.output_offsets,
+                        self.out_most_executor.schema(),
+                        data,
+                    )?;
+                }
+                chunks.push(chunk);
+            }
+
+            // Grow batch size
+            grow_batch_size(&mut batch_size);
         }
 
-        unimplemented!()
+        // TODO: Change this to chunk .
+        // TODO: Find a better way to initialize it .
+        // TODO: Current I use `make_stream_response` in `ExecutorsRunner`.
+        let mut resp;
+        resp = self.make_stream_response(chunks[0].to_owned());
+        for chunk_id in 1..chunks.len() {
+            resp = self.make_stream_response(chunks[chunk_id].to_owned());
+        }
+
+        // TODO: change it to a real range
+        // TODO: how to get the range?
+        let range = ("2", "3").into();
+        resp.map(|r| (Some((r, range)), is_drained))
+    }
+
+    // TODO: check if this method can be share
+    fn make_stream_response(&mut self, chunk: Chunk) -> Result<StreamResponse> {
+        self.out_most_executor
+            .collect_exec_stats(&mut self.exec_stats);
+
+        let mut s_resp = StreamResponse::default();
+        s_resp.set_data(box_try!(chunk.write_to_bytes()));
+        // TODO: now how to fill this and give warnings to Response
+        //        if let Some(eval_warnings) = self. {
+        //            s_resp.set_warnings(eval_warnings.warnings.into());
+        //            s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
+        //        }
+        s_resp.set_output_counts(
+            self.exec_stats
+                .scanned_rows_per_range
+                .iter()
+                .map(|v| *v as i64)
+                .collect(),
+        );
+
+        self.exec_stats.clear();
+
+        Ok(s_resp)
+    }
+}
+
+#[inline]
+fn grow_batch_size(batch_size: &mut usize) {
+    // Grow batch size
+    if *batch_size < BATCH_MAX_SIZE {
+        *batch_size *= BATCH_GROW_FACTOR;
+        if *batch_size > BATCH_MAX_SIZE {
+            *batch_size = BATCH_MAX_SIZE
+        }
     }
 }
