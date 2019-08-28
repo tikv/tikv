@@ -13,8 +13,8 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
 use engine::*;
+use pd_client::PdClient;
 use test_raftstore::*;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -204,6 +204,108 @@ fn test_node_merge_restart() {
     cluster.start().unwrap();
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k3");
+}
+
+/// Test if merge is still working when restart a cluster during catching up logs for merge.
+#[test]
+fn test_node_merge_catch_up_logs_restart() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // make sure the peer of left region on engine 3 has caught up logs.
+    cluster.must_put(b"k0", b"v0");
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.must_put(b"k11", b"v11");
+    must_get_none(&cluster.get_engine(3), b"k11");
+
+    // after source peer is applied but before set it to tombstone
+    fail::cfg("after_handle_catch_up_logs_for_merge_1000_1003", "return()").unwrap();
+    pd_client.must_merge(left.get_id(), right.get_id());
+    thread::sleep(Duration::from_millis(100));
+    cluster.shutdown();
+
+    fail::remove("after_handle_catch_up_logs_for_merge_1000_1003");
+    cluster.start().unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+}
+
+/// Test if leader election is working properly when catching up logs for merge.
+#[test]
+fn test_node_merge_catch_up_logs_leader_election() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 25;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    let state1 = cluster.truncated_state(1000, 1);
+    // let the entries committed but not applied
+    fail::cfg("on_handle_apply_1000_1003", "pause").unwrap();
+    for i in 2..20 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v");
+    }
+
+    // wait to trigger compact raft log
+    for _ in 0..50 {
+        let state2 = cluster.truncated_state(1000, 1);
+        if state1.get_index() != state2.get_index() {
+            break;
+        }
+        sleep_ms(10);
+    }
+
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.must_put(b"k11", b"v11");
+    must_get_none(&cluster.get_engine(3), b"k11");
+
+    // let peer not destroyed before election timeout
+    fail::cfg("before_peer_destroy_1000_1003", "pause").unwrap();
+    fail::remove("on_handle_apply_1000_1003");
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    // wait election timeout
+    thread::sleep(Duration::from_millis(500));
+    fail::remove("before_peer_destroy_1000_1003");
+
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
 
 /// Test if merging state will be removed after accepting a snapshot.
@@ -467,4 +569,6 @@ fn test_node_request_snapshot_reject_merge() {
     let target = cluster.get_region(target_region.get_start_key());
     assert_eq!(target, target_region);
     fail::remove(region_gen_snap_fp);
+    // Drop cluster to ensure notifier will not send any message after rx is dropped.
+    drop(cluster);
 }

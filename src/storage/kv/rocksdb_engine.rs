@@ -12,7 +12,7 @@ use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -74,6 +74,9 @@ impl Drop for RocksEngineCore {
     }
 }
 
+/// The RocksEngine is based on `RocksDB`.
+///
+/// This is intended for **testing use only**.
 #[derive(Clone)]
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
@@ -194,7 +197,7 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::new();
+    let wb = WriteBatch::default();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -258,7 +261,7 @@ impl Engine for RocksEngine {
             "snapshot failed"
         )));
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            let mut header = ErrorHeader::new();
+            let mut header = ErrorHeader::default();
             header.mut_not_leader().set_region_id(100);
             Err(Error::Request(header))
         });
@@ -424,7 +427,7 @@ mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
@@ -451,5 +454,4 @@ mod tests {
         iter.prev(&mut statistics);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
     }
-
 }

@@ -6,11 +6,12 @@ use std::sync::Arc;
 use criterion::black_box;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::Executor as PbExecutor;
+use tipb::Executor as PbExecutor;
 
 use test_coprocessor::*;
-use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
-use tikv::coprocessor::dag::expr::EvalConfig;
+use tidb_query::execute_stats::ExecSummaryCollectorDisabled;
+use tidb_query::expr::EvalConfig;
+use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 
 use crate::util::bencher::Bencher;
@@ -63,15 +64,12 @@ impl<T: TxnStore + 'static> IntegratedBencher for NormalBencher<T> {
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
-            tikv::coprocessor::dag::builder::DAGBuilder::build_normal::<
-                _,
-                ExecSummaryCollectorDisabled,
-            >(
+            tidb_query::executor::runner::build_executors::<_, ExecSummaryCollectorDisabled>(
                 black_box(executors.to_vec()),
-                black_box(ToTxnStore::<T>::to_store(store)),
+                black_box(TiKVStorage::from(ToTxnStore::<T>::to_store(store))),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
-                false,
+                black_box(false),
             )
             .unwrap()
         })
@@ -109,12 +107,9 @@ impl<T: TxnStore + 'static> IntegratedBencher for BatchBencher<T> {
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
-            tikv::coprocessor::dag::builder::DAGBuilder::build_batch::<
-                _,
-                ExecSummaryCollectorDisabled,
-            >(
+            tidb_query::batch::runner::build_executors::<_, ExecSummaryCollectorDisabled>(
                 black_box(executors.to_vec()),
-                black_box(ToTxnStore::<T>::to_store(store)),
+                black_box(TiKVStorage::from(ToTxnStore::<T>::to_store(store))),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
             )

@@ -9,13 +9,13 @@ pub struct Incompatible;
 
 impl PdMocker for Incompatible {
     fn ask_batch_split(&self, _: &AskBatchSplitRequest) -> Option<Result<AskBatchSplitResponse>> {
-        let mut err = Error::new();
-        err.set_field_type(ErrorType::INCOMPATIBLE_VERSION);
+        let mut err = Error::default();
+        err.set_type(ErrorType::IncompatibleVersion);
 
-        let mut header = ResponseHeader::new();
+        let mut header = ResponseHeader::default();
         header.set_error(err);
 
-        let mut resp = AskBatchSplitResponse::new();
+        let mut resp = AskBatchSplitResponse::default();
         resp.set_header(header);
 
         Some(Ok(resp))

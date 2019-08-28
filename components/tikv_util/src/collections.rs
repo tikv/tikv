@@ -11,5 +11,3 @@ pub use std::collections::hash_map::Entry as HashMapEntry;
 pub fn hash_set_with_capacity<T: Hash + Eq>(capacity: usize) -> HashSet<T> {
     HashSet::with_capacity_and_hasher(capacity, fxhash::FxBuildHasher::default())
 }
-pub use indexmap::map::Entry as OrderMapEntry;
-pub use indexmap::IndexMap as OrderMap;

@@ -6,7 +6,7 @@ use grpcio::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 use super::Error;
 
 pub fn make_rpc_error(err: Error) -> RpcStatus {
-    RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)))
+    RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)))
 }
 
 pub fn send_rpc_error<M, E>(ctx: RpcContext<'_>, sink: UnarySink<M>, error: E)

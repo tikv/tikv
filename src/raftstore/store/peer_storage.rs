@@ -349,7 +349,7 @@ pub fn recover_from_applying_state(
     let raft_state_key = keys::raft_state_key(region_id);
     let raft_state: RaftLocalState = match box_try!(engines.raft.get_msg(&raft_state_key)) {
         Some(state) => state,
-        None => RaftLocalState::new(),
+        None => RaftLocalState::default(),
     };
 
     // if we recv append log when applying snapshot, last_index in raft_local_state will
@@ -369,7 +369,7 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
     Ok(match engines.raft.get_msg(&state_key)? {
         Some(s) => s,
         None => {
-            let mut raft_state = RaftLocalState::new();
+            let mut raft_state = RaftLocalState::default();
             if !region.get_peers().is_empty() {
                 // new split region
                 raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
@@ -390,7 +390,7 @@ pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyS
         {
             Some(s) => s,
             None => {
-                let mut apply_state = RaftApplyState::new();
+                let mut apply_state = RaftApplyState::default();
                 if !region.get_peers().is_empty() {
                     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
                     let state = apply_state.mut_truncated_state();
@@ -457,8 +457,13 @@ impl Storage for PeerStorage {
         self.initial_state()
     }
 
-    fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
-        self.entries(low, high, max_size)
+    fn entries(
+        &self,
+        low: u64,
+        high: u64,
+        max_size: impl Into<Option<u64>>,
+    ) -> raft::Result<Vec<Entry>> {
+        self.entries(low, high, max_size.into().unwrap_or(u64::MAX))
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
@@ -528,7 +533,7 @@ impl PeerStorage {
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = self.raft_state.get_hard_state().clone();
-        if hard_state == HardState::new() {
+        if hard_state == HardState::default() {
             assert!(
                 !self.is_initialized(),
                 "peer for region {:?} is initialized but local state {:?} has empty hard \
@@ -537,15 +542,12 @@ impl PeerStorage {
                 self.raft_state
             );
 
-            return Ok(RaftState {
-                hard_state,
-                conf_state: ConfState::default(),
-            });
+            return Ok(RaftState::new(hard_state, ConfState::default()));
         }
-        Ok(RaftState {
+        Ok(RaftState::new(
             hard_state,
-            conf_state: conf_state_from_region(self.region()),
-        })
+            conf_state_from_region(self.region()),
+        ))
     }
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -709,7 +711,7 @@ impl PeerStorage {
             return false;
         }
 
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
             error!(
                 "failed to decode snapshot, it may be corrupted";
@@ -914,7 +916,7 @@ impl PeerStorage {
             "peer_id" => self.peer_id,
         );
 
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
 
         let region_id = self.get_region_id();
@@ -1126,13 +1128,13 @@ impl PeerStorage {
         ready: &Ready,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let snapshot_index = if raft::is_empty_snap(&ready.snapshot) {
+        let snapshot_index = if raft::is_empty_snap(ready.snapshot()) {
             0
         } else {
             fail_point!("raft_before_apply_snap");
             self.apply_snapshot(
                 &mut ctx,
-                &ready.snapshot,
+                ready.snapshot(),
                 &ready_ctx.kv_wb(),
                 &ready_ctx.raft_wb(),
             )?;
@@ -1141,18 +1143,18 @@ impl PeerStorage {
             last_index(&ctx.raft_state)
         };
 
-        if ready.must_sync {
+        if ready.must_sync() {
             ready_ctx.set_sync_log(true);
         }
 
-        if !ready.entries.is_empty() {
-            self.append(&mut ctx, &ready.entries, ready_ctx)?;
+        if !ready.entries().is_empty() {
+            self.append(&mut ctx, ready.entries(), ready_ctx)?;
         }
 
         // Last index is 0 means the peer is created from raft message
         // and has not applied snapshot yet, so skip persistent hard state.
         if ctx.raft_state.get_last_index() > 0 {
-            if let Some(ref hs) = ready.hs {
+            if let Some(hs) = ready.hs() {
                 ctx.raft_state.set_hard_state(hs.clone());
             }
         }
@@ -1253,7 +1255,7 @@ pub fn fetch_entries_to(
             match engine.get(&key) {
                 Ok(None) => return Err(RaftError::Store(StorageError::Unavailable)),
                 Ok(Some(v)) => {
-                    let mut entry = Entry::new();
+                    let mut entry = Entry::default();
                     entry.merge_from_bytes(&v)?;
                     assert_eq!(entry.get_index(), i);
                     total_size += v.len() as u64;
@@ -1277,7 +1279,7 @@ pub fn fetch_entries_to(
         &end_key,
         true, // fill_cache
         |_, value| {
-            let mut entry = Entry::new();
+            let mut entry = Entry::default();
             entry.merge_from_bytes(value)?;
 
             // May meet gap or has been compacted.
@@ -1403,7 +1405,7 @@ pub fn do_snapshot(
         )));
     }
 
-    let mut snapshot = Snapshot::new();
+    let mut snapshot = Snapshot::default();
 
     // Set snapshot metadata.
     snapshot.mut_metadata().set_index(key.idx);
@@ -1414,7 +1416,7 @@ pub fn do_snapshot(
 
     let mut s = mgr.get_snapshot_for_building(&key)?;
     // Set snapshot data.
-    let mut snap_data = RaftSnapshotData::new();
+    let mut snap_data = RaftSnapshotData::default();
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
     s.build(
@@ -1436,7 +1438,7 @@ pub fn do_snapshot(
 
 // When we bootstrap the region we must call this to initialize region local state first.
 pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
-    let mut raft_state = RaftLocalState::new();
+    let mut raft_state = RaftLocalState::default();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
     raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
@@ -1452,7 +1454,7 @@ pub fn write_initial_apply_state<T: Mutable>(
     kv_wb: &T,
     region_id: u64,
 ) -> Result<()> {
-    let mut apply_state = RaftApplyState::new();
+    let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
         .mut_truncated_state()
@@ -1474,7 +1476,7 @@ pub fn write_peer_state<T: Mutable>(
     merge_state: Option<MergeState>,
 ) -> Result<()> {
     let region_id = region.get_id();
-    let mut region_state = RegionLocalState::new();
+    let mut region_state = RegionLocalState::default();
     region_state.set_state(state);
     region_state.set_region(region.clone());
     if let Some(state) = merge_state {
@@ -1528,14 +1530,14 @@ pub fn maybe_upgrade_from_2_to_3(
     let mut kv_engine = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)?;
 
     // Move meta data from kv engine to raft engine.
-    let upgrade_raft_wb = WriteBatch::new();
+    let upgrade_raft_wb = WriteBatch::default();
     // Cleanup meta data in kv engine.
-    let cleanup_kv_wb = WriteBatch::new();
+    let cleanup_kv_wb = WriteBatch::default();
 
     // For meta data in the default CF.
     //
     //  1. store_ident_key: 0x01 0x01
-    //  2. prepare_boostrap_key: 0x01 0x02
+    //  2. prepare_bootstrap_key: 0x01 0x02
     if let Some(m) =
         kv_engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)?
     {
@@ -1576,8 +1578,8 @@ pub fn maybe_upgrade_from_2_to_3(
                 let raft_state_key = keys::raft_state_key(region_id);
                 let raft_state = raft_engine
                     .get_msg(&raft_state_key)?
-                    .unwrap_or_else(RaftLocalState::new);
-                let mut snapshot_raft_state = RaftLocalState::new();
+                    .unwrap_or_else(RaftLocalState::default);
+                let mut snapshot_raft_state = RaftLocalState::default();
                 box_try!(snapshot_raft_state.merge_from_bytes(value));
                 // if we recv append log when applying snapshot, last_index in
                 // raft_local_state will larger than snapshot_index. since
@@ -1711,7 +1713,7 @@ mod tests {
         ents: &[Entry],
     ) -> PeerStorage {
         let mut store = new_storage(sched, path);
-        let mut kv_wb = WriteBatch::new();
+        let mut kv_wb = WriteBatch::default();
         let mut ctx = InvokeContext::new(&store);
         let mut ready_ctx = ReadyContext::default();
         store.append(&mut ctx, &ents[1..], &mut ready_ctx).unwrap();
@@ -1746,14 +1748,14 @@ mod tests {
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
             let bytes = store.engines.raft.get(&key).unwrap().unwrap();
-            let mut entry = Entry::new();
+            let mut entry = Entry::default();
             entry.merge_from_bytes(&bytes).unwrap();
             assert_eq!(entry, *e);
         }
     }
 
     fn new_entry(index: u64, term: u64) -> Entry {
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_index(index);
         e.set_term(term);
         e
@@ -1836,8 +1838,8 @@ mod tests {
 
         assert_eq!(6, get_meta_key_count(&store));
 
-        let kv_wb = WriteBatch::new();
-        let raft_wb = WriteBatch::new();
+        let kv_wb = WriteBatch::default();
+        let raft_wb = WriteBatch::default();
         store.clear_meta(&kv_wb, &raft_wb).unwrap();
         store.engines.kv.write(&kv_wb).unwrap();
         store.engines.raft.write(&raft_wb).unwrap();
@@ -1944,7 +1946,7 @@ mod tests {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
             }
             if res.is_ok() {
-                let mut kv_wb = WriteBatch::new();
+                let mut kv_wb = WriteBatch::default();
                 ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
                     .unwrap();
                 store.engines.kv.write(&kv_wb).unwrap();
@@ -1955,7 +1957,7 @@ mod tests {
     #[test]
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut cs = ConfState::new();
+        let mut cs = ConfState::default();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
@@ -1983,7 +1985,7 @@ mod tests {
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert!(!snap.get_data().is_empty());
 
-        let mut data = RaftSnapshotData::new();
+        let mut data = RaftSnapshotData::default();
         protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).unwrap();
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
@@ -2011,7 +2013,7 @@ mod tests {
         let _ = s.gen_snap_task.borrow_mut().take().unwrap();
 
         let mut ctx = InvokeContext::new(&s);
-        let mut kv_wb = WriteBatch::new();
+        let mut kv_wb = WriteBatch::default();
         let mut ready_ctx = ReadyContext::default();
         s.append(
             &mut ctx,
@@ -2019,7 +2021,7 @@ mod tests {
             &mut ready_ctx,
         )
         .unwrap();
-        let mut hs = HardState::new();
+        let mut hs = HardState::default();
         hs.set_commit(7);
         hs.set_term(5);
         ctx.raft_state.set_hard_state(hs);
@@ -2034,7 +2036,7 @@ mod tests {
         ctx = InvokeContext::new(&s);
         let term = s.term(7).unwrap();
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
-        kv_wb = WriteBatch::new();
+        kv_wb = WriteBatch::default();
         ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
         s.engines.kv.write(&kv_wb).unwrap();
         s.apply_state = ctx.apply_state;
@@ -2272,7 +2274,7 @@ mod tests {
             new_entry(5, 5),
             new_entry(6, 6),
         ];
-        let mut cs = ConfState::new();
+        let mut cs = ConfState::default();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
@@ -2307,8 +2309,8 @@ mod tests {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let kv_wb = WriteBatch::new();
-        let raft_wb = WriteBatch::new();
+        let kv_wb = WriteBatch::default();
+        let raft_wb = WriteBatch::default();
         s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
@@ -2325,8 +2327,8 @@ mod tests {
         validate_cache(&s3, &ents[1..]);
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
-        let kv_wb = WriteBatch::new();
-        let raft_wb = WriteBatch::new();
+        let kv_wb = WriteBatch::default();
+        let raft_wb = WriteBatch::default();
         s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
             .unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
@@ -2437,16 +2439,16 @@ mod tests {
         let mut tbl = vec![];
 
         // Do not sync empty entrise.
-        tbl.push((Entry::new(), false));
+        tbl.push((Entry::default(), false));
 
         // Sync if sync_log is set.
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_sync_log(true);
         tbl.push((e, true));
 
         // Sync if context is marked sync.
         let context = ProposalContext::SYNC_LOG.to_vec();
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_context(context);
         tbl.push((e.clone(), true));
 

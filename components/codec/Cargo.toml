@@ -13,6 +13,6 @@ tikv_alloc = { path = "../tikv_alloc", default-features = false }
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
-protobuf = "2.7.0"
+protobuf = "2"
 bytes = "0.4.10"
 rand = "0.6.5"

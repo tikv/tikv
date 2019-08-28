@@ -18,15 +18,15 @@ use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 
-use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary};
+use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
-use crate::pd::PdClient;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
+use pd_client::PdClient;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 
@@ -134,7 +134,7 @@ struct GCRunner<E: Engine> {
 
     ratio_threshold: f64,
 
-    stats: StatisticsSummary,
+    stats: Statistics,
 }
 
 impl<E: Engine> GCRunner<E> {
@@ -149,7 +149,7 @@ impl<E: Engine> GCRunner<E> {
             local_storage,
             raft_store_router,
             ratio_threshold,
-            stats: StatisticsSummary::default(),
+            stats: Statistics::default(),
         }
     }
 
@@ -208,7 +208,7 @@ impl<E: Engine> GCRunner<E> {
                     Ok((keys, next))
                 })
         };
-        self.stats.add_statistics(reader.get_statistics());
+        self.stats.add(reader.get_statistics());
         res
     }
 
@@ -249,7 +249,7 @@ impl<E: Engine> GCRunner<E> {
                 break;
             }
         }
-        self.stats.add_statistics(&txn.take_statistics());
+        self.stats.add(&txn.take_statistics());
 
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
@@ -424,12 +424,12 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     }
 
     fn on_tick(&mut self) {
-        let stats = mem::replace(&mut self.stats, StatisticsSummary::default());
-        for (cf, details) in stats.stat.details() {
-            for (tag, count) in details {
+        let stats = mem::replace(&mut self.stats, Statistics::default());
+        for (cf, details) in stats.details().iter() {
+            for (tag, count) in details.iter() {
                 GC_KEYS_COUNTER_VEC
-                    .with_label_values(&[cf, tag])
-                    .inc_by(count as i64);
+                    .with_label_values(&[cf, *tag])
+                    .inc_by(*count as i64);
             }
         }
     }
@@ -704,6 +704,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// Starts working in another thread. This function moves the `GCManager` and returns a handler
     /// of it.
     fn start(mut self) -> Result<GCManagerHandle> {
+        set_status_metrics(GCManagerState::Init);
+        self.initialize();
+
         let (tx, rx) = mpsc::channel();
         self.gc_manager_ctx.set_stop_signal_receiver(rx);
         let res: Result<_> = ThreadBuilder::new()
@@ -721,16 +724,13 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// Polls safe point and does GC in a loop, again and again, until interrupted by invoking
     /// `GCManagerHandle::stop`.
     fn run(&mut self) {
-        info!("gc-manager is started");
+        debug!("gc-manager is started");
         self.run_impl().unwrap_err();
         set_status_metrics(GCManagerState::None);
-        info!("gc-manager is stopped");
+        debug!("gc-manager is stopped");
     }
 
     fn run_impl(&mut self) -> GCManagerResult<()> {
-        set_status_metrics(GCManagerState::Init);
-        self.initialize()?;
-
         loop {
             AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
                 .with_label_values(&[PROCESS_TYPE_GC])
@@ -755,12 +755,11 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// The only task of initializing is to simply get the current safe point as the initial value
     /// of `safe_point`. TiKV won't do any GC automatically until the first time `safe_point` was
     /// updated to a greater value than initial value.
-    fn initialize(&mut self) -> GCManagerResult<()> {
-        info!("gc-manager is initializing");
+    fn initialize(&mut self) {
+        debug!("gc-manager is initializing");
         self.safe_point = 0;
         self.try_update_safe_point();
-        info!("gc-manager started"; "safe_point" => self.safe_point);
-        Ok(())
+        debug!("gc-manager started"; "safe_point" => self.safe_point);
     }
 
     /// Waits until the safe_point updates. Returns the new safe point.
@@ -1279,7 +1278,7 @@ mod tests {
         let regions: BTreeMap<_, _> = regions
             .into_iter()
             .map(|(start_key, end_key, id)| {
-                let mut r = metapb::Region::new();
+                let mut r = metapb::Region::default();
                 r.set_id(id);
                 r.set_start_key(start_key.clone());
                 r.set_end_key(end_key);
@@ -1294,7 +1293,7 @@ mod tests {
         for safe_point in &safe_points {
             test_util.add_next_safe_point(*safe_point);
         }
-        test_util.gc_manager.as_mut().unwrap().initialize().unwrap();
+        test_util.gc_manager.as_mut().unwrap().initialize();
 
         test_util.gc_manager.as_mut().unwrap().gc_a_round().unwrap();
         test_util.stop();
@@ -1370,7 +1369,7 @@ mod tests {
         assert_eq!(gc_manager.safe_point, 0);
         test_util.add_next_safe_point(0);
         test_util.add_next_safe_point(5);
-        gc_manager.initialize().unwrap();
+        gc_manager.initialize();
         assert_eq!(gc_manager.safe_point, 0);
         assert!(gc_manager.try_update_safe_point());
         assert_eq!(gc_manager.safe_point, 5);

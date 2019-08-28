@@ -7,21 +7,21 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
 
-use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
 use test_coprocessor::*;
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::collections::HashMap;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
-use tikv::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tikv::coprocessor::codec::data_type::Decimal;
-use tikv::coprocessor::codec::datum::{Datum, DatumEncoder};
-use tikv::coprocessor::codec::table::RowColsDict;
-use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::exec_summary::ExecSummary;
-use tikv::coprocessor::dag::executor::{Executor, ExecutorMetrics, Row};
-use tikv::coprocessor::dag::expr::EvalWarnings;
-use tikv::storage::RocksEngine;
+use tidb_query::batch::interface::*;
+use tidb_query::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use tidb_query::codec::data_type::Decimal;
+use tidb_query::codec::datum::{Datum, DatumEncoder};
+use tidb_query::codec::table::RowColsDict;
+use tidb_query::executor::{Executor, Row};
+use tidb_query::expr::EvalWarnings;
+use tidb_query::storage::IntervalRange;
+use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;
 
@@ -276,8 +276,9 @@ impl FixtureBuilder {
             .into_iter()
             .enumerate()
             .map(|(index, ft)| {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.set_column_id(index as i64);
+                let ft = ft.as_accessor();
                 ci.as_mut_accessor()
                     .set_tp(ft.tp())
                     .set_flag(ft.flag())
@@ -319,6 +320,8 @@ pub struct BatchFixtureExecutor {
 }
 
 impl BatchExecutor for BatchFixtureExecutor {
+    type StorageStats = Statistics;
+
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -350,8 +353,13 @@ impl BatchExecutor for BatchFixtureExecutor {
     }
 
     #[inline]
-    fn collect_statistics(&mut self, _destination: &mut BatchExecuteStatistics) {
-        // DO NOTHING
+    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
+        // Do nothing
+    }
+
+    #[inline]
+    fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
+        // Do nothing
     }
 }
 
@@ -361,29 +369,37 @@ pub struct NormalFixtureExecutor {
 }
 
 impl Executor for NormalFixtureExecutor {
+    type StorageStats = Statistics;
+
     #[inline]
-    fn next(&mut self) -> tikv::coprocessor::Result<Option<Row>> {
+    fn next(&mut self) -> tidb_query::Result<Option<Row>> {
         Ok(self.rows.next())
     }
 
     #[inline]
-    fn collect_output_counts(&mut self, _counts: &mut Vec<i64>) {
-        // DO NOTHING
+    fn collect_exec_stats(&mut self, _dest: &mut ExecuteStats) {
+        // Do nothing
     }
 
     #[inline]
-    fn collect_metrics_into(&mut self, _metrics: &mut ExecutorMetrics) {
-        // DO NOTHING
-    }
-
-    #[inline]
-    fn collect_execution_summaries(&mut self, _target: &mut [ExecSummary]) {
-        // DO NOTHING
+    fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
+        // Do nothing
     }
 
     #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.columns
+    }
+
+    #[inline]
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        // Do nothing
+        None
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        unreachable!()
     }
 }
 

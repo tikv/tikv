@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use kvproto::metapb;
 
-use crate::pd::PdClient;
+use pd_client::PdClient;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -141,9 +141,9 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use crate::pd::{PdClient, PdFuture, RegionStat, Result};
     use kvproto::metapb;
     use kvproto::pdpb;
+    use pd_client::{PdClient, PdFuture, RegionStat, Result};
     use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -231,7 +231,7 @@ mod tests {
     }
 
     fn new_store(addr: &str, state: metapb::StoreState) -> metapb::Store {
-        let mut store = metapb::Store::new();
+        let mut store = metapb::Store::default();
         store.set_id(1);
         store.set_state(state);
         store.set_address(addr.into());

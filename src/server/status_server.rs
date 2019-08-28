@@ -2,7 +2,7 @@
 
 use futures::future::{err, ok};
 use futures::sync::oneshot::{Receiver, Sender};
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
@@ -63,11 +63,11 @@ mod profiler_guard {
     }
 }
 
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 static MISSING_NAME: &[u8] = b"Missing param name";
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 static MISSING_ACTIONS: &[u8] = b"Missing param actions";
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 
 pub struct StatusServer {
@@ -84,10 +84,10 @@ impl StatusServer {
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
             .after_start(|| {
-                info!("Status server started");
+                debug!("Status server started");
             })
             .before_stop(|| {
-                info!("stopping status server");
+                debug!("stopping status server");
             })
             .build();
         let (tx, rx) = futures::sync::oneshot::channel::<()>();
@@ -228,7 +228,7 @@ impl StatusServer {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
 
-                        #[cfg(not(feature = "no-fail"))]
+                        #[cfg(feature = "failpoints")]
                         {
                             if path.starts_with(FAIL_POINTS_REQUEST_PATH) {
                                 return handle_fail_points_request(req);
@@ -273,7 +273,7 @@ impl StatusServer {
 }
 
 // For handling fail points related requests
-#[cfg(not(feature = "no-fail"))]
+#[cfg(feature = "failpoints")]
 fn handle_fail_points_request(
     req: Request<Body>,
 ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
@@ -350,25 +350,11 @@ fn handle_fail_points_request(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard};
-
     use crate::config::TiKvConfig;
     use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
-    #[cfg(not(feature = "no-fail"))]
     use futures::Stream;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
-
-    lazy_static! {
-        static ref LOCK: Mutex<()> = Mutex::new(());
-    }
-
-    fn setup<'a>() -> MutexGuard<'a, ()> {
-        let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        fail::teardown();
-        fail::setup();
-        guard
-    }
 
     #[test]
     fn test_status_service() {
@@ -432,10 +418,10 @@ mod tests {
         status_server.stop();
     }
 
-    #[cfg(not(feature = "no-fail"))]
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_status_service_fail_endpoints() {
-        let _gaurd = setup();
+        let _guard = fail::FailScenario::setup();
         let config = TiKvConfig::default();
         let mut status_server = StatusServer::new(1, config);
         let _ = status_server.start("127.0.0.1:0".to_string());
@@ -565,10 +551,10 @@ mod tests {
         status_server.stop();
     }
 
-    #[cfg(not(feature = "no-fail"))]
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
-        let _gaurd = setup();
+        let _guard = fail::FailScenario::setup();
         let config = TiKvConfig::default();
         let mut status_server = StatusServer::new(1, config);
         let _ = status_server.start("127.0.0.1:0".to_string());
@@ -607,10 +593,10 @@ mod tests {
         assert!(true_only_if_fail_point_triggered());
     }
 
-    #[cfg(feature = "no-fail")]
+    #[cfg(not(feature = "failpoints"))]
     #[test]
-    fn test_status_service_fail_endpoints_should_give_404_when_feature_no_fail_exists() {
-        let _gaurd = setup();
+    fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
+        let _guard = fail::FailScenario::setup();
         let config = TiKvConfig::default();
         let mut status_server = StatusServer::new(1, config);
         let _ = status_server.start("127.0.0.1:0".to_string());
@@ -632,7 +618,8 @@ mod tests {
             client
                 .request(req)
                 .map(|res| {
-                    assert_eq!(res.status(), StatusCode::NOT_FOUND); // with feature no-fail, this PUT endpoint should return 404
+                    // without feature "failpoints", this PUT endpoint should return 404
+                    assert_eq!(res.status(), StatusCode::NOT_FOUND);
                 })
                 .map_err(|err| {
                     panic!("response status is not OK: {:?}", err);

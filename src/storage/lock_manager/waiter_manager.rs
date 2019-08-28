@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
 use super::util::extract_raw_key_from_process_result;
@@ -8,8 +9,6 @@ use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
 use crate::storage::txn::{execute_callback, ProcessResult};
 use crate::storage::{Error as StorageError, StorageCb};
-use crate::tikv_util::collections::HashMap;
-use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
@@ -18,6 +17,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use tikv_util::collections::HashMap;
+use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
@@ -161,7 +162,7 @@ impl WaitTable {
             .iter()
             .flat_map(|(_, waiters)| {
                 waiters.iter().map(|waiter| {
-                    let mut wait_for_entry = WaitForEntry::new();
+                    let mut wait_for_entry = WaitForEntry::default();
                     wait_for_entry.set_txn(waiter.start_ts);
                     wait_for_entry.set_wait_for_txn(waiter.lock.ts);
                     wait_for_entry.set_key_hash(waiter.lock.hash);
@@ -240,30 +241,25 @@ pub struct WaiterManager {
 unsafe impl Send for WaiterManager {}
 
 impl WaiterManager {
-    pub fn new(
-        detector_scheduler: DetectorScheduler,
-        wait_for_lock_timeout: u64,
-        wake_up_delay_duration: u64,
-    ) -> Self {
+    pub fn new(detector_scheduler: DetectorScheduler, cfg: &Config) -> Self {
         Self {
             wait_table: Rc::new(RefCell::new(WaitTable::new())),
             detector_scheduler,
-            wait_for_lock_timeout,
-            wake_up_delay_duration,
+            wait_for_lock_timeout: cfg.wait_for_lock_timeout,
+            wake_up_delay_duration: cfg.wake_up_delay_duration,
         }
     }
 
     fn handle_wait_for(&mut self, handle: &Handle, is_first_lock: bool, waiter: Waiter) {
-        let lock = waiter.lock.clone();
+        let lock = waiter.lock;
         let start_ts = waiter.start_ts;
 
         // If it is the first lock, deadlock never occur
         if !is_first_lock {
-            self.detector_scheduler.detect(start_ts, lock.clone());
+            self.detector_scheduler.detect(start_ts, lock);
         }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
-            let detector_scheduler = self.detector_scheduler.clone();
             let when = Instant::now() + Duration::from_millis(self.wait_for_lock_timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
@@ -271,9 +267,10 @@ impl WaiterManager {
                 .then(move |_| {
                     wait_table
                         .borrow_mut()
-                        .remove_waiter(start_ts, lock.clone())
+                        .remove_waiter(start_ts, lock)
                         .and_then(|waiter| {
-                            detector_scheduler.clean_up_wait_for(start_ts, lock);
+                            // The corresponding `WaitForEntry` in deadlock detector
+                            // will be removed by expiration.
                             execute_callback(waiter.cb, waiter.pr);
                             Some(())
                         });
@@ -292,7 +289,7 @@ impl WaiterManager {
 
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             self.detector_scheduler
-                .clean_up_wait_for(waiter.start_ts, waiter.lock.clone());
+                .clean_up_wait_for(waiter.start_ts, waiter.lock);
             if self.wake_up_delay_duration > 0 {
                 // Sleep a little so the transaction with small start_ts will more likely get the lock.
                 let when = Instant::now()
@@ -374,7 +371,6 @@ impl FutureRunnable<Task> for WaiterManager {
                 deadlock_key_hash,
             } => {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
-                TASK_COUNTER_VEC.deadlock.inc();
             }
         }
     }
@@ -513,14 +509,17 @@ mod tests {
 
     #[test]
     fn test_waiter_manager() {
-        use crate::tikv_util::worker::FutureWorker;
         use std::sync::mpsc;
+        use tikv_util::worker::FutureWorker;
 
         let detect_worker = FutureWorker::new("dummy-deadlock");
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
 
         let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
-        let waiter_mgr_runner = WaiterManager::new(detector_scheduler, 1000, 1);
+        let mut cfg = Config::default();
+        cfg.wait_for_lock_timeout = 1000;
+        cfg.wake_up_delay_duration = 1;
+        let waiter_mgr_runner = WaiterManager::new(detector_scheduler, &cfg);
         let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 

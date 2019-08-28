@@ -3,7 +3,6 @@
 #![cfg_attr(test, feature(test))]
 #![feature(core_intrinsics)]
 #![feature(ptr_offset_from)]
-#![feature(underscore_const_names)]
 
 #[macro_use]
 extern crate static_assertions;
@@ -22,9 +21,8 @@ pub mod number;
 
 pub mod prelude {
     pub use super::buffer::{BufferReader, BufferWriter};
-    pub use super::byte::{
-        CompactByteDecoder, CompactByteEncoder, MemComparableByteDecoder, MemComparableByteEncoder,
-    };
+    pub use super::byte::{CompactByteDecoder, CompactByteEncoder};
+    pub use super::byte::{MemComparableByteDecoder, MemComparableByteEncoder};
     pub use super::number::{NumberDecoder, NumberEncoder};
 }
 
