@@ -75,7 +75,6 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
     pub min_blob_size: ReadableSize,
@@ -125,7 +124,6 @@ macro_rules! cf_config {
     ($name:ident) => {
         #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
-        #[serde(deny_unknown_fields)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
             pub block_size: ReadableSize,
@@ -594,7 +592,6 @@ impl RaftCfConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 // Note that Titan is still an experimental feature. Once enabled, it can't fall back.
 // Forced fallback may result in data loss.
@@ -635,7 +632,6 @@ impl TitanDBConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
@@ -865,7 +861,6 @@ impl RaftDefaultCfConfig {
 // But each instance will limit their background jobs according to their own max_background_jobs
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
@@ -982,7 +977,6 @@ impl RaftDbConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct MetricConfig {
     pub interval: ReadableDuration,
@@ -1030,7 +1024,6 @@ macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
         #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
-        #[serde(deny_unknown_fields)]
         #[serde(rename_all = "kebab-case")]
         pub struct $struct_name {
             pub high_concurrency: usize,
@@ -1238,7 +1231,6 @@ impl Default for CoprReadPoolConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: StorageReadPoolConfig,
@@ -1255,7 +1247,6 @@ impl ReadPoolConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[serde(with = "log_level_serde")]
