@@ -29,5 +29,8 @@ extern crate failure;
 extern crate tikv_alloc;
 
 mod errors;
+mod metrics;
+mod writer;
 
 pub use errors::{Error, Result};
+pub use writer::BackupWriter;
