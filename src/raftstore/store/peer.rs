@@ -457,8 +457,9 @@ impl Peer {
         // make sure message should be with index not smaller than committed
         let mut log_idx = first.get_index() - 1;
         if log_idx < self.raft_group.raft.raft_log.committed {
-            // it indicates the logs are already committed during the process,
-            // so no need to append
+            // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
+            // so the commit index may exceed the last index of the entires from CommitMergeRequest.
+            // If that, no need to append
             if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
                 return None;
             }
