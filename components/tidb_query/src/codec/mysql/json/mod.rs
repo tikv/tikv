@@ -20,6 +20,7 @@ pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
 use tikv_util::is_even;
 
 use super::super::datum::Datum;
@@ -104,11 +105,28 @@ impl ConvertTo<f64> for Json {
 }
 
 impl ConvertTo<Decimal> for Json {
-    /// Converts a `Json` to a `Decimal`
     #[inline]
+    /// Port from TiDB's types.ConvertJSONToDecimal
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let f: f64 = self.convert(ctx)?;
-        f.convert(ctx)
+        match self {
+            Json::String(s) => {
+                match Decimal::from_str(s.as_str()) {
+                    Ok(d) => Ok(d),
+                    Err(e) => {
+                        ctx.handle_truncate_err(e)?;
+                        // TODO, if TiDB's MyDecimal::FromString return err,
+                        //  it may has res. However, if TiKV's Decimal::from_str
+                        //  return err, it has no res, so I return zero here,
+                        //  but it may different from TiDB's MyDecimal::FromString
+                        Ok(Decimal::zero())
+                    }
+                }
+            }
+            _ => {
+                let r: f64 = self.convert(ctx)?;
+                Decimal::from_f64(r)
+            }
+        }
     }
 }
 
@@ -122,6 +140,7 @@ impl ConvertTo<Json> for i64 {
 impl ConvertTo<Json> for f64 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
         Ok(Json::Double(*self))
     }
 }

@@ -1519,8 +1519,7 @@ impl Decimal {
     /// `as_i64_with_ctx` returns int part of the decimal.
     pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> Result<i64> {
         let res = self.as_i64();
-        ctx.handle_truncate(res.is_truncated())?;
-        res.into()
+        res.into_result(ctx)
     }
 
     /// `as_u64` returns int part of the decimal
@@ -1545,6 +1544,12 @@ impl Decimal {
             }
         }
         Res::Ok(x)
+    }
+
+    // TODO, add test
+    pub fn from_f64(val: f64) -> Result<Decimal> {
+        let r = val.to_string();
+        Decimal::from_str(r.as_str())
     }
 
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
@@ -1776,12 +1781,7 @@ impl ConvertTo<Decimal> for f64 {
     /// rather than the accurate value the float represent.
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        if !self.is_finite() {
-            return Err(invalid_type!("{} can't be convert to decimal'", self));
-        }
-
-        let s = format!("{}", self);
-        s.parse()
+        Decimal::from_f64(*self)
     }
 }
 
@@ -1793,6 +1793,7 @@ impl ConvertTo<Decimal> for Real {
 }
 
 impl ConvertTo<Decimal> for &[u8] {
+    // TODO, the err handle is not exactly same as TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         let dec = match Decimal::from_bytes(self)? {
@@ -2886,25 +2887,25 @@ mod tests {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
-            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
-            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e -1", Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001", Res::Ok("10")),
             (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
             (WORD_BUF_LEN, b"1e1073741823",
-            Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+             Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
             (WORD_BUF_LEN, b"-1e1073741823",
-            Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
-            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+             Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN, b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
              Res::Overflow("0")),
-            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
-            Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
+            (WORD_BUF_LEN, b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+             Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
             // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
-            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
-            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
+            (WORD_BUF_LEN, b"1eabc", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e 1ddd", Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e - 1", Res::Ok("1")),
             // with word_buf_len 1
-            (1,b"123450000098765",Res::Overflow("98765")),
-            (1,b"123450.000098765", Res::Truncated("123450")),
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {

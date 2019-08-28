@@ -708,9 +708,20 @@ impl ConvertTo<f64> for Duration {
 }
 
 impl ConvertTo<Decimal> for Duration {
-    #[inline]
+    /// This function should not return err,
+    /// if it return err, then the err is because of bug.
+    ///
+    /// Port from TiDB' Duration::ToNumber
+    //
+    // this impl is not same as TiDB's,
+    // TiDB impl is by convert duration to decimal then convert to float64
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        self.to_numeric_string().parse()
+        match self.to_numeric_string().parse::<Decimal>() {
+            Ok(val) => Ok(val),
+            // TODO, here should return `other_err!("unreachable Duration::as_decimal, err is {}", e)`
+            //  however, here's Result's error is codec::error, so I can't return this error
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -771,6 +782,7 @@ impl Ord for Duration {
 }
 
 impl<T: Write> DurationEncoder for T {}
+
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: Duration) -> Result<()> {
         self.encode_i64(v.to_nanos())?;

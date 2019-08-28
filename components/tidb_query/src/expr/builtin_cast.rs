@@ -155,18 +155,28 @@ impl ScalarFunc {
     pub fn cast_int_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         if !self.children[0].is_unsigned() {
-            Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
+            Ok(Some(produce_float_with_specified_tp(
+                ctx,
+                &self.field_type,
+                val as f64,
+            )?))
         } else {
             let uval = val as u64;
-            Ok(Some(
-                self.produce_float_with_specified_tp(ctx, uval as f64)?,
-            ))
+            Ok(Some(produce_float_with_specified_tp(
+                ctx,
+                &self.field_type,
+                uval as f64,
+            )?))
         }
     }
 
     pub fn cast_real_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
-        Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
+        Ok(Some(produce_float_with_specified_tp(
+            ctx,
+            &self.field_type,
+            val,
+        )?))
     }
 
     pub fn cast_decimal_as_real(
@@ -176,7 +186,11 @@ impl ScalarFunc {
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let res = val.convert(ctx)?;
-        Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
+        Ok(Some(produce_float_with_specified_tp(
+            ctx,
+            &self.field_type,
+            res,
+        )?))
     }
 
     pub fn cast_str_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
@@ -185,13 +199,21 @@ impl ScalarFunc {
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let res = val.convert(ctx)?;
-        Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
+        Ok(Some(produce_float_with_specified_tp(
+            ctx,
+            &self.field_type,
+            res,
+        )?))
     }
 
     pub fn cast_time_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let res = val.convert(ctx)?;
-        Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
+        Ok(Some(produce_float_with_specified_tp(
+            ctx,
+            &self.field_type,
+            res,
+        )?))
     }
 
     pub fn cast_duration_as_real(
@@ -202,13 +224,21 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let val: Decimal = val.convert(ctx)?;
         let res = val.convert(ctx)?;
-        Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
+        Ok(Some(produce_float_with_specified_tp(
+            ctx,
+            &self.field_type,
+            res,
+        )?))
     }
 
     pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let val = val.convert(ctx)?;
-        Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
+        Ok(Some(produce_float_with_specified_tp(
+            ctx,
+            &self.field_type,
+            val,
+        )?))
     }
 
     pub fn cast_int_as_decimal<'a, 'b: 'a>(
@@ -729,27 +759,6 @@ impl ScalarFunc {
         )?;
         t.set_time_type(self.field_type.as_accessor().tp().try_into()?)?;
         Ok(Cow::Owned(t))
-    }
-
-    /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
-    /// a new float64 according to `flen` and `decimal` in `self.tp`.
-    /// TODO port tests from tidb(tidb haven't implemented now)
-    fn produce_float_with_specified_tp(&self, ctx: &mut EvalContext, f: f64) -> Result<f64> {
-        let flen = self.field_type.as_accessor().flen();
-        let decimal = self.field_type.as_accessor().decimal();
-        if flen == tidb_query_datatype::UNSPECIFIED_LENGTH
-            || decimal == tidb_query_datatype::UNSPECIFIED_LENGTH
-        {
-            return Ok(f);
-        }
-        match truncate_f64(f, flen as u8, decimal as u8) {
-            Res::Ok(d) => Ok(d),
-            Res::Overflow(d) | Res::Truncated(d) => {
-                //TODO process warning with ctx
-                ctx.handle_truncate(true)?;
-                Ok(d)
-            }
-        }
     }
 }
 
