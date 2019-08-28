@@ -3,7 +3,7 @@
 use super::setup::*;
 use super::signal_handler;
 use crate::binutil::setup::initial_logger;
-use crate::config::{check_and_persist_critical_config, TiKvConfig};
+use crate::config::TiKvConfig;
 use crate::coprocessor;
 use crate::fatal;
 use crate::import::{ImportSSTService, SSTImporter};
@@ -40,10 +40,6 @@ use tikv_util::worker::FutureWorker;
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 pub fn run_tikv(mut config: TiKvConfig) {
-    if let Err(e) = check_and_persist_critical_config(&config) {
-        fatal!("critical config check failed: {}", e);
-    }
-
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -52,11 +48,6 @@ pub fn run_tikv(mut config: TiKvConfig) {
 
     // Print version information.
     super::log_tikv_info();
-
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
-    }
     info!(
         "using config";
         "config" => serde_json::to_string(&config).unwrap(),
