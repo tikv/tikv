@@ -3,7 +3,7 @@
 use super::{DeadlockFuture, Error, Result};
 use futures::unsync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
-use grpcio::{ChannelBuilder, EnvBuilder, WriteFlags};
+use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +14,16 @@ pub type Callback = Box<dyn Fn(DeadlockResponse)>;
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "deadlock";
 
+/// Builds the `Environment` of deadlock clients. All clients should use the same instance.
+pub fn env() -> Arc<Environment> {
+    Arc::new(
+        EnvBuilder::new()
+            .cq_count(CQ_COUNT)
+            .name_prefix(thd_name!(CLIENT_PREFIX))
+            .build(),
+    )
+}
+
 #[derive(Clone)]
 pub struct Client {
     addr: String,
@@ -22,14 +32,8 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(security_mgr: Arc<SecurityManager>, addr: &str) -> Self {
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(CQ_COUNT)
-                .name_prefix(thd_name!(CLIENT_PREFIX))
-                .build(),
-        );
-        let cb = ChannelBuilder::new(Arc::clone(&env))
+    pub fn new(env: Arc<Environment>, security_mgr: Arc<SecurityManager>, addr: &str) -> Self {
+        let cb = ChannelBuilder::new(env)
             .keepalive_time(Duration::from_secs(10))
             .keepalive_timeout(Duration::from_secs(3));
         let channel = security_mgr.connect(cb, addr);
