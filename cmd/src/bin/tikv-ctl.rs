@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 use std::{process, str, u64};
 
-use clap::{crate_authors, crate_version, App, AppSettings, Arg, ArgMatches, SubCommand};
+use clap::{crate_authors, App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
@@ -954,7 +954,7 @@ fn main() {
     let mut app = App::new("TiKV Control (tikv-ctl)")
         .about("A tool for interacting with TiKV deployments.")
         .author(crate_authors!())
-        .version(crate_version!())
+        .version(version_info.as_ref())
         .long_version(version_info.as_ref())
         .setting(AppSettings::AllowExternalSubcommands)
         .arg(
