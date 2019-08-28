@@ -1932,8 +1932,6 @@ impl Peer {
             return false;
         }
 
-        poll_ctx.raft_metrics.propose.read_index += 1;
-
         let renew_lease_time = monotonic_raw_now();
         if self.is_leader() {
             match self.inspect_lease() {
@@ -1973,6 +1971,8 @@ impl Peer {
         // Should we call pre_propose here?
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
+
+        poll_ctx.raft_metrics.propose.read_index += 1;
 
         let id = Uuid::new_v4();
         self.raft_group.read_index(id.as_bytes().to_vec());
