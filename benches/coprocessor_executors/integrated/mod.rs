@@ -675,7 +675,18 @@ where
     M: criterion::measurement::Measurement,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/rows={}", self.bencher.name(), self.rows)
+        write!(f, "{}", self.name())
+    }
+}
+
+impl<M>  Input<M>
+    where
+        M: criterion::measurement::Measurement {
+    fn name(&self) -> String {
+        format!("{}/rows={}", self.bencher.name(), self.rows)
+    }
+    fn size(&self) -> usize {
+        self.rows.clone()
     }
 }
 
@@ -819,15 +830,20 @@ where
     }
 
     cases.sort();
-    for case in cases {
-        let mut group = c.benchmark_group(case.get_name());
-        for input in inputs.iter() {
+    for input in inputs.iter() {
+        let mut group = c.benchmark_group(input.name());
+
+        if input.size() < 100 {
+            group.sample_size(1000);
+        }
+        for  case in cases.iter() {
             group.bench_with_input(
-                criterion::BenchmarkId::from_parameter(input),
+                criterion::BenchmarkId::from_parameter(case.get_name()),
                 input,
                 case.get_fn(),
             );
         }
+
         group.finish();
     }
 }

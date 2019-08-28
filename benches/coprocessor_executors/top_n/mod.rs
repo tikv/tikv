@@ -18,7 +18,7 @@ fn bench_top_n_1_order_by_impl<M>(
 {
     assert!(columns >= 1);
     assert!(n > 0);
-    let mut fb = FixtureBuilder::new(input.src_rows);
+    let mut fb = FixtureBuilder::new(input.size());
     for _ in 0..columns {
         fb = fb.push_column_i64_random();
     }
@@ -68,7 +68,7 @@ fn bench_top_n_3_order_by_impl<M>(
 {
     assert!(columns >= 3);
     assert!(n > 0);
-    let mut fb = FixtureBuilder::new(input.src_rows);
+    let mut fb = FixtureBuilder::new(input.size());
     for _ in 0..columns {
         fb = fb.push_column_i64_random();
     }
@@ -133,7 +133,16 @@ where
     M: criterion::measurement::Measurement,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/rows={}", self.bencher.name(), self.src_rows)
+        write!(f, "{}", self.name())
+    }
+}
+
+impl<M> Input<M> where M: criterion::measurement::Measurement, {
+    fn name(&self) -> String {
+        format!("{}/rows={}", self.bencher.name(), self.src_rows)
+    }
+    fn size(&self) -> usize {
+        self.src_rows.clone()
     }
 }
 
@@ -203,15 +212,20 @@ where
     }
 
     cases.sort();
-    for case in cases {
-        let mut group = c.benchmark_group(case.get_name());
-        for input in inputs.iter() {
+    for input in inputs.iter() {
+        let mut group = c.benchmark_group(input.name());
+
+        if input.size() < 100 {
+            group.sample_size(1000);
+        }
+        for  case in cases.iter() {
             group.bench_with_input(
-                criterion::BenchmarkId::from_parameter(input),
+                criterion::BenchmarkId::from_parameter(case.get_name()),
                 input,
                 case.get_fn(),
             );
         }
+
         group.finish();
     }
 }

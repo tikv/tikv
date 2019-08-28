@@ -220,11 +220,20 @@ where
 }
 
 impl<M> std::fmt::Display for Input<M>
-where
-    M: criterion::measurement::Measurement + 'static,
+    where
+        M: criterion::measurement::Measurement + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.name())
+        write!(f, "{}", self.name())
+    }
+}
+
+impl<M> Input<M>
+    where
+        M: criterion::measurement::Measurement + 'static,
+{
+    fn name(&self) -> String {
+        self.0.name()
     }
 }
 
@@ -291,15 +300,17 @@ where
     }
 
     cases.sort();
-    for case in cases {
-        let mut group = c.benchmark_group(case.get_name());
-        for input in inputs.iter() {
+    for input in inputs.iter() {
+        let mut group = c.benchmark_group(input.name());
+
+        for  case in cases.iter() {
             group.bench_with_input(
-                criterion::BenchmarkId::from_parameter(input),
+                criterion::BenchmarkId::from_parameter(case.get_name()),
                 input,
                 case.get_fn(),
-            ); // TODO: add parameter for each bench
+            );
         }
+
         group.finish();
     }
 }
