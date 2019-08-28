@@ -361,6 +361,12 @@ impl BatchExecutor for BatchFixtureExecutor {
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
         // Do nothing
     }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        // TODO: pass values
+        ("0", "1").into()
+    }
 }
 
 pub struct NormalFixtureExecutor {

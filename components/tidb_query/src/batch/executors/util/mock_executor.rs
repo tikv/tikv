@@ -43,6 +43,7 @@ impl BatchExecutor for MockExecutor {
         // Do nothing
     }
 
+    // TODO: make it fit next_batch
     fn take_scanned_range(&mut self) -> IntervalRange {
         // Do nothing
         ("0", "1").into()
