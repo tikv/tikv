@@ -21,6 +21,7 @@ use crate::codec::data_type::*;
 use crate::Result;
 
 use self::impl_arithmetic::*;
+use self::impl_cast::*;
 use self::impl_compare::*;
 use self::impl_control::*;
 use self::impl_json::*;
@@ -109,7 +110,9 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
 }
 
 #[rustfmt::skip]
-fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
+    let value = expr.get_sig();
+    let children = expr.get_children();
     Ok(match value {
         ScalarFuncSig::LtInt => map_int_sig(value, children, compare_mapper::<CmpOpLT>)?,
         ScalarFuncSig::LtReal => compare_fn_meta::<BasicComparer<Real, CmpOpLT>>(),
@@ -237,7 +240,57 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
         ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
         ScalarFuncSig::JsonTypeSig => json_type_fn_meta(),
+        ScalarFuncSig::JsonArraySig => json_array_fn_meta(),
         ScalarFuncSig::JsonUnquoteSig => json_unquote_fn_meta(),
+        ScalarFuncSig::CastIntAsInt |
+        ScalarFuncSig::CastIntAsReal |
+        ScalarFuncSig::CastIntAsString |
+        ScalarFuncSig::CastIntAsDecimal |
+        ScalarFuncSig::CastIntAsTime |
+        ScalarFuncSig::CastIntAsDuration |
+        ScalarFuncSig::CastIntAsJson |
+        ScalarFuncSig::CastRealAsInt |
+        ScalarFuncSig::CastRealAsReal |
+        ScalarFuncSig::CastRealAsString |
+        ScalarFuncSig::CastRealAsDecimal |
+        ScalarFuncSig::CastRealAsTime |
+        ScalarFuncSig::CastRealAsDuration |
+        ScalarFuncSig::CastRealAsJson |
+        ScalarFuncSig::CastDecimalAsInt |
+        ScalarFuncSig::CastDecimalAsReal |
+        ScalarFuncSig::CastDecimalAsString |
+        ScalarFuncSig::CastDecimalAsDecimal |
+        ScalarFuncSig::CastDecimalAsTime |
+        ScalarFuncSig::CastDecimalAsDuration |
+        ScalarFuncSig::CastDecimalAsJson |
+        ScalarFuncSig::CastStringAsInt |
+        ScalarFuncSig::CastStringAsReal |
+        ScalarFuncSig::CastStringAsString |
+        ScalarFuncSig::CastStringAsDecimal |
+        ScalarFuncSig::CastStringAsTime |
+        ScalarFuncSig::CastStringAsDuration |
+        ScalarFuncSig::CastStringAsJson |
+        ScalarFuncSig::CastTimeAsInt |
+        ScalarFuncSig::CastTimeAsReal |
+        ScalarFuncSig::CastTimeAsString |
+        ScalarFuncSig::CastTimeAsDecimal |
+        ScalarFuncSig::CastTimeAsTime |
+        ScalarFuncSig::CastTimeAsDuration |
+        ScalarFuncSig::CastTimeAsJson |
+        ScalarFuncSig::CastDurationAsInt |
+        ScalarFuncSig::CastDurationAsReal |
+        ScalarFuncSig::CastDurationAsString |
+        ScalarFuncSig::CastDurationAsDecimal |
+        ScalarFuncSig::CastDurationAsTime |
+        ScalarFuncSig::CastDurationAsDuration |
+        ScalarFuncSig::CastDurationAsJson |
+        ScalarFuncSig::CastJsonAsInt |
+        ScalarFuncSig::CastJsonAsReal |
+        ScalarFuncSig::CastJsonAsString |
+        ScalarFuncSig::CastJsonAsDecimal |
+        ScalarFuncSig::CastJsonAsTime |
+        ScalarFuncSig::CastJsonAsDuration |
+        ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

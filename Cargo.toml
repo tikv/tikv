@@ -187,6 +187,7 @@ members = [
   "components/tidb_query_datatype",
   "components/tidb_query_codegen",
   "components/pd_client",
+  "components/external_storage",
   "cmd",
 ]
 

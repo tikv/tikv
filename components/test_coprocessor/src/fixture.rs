@@ -5,6 +5,7 @@ use super::*;
 use kvproto::kvrpcpb::Context;
 
 use tidb_query::codec::Datum;
+use tikv::config::CoprReadPoolConfig;
 use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
@@ -78,7 +79,10 @@ pub fn init_data_with_details<E: Engine>(
         store.commit_with_ctx(ctx);
     }
 
-    let pool = readpool_impl::build_read_pool_for_test(store.get_engine());
+    let pool = readpool_impl::build_read_pool_for_test(
+        &CoprReadPoolConfig::default_for_test(),
+        store.get_engine(),
+    );
     let cop = Endpoint::new(cfg, pool);
     (store, cop)
 }

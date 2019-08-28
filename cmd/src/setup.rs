@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono;
 use clap::ArgMatches;
 
-use tikv::config::{MetricConfig, TiKvConfig};
+use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
@@ -28,9 +28,8 @@ macro_rules! fatal {
 
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
-    let log_rotation_timespan =
-        chrono::Duration::from_std(config.log_rotation_timespan.clone().into())
-            .expect("config.log_rotation_timespan is an invalid duration.");
+    let log_rotation_timespan = chrono::Duration::from_std(config.log_rotation_timespan.into())
+        .expect("config.log_rotation_timespan is an invalid duration.");
 
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
@@ -134,5 +133,23 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(metrics_addr) = matches.value_of("metrics-addr") {
         config.metric.address = metrics_addr.to_owned()
+    }
+}
+
+#[allow(dead_code)]
+pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
+    if let Err(e) = check_critical_config(config) {
+        fatal!("critical config check failed: {}", e);
+    }
+
+    if persist {
+        if let Err(e) = persist_critical_config(&config) {
+            fatal!("persist critical config failed: {}", e);
+        }
+    }
+
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {}", e.description());
     }
 }
