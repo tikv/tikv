@@ -591,8 +591,7 @@ impl Cluster {
             .insert(region.get_id(), region_stat.approximate_keys);
         self.region_last_report_ts
             .insert(region.get_id(), region_stat.last_report_ts);
-        self.region_last_report_term
-            .insert(region.get_id(), term);
+        self.region_last_report_term.insert(region.get_id(), term);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
