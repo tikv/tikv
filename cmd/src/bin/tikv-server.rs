@@ -5,16 +5,18 @@
 
 use std::process;
 
-use clap::{crate_authors, crate_version, App, Arg};
+use clap::{crate_authors, App, Arg};
 use cmd::setup::validate_and_persist_config;
 use tikv::config::TiKvConfig;
 
 fn main() {
+    let version_info = tikv::tikv_version_info();
+
     let matches = App::new("TiKV")
         .about("A distributed transactional key-value database powered by Rust and Raft")
         .author(crate_authors!())
-        .version(crate_version!())
-        .long_version(tikv::tikv_version_info().as_ref())
+        .version(version_info.as_ref())
+        .long_version(version_info.as_ref())
         .arg(
             Arg::with_name("config")
                 .short("C")
