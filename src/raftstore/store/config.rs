@@ -48,6 +48,12 @@ pub struct Config {
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
+
+    // deprecated. Use region_split_check_size_diff.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub region_split_check_diff: ReadableSize,
+
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_size_diff: ReadableSize,
