@@ -143,28 +143,13 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
 }
 
 impl RunnableWithTimer<MvccGcTask, ()> for MvccGcRunner {
-    fn on_timeout(&mut self, _timer: &mut Timer<()>, _: ()) {
-        // TODO: deal with it.
-        // init_mvcc_gc_db(Arc::clone(&self.db));
-        // let metrics = Arc::new(GcMetrics::default());
-        // init_metrics(Arc::clone(&metrics));
-
-        // let start_time = Instant::now();
-        // let mut merged_count = 0;
-        // let tasks = mem::replace(&mut self.tasks, Default::default());
-        // for (start_key, (end_key, count)) in tasks {
-        //     merged_count += count;
-        //     self.compact(&start_key, &end_key);
-        // }
-        // let elapsed = duration_to_ms(start_time.elapsed());
-        // info!(
-        //     "on timeout, gc worker handles {} regions in {} ms, delete {} writes, {} defaults",
-        //     merged_count,
-        //     elapsed,
-        //     metrics.write_versions.load(Ordering::Relaxed),
-        //     metrics.default_versions.load(Ordering::Relaxed),
-        // );
-        // timer.add_task(COLLECT_TASK_INTERVAL, ());
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        let mut total_pending = 0;
+        for (_, count) in self.tasks.values() {
+            total_pending += count;
+        }
+        info!("{} pending GC tasks in mvcc_gc worker", total_pending);
+        timer.add_task(COLLECT_TASK_INTERVAL, ());
     }
 }
 

@@ -784,6 +784,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             local_storage,
             raft_store_router,
             config.gc_ratio_threshold,
+            config.gc_with_compaction_filter,
         );
 
         gc_worker.start()?;
