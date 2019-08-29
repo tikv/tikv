@@ -2830,7 +2830,6 @@ mod tests {
         }
     }
 
-
     #[test]
     #[rustfmt::skip]
     fn test_string() {
