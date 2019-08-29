@@ -141,7 +141,6 @@ mod tests {
 
     use tipb::ScalarFuncSig;
 
-    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -227,6 +226,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn test_json_array() {
         let cases = vec![
             (vec![], Some(r#"[]"#)),
