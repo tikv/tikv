@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
+use std::fmt::Display;
 
 use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_datatype::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
@@ -15,7 +16,6 @@ use crate::codec::mysql::charset;
 use crate::codec::mysql::decimal::max_or_min_dec;
 use crate::expr::EvalContext;
 use crate::expr::Flag;
-use std::fmt::Display;
 
 /// A trait for converting a value to an `Int`.
 pub trait ToInt {
