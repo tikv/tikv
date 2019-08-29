@@ -409,6 +409,29 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
 
         self.handle_response(ctx, sink, f, TAG);
     }
+
+    fn get_store_info(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetStoreInfoRequest,
+        sink: UnarySink<GetStoreInfoResponse>,
+    ) {
+        ctx.spawn(
+            sink.fail(RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None))
+                .map_err(|_| ()),
+        )
+    }
+    fn get_cluster_info(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetClusterInfoRequest,
+        sink: UnarySink<GetClusterInfoResponse>,
+    ) {
+        ctx.spawn(
+            sink.fail(RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None))
+                .map_err(|_| ()),
+        )
+    }
 }
 
 fn region_detail<T: RaftStoreRouter>(
