@@ -28,6 +28,10 @@ extern crate failure;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+mod endpoint;
 mod errors;
+mod service;
 
+pub use endpoint::{Endpoint, Task};
 pub use errors::{Error, Result};
+pub use service::Service;
