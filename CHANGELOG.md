@@ -4,6 +4,14 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [3.0.3]
 
++ Fix the issue that ReadIndex might fail to respond to requests because of duplicate context [#5256](https://github.com/tikv/tikv/pull/5256)
++ Fix potential scheduling jitters caused by premature `PutStore` [#5277](https://github.com/tikv/tikv/pull/5277)
++ Fix incorrect timestamps reported from Region heartbeats [#5296](https://github.com/tikv/tikv/pull/5296)
++ Fix potential TiKV panics during region merge [#5291](https://github.com/tikv/tikv/pull/5291)
++ Speed up leader change check for the dead lock detector [#5317](https://github.com/tikv/tikv/pull/5317)
++ Support using `grpc env` to create deadlock clients [#5346](https://github.com/tikv/tikv/pull/5346)
++ Add `config-check` to check whether the configuration is correct [#5349](https://github.com/tikv/tikv/pull/5349)
++ Fix the issue that ReadIndex does not return anything when there is no leader [#5351](https://github.com/tikv/tikv/pull/5351)
 + Exclude shared block cache from core dump [#5322](https://github.com/tikv/tikv/pull/5322)
 
 ## [3.0.2]
