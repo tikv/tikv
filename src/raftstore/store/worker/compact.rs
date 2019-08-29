@@ -1,8 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO: remove the file.
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::error;
 use std::fmt::{self, Display, Formatter};
@@ -17,6 +14,7 @@ use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
 use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
+use crate::storage::mvcc::get_gc_with_compaction_filter;
 
 type Key = Vec<u8>;
 
@@ -130,7 +128,57 @@ impl Runner {
 }
 
 impl Runnable<Task> for Runner {
-    fn run(&mut self, _task: Task) {}
+    fn run(&mut self, task: Task) {
+        if get_gc_with_compaction_filter() {
+            // Compaction filter is used to performance GC.
+            return;
+        }
+
+        match task {
+            Task::Compact {
+                cf_name,
+                start_key,
+                end_key,
+            } => {
+                let cf = &cf_name;
+                if let Err(e) = self.compact_range_cf(
+                    cf,
+                    start_key.as_ref().map(Vec::as_slice),
+                    end_key.as_ref().map(Vec::as_slice),
+                ) {
+                    error!("execute compact range failed"; "cf" => cf, "err" => %e);
+                }
+            }
+            Task::CheckAndCompact {
+                cf_names,
+                ranges,
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            } => match collect_ranges_need_compact(
+                &self.engine,
+                ranges,
+                tombstones_num_threshold,
+                tombstones_percent_threshold,
+            ) {
+                Ok(mut ranges) => {
+                    for (start, end) in ranges.drain(..) {
+                        for cf in &cf_names {
+                            if let Err(e) = self.compact_range_cf(cf, Some(&start), Some(&end)) {
+                                error!(
+                                    "compact range failed";
+                                    "range_start" => log_wrappers::Key(&start),
+                                    "range_end" => log_wrappers::Key(&end),
+                                    "cf" => cf,
+                                    "err" => %e,
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
+            },
+        }
+    }
 }
 
 fn need_compact(

@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::raftstore::store::keys::{data_end_key, data_key};
-use crate::storage::mvcc::{init_mvcc_gc_db, init_safe_point};
+use crate::storage::mvcc::{
+    extract_mvcc_props, get_gc_ratio, init_mvcc_gc_db, init_safe_point, need_gc,
+};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{CompactOptions, DBBottommostLevelCompaction, DB};
 use engine::util::get_range_properties_cf;
@@ -87,30 +88,12 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
             }
 
             // Check properties.
-            let collection = get_range_properties_cf(&self.db, CF_WRITE, &sk, &ek).unwrap();
-            if collection.is_empty() {
-                info!("empty properties for the given range, skip");
-                return;
-            }
-            let mut props = MvccProperties::new();
-            for (_, v) in &*collection {
-                let mvcc = MvccProperties::decode(v.user_collected_properties()).unwrap();
-                props.add(&mvcc);
-            }
-            if props.min_ts > task.safe_point {
-                info!(
-                    "min ts: {}, safe_point: {}, skip",
-                    props.min_ts, task.safe_point
-                );
-                return;
-            }
-            if props.num_versions as f64 <= props.num_rows as f64 * 1.1
-                && props.num_versions as f64 <= props.num_puts as f64 * 1.1
-            {
-                info!(
-                    "num_versions: {}, num_rows: {}, num_puts: {}, skip",
-                    props.num_versions, props.num_rows, props.num_puts,
-                );
+            let gc_ratio = get_gc_ratio();
+            let need_gc = get_range_properties_cf(&self.db, CF_WRITE, &sk, &ek)
+                .ok()
+                .and_then(|collection| extract_mvcc_props(collection))
+                .map_or(true, |props| need_gc(props, task.safe_point, gc_ratio));
+            if !need_gc {
                 return;
             }
 
@@ -148,7 +131,9 @@ impl RunnableWithTimer<MvccGcTask, ()> for MvccGcRunner {
         for (_, count) in self.tasks.values() {
             total_pending += count;
         }
-        info!("{} pending GC tasks in mvcc_gc worker", total_pending);
+        if total_pending > 0 {
+            info!("{} pending GC tasks in mvcc_gc worker", total_pending);
+        }
         timer.add_task(COLLECT_TASK_INTERVAL, ());
     }
 }

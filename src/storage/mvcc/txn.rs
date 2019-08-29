@@ -1,5 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ffi::CString;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::{fmt, mem};
+
 use super::lock::{Lock, LockType};
 use super::metrics::*;
 use super::reader::MvccReader;
@@ -10,8 +15,12 @@ use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
     GC_DELETED_VERSIONS,
 };
+
+use engine::rocks::{
+    new_compaction_filter_raw, util::get_cf_handle, CompactionFilter, CompactionFilterContext,
+    CompactionFilterFactory, DBCompactionFilter, Writable, WriteBatch, WriteOptions, DB,
+};
 use kvproto::kvrpcpb::IsolationLevel;
-use std::fmt;
 use tikv_util::time::Instant;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -621,14 +630,6 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 }
 
-use engine::rocks::{
-    new_compaction_filter_raw, util::get_cf_handle, CompactionFilter, CompactionFilterContext,
-    CompactionFilterFactory, DBCompactionFilter, Writable, WriteBatch, WriteOptions, DB,
-};
-use std::ffi::CString;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-
 pub struct WriteCompactionFilterFactory;
 
 impl CompactionFilterFactory for WriteCompactionFilterFactory {
@@ -636,6 +637,10 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
+        if !get_gc_with_compaction_filter() {
+            return std::ptr::null_mut();
+        }
+
         let name = CString::new("write_compaction_filter").unwrap();
         let safe_point = SAFE_POINT.lock().unwrap().as_ref().map(Arc::clone);
         let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone);
@@ -820,7 +825,27 @@ pub fn init_safe_point(safe_point: Arc<AtomicU64>) {
     *sp = Some(safe_point);
 }
 
+pub fn set_gc_with_compaction_filter(b: bool) {
+    GC_WITH_COMACTION_FILTER.store(b, Ordering::Release);
+}
+
+pub fn get_gc_with_compaction_filter() -> bool {
+    GC_WITH_COMACTION_FILTER.load(Ordering::Acquire)
+}
+
+pub fn set_gc_ratio(f: f64) {
+    let u: u64 = unsafe { mem::transmute(f) };
+    GC_RATIO_THRESHOLD.store(u, Ordering::Release);
+}
+
+pub fn get_gc_ratio() -> f64 {
+    let u = GC_RATIO_THRESHOLD.load(Ordering::Acquire);
+    unsafe { mem::transmute(u) }
+}
+
 lazy_static! {
+    static ref GC_WITH_COMACTION_FILTER: AtomicBool = AtomicBool::new(false);
+    static ref GC_RATIO_THRESHOLD: AtomicU64 = AtomicU64::new(0);
     static ref SAFE_POINT: Mutex<Option<Arc<AtomicU64>>> = Mutex::new(None);
     static ref MVCC_GC_DB: Mutex<Option<Arc<DB>>> = Mutex::new(None);
 }

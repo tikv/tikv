@@ -10,10 +10,11 @@ mod write;
 
 pub use self::lock::{Lock, LockType};
 pub use self::reader::EntryScanner;
-pub use self::reader::MvccReader;
+pub use self::reader::{extract_mvcc_props, need_gc, MvccReader};
 pub use self::reader::{Scanner, ScannerBuilder};
 pub use self::txn::{
-    init_mvcc_gc_db, init_safe_point, MvccTxn, WriteCompactionFilterFactory, MAX_TXN_WRITE_SIZE,
+    get_gc_ratio, get_gc_with_compaction_filter, init_mvcc_gc_db, init_safe_point, set_gc_ratio,
+    set_gc_with_compaction_filter, MvccTxn, WriteCompactionFilterFactory, MAX_TXN_WRITE_SIZE,
 };
 pub use self::write::{Write, WriteType};
 

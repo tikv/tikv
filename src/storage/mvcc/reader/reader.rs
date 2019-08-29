@@ -7,6 +7,7 @@ use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
+use engine::rocks::TablePropertiesCollection;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
@@ -475,6 +476,44 @@ impl<S: Snapshot> MvccReader<S> {
         }
         Some(props)
     }
+}
+
+pub fn extract_mvcc_props(collection: TablePropertiesCollection) -> Option<MvccProperties> {
+    if collection.is_empty() {
+        return None;
+    }
+    let mut props = MvccProperties::new();
+    for (_, v) in &*collection {
+        let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        props.add(&mvcc);
+    }
+    Some(props)
+}
+
+pub fn need_gc(props: MvccProperties, safe_point: u64, ratio_threshold: f64) -> bool {
+    if ratio_threshold <= 1.0 {
+        return true;
+    }
+
+    // No data older than safe_point to GC.
+    if props.min_ts > safe_point {
+        return false;
+    }
+
+    // A lot of MVCC versions to GC.
+    if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
+        return true;
+    }
+    // A lot of non-effective MVCC versions to GC.
+    if props.num_versions as f64 > props.num_puts as f64 * ratio_threshold {
+        return true;
+    }
+
+    // A lot of MVCC versions of a single row to GC.
+    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
 }
 
 #[cfg(test)]

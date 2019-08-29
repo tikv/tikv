@@ -21,7 +21,7 @@ use raft::StateRole;
 
 use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
 use super::metrics::*;
-use super::mvcc::{MvccReader, MvccTxn};
+use super::mvcc::{set_gc_ratio, set_gc_with_compaction_filter, MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
@@ -147,6 +147,8 @@ impl<E: Engine> GCRunner<E> {
         ratio_threshold: f64,
         gc_with_compaction_filter: bool,
     ) -> Self {
+        set_gc_ratio(ratio_threshold);
+        set_gc_with_compaction_filter(gc_with_compaction_filter);
         Self {
             engine,
             local_storage,
