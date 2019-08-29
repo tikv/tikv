@@ -56,7 +56,7 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
     })
 }
 
-fn json_extract_validator(expr: &tipb::Expr) -> Result<()> {
+fn json_with_bytes_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     // min_args = 2
     // args should be like `&Option<Json> , &[&Option<Bytes>]`.
@@ -68,7 +68,7 @@ fn json_extract_validator(expr: &tipb::Expr) -> Result<()> {
 }
 
 /// args should be like `&Option<Json> , &[&Option<Bytes>]`.
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_extract_validator)]
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_bytes_validator)]
 #[inline]
 fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     // args should be at least 2
@@ -94,6 +94,36 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     }
 
     Ok(j.extract(&path_expr_list))
+}
+
+/// args should be like `&Option<Json> , &[&Option<Bytes>]`.
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_bytes_validator)]
+#[inline]
+fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    // args should be at least 2
+    let j: &Option<Json> = Evaluable::borrow_scalar_value_ref(&args[0]);
+    let mut j = match j.as_ref() {
+        None => return Ok(None),
+        Some(j) => j.to_owned(),
+    };
+
+    let mut path_expr_list = vec![];
+    for i in 1..args.len() {
+        let json_path: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&args[i]);
+
+        let json_path = match json_path.as_ref() {
+            None => return Ok(None),
+            Some(p) => p.to_owned(),
+        };
+        let json_path = eval_string_and_decode(json_path)?;
+
+        let path_expr = parse_json_path_expr(&json_path)?;
+
+        path_expr_list.push(path_expr);
+    }
+
+    j.remove(&path_expr_list)?;
+    Ok(Some(j))
 }
 
 #[inline]
@@ -276,6 +306,29 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(vargs.clone())
                 .evaluate(ScalarFuncSig::JsonExtractSig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
+        }
+    }
+
+    #[test]
+    fn test_json_remove() {
+        let cases: Vec<(Vec<ScalarValue>, _)> = vec![
+            (
+                vec![
+                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+                    Some(b"$[1]".to_vec()).into(),
+                ],
+                Some(r#"["a", "d"]"#),
+            )
+        ];
+
+        for (vargs, expected) in cases {
+            let expected = expected.map(|s| Json::from_str(s).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonRemoveSig)
                 .unwrap();
             assert_eq!(output, expected, "{:?}", vargs);
         }
