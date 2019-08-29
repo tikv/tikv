@@ -31,13 +31,13 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
 }
 
 fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
-    let chunks = expr.get_children().chunks(2);
+    let chunks = expr.get_children();
     if chunks.len() % 2 == 1 {
         return Err(other_err!(
             "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
         ));
     }
-    for chunk in chunks {
+    for chunk in chunks.chunks(2) {
         super::function::validate_expr_return_type(&chunk[0], EvalType::Bytes)?;
         super::function::validate_expr_return_type(&chunk[1], EvalType::Json)?;
     }
