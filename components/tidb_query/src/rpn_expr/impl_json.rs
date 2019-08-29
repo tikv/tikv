@@ -55,6 +55,19 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
     })
 }
 
+fn json_extract_validator(expr: &tipb::Expr) -> Result<()> {
+    unimplemented!()
+}
+
+/// args should be like `Option<Json> , &[Option<Bytes>]`.
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_extract_validator)]
+#[inline]
+fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    // args should be at least 2
+    let key: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&args[0]);
+    unimplemented!()
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -184,5 +197,10 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
+    }
+
+    #[test]
+    fn test_json_extract() {
+        unimplemented!()
     }
 }

@@ -243,6 +243,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonArraySig => json_array_fn_meta(),
         ScalarFuncSig::JsonMergeSig => json_merge_fn_meta(),
         ScalarFuncSig::JsonUnquoteSig => json_unquote_fn_meta(),
+        ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |
