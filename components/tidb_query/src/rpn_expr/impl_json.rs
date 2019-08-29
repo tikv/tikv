@@ -31,15 +31,15 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
 }
 
 fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
-    for chunk in expr.get_children().chunks(2) {
-        if chunk.len() == 1 {
-            return Err(other_err!(
-                "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
-            ));
-        } else {
-            super::function::validate_expr_return_type(&chunk[0], EvalType::Bytes)?;
-            super::function::validate_expr_return_type(&chunk[1], EvalType::Json)?;
-        }
+    let chunks = expr.get_children().chunks(2);
+    if chunks.len() % 2 == 1 {
+        return Err(other_err!(
+            "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
+        ));
+    }
+    for chunk in chunks {
+        super::function::validate_expr_return_type(&chunk[0], EvalType::Bytes)?;
+        super::function::validate_expr_return_type(&chunk[1], EvalType::Json)?;
     }
     Ok(())
 }
@@ -50,25 +50,24 @@ fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
     for chunk in raw_args.chunks(2) {
-        // chunk.len() must be 1 or 2 here.
-        let key =
-            Evaluable::borrow_scalar_value_ref(&chunk[0])
-                .as_ref()
-                .map_or_else(
-                    || {
-                        Err(other_err!(
-                            "Data truncation: JSON documents may not contain NULL member names."
-                        ))
-                    },
-                    |v: &Bytes| {
-                        Ok(String::from_utf8(v.to_owned())
-                            .map_err(|e| crate::codec::Error::from(e))?)
-                    },
-                )?;
+        // chunk.len() must be 2 here.
 
-        let value = Evaluable::borrow_scalar_value_ref(&chunk[1])
-            .as_ref()
-            .map_or(Json::None, |v: &Json| v.to_owned());
+        let key: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
+        let key = match key {
+            // json_object should raise an error if key is None(NULL)
+            None => Err(other_err!(
+                "Data truncation: JSON documents may not contain NULL member names."
+            )),
+            Some(v) => {
+                Ok(String::from_utf8(v.to_owned()).map_err(|e| crate::codec::Error::from(e))?)
+            }
+        }?;
+
+        let value: &Option<Json> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
+        let value = match value {
+            None => Json::None,
+            Some(v) => v.to_owned(),
+        };
 
         pairs.insert(key, value);
     }
