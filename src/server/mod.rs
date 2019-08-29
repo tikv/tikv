@@ -7,6 +7,7 @@ pub mod config;
 pub mod debug;
 pub mod errors;
 pub mod load_statistics;
+pub mod lock_manager;
 pub mod node;
 pub mod raftkv;
 pub mod resolve;
@@ -18,6 +19,7 @@ pub mod transport;
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
+pub use self::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 pub use self::metrics::CONFIG_ROCKSDB_GAUGE;
 pub use self::node::{create_raft_storage, Node};
 pub use self::raft_client::RaftClient;

@@ -23,16 +23,16 @@ use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use tikv::raftstore::store::{fsm, LocalReader};
 use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
+use tikv::server::lock_manager::{
+    register_detector_role_change_observer, Detector, DetectorScheduler,
+    Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
+};
 use tikv::server::resolve;
 use tikv::server::service::DebugService;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
-use tikv::storage::lock_manager::{
-    register_detector_role_change_observer, Detector, DetectorScheduler,
-    Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
-};
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;

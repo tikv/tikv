@@ -15,9 +15,9 @@ use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
 };
+use crate::server::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
-use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::{Config as StorageConfig, Storage};
 use engine::rocks::DB;
 use engine::Engines;
@@ -41,7 +41,7 @@ pub fn create_raft_storage<S>(
     raft_store_router: Option<ServerRaftStoreRouter>,
     waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
     detector_scheduler: Option<DetectorScheduler>,
-) -> Result<Storage<RaftKv<S>>>
+) -> Result<Storage<RaftKv<S>, WaiterMgrScheduler, DetectorScheduler>>
 where
     S: RaftStoreRouter + 'static,
 {

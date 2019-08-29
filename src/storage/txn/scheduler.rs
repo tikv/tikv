@@ -31,9 +31,7 @@ use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
-use crate::storage::lock_manager::{
-    self, store_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
-};
+use crate::storage::lock_manager::{self, store_wait_table_is_empty, Detector, WaiterMgr};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
@@ -138,7 +136,7 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner {
+struct SchedulerInner<W: WaiterMgr, D: Detector> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
@@ -159,9 +157,9 @@ struct SchedulerInner {
     // used to control write flow
     running_write_bytes: AtomicUsize,
 
-    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+    waiter_mgr_scheduler: Option<W>,
 
-    detector_scheduler: Option<DetectorScheduler>,
+    detector_scheduler: Option<D>,
 }
 
 #[inline]
@@ -169,7 +167,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl SchedulerInner {
+impl<W: WaiterMgr, D: Detector> SchedulerInner<W, D> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -236,20 +234,20 @@ impl SchedulerInner {
 
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
-pub struct Scheduler<E: Engine> {
+pub struct Scheduler<E: Engine, W: WaiterMgr, D: Detector> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
-    inner: Arc<SchedulerInner>,
+    inner: Arc<SchedulerInner<W, D>>,
 }
 
-unsafe impl<E: Engine> Send for Scheduler<E> {}
+unsafe impl<E: Engine, W: WaiterMgr, D: Detector> Send for Scheduler<E, W, D> {}
 
-impl<E: Engine> Scheduler<E> {
+impl<E: Engine, W: WaiterMgr, D: Detector> Scheduler<E, W, D> {
     /// Creates a scheduler.
     pub fn new(
         engine: E,
-        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-        detector_scheduler: Option<DetectorScheduler>,
+        waiter_mgr_scheduler: Option<W>,
+        detector_scheduler: Option<D>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -290,8 +288,8 @@ impl<E: Engine> Scheduler<E> {
     }
 }
 
-impl<E: Engine> Scheduler<E> {
-    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self> {
+impl<E: Engine, W: WaiterMgr, D: Detector> Scheduler<E, W, D> {
+    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self, W, D> {
         let pool = if priority == CommandPri::High || is_sys_cmd {
             self.inner.high_priority_pool.clone()
         } else {
@@ -478,7 +476,7 @@ impl<E: Engine> Scheduler<E> {
     }
 }
 
-impl<E: Engine> MsgScheduler for Scheduler<E> {
+impl<E: Engine, W: WaiterMgr, D: Detector> MsgScheduler for Scheduler<E, W, D> {
     fn on_msg(&self, task: Msg) {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),

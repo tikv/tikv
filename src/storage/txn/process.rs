@@ -9,9 +9,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
-use crate::storage::lock_manager::{
-    self, wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
-};
+use crate::storage::lock_manager::{self, wait_table_is_empty, Detector, WaiterMgr};
 use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
@@ -108,24 +106,24 @@ pub trait MsgScheduler: Clone + Send + 'static {
     fn on_msg(&self, task: Msg);
 }
 
-pub struct Executor<E: Engine, S: MsgScheduler> {
+pub struct Executor<E: Engine, S: MsgScheduler, W: WaiterMgr, D: Detector> {
     // We put time consuming tasks to the thread pool.
     sched_pool: Option<SchedPool>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<S>,
     // If the task releases some locks, we wake up waiters waiting for them.
-    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-    detector_scheduler: Option<DetectorScheduler>,
+    waiter_mgr_scheduler: Option<W>,
+    detector_scheduler: Option<D>,
 
     _phantom: PhantomData<E>,
 }
 
-impl<E: Engine, S: MsgScheduler> Executor<E, S> {
+impl<E: Engine, S: MsgScheduler, W: WaiterMgr, D: Detector> Executor<E, S, W, D> {
     pub fn new(
         scheduler: S,
         pool: SchedPool,
-        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-        detector_scheduler: Option<DetectorScheduler>,
+        waiter_mgr_scheduler: Option<W>,
+        detector_scheduler: Option<D>,
     ) -> Self {
         Executor {
             sched_pool: Some(pool),
@@ -148,11 +146,11 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         self.scheduler.take().unwrap()
     }
 
-    fn take_waiter_mgr_scheduler(&mut self) -> Option<WaiterMgrScheduler> {
+    fn take_waiter_mgr_scheduler(&mut self) -> Option<W> {
         self.waiter_mgr_scheduler.take()
     }
 
-    fn take_detector_scheduler(&mut self) -> Option<DetectorScheduler> {
+    fn take_detector_scheduler(&mut self) -> Option<D> {
         self.detector_scheduler.take()
     }
 
@@ -483,8 +481,8 @@ fn process_read_impl<E: Engine>(
 // If waiter_mgr_scheduler is some and wait_table is not empty,
 // there may be some transactions waiting for these keys,
 // so calculates keys' hashes to wake up them.
-fn gen_key_hashes_if_needed(
-    waiter_mgr_scheduler: &Option<WaiterMgrScheduler>,
+fn gen_key_hashes_if_needed<W: WaiterMgr>(
+    waiter_mgr_scheduler: &Option<W>,
     keys: &[Key],
 ) -> Option<Vec<u64>> {
     if waiter_mgr_scheduler.is_some() && !wait_table_is_empty() {
@@ -495,8 +493,8 @@ fn gen_key_hashes_if_needed(
 }
 
 // Wake up pessimistic transactions that waiting for these locks
-fn notify_waiter_mgr_if_needed(
-    waiter_mgr_scheduler: &Option<WaiterMgrScheduler>,
+fn notify_waiter_mgr_if_needed<W: WaiterMgr>(
+    waiter_mgr_scheduler: &Option<W>,
     lock_ts: u64,
     key_hashes: Option<Vec<u64>>,
     commit_ts: u64,
@@ -510,8 +508,8 @@ fn notify_waiter_mgr_if_needed(
 }
 
 // When it is a pessimistic transaction, we need to clean up `wait_for_entries`.
-fn notify_deadlock_detector_if_needed(
-    detector_scheduler: &Option<DetectorScheduler>,
+fn notify_deadlock_detector_if_needed<D: Detector>(
+    detector_scheduler: &Option<D>,
     is_pessimistic_txn: bool,
     txn_ts: u64,
 ) {
@@ -529,11 +527,11 @@ struct WriteResult {
     lock_info: Option<(lock_manager::Lock, bool)>,
 }
 
-fn process_write_impl<S: Snapshot>(
+fn process_write_impl<S: Snapshot, W: WaiterMgr, D: Detector>(
     cmd: Command,
     snapshot: S,
-    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-    detector_scheduler: Option<DetectorScheduler>,
+    waiter_mgr_scheduler: Option<W>,
+    detector_scheduler: Option<D>,
     statistics: &mut Statistics,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd {

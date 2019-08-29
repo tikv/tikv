@@ -3,8 +3,9 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use super::util::extract_raw_key_from_process_result;
-use super::Lock;
+use crate::storage::lock_manager::{
+    extract_raw_key_from_process_result, store_wait_table_is_empty, Lock, WaiterMgr,
+};
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
 use crate::storage::txn::{execute_callback, ProcessResult};
@@ -21,17 +22,6 @@ use tikv_util::collections::HashMap;
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
-
-// If it is true, there is no need to calculate keys' hashes and wake up waiters.
-pub static WAIT_TABLE_IS_EMPTY: AtomicBool = AtomicBool::new(true);
-
-pub fn store_wait_table_is_empty(is_empty: bool) {
-    WAIT_TABLE_IS_EMPTY.store(is_empty, Ordering::Relaxed);
-}
-
-pub fn wait_table_is_empty() -> bool {
-    WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed)
-}
 
 pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
@@ -192,7 +182,29 @@ impl Scheduler {
         true
     }
 
-    pub fn wait_for(
+    pub fn dump_wait_table(&self, cb: Callback) -> bool {
+        self.notify_scheduler(Task::Dump { cb })
+    }
+
+    pub fn deadlock(&self, txn_ts: u64, lock: Lock, deadlock_key_hash: u64) {
+        self.notify_scheduler(Task::Deadlock {
+            start_ts: txn_ts,
+            lock,
+            deadlock_key_hash,
+        });
+    }
+}
+
+impl WaiterMgr for Scheduler {
+    fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {
+        self.notify_scheduler(Task::WakeUp {
+            lock_ts,
+            hashes,
+            commit_ts,
+        });
+    }
+
+    fn wait_for(
         &self,
         start_ts: u64,
         cb: StorageCb,
@@ -206,26 +218,6 @@ impl Scheduler {
             pr,
             lock,
             is_first_lock,
-        });
-    }
-
-    pub fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {
-        self.notify_scheduler(Task::WakeUp {
-            lock_ts,
-            hashes,
-            commit_ts,
-        });
-    }
-
-    pub fn dump_wait_table(&self, cb: Callback) -> bool {
-        self.notify_scheduler(Task::Dump { cb })
-    }
-
-    pub fn deadlock(&self, txn_ts: u64, lock: Lock, deadlock_key_hash: u64) {
-        self.notify_scheduler(Task::Deadlock {
-            start_ts: txn_ts,
-            lock,
-            deadlock_key_hash,
         });
     }
 }
@@ -398,8 +390,10 @@ fn wake_up_waiter(waiter: Waiter, commit_ts: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::util::*;
     use super::*;
+    use crate::storage::lock_manager::{
+        gen_key_hash, store_wait_table_is_empty, wait_table_is_empty,
+    };
     use crate::storage::Key;
     use std::time::Duration;
     use test_util::KvGenerator;
