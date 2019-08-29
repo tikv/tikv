@@ -14,6 +14,7 @@ use tikv_util;
 use crate::metrics::*;
 use crate::{Error, Result};
 
+/// A writer writes txn entries into SST files.
 pub struct BackupWriter {
     name: String,
     default: SstWriter,
@@ -23,6 +24,7 @@ pub struct BackupWriter {
 }
 
 impl BackupWriter {
+    /// Create a new BackupWriter.
     pub fn new(db: Arc<DB>, name: &str) -> Result<BackupWriter> {
         let default = SstWriterBuilder::new()
             .set_in_memory(true)
@@ -44,11 +46,12 @@ impl BackupWriter {
         })
     }
 
-    pub fn write<I>(&mut self, entris: I) -> Result<()>
+    /// Wrtie entries to buffered SST files.
+    pub fn write<I>(&mut self, entries: I) -> Result<()>
     where
         I: Iterator<Item = TxnEntry>,
     {
-        for e in entris {
+        for e in entries {
             match e {
                 TxnEntry::Commit { default, write } => {
                     // Default may be empty if value is small.
@@ -73,6 +76,7 @@ impl BackupWriter {
         Ok(())
     }
 
+    /// Save buffered SST files to the given external storage.
     pub fn save(mut self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let name = self.name;
         let save_and_build_file = |cf, mut contents: &[u8]| -> Result<File> {
@@ -115,8 +119,30 @@ impl BackupWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
+
+    fn check_sst(ssts: &[(engine::CfName, &Path)], kvs: &[(engine::CfName, &[u8], &[u8])]) {
+        let temp = TempDir::new().unwrap();
+        let rocks = TestEngineBuilder::new()
+            .path(temp.path())
+            .cfs(&[engine::CF_DEFAULT, engine::CF_LOCK, engine::CF_WRITE])
+            .build()
+            .unwrap();
+        let db = rocks.get_rocksdb();
+
+        let opt = engine::rocks::IngestExternalFileOptions::new();
+        for (cf, sst) in ssts {
+            let handle = db.cf_handle(cf).unwrap();
+            db.ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
+                .unwrap();
+        }
+        for (cf, k, v) in kvs {
+            let handle = db.cf_handle(cf).unwrap();
+            assert_eq!(*v, &*db.get_cf(handle, k).unwrap().unwrap());
+        }
+    }
 
     #[test]
     fn test_writer() {
@@ -147,7 +173,12 @@ mod tests {
                 .into_iter(),
             )
             .unwrap();
-        assert_eq!(writer.save(&storage).unwrap().len(), 1);
+        let files = writer.save(&storage).unwrap();
+        assert_eq!(files.len(), 1);
+        check_sst(
+            &[(engine::CF_WRITE, &temp.path().join(files[0].get_name()))],
+            &[(engine::CF_WRITE, &keys::data_key(&[b'a']), &[b'a'])],
+        );
 
         // Test write and default.
         let mut writer = BackupWriter::new(db.clone(), "foo2").unwrap();
@@ -160,6 +191,17 @@ mod tests {
                 .into_iter(),
             )
             .unwrap();
-        assert_eq!(writer.save(&storage).unwrap().len(), 2);
+        let files = writer.save(&storage).unwrap();
+        assert_eq!(files.len(), 2);
+        check_sst(
+            &[
+                (engine::CF_DEFAULT, &temp.path().join(files[0].get_name())),
+                (engine::CF_WRITE, &temp.path().join(files[1].get_name())),
+            ],
+            &[
+                (engine::CF_DEFAULT, &keys::data_key(&[b'a']), &[b'a']),
+                (engine::CF_WRITE, &keys::data_key(&[b'a']), &[b'a']),
+            ],
+        );
     }
 }
