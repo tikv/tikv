@@ -345,6 +345,7 @@ pub fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
 }
 
 // -------------------* as int/uint----------------------------------
+// this include cast_signed_or_unsigned_int_to_int,
 #[rpn_fn]
 #[inline]
 fn cast_int_as_int(val: &Option<Int>) -> Result<Option<i64>> {
@@ -354,6 +355,8 @@ fn cast_int_as_int(val: &Option<Int>) -> Result<Option<i64>> {
     }
 }
 
+// this include cast_signed_or_unsigned_int_to_uint,
+// only signed int to uint has special case. 
 #[rpn_fn(capture = [extra])]
 #[inline]
 fn cast_int_as_uint(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Option<i64>> {
