@@ -14,9 +14,9 @@ use std::path::Path;
 use std::usize;
 
 use engine::rocks::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-    TitanDBOptions,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
+    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
+    LRUCacheOptions, TitanDBOptions,
 };
 use slog;
 use sys_info;
@@ -477,7 +477,7 @@ impl WriteCfConfig {
         cf_opts
             .set_compaction_filter_factory(
                 "write_compaction_filter_factory",
-                Box::new(WriteCompactionFilterFactory {}),
+                Box::new(WriteCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
             )
             .unwrap();
         cf_opts

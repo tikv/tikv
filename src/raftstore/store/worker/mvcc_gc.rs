@@ -74,7 +74,7 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
         for (sk, ek) in &self.running_tasks {
             let dsk = data_key(&task.start_key);
             let dek = data_end_key(&task.end_key);
-            if sk < &dek && &dsk < ek {
+            if *sk < dek && dsk < *ek {
                 // overlap with a range in compaction.
                 info!("gc task overlap, skip");
                 return;
@@ -119,8 +119,6 @@ impl Runnable<MvccGcTask> for MvccGcRunner {
                 info!("gc worker handles {} regions in {} ms", mc, elapsed,);
                 sender.send((sk, ek)).unwrap();
             });
-            // Avoid 2 compaction filter uses 1 metrics.
-            thread::sleep(Duration::from_secs(1));
         }
     }
 }
@@ -159,7 +157,7 @@ fn insert_range(
         .range::<Vec<_>, _>((Included(&vec![]), Included(&start_key)))
         .next_back()
     {
-        if ek >= &start_key {
+        if *ek >= start_key {
             removed.push(sk.to_owned());
         }
     }

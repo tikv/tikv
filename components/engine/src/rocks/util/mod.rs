@@ -450,8 +450,6 @@ pub fn compact_range(
     // concurrently run with other background compactions.
     compact_opts.set_exclusive_manual_compaction(exclusive_manual);
     compact_opts.set_max_subcompactions(max_subcompactions as i32);
-    compact_opts.set_change_level(true);
-    compact_opts.set_target_level(6);
     db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
 }
 

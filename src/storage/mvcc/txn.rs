@@ -3,7 +3,7 @@
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{fmt, mem};
+use std::{f64, fmt, mem};
 
 use super::lock::{Lock, LockType};
 use super::metrics::*;
@@ -646,18 +646,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         let db = MVCC_GC_DB.lock().unwrap().as_ref().map(Arc::clone);
         match (safe_point, db) {
             (Some(sp), Some(db)) => {
-                let cf_handle = get_cf_handle(&db, CF_WRITE).unwrap();
-                let max_level = db.get_options_cf(cf_handle).get_num_levels() - 1;
-                let output_level = context.output_level();
-                if context.is_manual_compaction() && output_level < max_level {
-                    // For manual compactions, only run the filter for the last level.
-                    return std::ptr::null_mut();
-                }
-                let max_delete = match Key::split_on_ts_for(context.end_key()) {
-                    Ok((k, _)) => k.to_vec(),
-                    _ => vec![],
-                };
-                let filter = Box::new(WriteCompactionFilter::new(sp, db, output_level, max_delete));
+                let filter = Box::new(WriteCompactionFilter::new(sp, db, context));
                 unsafe { new_compaction_filter_raw(name, true, filter) }
             }
             _ => std::ptr::null_mut(),
@@ -670,7 +659,8 @@ struct WriteCompactionFilter {
     db: Arc<DB>,
     max_level: usize,
     output_level: usize,
-    max_delete: Vec<u8>,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
 
     write_batch: WriteBatch,
     key_prefix: Vec<u8>,
@@ -681,25 +671,29 @@ struct WriteCompactionFilter {
     rows: usize,
     stale_versions: usize,
     deleted: usize,
+    default_deleted: usize,
     skipped: usize, // can't delete because it's not the last level.
     start: Instant,
 }
 
 impl WriteCompactionFilter {
-    fn new(
-        safe_point: Arc<AtomicU64>,
-        db: Arc<DB>,
-        output_level: usize,
-        max_delete: Vec<u8>,
-    ) -> Self {
+    fn new(safe_point: Arc<AtomicU64>, db: Arc<DB>, context: &CompactionFilterContext) -> Self {
         let cf_handle = get_cf_handle(&db, CF_WRITE).unwrap();
         let max_level = db.get_options_cf(cf_handle).get_num_levels() - 1;
+        let output_level = context.output_level();
+        let start_key = Key::split_on_ts_for(context.start_key())
+            .map(|(k, _)| k.to_vec())
+            .unwrap_or_default();
+        let end_key = Key::split_on_ts_for(context.end_key())
+            .map(|(k, _)| k.to_vec())
+            .unwrap_or_default();
         WriteCompactionFilter {
             safe_point,
             db,
             max_level,
             output_level,
-            max_delete,
+            start_key,
+            end_key,
 
             write_batch: WriteBatch::with_capacity(DEFAULT_DELETE_BATCH_SIZE),
             key_prefix: vec![],
@@ -710,6 +704,7 @@ impl WriteCompactionFilter {
             rows: 0,
             stale_versions: 0,
             deleted: 0,
+            default_deleted: 0,
             skipped: 0,
             start: Instant::now_coarse(),
         }
@@ -741,7 +736,10 @@ impl Drop for WriteCompactionFilter {
             "stale_versions" => self.stale_versions,
             "rows" => self.rows,
             "deleted" => self.deleted,
+            "default_deleted" => self.default_deleted,
             "skipped" => self.skipped,
+            "start_key" => hex::encode_upper(&self.start_key),
+            "end_key" => hex::encode_upper(&self.end_key),
         );
         GC_DELETED_VERSIONS.inc_by(self.deleted as i64);
     }
@@ -788,7 +786,7 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Rollback | WriteType::Lock => filtered = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    if self.output_level == self.max_level && self.key_prefix != self.max_delete {
+                    if self.output_level == self.max_level && self.key_prefix != self.end_key {
                         filtered = true;
                     } else {
                         self.skipped += 1;
@@ -805,6 +803,7 @@ impl CompactionFilter for WriteCompactionFilter {
             if !has_short {
                 let key = Key::from_encoded_slice(key_prefix).append_ts(start_ts);
                 self.delete_default_key(key.as_encoded());
+                self.default_deleted += 1;
             }
             self.deleted += 1;
         }
@@ -840,7 +839,7 @@ pub fn set_gc_ratio(f: f64) {
 
 pub fn get_gc_ratio() -> f64 {
     let u = GC_RATIO_THRESHOLD.load(Ordering::Acquire);
-    unsafe { mem::transmute(u) }
+    f64::from_bits(u)
 }
 
 lazy_static! {
@@ -854,7 +853,7 @@ lazy_static! {
 mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::kv::Engine;
+    use crate::storage::kv::{Engine, RocksEngine};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
@@ -1123,7 +1122,10 @@ mod tests {
         must_prewrite_lock_err(&engine, key, key, 5);
     }
 
-    fn test_gc_imp(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8]) {
+    fn test_gc_imp<F>(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8], gc: F)
+    where
+        F: Fn(&RocksEngine, &[u8], u64),
+    {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v1, k, 5);
@@ -1164,30 +1166,48 @@ mod tests {
         // 10             Commit(PUT,5)
         // 5    x5
 
-        must_gc(&engine, k, 12);
+        gc(&engine, k, 12);
         must_get(&engine, k, 12, v1);
 
-        must_gc(&engine, k, 22);
+        gc(&engine, k, 22);
         must_get(&engine, k, 22, v2);
         must_get_none(&engine, k, 12);
 
-        must_gc(&engine, k, 32);
+        gc(&engine, k, 32);
         must_get_none(&engine, k, 22);
         must_get_none(&engine, k, 35);
 
-        must_gc(&engine, k, 60);
+        gc(&engine, k, 60);
         must_get(&engine, k, 62, v3);
     }
 
     #[test]
     fn test_gc() {
-        test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4");
+        test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4", must_gc);
 
         let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v2 = "y".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v3 = "z".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_gc_imp(b"k2", &v1, &v2, &v3, &v4);
+        test_gc_imp(b"k2", &v1, &v2, &v3, &v4, must_gc);
+    }
+
+    fn gc_by_compact(engine: &RocksEngine, _: &[u8], safe_point: u64) {
+        let kv = Arc::clone(&engine.get_rocksdb());
+        init_compaction_filter_deps(Arc::new(AtomicU64::new(safe_point)), Arc::clone(&kv));
+        let handle = get_cf_handle(&kv, "write").unwrap();
+        compact_range(&kv, handle, None, None, false, 1);
+    }
+
+    #[test]
+    fn test_gc_with_compaction_filter() {
+        test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4", gc_by_compact);
+
+        let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v2 = "y".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v3 = "z".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        test_gc_imp(b"k2", &v1, &v2, &v3, &v4, gc_by_compact);
     }
 
     fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8]) {
@@ -1779,13 +1799,15 @@ mod tests {
         assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
     }
 
-    use super::{init_mvcc_gc_db, init_safe_point};
+    use super::{init_mvcc_gc_db, init_safe_point, set_gc_ratio, set_gc_with_compaction_filter};
     use engine::rocks::util::{compact_range, get_cf_handle};
     use engine::rocks::DB;
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
 
     fn init_compaction_filter_deps(safe_point: Arc<AtomicU64>, db: Arc<DB>) {
+        set_gc_with_compaction_filter(true);
+        set_gc_ratio(1.1);
         init_safe_point(safe_point);
         init_mvcc_gc_db(db);
     }

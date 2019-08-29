@@ -474,6 +474,7 @@ fn test_serde_custom_tikv_config() {
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
+        gc_with_compaction_filter: false,
         max_key_size: 8192,
         scheduler_notify_capacity: 123,
         scheduler_concurrency: 123,
