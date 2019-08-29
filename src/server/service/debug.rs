@@ -413,7 +413,7 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
     fn get_store_info(
         &mut self,
         ctx: RpcContext<'_>,
-        _req: GetStoreInfoRequest,
+        _: GetStoreInfoRequest,
         sink: UnarySink<GetStoreInfoResponse>,
     ) {
         const TAG: &str = "debug_get_store_id";
@@ -434,7 +434,7 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
     fn get_cluster_info(
         &mut self,
         ctx: RpcContext<'_>,
-        _req: GetClusterInfoRequest,
+        _: GetClusterInfoRequest,
         sink: UnarySink<GetClusterInfoResponse>,
     ) {
         const TAG: &str = "debug_get_cluster_id";
