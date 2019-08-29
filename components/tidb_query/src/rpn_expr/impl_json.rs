@@ -51,18 +51,20 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
     for chunk in raw_args.chunks(2) {
         // chunk.len() must be 1 or 2 here.
-        let key = Evaluable::borrow_scalar_value_ref(&chunk[0])
-            .as_ref()
-            .map_or_else(
-                || {
-                    Err(other_err!(
-                        "Data truncation: JSON documents may not contain NULL member names."
-                    ))
-                },
-                |v: &Bytes| {
-                    String::from_utf8(v.to_owned()).map_err(|e| crate::codec::Error::from(e).into())
-                },
-            )?;
+        let key =
+            Evaluable::borrow_scalar_value_ref(&chunk[0])
+                .as_ref()
+                .map_or_else(
+                    || {
+                        Err(other_err!(
+                            "Data truncation: JSON documents may not contain NULL member names."
+                        ))
+                    },
+                    |v: &Bytes| {
+                        Ok(String::from_utf8(v.to_owned())
+                            .map_err(|e| crate::codec::Error::from(e))?)
+                    },
+                )?;
 
         let value = Evaluable::borrow_scalar_value_ref(&chunk[1])
             .as_ref()
