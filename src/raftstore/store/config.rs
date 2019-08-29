@@ -49,7 +49,7 @@ pub struct Config {
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
 
-    // deprecated. Use region_split_check_size_diff.
+    // deprecated. use region_split_check_size_diff.
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub region_split_check_diff: ReadableSize,
@@ -209,6 +209,7 @@ impl Default for Config {
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
+            region_split_check_diff: ReadableSize(0),
         }
     }
 }

@@ -154,6 +154,7 @@ fn test_serde_custom_tikv_config() {
         cleanup_import_sst_interval: ReadableDuration::minutes(12),
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
+        region_split_check_diff: ReadableSize(0),
         local_read_batch_size: 33,
         apply_max_batch_size: 22,
         apply_pool_size: 4,
