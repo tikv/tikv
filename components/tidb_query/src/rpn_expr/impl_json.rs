@@ -50,8 +50,7 @@ fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
 fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let mut pairs = BTreeMap::new();
     for chunk in raw_args.chunks(2) {
-        // chunk.len() must be 2 here.
-        assert!(chunk.len() >= 2);
+        assert_eq!(chunk.len(), 2);
         let key: &Option<Bytes> = chunk[0].as_ref();
         if key.is_none() {
             return Err(other_err!(
