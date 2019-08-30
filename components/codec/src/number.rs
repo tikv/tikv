@@ -999,24 +999,6 @@ pub trait NumberEncoder: BufferWriter {
         unsafe { self.advance_mut(encoded_bytes) };
         Ok(encoded_bytes)
     }
-
-    /// Writes all unsigned 8 bit integers ,
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Io` if buffer remaining size < values.len().
-    #[inline]
-    fn write_all_bytes(&mut self, values: &[u8]) -> Result<()> {
-        let buf = unsafe { self.bytes_mut(values.len()) };
-        if unsafe { unlikely(buf.len() < values.len()) } {
-            return Err(Error::eof());
-        }
-        buf[..values.len()].copy_from_slice(values);
-        unsafe {
-            self.advance_mut(values.len());
-        }
-        Ok(())
-    }
 }
 
 /// Any types who implemented `BufferWriter` also implements `NumberEncoder`.
