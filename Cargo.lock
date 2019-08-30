@@ -235,6 +235,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "cassowary"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -395,14 +400,15 @@ dependencies = [
 [[package]]
 name = "criterion"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression#932906eee1087ef6044df5a7cfaeaf5e9380ad0b"
 dependencies = [
  "atty 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "cast 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "criterion-plot 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "criterion-plot 0.4.0 (git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression)",
  "csv 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "langbardo 0.1.0 (git+https://github.com/YangKeao/langbardo.git)",
  "lazy_static 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-traits 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand_core 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -417,6 +423,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "criterion"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+replace = "criterion 0.3.0 (git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression)"
+
+[[package]]
 name = "criterion-cpu-time"
 version = "0.1.0"
 source = "git+https://github.com/YangKeao/criterion-cpu-time.git#caa30929e27549aecab3a255e0a6ee2eeae9d1a2"
@@ -428,7 +440,7 @@ dependencies = [
 [[package]]
 name = "criterion-plot"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression#932906eee1087ef6044df5a7cfaeaf5e9380ad0b"
 dependencies = [
  "cast 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1152,6 +1164,14 @@ dependencies = [
  "protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)",
  "protobuf-build 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft-proto 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "langbardo"
+version = "0.1.0"
+source = "git+https://github.com/YangKeao/langbardo.git#d9fb3a1071176f6594eb9ceff0af5d279107a585"
+dependencies = [
+ "cassowary 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3464,6 +3484,7 @@ dependencies = [
 "checksum c2-chacha 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7d64d04786e0f528460fc884753cf8dddcc466be308f6026f8e355c41a0e4101"
 "checksum callgrind 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "f7f788eaf239475a3c1e1acf89951255a46c4b9b46cf3e866fc4d0707b4b9e36"
 "checksum cargo_metadata 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)" = "48e8d5fd5b81d86d3ec3c820ecf5a3027fa22d6aede2be981cf07a8ce16451bb"
+"checksum cassowary 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "df8670b8c7b9dae1793364eafadf7239c40d669904660c5960d74cfd80b46a53"
 "checksum cast 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 "checksum cc 1.0.38 (registry+https://github.com/rust-lang/crates.io-index)" = "ce400c638d48ee0e9ab75aef7997609ec57367ccfe1463f21bf53c3eca67bf46"
 "checksum cexpr 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)" = "a7fa24eb00d5ffab90eaeaf1092ac85c04c64aaf358ea6f84505b8116d24c6af"
@@ -3477,9 +3498,10 @@ dependencies = [
 "checksum cookie 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)" = "0e3d6405328b6edb412158b3b7710e2634e23f3614b9bb1c412df7952489a626"
 "checksum cpuprofiler 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "33f07976bb6821459632d7a18d97ccca005cb5c552f251f822c7c1781c1d7035"
 "checksum crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)" = "d663548de7f5cca343f1e0a48d14dcfb0e9eb4e079ec58883b7251539fa10aeb"
+"checksum criterion 0.3.0 (git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression)" = "<none>"
 "checksum criterion 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "938703e165481c8d612ea3479ac8342e5615185db37765162e762ec3523e2fc6"
 "checksum criterion-cpu-time 0.1.0 (git+https://github.com/YangKeao/criterion-cpu-time.git)" = "<none>"
-"checksum criterion-plot 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "eccdc6ce8bbe352ca89025bee672aa6d24f4eb8c53e3a8b5d1bc58011da072a2"
+"checksum criterion-plot 0.4.0 (git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression)" = "<none>"
 "checksum crossbeam 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)" = "bd66663db5a988098a89599d4857919b3acf7f61402e61365acfd3919857b9be"
 "checksum crossbeam 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d1c92ff2d7a202d592f5a412d75cf421495c913817781c1cb383bf12a77e185f"
 "checksum crossbeam 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b14492071ca110999a20bf90e3833406d5d66bfd93b4e52ec9539025ff43fe0d"
@@ -3549,6 +3571,7 @@ dependencies = [
 "checksum jemallocator 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)" = "9f0cd42ac65f758063fea55126b0148b1ce0a6354ff78e07a4d6806bc65c4ab3"
 "checksum kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 "checksum kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)" = "<none>"
+"checksum langbardo 0.1.0 (git+https://github.com/YangKeao/langbardo.git)" = "<none>"
 "checksum language-tags 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a91d884b6667cd606bb5a69aa0c99ba811a115fc68915e7056ec08a46e93199a"
 "checksum lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "3b37545ab726dd833ec6420aaba8231c5b320814b9029ad585555d2a03e94fbf"
 "checksum lazy_static 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "bc5729f27f159ddd61f4df6228e827e86643d4d3e7c32183cb30a1c08f604a14"
