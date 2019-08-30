@@ -160,6 +160,7 @@ macro_rules! cf_config {
             pub hard_pending_compaction_bytes_limit: ReadableSize,
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
+            pub enable_doubly_skiplist: bool,
             pub titan: TitanCfConfig,
         }
 
@@ -265,6 +266,10 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "hard_pending_compaction_bytes_limit"])
             .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
         $metrics
+            .with_label_values(&[$tag, "enable_doubly_skiplist"])
+            .set(($cf.enable_doubly_skiplist as i32).into());
+
+        $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.0 as f64);
         $metrics
@@ -334,7 +339,9 @@ macro_rules! build_cf_opt {
         cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
         cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
         cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
-
+        if $opt.enable_doubly_skiplist {
+            cf_opts.set_doubly_skiplist();
+        }
         cf_opts
     }};
 }
@@ -383,6 +390,7 @@ impl Default for DefaultCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan: TitanCfConfig::default(),
         }
     }
@@ -448,6 +456,7 @@ impl Default for WriteCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan,
         }
     }
@@ -515,6 +524,7 @@ impl Default for LockCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan,
         }
     }
@@ -572,6 +582,7 @@ impl Default for RaftCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan,
         }
     }
@@ -839,6 +850,7 @@ impl Default for RaftDefaultCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan: TitanCfConfig::default(),
         }
     }
