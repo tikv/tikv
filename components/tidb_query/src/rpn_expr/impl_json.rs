@@ -27,6 +27,26 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
     )))
 }
 
+// According to mysql 5.7,
+// arguments of json_merge should not be less than 2.
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
+    // min_args = 2, so it's ok to call args[0]
+    let base_json = match args[0] {
+        None => return Ok(None),
+        Some(json) => json.to_owned(),
+    };
+
+    Ok(args[1..]
+        .iter()
+        .try_fold(base_json, move |base, json_to_merge| {
+            json_to_merge
+                .as_ref()
+                .map(|json| base.merge(json.to_owned()))
+        }))
+}
+
 #[rpn_fn]
 #[inline]
 fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
@@ -97,6 +117,36 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(vargs.clone())
                 .evaluate(ScalarFuncSig::JsonArraySig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
+        }
+    }
+
+    #[test]
+    fn test_json_merge() {
+        let cases = vec![
+            (vec![None, None], None),
+            (vec![Some("{}"), Some("[]")], Some("[{}]")),
+            (
+                vec![Some(r#"{}"#), Some(r#"[]"#), Some(r#"3"#), Some(r#""4""#)],
+                Some(r#"[{}, 3, "4"]"#),
+            ),
+            (
+                vec![Some("[1, 2]"), Some("[3, 4]")],
+                Some(r#"[1, 2, 3, 4]"#),
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs = vargs
+                .into_iter()
+                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
+                .collect::<Vec<_>>();
+            let expected = expected.map(|s| Json::from_str(s).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonMergeSig)
                 .unwrap();
             assert_eq!(output, expected, "{:?}", vargs);
         }
