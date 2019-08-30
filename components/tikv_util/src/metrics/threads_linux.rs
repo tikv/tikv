@@ -594,11 +594,11 @@ mod tests {
         let (tx, rx) = high_cpu_thread(tn.to_owned(), 200);
 
         let pid = unsafe { libc::getpid() };
+        rx.recv().unwrap();
         let tids = get_thread_ids(pid).unwrap();
         for tid in tids {
             if let Ok(stat) = pid::stat_task(pid, tid) {
                 if stat.command.starts_with(tn) {
-                    rx.recv().unwrap();
                     thread_info.record();
 
                     let mut cpu_usages = thread_info.get_cpu_usages();

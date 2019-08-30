@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
+use chocolates::thread_pool::future::{FutureThreadPool, RunnerFactory as FutureRunnerFactory};
+use chocolates::thread_pool::Config as ThreadPoolConfig;
 use grpcio::{EnvBuilder, Error as GrpcError};
 use kvproto::debugpb::create_debug;
 use kvproto::import_sstpb::create_import_sst;
@@ -13,7 +15,7 @@ use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
 use engine::Engines;
-use tikv::config::{CoprReadPoolConfig, StorageReadPoolConfig, TiKvConfig};
+use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -62,7 +64,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
-    _stats_pool: tokio_threadpool::ThreadPool,
+    _stats_pool: FutureThreadPool,
 }
 
 impl ServerCluster {
@@ -74,14 +76,16 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
-        let stats_pool = tokio_threadpool::Builder::new().pool_size(1).build();
+        let stats_pool = ThreadPoolConfig::new(thd_name!("stats_pool"))
+            .max_thread_count(1)
+            .spawn(FutureRunnerFactory::default());
         let raft_client = RaftClient::new(
             env,
             Arc::new(Config::default()),
             security_mgr,
             RaftStoreBlackHole,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
-            stats_pool.sender().clone(),
+            stats_pool.sender(),
         );
         ServerCluster {
             metas: HashMap::default(),
@@ -132,10 +136,8 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool = storage::readpool_impl::build_read_pool_for_test(
-            &StorageReadPoolConfig::default_for_test(),
-            raft_engine.clone(),
-        );
+        let storage_read_pool =
+            storage::readpool_impl::build_read_pool_for_test(raft_engine.clone());
         let store = create_raft_storage(
             RaftKv::new(sim_router.clone()),
             &cfg.storage,
@@ -166,10 +168,8 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool = coprocessor::readpool_impl::build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
-            store.get_engine(),
-        );
+        let cop_read_pool =
+            coprocessor::readpool_impl::build_read_pool_for_test(store.get_engine());
         let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {

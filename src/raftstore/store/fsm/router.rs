@@ -2,35 +2,251 @@
 
 use super::batch::{Fsm, FsmScheduler};
 use crossbeam::channel::{SendError, TrySendError};
-use std::borrow::Cow;
 use std::cell::Cell;
+use std::fmt::{self, Formatter, Pointer};
+use std::mem;
+use std::ops::{Deref, DerefMut};
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{self, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tikv_util::collections::HashMap;
 use tikv_util::mpsc;
 use tikv_util::Either;
 
 // The FSM is notified.
-const NOTIFYSTATE_NOTIFIED: usize = 0;
+const NOTIFYSTATE_NOTIFIED: usize = 4;
 // The FSM is idle.
-const NOTIFYSTATE_IDLE: usize = 1;
+const NOTIFYSTATE_IDLE: usize = 0;
 // The FSM is expected to be dropped.
 const NOTIFYSTATE_DROP: usize = 2;
+// The FSM is being processed.
+const NOTIFYSTATE_PROCESS: usize = 3;
+const STATE_REF_SHIFT: usize = 5;
+const STATE_REF_BASE: usize = 1 << STATE_REF_SHIFT;
+const NOTIFYSTATE_MASK: usize = STATE_REF_BASE - 1;
+
+struct StateInner<N> {
+    status: AtomicUsize,
+    data: *mut N,
+}
+
+pub struct Managed<N> {
+    ptr: *mut StateInner<N>,
+}
+
+impl<N> Managed<N> {
+    fn as_state(&self) -> &StateInner<N> {
+        unsafe { &*self.ptr }
+    }
+
+    pub fn reset_dirty_flag(&self) {
+        let state = self.as_state();
+        let mut status = state.status.load(Ordering::Acquire);
+        loop {
+            if status & NOTIFYSTATE_MASK == NOTIFYSTATE_NOTIFIED {
+                let new_status = status & !NOTIFYSTATE_MASK | NOTIFYSTATE_PROCESS;
+                match state.status.compare_exchange_weak(
+                    status,
+                    new_status,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return,
+                    Err(s) => status = s,
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    pub fn release(self) -> Option<Managed<N>> {
+        let state = unsafe { &mut *self.ptr };
+        let mut status = state.status.load(Ordering::Acquire);
+        loop {
+            let notify_state = status & NOTIFYSTATE_MASK;
+            if notify_state == NOTIFYSTATE_PROCESS {
+                let new_status = (status & !NOTIFYSTATE_MASK | NOTIFYSTATE_IDLE) - STATE_REF_BASE;
+                match state.status.compare_exchange_weak(
+                    status,
+                    new_status,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        if new_status == NOTIFYSTATE_IDLE {
+                            unsafe {
+                                drop_state_inner(self.ptr);
+                            }
+                        }
+                        mem::forget(self);
+                        return None;
+                    }
+                    Err(s) => status = s,
+                }
+            } else if notify_state == NOTIFYSTATE_DROP {
+                unsafe {
+                    Box::from_raw(state.data);
+                }
+                state.data = ptr::null_mut();
+                return None;
+            } else if notify_state == NOTIFYSTATE_NOTIFIED {
+                return Some(self);
+            } else {
+                panic!("unexpected state {}", notify_state);
+            }
+        }
+    }
+}
+
+impl<N> Deref for Managed<N> {
+    type Target = N;
+
+    fn deref(&self) -> &N {
+        unsafe { &*self.as_state().data }
+    }
+}
+
+impl<N> DerefMut for Managed<N> {
+    fn deref_mut(&mut self) -> &mut N {
+        unsafe { &mut *self.as_state().data }
+    }
+}
+
+impl<N> Pointer for Managed<N> {
+    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+        write!(fmt, "{:p}", self.as_state().data)
+    }
+}
+
+impl<N> Drop for Managed<N> {
+    fn drop(&mut self) {
+        let state = self.as_state();
+        let final_status = state.status.fetch_sub(STATE_REF_BASE, Ordering::Release);
+        if final_status & !NOTIFYSTATE_MASK == STATE_REF_BASE {
+            unsafe {
+                drop_state_inner(self.ptr);
+            }
+        }
+    }
+}
+
+unsafe impl<N: Send> Send for Managed<N> {}
 
 struct State<N> {
-    status: AtomicUsize,
-    data: AtomicPtr<N>,
+    ptr: *mut StateInner<N>,
+}
+
+impl<N> State<N> {
+    pub fn new(fsm: Box<N>) -> State<N> {
+        State {
+            ptr: Box::into_raw(Box::new(StateInner {
+                status: AtomicUsize::new(STATE_REF_BASE | NOTIFYSTATE_IDLE),
+                data: Box::into_raw(fsm),
+            })),
+        }
+    }
+
+    fn as_state(&self) -> &StateInner<N> {
+        unsafe { &*self.ptr }
+    }
+
+    pub fn schedule(&self) -> Option<Managed<N>> {
+        let state = self.as_state();
+        let mut status = state.status.load(Ordering::Acquire);
+        loop {
+            let notify_state = status & NOTIFYSTATE_MASK;
+            if notify_state == NOTIFYSTATE_NOTIFIED || notify_state == NOTIFYSTATE_DROP {
+                return None;
+            }
+
+            let mut new_status = status & !NOTIFYSTATE_MASK | NOTIFYSTATE_NOTIFIED;
+            if notify_state != NOTIFYSTATE_PROCESS {
+                new_status += STATE_REF_BASE;
+            }
+            match state.status.compare_exchange_weak(
+                status,
+                new_status,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    if notify_state == NOTIFYSTATE_PROCESS {
+                        return None;
+                    } else if notify_state == NOTIFYSTATE_IDLE {
+                        return Some(Managed { ptr: self.ptr });
+                    } else {
+                        panic!("unexpected state {}", notify_state);
+                    }
+                }
+                Err(s) => status = s,
+            }
+        }
+    }
+
+    pub fn destroy_state(&self) {
+        let state = unsafe { &mut *self.ptr };
+        let mut status = state.status.load(Ordering::Acquire);
+        loop {
+            let notify_state = status & NOTIFYSTATE_MASK;
+            if notify_state == NOTIFYSTATE_DROP {
+                return;
+            }
+            let new_status = status & !NOTIFYSTATE_MASK | NOTIFYSTATE_DROP;
+            match state.status.compare_exchange_weak(
+                status,
+                new_status,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    if notify_state == NOTIFYSTATE_IDLE {
+                        unsafe {
+                            Box::from_raw(state.data);
+                        }
+                        state.data = ptr::null_mut();
+                    }
+                    return;
+                }
+                Err(s) => status = s,
+            }
+        }
+    }
+}
+
+unsafe fn drop_state_inner<N>(state: *mut StateInner<N>) {
+    atomic::fence(Ordering::Acquire);
+    let s = &*state;
+    if !s.data.is_null() {
+        Box::from_raw(s.data);
+    }
+    Box::from_raw(state);
 }
 
 impl<N> Drop for State<N> {
     fn drop(&mut self) {
-        let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
-        if !ptr.is_null() {
-            unsafe { Box::from_raw(ptr) };
+        let state = self.as_state();
+        let status = state.status.fetch_sub(STATE_REF_BASE, Ordering::Release);
+        if status & !NOTIFYSTATE_MASK != STATE_REF_BASE {
+            return;
+        }
+        unsafe {
+            drop_state_inner(self.ptr);
         }
     }
 }
+
+impl<N> Clone for State<N> {
+    fn clone(&self) -> State<N> {
+        self.as_state()
+            .status
+            .fetch_add(STATE_REF_BASE, Ordering::Relaxed);
+        State { ptr: self.ptr }
+    }
+}
+
+unsafe impl<N: Send> Send for State<N> {}
+unsafe impl<N: Send> Sync for State<N> {}
 
 /// A basic mailbox.
 ///
@@ -42,7 +258,7 @@ impl<N> Drop for State<N> {
 /// will drive the fsm to poll for messages.
 pub struct BasicMailbox<Owner: Fsm> {
     sender: mpsc::LooseBoundedSender<Owner::Message>,
-    state: Arc<State<Owner>>,
+    state: State<Owner>,
 }
 
 impl<Owner: Fsm> BasicMailbox<Owner> {
@@ -53,80 +269,19 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     ) -> BasicMailbox<Owner> {
         BasicMailbox {
             sender,
-            state: Arc::new(State {
-                status: AtomicUsize::new(NOTIFYSTATE_IDLE),
-                data: AtomicPtr::new(Box::into_raw(fsm)),
-            }),
+            state: State::new(fsm),
         }
-    }
-
-    /// Take the owner if it's IDLE.
-    pub(super) fn take_fsm(&self) -> Option<Box<Owner>> {
-        let previous_state = self.state.status.compare_and_swap(
-            NOTIFYSTATE_IDLE,
-            NOTIFYSTATE_NOTIFIED,
-            Ordering::AcqRel,
-        );
-        if previous_state != NOTIFYSTATE_IDLE {
-            return None;
-        }
-
-        let p = self.state.data.swap(ptr::null_mut(), Ordering::AcqRel);
-        if !p.is_null() {
-            Some(unsafe { Box::from_raw(p) })
-        } else {
-            panic!("inconsistent status and data, something should be wrong.");
-        }
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.sender.len()
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.sender.is_empty()
     }
 
     /// Notify owner via a `FsmScheduler`.
     #[inline]
     fn notify<S: FsmScheduler<Fsm = Owner>>(&self, scheduler: &S) {
-        match self.take_fsm() {
+        match self.state.schedule() {
             None => {}
-            Some(mut n) => {
-                n.set_mailbox(Cow::Borrowed(self));
+            Some(n) => {
                 scheduler.schedule(n);
             }
         }
-    }
-
-    /// Put the owner back to the state.
-    ///
-    /// It's not required that all messages should be consumed before
-    /// releasing a fsm. However, a fsm is guaranteed to be notified only
-    /// when new messages arrives after it's released.
-    #[inline]
-    pub(super) fn release(&self, fsm: Box<Owner>) {
-        let previous = self.state.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
-        let mut previous_status = NOTIFYSTATE_NOTIFIED;
-        if previous.is_null() {
-            previous_status = self.state.status.compare_and_swap(
-                NOTIFYSTATE_NOTIFIED,
-                NOTIFYSTATE_IDLE,
-                Ordering::AcqRel,
-            );
-            match previous_status {
-                NOTIFYSTATE_NOTIFIED => return,
-                NOTIFYSTATE_DROP => {
-                    let ptr = self.state.data.swap(ptr::null_mut(), Ordering::AcqRel);
-                    unsafe { Box::from_raw(ptr) };
-                    return;
-                }
-                _ => {}
-            }
-        }
-        panic!("invalid release state: {:?} {}", previous, previous_status);
     }
 
     /// Force sending a message despite the capacity limit on channel.
@@ -158,18 +313,8 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     /// Close the mailbox explicitly.
     #[inline]
     fn close(&self) {
-        self.sender.close_sender();
-        match self.state.status.swap(NOTIFYSTATE_DROP, Ordering::AcqRel) {
-            NOTIFYSTATE_NOTIFIED | NOTIFYSTATE_DROP => return,
-            _ => {}
-        }
-
-        let ptr = self.state.data.swap(ptr::null_mut(), Ordering::SeqCst);
-        if !ptr.is_null() {
-            unsafe {
-                Box::from_raw(ptr);
-            }
-        }
+        self.sender.disconnect();
+        self.state.destroy_state();
     }
 }
 
@@ -328,7 +473,7 @@ where
     /// Get the mailbox of specified address.
     pub fn mailbox(&self, addr: u64) -> Option<Mailbox<N, Ns>> {
         let res = self.check_do(addr, |mailbox| {
-            if mailbox.sender.is_sender_connected() {
+            if mailbox.sender.is_connected() {
                 Some(Mailbox {
                     mailbox: mailbox.clone(),
                     scheduler: self.normal_scheduler.clone(),

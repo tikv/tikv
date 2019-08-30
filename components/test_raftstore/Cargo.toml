@@ -13,7 +13,7 @@ tempfile = "3.0"
 raft = "0.6.0-alpha"
 futures = "0.1"
 tokio-timer = "0.2"
-tokio-threadpool = "0.1"
+chocolates = { git = "https://github.com/busyjay/chocolates.git", branch = "dev" }
 grpcio = { version = "0.5.0-alpha.3", features = [ "secure" ] }
 rand = "0.6.5"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

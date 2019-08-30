@@ -1,13 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use prometheus::local::*;
 use tikv_util::collections::HashMap;
-use tikv_util::future_pool::Builder as FuturePoolBuilder;
-use tikv_util::future_pool::FuturePool;
+use tikv_util::future_pool::{Builder as FuturePoolBuilder, CloneFactory, FuturePool, TickRunner};
 
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::metrics::*;
@@ -32,22 +30,34 @@ thread_local! {
 }
 
 #[derive(Clone)]
+pub struct MetricsFlusher<E> {
+    e: E,
+}
+
+impl<E: Engine> TickRunner for MetricsFlusher<E> {
+    fn start(&mut self) {
+        set_tls_engine(self.e.clone());
+    }
+
+    fn on_tick(&mut self) {
+        tls_flush();
+    }
+
+    fn end(&mut self) {
+        destroy_tls_engine::<E>();
+        tls_flush();
+    }
+}
+
+#[derive(Clone)]
 pub struct SchedPool {
     pub pool: FuturePool,
 }
 
 impl SchedPool {
     pub fn new<E: Engine>(engine: E, pool_size: usize, name_prefix: &str) -> Self {
-        let engine = Arc::new(Mutex::new(engine));
-        let pool = FuturePoolBuilder::new()
+        let pool = FuturePoolBuilder::new(name_prefix, CloneFactory(MetricsFlusher { e: engine }))
             .pool_size(pool_size)
-            .name_prefix(name_prefix)
-            .on_tick(move || tls_flush())
-            .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-            .before_stop(move || {
-                destroy_tls_engine::<E>();
-                tls_flush();
-            })
             .build();
         SchedPool { pool }
     }

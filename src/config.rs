@@ -1036,25 +1036,24 @@ macro_rules! readpool_config {
         }
 
         impl $struct_name {
-            /// Builds configurations for low, normal and high priority pools.
-            pub fn to_future_pool_configs(&self) -> Vec<future_pool::Config> {
-                vec![
-                    future_pool::Config {
-                        workers: self.low_concurrency,
-                        max_tasks_per_worker: self.max_tasks_per_worker_low,
-                        stack_size: self.stack_size.0 as usize,
-                    },
-                    future_pool::Config {
-                        workers: self.normal_concurrency,
-                        max_tasks_per_worker: self.max_tasks_per_worker_normal,
-                        stack_size: self.stack_size.0 as usize,
-                    },
-                    future_pool::Config {
-                        workers: self.high_concurrency,
-                        max_tasks_per_worker: self.max_tasks_per_worker_high,
-                        stack_size: self.stack_size.0 as usize,
-                    },
-                ]
+            pub fn configure_builder<T>(
+                &self,
+                priority: &str,
+                mut builder: future_pool::Builder<T>,
+            ) -> future_pool::Builder<T> {
+                builder = builder.stack_size(self.stack_size.0 as usize);
+                match priority {
+                    "high" => builder
+                        .pool_size(self.high_concurrency)
+                        .max_tasks(self.max_tasks_per_worker_high),
+                    "normal" => builder
+                        .pool_size(self.normal_concurrency)
+                        .max_tasks(self.max_tasks_per_worker_normal),
+                    "low" => builder
+                        .pool_size(self.low_concurrency)
+                        .max_tasks(self.max_tasks_per_worker_low),
+                    _ => unimplemented!(),
+                }
             }
 
             pub fn default_for_test() -> Self {

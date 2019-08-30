@@ -34,12 +34,12 @@ tikv_alloc = { path = "../tikv_alloc", default-features = false }
 tokio-core = "0.1"
 tokio-timer = "0.2"
 tokio-executor = "0.1"
-tokio-threadpool = "0.1.13"
+chocolates = { git = "https://github.com/busyjay/chocolates.git", branch = "dev" }
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
 grpcio = { version = "0.5.0-alpha.3", features = [ "secure" ] }
-crossbeam = "0.5"
+crossbeam = "0.7"
 fail = "0.3"
 fxhash = "0.2.1"
 

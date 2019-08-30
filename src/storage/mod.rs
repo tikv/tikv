@@ -655,10 +655,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        let read_pool = self::readpool_impl::build_read_pool_for_test(
-            &crate::config::StorageReadPoolConfig::default_for_test(),
-            self.engine.clone(),
-        );
+        let read_pool = build_read_pool_for_test(self.engine.clone());
         Storage::from_engine(
             self.engine,
             &self.config,
@@ -791,6 +788,7 @@ impl<E: Engine> Storage<E> {
 
         gc_worker.start()?;
 
+        // TODO: use a strong type instead of relying on contract.
         let read_pool_high = read_pool.remove(2);
         let read_pool_normal = read_pool.remove(1);
         let read_pool_low = read_pool.remove(0);

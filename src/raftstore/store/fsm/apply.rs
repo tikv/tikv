@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -10,7 +9,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
-use crossbeam::channel::{TryRecvError, TrySendError};
+use crossbeam::channel::TrySendError;
 use engine::rocks;
 use engine::rocks::Writable;
 use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
@@ -31,7 +30,7 @@ use uuid::Uuid;
 
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
-use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
+use crate::raftstore::store::fsm::{Managed, RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::{Callback, PeerMsg};
 use crate::raftstore::store::peer::Peer;
@@ -2347,7 +2346,6 @@ pub enum TaskRes {
 pub struct ApplyFsm {
     delegate: ApplyDelegate,
     receiver: Receiver<Msg>,
-    mailbox: Option<BasicMailbox<ApplyFsm>>,
 }
 
 impl ApplyFsm {
@@ -2364,7 +2362,6 @@ impl ApplyFsm {
             Box::new(ApplyFsm {
                 delegate,
                 receiver: rx,
-                mailbox: None,
             }),
         )
     }
@@ -2667,27 +2664,6 @@ impl ApplyFsm {
 
 impl Fsm for ApplyFsm {
     type Message = Msg;
-
-    #[inline]
-    fn is_stopped(&self) -> bool {
-        self.delegate.stopped
-    }
-
-    #[inline]
-    fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
-    where
-        Self: Sized,
-    {
-        self.mailbox = Some(mailbox.into_owned());
-    }
-
-    #[inline]
-    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
-    where
-        Self: Sized,
-    {
-        self.mailbox.take()
-    }
 }
 
 impl Drop for ApplyFsm {
@@ -2702,11 +2678,6 @@ pub struct ControlFsm;
 
 impl Fsm for ControlFsm {
     type Message = ControlMsg;
-
-    #[inline]
-    fn is_stopped(&self) -> bool {
-        true
-    }
 }
 
 pub struct ApplyPoller {
@@ -2719,49 +2690,40 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {}
 
     /// There is no control fsm in apply poller.
-    fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {
+    fn handle_control(&mut self, _: &mut Managed<ControlFsm>) -> bool {
         unimplemented!()
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(&mut self, normal: &mut Managed<ApplyFsm>) -> bool {
         if normal.delegate.wait_merge_state.is_some() {
             // We need to query the length first, otherwise there is a race
             // condition that new messages are queued after resuming and before
             // query the length.
-            expected_msg_count = Some(normal.receiver.len());
             if !normal.resume_pending_merge(&mut self.apply_ctx) {
-                return expected_msg_count;
+                return true;
             }
-            expected_msg_count = None;
         }
-        while self.msg_buf.len() < self.messages_per_tick {
-            match normal.receiver.try_recv() {
-                Ok(msg) => self.msg_buf.push(msg),
-                Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
-                    break;
-                }
-                Err(TryRecvError::Disconnected) => {
-                    normal.delegate.stopped = true;
-                    expected_msg_count = Some(0);
-                    break;
-                }
+        let available = normal.receiver.len();
+        let (exhausted, count) = if self.messages_per_tick > available {
+            (true, available)
+        } else {
+            (false, self.messages_per_tick)
+        };
+        for _ in 0..count {
+            if let Ok(msg) = normal.receiver.try_recv() {
+                self.msg_buf.push(msg);
+            } else {
+                unreachable!()
             }
         }
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
         if normal.delegate.merged {
             normal.delegate.destroy(&mut self.apply_ctx);
-            // Set it to 0 to clear all messages remained in queue.
-            expected_msg_count = Some(0);
-        } else if normal.delegate.wait_merge_state.is_some() {
-            // Check it again immediately as catching up logs can be very fast.
-            expected_msg_count = Some(0);
         }
-        expected_msg_count
+        exhausted
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+    fn end(&mut self, fsms: &mut [Managed<ApplyFsm>]) {
         let is_synced = self.apply_ctx.flush();
         if is_synced {
             for fsm in fsms {

@@ -215,6 +215,13 @@ impl FlowStatsReporter for FutureScheduler<PdTask> {
     }
 }
 
+#[derive(Clone)]
+pub struct NoopReporter;
+
+impl FlowStatsReporter for NoopReporter {
+    fn report_read_stats(&self, _: HashMap<u64, FlowStatistics>) {}
+}
+
 impl FlowStatistics {
     pub fn add(&mut self, other: &Self) {
         self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);

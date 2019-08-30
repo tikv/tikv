@@ -11,106 +11,106 @@ use tikv_util::mpsc;
 #[bench]
 fn bench_thread_channel(b: &mut Bencher) {
     let (tx, rx) = channel();
+    tx.send(0).unwrap();
 
-    let t = thread::spawn(move || {
-        let mut n2: usize = 0;
-        loop {
-            let n = rx.recv().unwrap();
-            if n == 0 {
-                return n2;
-            }
-            n2 += 1;
-        }
-    });
-
-    let mut n1 = 0;
     b.iter(|| {
-        n1 += 1;
-        tx.send(1).unwrap()
+        rx.try_recv().unwrap();
+        tx.send(1).unwrap();
+        rx.try_recv().unwrap();
+        rx.try_recv().unwrap_err();
+        tx.send(1).unwrap();
     });
 
     tx.send(0).unwrap();
-    let n2 = t.join().unwrap();
-    assert_eq!(n1, n2);
+    rx.try_recv().unwrap();
 }
 
 #[bench]
 fn bench_util_channel(b: &mut Bencher) {
-    let (tx, rx) = mpsc::unbounded();
+    let (tx, rx) = mpsc::channel::unbounded();
+    tx.send(0).unwrap();
 
-    let t = thread::spawn(move || {
-        let mut n2: usize = 0;
-        loop {
-            let n = rx.recv().unwrap();
-            if n == 0 {
-                return n2;
-            }
-            n2 += 1;
-        }
-    });
-
-    let mut n1 = 0;
     b.iter(|| {
-        n1 += 1;
-        tx.send(1).unwrap()
+        rx.try_recv().unwrap();
+        tx.send(1).unwrap();
+        rx.try_recv().unwrap();
+        rx.try_recv().unwrap_err();
+        tx.send(1).unwrap();
     });
 
     tx.send(0).unwrap();
-    let n2 = t.join().unwrap();
-    assert_eq!(n1, n2);
 }
 
 #[bench]
 fn bench_util_loose(b: &mut Bencher) {
-    let (tx, rx) = mpsc::loose_bounded(480_000);
+    let (tx, rx) = mpsc::channel::loose_bounded(480_000);
+    tx.try_send(0).unwrap();
 
-    let t = thread::spawn(move || {
-        let mut n2: usize = 0;
-        loop {
-            let n = rx.recv().unwrap();
-            if n == 0 {
-                return n2;
-            }
-            n2 += 1;
-        }
-    });
-
-    let mut n1 = 0;
     b.iter(|| {
-        n1 += 1;
-        while tx.try_send(1).is_err() {}
+        rx.try_recv().unwrap();
+        tx.try_send(1).unwrap();
+        rx.try_recv().unwrap();
+        rx.try_recv().unwrap_err();
+        tx.try_send(1).unwrap();
     });
 
-    while tx.try_send(0).is_err() {}
+    tx.try_send(0).unwrap();
+}
 
-    let n2 = t.join().unwrap();
-    assert_eq!(n1, n2);
+#[bench]
+fn bench_util_loose_len(b: &mut Bencher) {
+    let (tx, rx) = mpsc::channel::loose_bounded(480_000);
+    tx.try_send(0).unwrap();
+
+    b.iter(|| {
+        assert_eq!(rx.len(), 1);
+    });
+
+    tx.try_send(0).unwrap();
+}
+
+#[bench]
+fn bench_util_loose_queue(b: &mut Bencher) {
+    let (tx, rx) = mpsc::queue::loose_bounded(480_000);
+    tx.try_send(0).unwrap();
+
+    b.iter(|| {
+        rx.try_recv().unwrap();
+        tx.try_send(1).unwrap();
+        rx.try_recv().unwrap();
+        rx.try_recv().unwrap_err();
+        tx.try_send(1).unwrap();
+    });
+
+    tx.try_send(0).unwrap();
+}
+
+#[bench]
+fn bench_util_loose_queue_len(b: &mut Bencher) {
+    let (tx, rx) = mpsc::queue::loose_bounded(480_000);
+    tx.try_send(0).unwrap();
+
+    b.iter(|| {
+        assert_eq!(rx.len(), 1);
+    });
+
+    tx.try_send(0).unwrap();
 }
 
 #[bench]
 fn bench_crossbeam_channel(b: &mut Bencher) {
     let (tx, rx) = channel::unbounded();
+    tx.try_send(0).unwrap();
 
-    let t = thread::spawn(move || {
-        let mut n2: usize = 0;
-        loop {
-            let n = rx.recv().unwrap();
-            if n == 0 {
-                return n2;
-            }
-            n2 += 1;
-        }
-    });
-
-    let mut n1 = 0;
     b.iter(|| {
-        n1 += 1;
-        tx.send(1).unwrap();
+        rx.try_recv().unwrap();
+        tx.try_send(1).unwrap();
+        rx.try_recv().unwrap();
+        rx.try_recv().unwrap_err();
+        tx.try_send(1).unwrap();
     });
 
-    tx.send(0).unwrap();
-    let n2 = t.join().unwrap();
-    assert_eq!(n1, n2);
+    tx.try_send(0).unwrap();
 }
 
 #[bench]

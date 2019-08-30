@@ -28,7 +28,7 @@ use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use crate::mpsc::{self, Receiver, Sender};
+use crate::mpsc::channel::{self, Receiver, Sender};
 use crate::time::{Instant, SlowTimer};
 use crate::timer::Timer;
 
@@ -178,7 +178,7 @@ impl<T> Clone for Scheduler<T> {
 ///
 /// Useful for test purpose.
 pub fn dummy_scheduler<T: Display>() -> (Scheduler<T>, Receiver<Option<T>>) {
-    let (tx, rx) = mpsc::unbounded::<Option<T>>();
+    let (tx, rx) = channel::unbounded::<Option<T>>();
     (
         Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx),
         rx,
@@ -214,9 +214,9 @@ impl<S: Into<String>> Builder<S> {
 
     pub fn create<T: Display>(self) -> Worker<T> {
         let (tx, rx) = if self.pending_capacity == usize::MAX {
-            mpsc::unbounded::<Option<T>>()
+            channel::unbounded::<Option<T>>()
         } else {
-            mpsc::bounded::<Option<T>>(self.pending_capacity)
+            channel::bounded::<Option<T>>(self.pending_capacity)
         };
 
         Worker {

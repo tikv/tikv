@@ -6,10 +6,11 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use futures::{Future, Stream};
+use chocolates::thread_pool::future::{FutureThreadPool, RunnerFactory as FutureRunnerFactory};
+use chocolates::thread_pool::Config as ThreadPoolConfig;
+use futures::Stream;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb::*;
-use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
@@ -52,7 +53,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
-    stats_pool: Option<ThreadPool>,
+    stats_pool: Option<FutureThreadPool>,
     thread_load: Arc<ThreadLoad>,
     timer: Handle,
 }
@@ -69,10 +70,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         snap_mgr: SnapManager,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
-        let stats_pool = ThreadPoolBuilder::new()
-            .pool_size(cfg.stats_concurrency)
-            .name_prefix(STATS_THREAD_PREFIX)
-            .build();
+        let stats_pool = ThreadPoolConfig::new(thd_name!(STATS_THREAD_PREFIX))
+            .max_thread_count(cfg.stats_concurrency)
+            .spawn(FutureRunnerFactory::default());
         let thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
         let env = Arc::new(
@@ -114,7 +114,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(security_mgr),
             raft_router.clone(),
             Arc::clone(&thread_load),
-            stats_pool.sender().clone(),
+            stats_pool.sender(),
         )));
 
         let trans = ServerTransport::new(
@@ -193,7 +193,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let tl = Arc::clone(&self.thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
-        self.stats_pool.as_ref().unwrap().spawn(
+        self.stats_pool.as_ref().unwrap().spawn_future(
             self.timer
                 .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())
@@ -214,7 +214,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             server.shutdown();
         }
         if let Some(pool) = self.stats_pool.take() {
-            let _ = pool.shutdown_now().wait();
+            pool.shutdown();
         }
         Ok(())
     }
@@ -239,7 +239,6 @@ mod tests {
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
-    use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::*;
@@ -328,10 +327,7 @@ mod tests {
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
-        let cop_read_pool = readpool_impl::build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
-            storage.get_engine(),
-        );
+        let cop_read_pool = readpool_impl::build_read_pool_for_test(storage.get_engine());
         let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
 
         let addr = Arc::new(Mutex::new(None));

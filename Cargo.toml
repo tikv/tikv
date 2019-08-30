@@ -92,18 +92,20 @@ tokio-executor = "0.1"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
+serde_with = "1.0"
 zipf = "5.0.1"
 bitflags = "1.0.1"
 fail = "0.3"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
 raft = "0.6.0-alpha"
-crossbeam = "0.5"
+crossbeam = "0.7"
 derive_more = "0.11.0"
 hex = "0.3"
 more-asserts = "0.1"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
-tokio-threadpool = "0.1.13"
+chocolates = { git = "https://github.com/busyjay/chocolates.git", branch = "dev" }
+tokio-threadpool = "0.1"
 tokio-fs = "0.1.6"
 tokio-io = "0.1.12"
 vlog = "0.1.4"

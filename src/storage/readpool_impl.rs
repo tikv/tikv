@@ -2,16 +2,15 @@
 
 use std::cell::RefCell;
 use std::mem;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use prometheus::local::*;
 
 use crate::config::StorageReadPoolConfig;
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, NoopReporter};
 use crate::storage::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
-use tikv_util::future_pool::{Builder, Config, FuturePool};
+use tikv_util::future_pool::{Builder, CloneFactory, FuturePool, TickRunner};
 
 use super::metrics::*;
 use super::Engine;
@@ -40,52 +39,58 @@ thread_local! {
     );
 }
 
+#[derive(Clone)]
+pub struct MetricsFlusher<E, R> {
+    reporter: R,
+    e: E,
+}
+
+impl<E: Engine, R: FlowStatsReporter> TickRunner for MetricsFlusher<E, R> {
+    fn start(&mut self) {
+        set_tls_engine(self.e.clone());
+    }
+
+    fn on_tick(&mut self) {
+        tls_flush(&self.reporter);
+    }
+
+    fn end(&mut self) {
+        destroy_tls_engine::<E>();
+        tls_flush(&self.reporter);
+    }
+}
+
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &StorageReadPoolConfig,
     reporter: R,
     engine: E,
 ) -> Vec<FuturePool> {
-    let names = vec!["store-read-low", "store-read-normal", "store-read-high"];
-    let configs: Vec<Config> = config.to_future_pool_configs();
-    assert_eq!(configs.len(), 3);
-
-    configs
-        .into_iter()
-        .zip(names)
-        .map(|(config, name)| {
-            let reporter = reporter.clone();
-            let reporter2 = reporter.clone();
-            let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
-                .name_prefix(name)
-                .on_tick(move || tls_flush(&reporter))
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                .before_stop(move || {
-                    destroy_tls_engine::<E>();
-                    tls_flush(&reporter2)
-                })
+    ["low", "normal", "high"]
+        .iter()
+        .map(|p| {
+            let name = format!("store-read-{}", p);
+            config
+                .configure_builder(
+                    p,
+                    Builder::new(
+                        name,
+                        CloneFactory(MetricsFlusher {
+                            reporter: reporter.clone(),
+                            e: engine.clone(),
+                        }),
+                    ),
+                )
                 .build()
         })
         .collect()
 }
 
-pub fn build_read_pool_for_test<E: Engine>(
-    config: &StorageReadPoolConfig,
-    engine: E,
-) -> Vec<FuturePool> {
-    let configs: Vec<Config> = config.to_future_pool_configs();
-    assert_eq!(configs.len(), 3);
-
-    configs
-        .into_iter()
-        .map(|config| {
-            let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                .before_stop(|| destroy_tls_engine::<E>())
-                .build()
-        })
-        .collect()
+pub fn build_read_pool_for_test<E: Engine>(engine: E) -> Vec<FuturePool> {
+    build_read_pool(
+        &StorageReadPoolConfig::default_for_test(),
+        NoopReporter,
+        engine,
+    )
 }
 
 fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
