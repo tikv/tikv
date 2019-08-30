@@ -364,8 +364,7 @@ impl BatchExecutor for BatchFixtureExecutor {
 
     #[inline]
     fn take_scanned_range(&mut self) -> IntervalRange {
-        // TODO: pass values
-        ("0", "1").into()
+        unreachable!()
     }
 }
 

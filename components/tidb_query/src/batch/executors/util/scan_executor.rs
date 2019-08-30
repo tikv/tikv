@@ -122,10 +122,6 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
         // Not drained
         Ok(false)
     }
-
-    pub(crate) fn take_scanned_range(&mut self) -> IntervalRange {
-        self.scanner.take_scanned_range()
-    }
 }
 
 /// Extracts `FieldType` from `ColumnInfo`.
