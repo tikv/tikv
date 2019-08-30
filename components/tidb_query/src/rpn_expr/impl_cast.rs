@@ -172,6 +172,8 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Duration) => cast_duration_as_duration_fn_meta(),
         (EvalType::Json, EvalType::Duration) => cast_json_as_duration_fn_meta(),
 
+        // TODO, cast any as time has not impl
+
         // others
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
@@ -292,13 +294,14 @@ fn cast_string_as_unsigned_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO, in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal` directly
+            // FIXME, in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal` directly
             let d: Decimal = val.convert(ctx)?;
             let d = if in_union(extra.implicit_args) && d.is_negative() {
                 Decimal::zero()
             } else {
                 d
             };
+            // FIXME, how to make a negative decimal value to unsigned decimal value
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 d,
@@ -353,13 +356,10 @@ fn cast_decimal_as_unsigned_decimal(
     }
 }
 
-/// The signed int implementation for push down signature `CastIntAsDecimal`.
-///
-/// It include `cast_int_as_decimal`, `cast_time_as_decimal`, `cast_duration_as_decimal`, `cast_json_as_decimal`
 // FIXME, for cast_int_as_decimal, TiDB's impl has bug, fix this after fixed TiDB's
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-pub fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
+fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra<'_>,
     val: &Option<From>,
@@ -481,7 +481,7 @@ fn cast_string_as_int_or_uint(
     }
 }
 
-// TODO, TiDB's this func can return err and res at the same time, however, we can't,
+// FIXME, TiDB's this func can return err and res at the same time, however, we can't,
 //  so it may be some inconsistency between this func and TiDB's
 fn handle_overflow_for_cast_string_as_int(
     ctx: &mut EvalContext,
@@ -930,7 +930,7 @@ macro_rules! cast_as_duration {
     ($ty:ty, $as_uint_fn:ident, $extra:expr) => {
         #[rpn_fn(capture = [ctx, extra])]
         #[inline]
-        pub fn $as_uint_fn(
+        fn $as_uint_fn(
             ctx: &mut EvalContext,
             extra: &RpnFnCallExtra<'_>,
             val: &Option<$ty>,
@@ -974,6 +974,8 @@ cast_as_duration!(
     val.to_string().as_bytes()
 );
 cast_as_duration!(Json, cast_json_as_duration, val.unquote()?.as_bytes());
+
+// TODO, cast any as time has not impl
 
 // cast any as any(others cast)
 #[rpn_fn(capture = [ctx])]

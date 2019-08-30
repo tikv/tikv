@@ -318,7 +318,7 @@ impl ToInt for &[u8] {
                 ctx.handle_overflow_err(Error::overflow("BIGINT", &vs))?;
                 // To make compatible with TiDB,
                 // return signed upper bound or lower bound when overflow.
-                // see TiDB's `types.StrToInt` and [strconv.ParseUint](https://golang.org/pkg/strconv/#ParseUint)
+                // see TiDB's `types.StrToInt` and [strconv.ParseInt](https://golang.org/pkg/strconv/#ParseInt)
                 let val = if vs.starts_with('-') {
                     integer_signed_lower_bound(tp)
                 } else {
@@ -340,7 +340,7 @@ impl ToInt for &[u8] {
                 ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &vs))?;
                 // To make compatible with TiDB,
                 // return `integer_unsigned_upper_bound(tp);` when overflow.
-                // see TiDB's `types.StrToUint` and [strconv.ParseInt](https://golang.org/pkg/strconv/#ParseInt)
+                // see TiDB's `types.StrToUint` and [strconv.ParseUint](https://golang.org/pkg/strconv/#ParseUint)
                 let val = integer_unsigned_upper_bound(tp);
                 Ok(val)
             }
