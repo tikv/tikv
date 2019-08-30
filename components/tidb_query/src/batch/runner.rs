@@ -10,9 +10,9 @@ use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
 use tikv_util::deadline::Deadline;
 
 use super::executors::*;
-use super::interface::{BatchExecuteResult, BatchExecutor, ExecuteStats};
+use super::interface::{BatchExecutor, ExecuteStats};
 use crate::execute_stats::*;
-use crate::expr::EvalConfig;
+use crate::expr::{EvalConfig, EvalWarnings};
 use crate::metrics::*;
 use crate::storage::{IntervalRange, Storage};
 use crate::Result;
@@ -461,21 +461,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.out_most_executor.collect_storage_stats(dest);
     }
 
-    // TODO: IntervalRange should be placed inside `StreamResponse`.
     // TODO: do not copy from the origin
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
-        let mut chunks: Vec<Chunk> = vec![];
-
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
         // if the data read finished
         let mut is_drained = false;
 
-        // TODO: decide how to handle this
-        while chunks.len() < self.stream_batch_row_limit || !is_drained {
+        let mut chunk = Chunk::default();
+
+        let mut record_count = 0;
+        while record_count < self.stream_batch_row_limit || !is_drained {
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);
@@ -494,11 +493,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     result.physical_columns.columns_len(),
                     self.out_most_executor.schema().len()
                 );
-                let mut chunk = Chunk::default();
                 {
                     let data = chunk.mut_rows_data();
                     // handle logical/physical data
-                    // TODO：now how to handle it in streaming mode
                     data.reserve(
                         result
                             .physical_columns
@@ -512,41 +509,34 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         self.out_most_executor.schema(),
                         data,
                     )?;
+
+                    record_count += result.logical_rows.len();
                 }
-                chunks.push(chunk);
             }
 
             // Grow batch size
             grow_batch_size(&mut batch_size);
         }
 
-        // TODO: Change this to chunk .
-        // TODO: Find a better way to initialize it .
-        // TODO: Current I use `make_stream_response` in `ExecutorsRunner`.
-        let mut resp;
-        resp = self.make_stream_response(chunks[0].to_owned());
-        for chunk_id in 1..chunks.len() {
-            resp = self.make_stream_response(chunks[chunk_id].to_owned());
-        }
+        let resp = self.make_stream_response(chunk, warnings);
 
-        // TODO: change it to a real range
-        // TODO: how to get the range?
-        let range = ("2", "3").into();
+        let range = self.out_most_executor.take_scanned_range();
         resp.map(|r| (Some((r, range)), is_drained))
     }
 
-    // TODO: check if this method can be share
-    fn make_stream_response(&mut self, chunk: Chunk) -> Result<StreamResponse> {
+    // TODO: check if this method can be share or put in utils
+    fn make_stream_response(
+        &mut self,
+        chunk: Chunk,
+        warnings: EvalWarnings,
+    ) -> Result<StreamResponse> {
         self.out_most_executor
             .collect_exec_stats(&mut self.exec_stats);
 
         let mut s_resp = StreamResponse::default();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
         // TODO: now how to fill this and give warnings to Response
-        //        if let Some(eval_warnings) = self. {
-        //            s_resp.set_warnings(eval_warnings.warnings.into());
-        //            s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
-        //        }
+
         s_resp.set_output_counts(
             self.exec_stats
                 .scanned_rows_per_range
@@ -554,6 +544,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 .map(|v| *v as i64)
                 .collect(),
         );
+
+        s_resp.set_warnings(warnings.warnings.into());
+        s_resp.set_warning_count(warnings.warning_cnt as i64);
 
         self.exec_stats.clear();
 
