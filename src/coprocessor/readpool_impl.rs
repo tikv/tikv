@@ -60,15 +60,35 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
             let reporter = reporter.clone();
             let reporter2 = reporter.clone();
             let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
+            let mut builder = Builder::from_config(config);
+            builder
                 .name_prefix(name)
                 .on_tick(move || tls_flush(&reporter))
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(move || {
                     destroy_tls_engine::<E>();
                     tls_flush(&reporter2)
-                })
-                .build()
+                });
+            if name == "cop-low" {
+                builder.after_start(move || {
+                    set_tls_engine(engine.lock().unwrap().clone());
+                    unsafe {
+                        // Set to lowest prio.
+                        *libc::__errno_location() = 0i32;
+                        if libc::nice(100) == -1 && *libc::__errno_location() != 0 {
+                            let msg = std::ffi::CString::new("set nice fail").unwrap();
+                            libc::perror(msg.as_c_str().as_ptr());
+                            panic!("set nice fail");
+                        }
+                        info!(
+                            "set nice to max for thread {:?}",
+                            std::thread::current().name()
+                        );
+                    }
+                });
+            } else {
+                builder.after_start(move || set_tls_engine(engine.lock().unwrap().clone()));
+            }
+            builder.build()
         })
         .collect()
 }
