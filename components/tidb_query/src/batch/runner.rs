@@ -518,10 +518,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             grow_batch_size(&mut batch_size);
         }
 
-        let resp = self.make_stream_response(chunk, warnings);
-
-        let range = self.out_most_executor.take_scanned_range();
-        resp.map(|r| (Some((r, range)), is_drained))
+        if record_count > 0 {
+            let range = self.out_most_executor.take_scanned_range();
+            return self
+                .make_stream_response(chunk, warnings)
+                .map(|r| (Some((r, range)), is_drained));
+        }
+        Ok((None, true))
     }
 
     // TODO: check if this method can be share or put in utils
