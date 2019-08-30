@@ -8,7 +8,7 @@ use std::{i64, u64};
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use super::{check_fsp, Decimal, Json};
+use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::codec::mysql::MAX_FSP;
@@ -612,7 +612,8 @@ impl Duration {
 
     fn format(self, sep: &str) -> String {
         use std::fmt::Write;
-        let mut string = String::new();
+        let res_max_len = 1 + 6 + 2 * sep.len() + 1 + MAX_FSP as usize;
+        let mut string = String::with_capacity(res_max_len);
         if self.get_neg() {
             string.push('-');
         }
@@ -646,25 +647,7 @@ impl Duration {
     /// Converts a `Duration` to printable numeric string representation
     #[inline]
     pub fn to_numeric_string(self) -> String {
-        use std::fmt::Write;
-        let mut buf = String::with_capacity(13);
-        if self.neg() {
-            buf.push('-');
-        }
-        write!(
-            buf,
-            "{:02}{:02}{:02}",
-            self.hours(),
-            self.minutes(),
-            self.secs(),
-        )
-        .unwrap();
-        let fsp = self.get_fsp();
-        if fsp > 0 {
-            let nanos = self.subsec_micros() / (TEN_POW[MICRO_WIDTH - usize::from(fsp)]) as u32;
-            write!(buf, ".{:01$}", nanos, fsp as usize).unwrap();
-        }
-        buf
+        self.format("")
     }
 
     pub fn from_i64(ctx: &mut EvalContext, mut n: i64, fsp: u8) -> Result<Duration> {
@@ -712,24 +695,8 @@ impl ConvertTo<Decimal> for Duration {
     /// if it return err, then the err is because of bug.
     ///
     /// Port from TiDB' Duration::ToNumber
-    //
-    // this impl is not same as TiDB's,
-    // TiDB impl is by convert duration to decimal then convert to float64
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        match self.to_numeric_string().parse::<Decimal>() {
-            Ok(val) => Ok(val),
-            // TODO, here should return `other_err!("unreachable Duration::as_decimal, err is {}", e)`
-            //  however, here's Result's error is codec::error, so I can't return this error
-            Err(e) => Err(e),
-        }
-    }
-}
-
-impl ConvertTo<Json> for Duration {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        let d = self.maximize_fsp();
-        Ok(Json::String(d.to_string()))
+        Ok(self.to_numeric_string().parse::<Decimal>()?)
     }
 }
 

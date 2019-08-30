@@ -20,13 +20,14 @@ pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
 use std::collections::BTreeMap;
-use std::str::FromStr;
 use tikv_util::is_even;
 
 use super::super::datum::Datum;
 use super::super::{Error, Result};
 use crate::codec::convert::ConvertTo;
 use crate::codec::data_type::{Decimal, Real};
+use crate::codec::mysql;
+use crate::codec::mysql::{Duration, Time, TimeType};
 use crate::expr::EvalContext;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
@@ -104,32 +105,6 @@ impl ConvertTo<f64> for Json {
     }
 }
 
-impl ConvertTo<Decimal> for Json {
-    #[inline]
-    /// Port from TiDB's types.ConvertJSONToDecimal
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        match self {
-            Json::String(s) => {
-                match Decimal::from_str(s.as_str()) {
-                    Ok(d) => Ok(d),
-                    Err(e) => {
-                        ctx.handle_truncate_err(e)?;
-                        // TODO, if TiDB's MyDecimal::FromString return err,
-                        //  it may has res. However, if TiKV's Decimal::from_str
-                        //  return err, it has no res, so I return zero here,
-                        //  but it may different from TiDB's MyDecimal::FromString
-                        Ok(Decimal::zero())
-                    }
-                }
-            }
-            _ => {
-                let r: f64 = self.convert(ctx)?;
-                Decimal::from_f64(r)
-            }
-        }
-    }
-}
-
 impl ConvertTo<Json> for i64 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
@@ -150,6 +125,39 @@ impl ConvertTo<Json> for Real {
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
         // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
         Ok(Json::Double(self.into_inner()))
+    }
+}
+
+impl ConvertTo<Json> for Decimal {
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
+        let val: f64 = self.convert(ctx)?;
+        Ok(Json::Double(val))
+    }
+}
+
+impl ConvertTo<Json> for Time {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        let tp = self.get_time_type();
+        let s = if tp == TimeType::DateTime || tp == TimeType::Timestamp {
+            // TODO: avoid this clone
+            let mut val = self.clone();
+            val.set_fsp(mysql::MAX_FSP as u8);
+            val.to_string()
+        } else {
+            self.to_string()
+        };
+        Ok(Json::String(s))
+    }
+}
+
+impl ConvertTo<Json> for Duration {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        let d = self.maximize_fsp();
+        Ok(Json::String(d.to_string()))
     }
 }
 

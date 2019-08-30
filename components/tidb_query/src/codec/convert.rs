@@ -58,7 +58,6 @@ where
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
         let val = self.convert(ctx)?;
-        // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
         let val = box_try!(Real::new(val));
         Ok(val)
     }
@@ -240,13 +239,12 @@ impl ToInt for u64 {
 }
 
 impl ToInt for f64 {
-    /// This function port from TiDB's types.ConvertFloatToInt,
-    /// it will check whether the number overflow signed lower and upper bound of `tp`.
+    /// This function is ported from TiDB's types.ConvertFloatToInt,
+    /// which checks whether the number overflows the signed lower and upper boundaries of `tp`
     ///
     /// # Notes
     ///
-    /// If overflow, it will handle overflow using ctx,
-    /// so if you get a err returned, needn't to handle it one more time
+    /// It handles overflows using `ctx` so that the caller would not handle it anymore.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         #![allow(clippy::float_cmp)]
         let val = (*self).round();
@@ -270,13 +268,12 @@ impl ToInt for f64 {
         Ok(val as i64)
     }
 
-    /// This function port from TiDB's types.ConvertFloatToUint,
-    /// it will check whether the number overflow unsigned upper bound of `tp`.
+    /// This function is ported from TiDB's types.ConvertFloatToUint,
+    /// which checks whether the number overflows the unsigned upper boundaries of `tp`
     ///
     /// # Notes
     ///
-    /// If overflow, it will handle overflow using ctx,
-    /// so if you get a err returned, needn't to handle it one more time
+    /// It handles overflows using `ctx` so that the caller would not handle it anymore.
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = (*self).round();
         if val < 0f64 {
@@ -376,15 +373,28 @@ impl ToInt for Decimal {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // TODO: avoid this clone
         let dec = round_decimal_with_ctx(ctx, self.clone())?;
-        let val = dec.as_i64_with_ctx(ctx)?;
-        val.to_int(ctx, tp)
+        let val = dec.as_i64();
+        let err = Error::truncated_wrong_val("DECIMAL", &dec);
+        let r = val.into_result_with_overflow_err(ctx, err)?;
+        if tp == FieldTypeTp::LongLong {
+            Ok(r)
+        } else {
+            r.to_int(ctx, tp)
+        }
     }
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         // TODO: avoid this clone
         let dec = round_decimal_with_ctx(ctx, self.clone())?;
-        decimal_as_u64(ctx, dec, tp)
+        let val = dec.as_u64();
+        let err = Error::truncated_wrong_val("DECIMAL", &dec);
+        let r = val.into_result_with_overflow_err(ctx, err)?;
+        if tp == FieldTypeTp::LongLong {
+            Ok(r)
+        } else {
+            r.to_uint(ctx, tp)
+        }
     }
 }
 

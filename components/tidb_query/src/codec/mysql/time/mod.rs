@@ -19,7 +19,7 @@ use tikv_util::codec::BytesSlice;
 
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use crate::codec::mysql::{self, Decimal, Json};
+use crate::codec::mysql::{self, Decimal};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -799,8 +799,7 @@ impl ConvertTo<f64> for Time {
         if self.is_zero() {
             return Ok(0f64);
         }
-        let f: f64 = box_try!(self.to_numeric_string().parse());
-        Ok(f)
+        Ok(self.to_numeric_string().parse()?)
     }
 }
 
@@ -812,21 +811,6 @@ impl ConvertTo<Decimal> for Time {
         }
 
         self.to_numeric_string().parse()
-    }
-}
-
-impl ConvertTo<Json> for Time {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        let s = if self.time_type == TimeType::DateTime || self.time_type == TimeType::Timestamp {
-            // TODO: avoid this clone
-            let mut val = self.clone();
-            val.fsp = mysql::MAX_FSP as u8;
-            val.to_string()
-        } else {
-            self.to_string()
-        };
-        Ok(Json::String(s))
     }
 }
 

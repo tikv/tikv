@@ -1715,18 +1715,11 @@ enable_conv_for_int!(usize, u64);
 enable_conv_for_int!(isize, i64);
 
 impl ConvertTo<f64> for Decimal {
+    /// This function should not return err,
+    /// if it return err, then the err because of bug.
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         let val = self.to_string().parse()?;
         Ok(val)
-    }
-}
-
-impl ConvertTo<Json> for Decimal {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
-        let val: f64 = self.convert(ctx)?;
-        Ok(Json::Double(val))
     }
 }
 
@@ -1793,21 +1786,13 @@ impl ConvertTo<Decimal> for Real {
 }
 
 impl ConvertTo<Decimal> for &[u8] {
-    // TODO, the err handle is not exactly same as TiDB's
+    // FIXME, the err handle is not exactly same as TiDB's,
+    //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let dec = match Decimal::from_bytes(self)? {
-            Res::Ok(d) => d,
-            Res::Overflow(d) => {
-                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))?;
-                d
-            }
-            Res::Truncated(d) => {
-                ctx.handle_truncate(true)?;
-                d
-            }
-        };
-        Ok(dec)
+        let r = Decimal::from_bytes(self)?;
+        let err = Error::overflow("DECIMAL", "");
+        r.into_result_with_overflow_err(ctx, err)
     }
 }
 
@@ -1822,6 +1807,32 @@ impl ConvertTo<Decimal> for Bytes {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         self.as_slice().convert(ctx)
+    }
+}
+
+impl ConvertTo<Decimal> for Json {
+    #[inline]
+    /// Port from TiDB's types.ConvertJSONToDecimal
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        match self {
+            Json::String(s) => {
+                match Decimal::from_str(s.as_str()) {
+                    Ok(d) => Ok(d),
+                    Err(e) => {
+                        ctx.handle_truncate_err(e)?;
+                        // FIXME, if TiDB's MyDecimal::FromString return err,
+                        //  it may has res. However, if TiKV's Decimal::from_str
+                        //  return err, it has no res, so I return zero here,
+                        //  but it may different from TiDB's MyDecimal::FromString
+                        Ok(Decimal::zero())
+                    }
+                }
+            }
+            _ => {
+                let r: f64 = self.convert(ctx)?;
+                Decimal::from_f64(r)
+            }
+        }
     }
 }
 
@@ -2887,25 +2898,25 @@ mod tests {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
-            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
-            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e -1", Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001", Res::Ok("10")),
             (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
             (WORD_BUF_LEN, b"1e1073741823",
-            Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+             Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
             (WORD_BUF_LEN, b"-1e1073741823",
-            Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
-            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+             Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN, b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
              Res::Overflow("0")),
-            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
-            Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
+            (WORD_BUF_LEN, b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+             Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
             // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
-            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
-            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
+            (WORD_BUF_LEN, b"1eabc", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e 1ddd", Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e - 1", Res::Ok("1")),
             // with word_buf_len 1
-            (1,b"123450000098765",Res::Overflow("98765")),
-            (1,b"123450.000098765", Res::Truncated("123450")),
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {
