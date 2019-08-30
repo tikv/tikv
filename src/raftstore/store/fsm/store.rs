@@ -3,6 +3,7 @@
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
+use engine::rocks::{set_perf_level, PerfLevel};
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -54,6 +55,7 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
+use crate::storage::kv::{PerfStatisticsInstant, persist_perf_data};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use pd_client::PdClient;
@@ -481,6 +483,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
+            set_perf_level(PerfLevel::EnableTime);
+            let perf_stats = PerfStatisticsInstant::new();
             self.poll_ctx
                 .engines
                 .kv
@@ -488,6 +492,9 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
+            set_perf_level(PerfLevel::EnableCount);
+            let delta = perf_stats.delta();
+            persist_perf_data(&mut ROCKSDB_WRITE_PERF_HISTOGRAM.local(), "kv", delta);
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
                 self.poll_ctx.kv_wb = WriteBatch::with_capacity(4 * 1024);
@@ -499,6 +506,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.raft_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
+            set_perf_level(PerfLevel::EnableTime);
+            let perf_stats = PerfStatisticsInstant::new();
             self.poll_ctx
                 .engines
                 .raft
@@ -506,6 +515,9 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
+            set_perf_level(PerfLevel::EnableCount);
+            let delta = perf_stats.delta();
+            persist_perf_data(&mut ROCKSDB_WRITE_PERF_HISTOGRAM.local(), "kv", delta);
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
                 self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);

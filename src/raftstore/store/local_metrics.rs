@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::local::LocalHistogram;
+use prometheus::local::{LocalHistogram, LocalHistogramVec};
 use std::sync::{Arc, Mutex};
 
 use tikv_util::collections::HashSet;
@@ -372,6 +372,26 @@ impl RaftInvalidProposeMetrics {
         }
     }
 }
+/// The buffered metrics counters for raft propose.
+#[derive(Clone)]
+pub struct RocksDBPerfMetrics {
+    pub write_perf: LocalHistogramVec,
+}
+
+impl Default for RocksDBPerfMetrics {
+    fn default() -> RocksDBPerfMetrics {
+        RocksDBPerfMetrics {
+            write_perf: ROCKSDB_WRITE_PERF_HISTOGRAM.local(),
+        }
+    }
+}
+
+impl RocksDBPerfMetrics {
+    fn flush(&mut self) {
+        self.write_perf.flush();
+    }
+}
+
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
@@ -381,8 +401,10 @@ pub struct RaftMetrics {
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
     pub append_log: LocalHistogram,
+    pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub rocksdb_perf: RocksDBPerfMetrics,
 }
 
 impl Default for RaftMetrics {
@@ -396,8 +418,10 @@ impl Default for RaftMetrics {
                 .with_label_values(&["ready"])
                 .local(),
             append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
+            commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            rocksdb_perf: Default::default(),
         }
     }
 }
@@ -410,8 +434,10 @@ impl RaftMetrics {
         self.propose.flush();
         self.process_ready.flush();
         self.append_log.flush();
+        self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.rocksdb_perf.flush();
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();

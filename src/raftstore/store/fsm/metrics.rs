@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::{exponential_buckets, Histogram};
+use prometheus::{exponential_buckets, Histogram, HistogramVec};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -9,6 +9,14 @@ lazy_static! {
         "tikv_raftstore_apply_proposal",
         "The count of proposals sent by a region at once",
         exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+
+    pub static ref APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_raftstore_apply_rocksdb_perf",
+        "The perf context data of raftstore apply",
+        &["db", "type"],
+        exponential_buckets(1.0, 2.0, 30).unwrap()
     )
     .unwrap();
 }

@@ -243,4 +243,12 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+
+    pub static ref ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_scheduler_rocksdb_perf_context",
+        "Bucketed histogram of rocksdb perf context",
+        &["type"],
+        exponential_buckets(1.0, 2.0, 30).unwrap()
+    )
+    .unwrap();
 }

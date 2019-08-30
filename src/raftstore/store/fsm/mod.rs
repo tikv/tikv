@@ -26,3 +26,4 @@ pub use self::store::{
     create_raft_batch_system, new_compaction_listener, RaftBatchSystem, RaftPollerBuilder,
     RaftRouter, StoreInfo,
 };
+pub use engine::rocks::{set_perf_level, PerfLevel};
