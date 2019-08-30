@@ -306,7 +306,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         stream_batch_row_limit: usize,
         // TODO: make clear if we need to add this
-        // is_streaming: bool,
+        _: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -468,13 +468,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
-        // if the data read finished
+        // if the data read finished, is_drained means "finished"
         let mut is_drained = false;
 
         let mut chunk = Chunk::default();
 
         let mut record_count = 0;
-        while record_count < self.stream_batch_row_limit || !is_drained {
+        // record count less than batch size and is not drained
+        while record_count < self.stream_batch_row_limit && !is_drained {
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);
@@ -509,11 +510,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         self.out_most_executor.schema(),
                         data,
                     )?;
-
-                    record_count += result.logical_rows.len();
                 }
             }
 
+            record_count += result.logical_rows.len();
             // Grow batch size
             grow_batch_size(&mut batch_size);
         }

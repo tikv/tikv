@@ -95,7 +95,7 @@ impl BatchDAGHandler {
         store: S,
         deadline: Deadline,
         stream_batch_row_limit: usize,
-        _is_streaming: bool,
+        is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self(
             tidb_query::batch::runner::BatchExecutorsRunner::from_request(
@@ -104,6 +104,7 @@ impl BatchDAGHandler {
                 TiKVStorage::from(store),
                 deadline,
                 stream_batch_row_limit,
+                is_streaming,
             )?,
         ))
     }
