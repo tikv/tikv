@@ -9,5 +9,7 @@ byteorder = "1.2"
 hex = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
+tikv_util = { path = "../tikv_util" }
+
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }

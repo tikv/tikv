@@ -9,6 +9,10 @@ use std::error::Error as StdError;
 use kvproto::metapb::Region;
 use std::mem;
 
+mod types;
+
+pub use types::{Key, Value, KvPair};
+
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];
 
