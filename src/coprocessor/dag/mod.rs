@@ -23,7 +23,7 @@ pub fn build_handler<S: Store + 'static>(
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
     let mut is_batch = false;
-    if enable_batch_if_possible && !is_streaming {
+    if enable_batch_if_possible {
         let is_supported =
             tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
         if let Err(e) = is_supported {
@@ -95,7 +95,7 @@ impl BatchDAGHandler {
         store: S,
         deadline: Deadline,
         stream_batch_row_limit: usize,
-        is_streaming: bool,
+        _is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self(
             tidb_query::batch::runner::BatchExecutorsRunner::from_request(
@@ -104,7 +104,6 @@ impl BatchDAGHandler {
                 TiKVStorage::from(store),
                 deadline,
                 stream_batch_row_limit,
-                is_streaming,
             )?,
         ))
     }

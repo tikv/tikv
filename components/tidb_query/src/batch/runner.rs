@@ -305,8 +305,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         deadline: Deadline,
 
         stream_batch_row_limit: usize,
-
-        is_streaming: bool,
+        // TODO: make clear if we need to add this
+        // is_streaming: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
