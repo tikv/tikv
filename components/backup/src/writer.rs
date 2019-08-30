@@ -119,15 +119,19 @@ impl BackupWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::Iterable;
+    use std::collections::BTreeMap;
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
 
-    fn check_sst(ssts: &[(engine::CfName, &Path)], kvs: &[(engine::CfName, &[u8], &[u8])]) {
+    type CfKvs<'a> = (engine::CfName, &'a [(&'a [u8], &'a [u8])]);
+
+    fn check_sst(ssts: &[(engine::CfName, &Path)], kvs: &[CfKvs]) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
-            .cfs(&[engine::CF_DEFAULT, engine::CF_LOCK, engine::CF_WRITE])
+            .cfs(&[engine::CF_DEFAULT, engine::CF_WRITE])
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
@@ -138,9 +142,23 @@ mod tests {
             db.ingest_external_file_cf(handle, &opt, &[sst.to_str().unwrap()])
                 .unwrap();
         }
-        for (cf, k, v) in kvs {
-            let handle = db.cf_handle(cf).unwrap();
-            assert_eq!(*v, &*db.get_cf(handle, k).unwrap().unwrap());
+        for (cf, kv) in kvs {
+            let mut map = BTreeMap::new();
+            db.scan_cf(
+                cf,
+                keys::DATA_MIN_KEY,
+                keys::DATA_MAX_KEY,
+                false,
+                |key, value| {
+                    map.insert(key.to_owned(), value.to_owned());
+                    Ok(true)
+                },
+            )
+            .unwrap();
+            assert_eq!(map.len(), kv.len(), "{:?} {:?}", map, kv);
+            for (k, v) in *kv {
+                assert_eq!(&v.to_vec(), map.get(&k.to_vec()).unwrap());
+            }
         }
     }
 
@@ -177,7 +195,7 @@ mod tests {
         assert_eq!(files.len(), 1);
         check_sst(
             &[(engine::CF_WRITE, &temp.path().join(files[0].get_name()))],
-            &[(engine::CF_WRITE, &keys::data_key(&[b'a']), &[b'a'])],
+            &[(engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])])],
         );
 
         // Test write and default.
@@ -199,8 +217,8 @@ mod tests {
                 (engine::CF_WRITE, &temp.path().join(files[1].get_name())),
             ],
             &[
-                (engine::CF_DEFAULT, &keys::data_key(&[b'a']), &[b'a']),
-                (engine::CF_WRITE, &keys::data_key(&[b'a']), &[b'a']),
+                (engine::CF_DEFAULT, &[(&keys::data_key(&[b'a']), &[b'a'])]),
+                (engine::CF_WRITE, &[(&keys::data_key(&[b'a']), &[b'a'])]),
             ],
         );
     }
