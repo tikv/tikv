@@ -6,7 +6,7 @@ use std::u64;
 
 use crate::storage::mvcc::{Lock, Write};
 
-pub use keys::{Key, Value, KvPair};
+pub use keys::{Key, KvPair, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
@@ -18,4 +18,3 @@ pub struct MvccInfo {
     /// start_ts and value
     pub values: Vec<(u64, Value)>,
 }
-

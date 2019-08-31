@@ -1,6 +1,6 @@
-use std::fmt::{self, Display, Formatter};
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
+use std::fmt::{self, Display, Formatter};
 use tikv_util::codec;
 use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;

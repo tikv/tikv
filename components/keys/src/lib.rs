@@ -7,13 +7,13 @@ extern crate derive_more;
 
 use byteorder::{BigEndian, ByteOrder};
 
-use std::error::Error as StdError;
 use kvproto::metapb::Region;
+use std::error::Error as StdError;
 use std::mem;
 
 mod types;
 
-pub use types::{Key, Value, KvPair};
+pub use types::{Key, KvPair, Value};
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];
@@ -151,11 +151,17 @@ fn make_region_meta_key(region_id: u64, suffix: u8) -> [u8; 11] {
 /// Decode region key, return the region id and meta suffix type.
 fn decode_region_key(prefix: &[u8], key: &[u8], category: &str) -> Result<(u64, u8)> {
     if prefix.len() + mem::size_of::<u64>() + mem::size_of::<u8>() != key.len() {
-        return Err(Error::InvalidRegionKeyLength(category.to_owned(), key.to_owned()));
+        return Err(Error::InvalidRegionKeyLength(
+            category.to_owned(),
+            key.to_owned(),
+        ));
     }
 
     if !key.starts_with(prefix) {
-        return Err(Error::InvalidRegionPrefix(category.to_owned(), key.to_owned()));
+        return Err(Error::InvalidRegionPrefix(
+            category.to_owned(),
+            key.to_owned(),
+        ));
     }
 
     let region_id = BigEndian::read_u64(&key[prefix.len()..prefix.len() + mem::size_of::<u64>()]);
@@ -226,18 +232,23 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
 
 #[derive(Debug, Display)]
 pub enum Error {
-    #[display(fmt = "{} is not a valid raft log key",
-              "hex::encode_upper(_0)")]
+    #[display(fmt = "{} is not a valid raft log key", "hex::encode_upper(_0)")]
     InvalidLogKey(Vec<u8>),
-    #[display(fmt = "invalid region {} key length for key {}",
-              "_0", "hex::encode_upper(_1)")]
+    #[display(
+        fmt = "invalid region {} key length for key {}",
+        "_0",
+        "hex::encode_upper(_1)"
+    )]
     InvalidRegionKeyLength(String, Vec<u8>),
-    #[display(fmt = "invalid region {} prefix for key {}",
-              "_0", "hex::encode_upper(_1)")]
+    #[display(
+        fmt = "invalid region {} prefix for key {}",
+        "_0",
+        "hex::encode_upper(_1)"
+    )]
     InvalidRegionPrefix(String, Vec<u8>),
 }
 
-impl StdError for Error { }
+impl StdError for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
