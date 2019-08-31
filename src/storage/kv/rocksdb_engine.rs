@@ -95,9 +95,9 @@ impl RocksEngine {
         let (path, temp_dir) = match path {
             TEMP_DIR => {
                 let td = Builder::new().prefix("temp-rocksdb").tempdir().unwrap();
-                (td.path().to_str().unwrap().to_owned(), Some(td))
+                (td.path().to_owned(), Some(td))
             }
-            _ => (path.to_owned(), None),
+            _ => (Path::new(path).to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
         let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);

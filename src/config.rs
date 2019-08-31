@@ -16,7 +16,7 @@ use std::usize;
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-    TitanDBOptions,
+    TitanDBOptions, DEFAULT_ROCKSDB_SUB_DIR,
 };
 use slog;
 use sys_info;
@@ -35,7 +35,7 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
-use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::storage::{Config as StorageConfig};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,

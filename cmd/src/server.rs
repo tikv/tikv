@@ -30,7 +30,7 @@ use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
-use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::storage::{self, AutoGCConfig};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
@@ -81,7 +81,6 @@ pub fn run_tikv(mut config: TiKvConfig) {
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
-    let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
     let import_path = store_path.join("import");
@@ -137,7 +136,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
     let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
     let raft_engine = rocks::util::new_engine_opt(
-        raft_db_path.to_str().unwrap(),
+        raft_db_path,
         raft_db_opts,
         raft_db_cf_opts,
     )
@@ -163,7 +162,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create kv engine, storage.
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
-    let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
+    let kv_engine = rocks::util::new_engine_opt(store_path, kv_db_opts, kv_cfs_opts)
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());

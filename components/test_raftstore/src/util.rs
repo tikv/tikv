@@ -521,7 +521,7 @@ pub fn create_test_engine(
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(
-                    path.as_ref().unwrap().path().to_str().unwrap(),
+                    path.as_ref().unwrap().path(),
                     kv_db_opt,
                     kv_cfs_opt,
                 )
@@ -529,7 +529,7 @@ pub fn create_test_engine(
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(&raft_path, None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             Engines::new(engine, raft_engine, cache.is_some())

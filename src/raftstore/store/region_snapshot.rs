@@ -834,7 +834,7 @@ mod tests {
         let engines = Engines::new(
             Arc::new(
                 rocks::util::new_engine(
-                    path.path().to_str().unwrap(),
+                    path.path(),
                     Some(kv_db_opts),
                     ALL_CFS,
                     Some(kv_cfs_opts),
@@ -842,7 +842,7 @@ mod tests {
                 .unwrap(),
             ),
             Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(raft_path, None, &[CF_DEFAULT], None)
                     .unwrap(),
             ),
             shared_block_cache,

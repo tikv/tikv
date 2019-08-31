@@ -160,7 +160,7 @@ mod tests {
     fn test_consistency_check() {
         let path = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let db = new_engine(
-            path.path().to_str().unwrap(),
+            path.path(),
             None,
             &[CF_DEFAULT, CF_RAFT],
             None,

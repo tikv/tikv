@@ -111,12 +111,12 @@ mod tests {
             CFOptions::new(CF_WRITE, cf_opts),
         ];
         let engine = Arc::new(
-            rocks::util::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
+            rocks::util::new_engine_opt(path.path(), db_opt, cfs_opts).unwrap(),
         );
 
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
         let raft_engine = Arc::new(
-            rocks::util::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
+            rocks::util::new_engine_opt(raft_path, DBOptions::new(), cfs_opts)
                 .unwrap(),
         );
         let shared_block_cache = false;

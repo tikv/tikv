@@ -35,6 +35,8 @@ pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
 
+pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
+
 /// Copies the source file to a newly created file.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     if !from.as_ref().is_file() {
@@ -96,7 +98,7 @@ impl<'a> CFOptions<'a> {
 }
 
 pub fn new_engine(
-    path: &str,
+    path: &Path,
     db_opts: Option<DBOptions>,
     cfs: &[&str],
     opts: Option<Vec<CFOptions<'_>>>,
@@ -149,10 +151,12 @@ fn adjust_dynamic_level_bytes(
 }
 
 pub fn new_engine_opt(
-    path: &str,
+    store_path: &Path,
     mut db_opt: DBOptions,
     cfs_opts: Vec<CFOptions<'_>>,
 ) -> Result<DB> {
+    let path = store_path.join(DEFAULT_ROCKSDB_SUB_DIR);
+    let path = path.to_str().expect("path to str");
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
         db_opt.create_if_missing(true);
@@ -850,7 +854,7 @@ mod tests {
             CFOptions::new("test", cf_opts.clone()),
         ];
         let db = new_engine(
-            temp_dir.path().to_str().unwrap(),
+            temp_dir.path(),
             None,
             &["default", "test"],
             Some(cfs_opts),

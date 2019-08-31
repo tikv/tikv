@@ -1321,7 +1321,7 @@ mod tests {
     fn test_flush() {
         let dir = Builder::new().prefix("test-flush").tempdir().unwrap();
         let db =
-            rocks::util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+            rocks::util::new_engine(dir.path(), None, ALL_CFS, None).unwrap();
         for tp in ENGINE_TICKER_TYPES {
             flush_engine_ticker_metrics(*tp, 2, "test-name");
         }

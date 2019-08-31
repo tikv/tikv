@@ -13,7 +13,6 @@ use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
 use libc::c_int;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
-pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;

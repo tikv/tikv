@@ -135,12 +135,12 @@ impl<T: Simulator> Cluster<T> {
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
-                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocks::util::new_engine_opt(&kv_path, kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
             let raft_path = dir.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(&raft_path, None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             let engines = Engines::new(engine, raft_engine, cache.is_some());

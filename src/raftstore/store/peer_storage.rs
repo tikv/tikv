@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
-use std::{cmp, error, u64};
+use std::{cmp, error, u64, path::Path};
 
 use engine::rocks;
 use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
@@ -1492,19 +1492,19 @@ pub fn write_peer_state<T: Mutable>(
 /// into raft engine.
 pub fn maybe_upgrade_from_2_to_3(
     raft_engine: &DB,
-    kv_path: &str,
+    kv_path: &Path,
     kv_db_opts: DBOptions,
     kv_cfg: &config::DbConfig,
     cache: &Option<Cache>,
 ) -> Result<()> {
     use engine::WriteOptions;
 
-    if !rocks::util::db_exist(kv_path) {
+    if !rocks::util::db_exist(kv_path.to_str().expect("path to str")) {
         debug!("no need upgrade to v3.x");
         return Ok(());
     }
 
-    if DB::list_column_families(&kv_db_opts, kv_path)
+    if DB::list_column_families(&kv_db_opts, kv_path.to_str().expect("convert path to str"))
         .unwrap()
         .into_iter()
         .find(|cf| *cf == CF_RAFT)

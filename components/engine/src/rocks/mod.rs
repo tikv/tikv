@@ -5,6 +5,7 @@ mod sst;
 pub use sst::{SstWriter, SstWriterBuilder};
 
 pub mod util;
+pub use util::DEFAULT_ROCKSDB_SUB_DIR;
 
 mod snapshot;
 pub use self::snapshot::*;
@@ -75,7 +76,7 @@ mod tests {
     fn test_peekable() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap();
+        let engine = util::new_engine(path.path(), None, &[cf], None).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
@@ -91,7 +92,7 @@ mod tests {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
         let engine =
-            Arc::new(util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap());
+            Arc::new(util::new_engine(path.path(), None, &[cf], None).unwrap());
         let handle = engine.cf_handle(cf).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();

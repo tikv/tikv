@@ -144,7 +144,7 @@ mod tests {
     fn test_smoke() {
         let path = Builder::new().tempdir().unwrap();
         let engine = Arc::new(
-            util::new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap(),
+            util::new_engine(path.path(), None, &[CF_DEFAULT], None).unwrap(),
         );
         let (k, v) = (b"foo", b"bar");
 
