@@ -1,5 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::intrinsics::unlikely;
+
+use crate::{Error, Result};
+
 /// A trait to provide sequential read over a memory buffer.
 ///
 /// The memory buffer can be `&[u8]` or `std::io::Cursor<AsRef<[u8]>>`.
@@ -15,20 +19,47 @@ pub trait BufferReader {
     ///
     /// This function may panic in some implementors when remaining space
     /// is not large enough to advance.
+    ///
+    /// TODO: We should make the panic behaviour deterministic.
     fn advance(&mut self, count: usize);
+
+    /// Read next several bytes as a slice and advance the position of internal cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if there is not enough space to read specified number of bytes.
+    fn read_bytes(&mut self, count: usize) -> Result<&[u8]>;
 }
 
 impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
+    #[inline]
     fn bytes(&self) -> &[u8] {
         let pos = self.position() as usize;
         let slice = self.get_ref().as_ref();
         slice.get(pos..).unwrap_or(&[])
     }
 
+    #[inline]
     fn advance(&mut self, count: usize) {
         let mut pos = self.position();
         pos += count as u64;
         self.set_position(pos);
+    }
+
+    fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
+        // We should not throw error at any time if `count == 0`.
+        if unsafe { unlikely(count == 0) } {
+            return Ok(&[]);
+        }
+
+        let pos = self.position() as usize;
+        let slice = self.get_ref().as_ref();
+        if unsafe { unlikely(pos + count >= slice.len()) } {
+            return Err(Error::eof());
+        }
+        let new_pos = pos + count;
+        self.set_position(new_pos as u64);
+        Ok(&self.get_ref().as_ref()[pos..new_pos])
     }
 }
 
@@ -42,6 +73,15 @@ impl<'a> BufferReader for &'a [u8] {
     fn advance(&mut self, count: usize) {
         *self = &self[count..]
     }
+
+    fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
+        if unsafe { unlikely(self.len() < count) } {
+            return Err(Error::eof());
+        }
+        let (left, right) = self.split_at(count);
+        *self = right;
+        Ok(left)
+    }
 }
 
 impl<'a, T: BufferReader + ?Sized> BufferReader for &'a mut T {
@@ -54,6 +94,11 @@ impl<'a, T: BufferReader + ?Sized> BufferReader for &'a mut T {
     fn advance(&mut self, count: usize) {
         (**self).advance(count)
     }
+
+    #[inline]
+    fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
+        (**self).read_bytes(count)
+    }
 }
 
 impl<T: BufferReader + ?Sized> BufferReader for Box<T> {
@@ -65,6 +110,11 @@ impl<T: BufferReader + ?Sized> BufferReader for Box<T> {
     #[inline]
     fn advance(&mut self, count: usize) {
         (**self).advance(count)
+    }
+
+    #[inline]
+    fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
+        (**self).read_bytes(count)
     }
 }
 
@@ -98,10 +148,20 @@ pub trait BufferWriter {
     ///
     /// This function may panic in some implementors when remaining space
     /// is not large enough to advance.
+    ///
+    /// TODO: We should make the panic behaviour deterministic.
     unsafe fn advance_mut(&mut self, count: usize);
+
+    /// Writes all bytes and advances the position of internal cursor,
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < values.len().
+    fn write_bytes(&mut self, values: &[u8]) -> Result<()>;
 }
 
 impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
+    #[inline]
     unsafe fn bytes_mut(&mut self, _size: usize) -> &mut [u8] {
         // `size` is ignored since this buffer is not capable to grow.
         let pos = self.position() as usize;
@@ -109,10 +169,30 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
         slice.get_mut(pos..).unwrap_or(&mut [])
     }
 
+    #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
         let mut pos = self.position();
         pos += count as u64;
         self.set_position(pos);
+    }
+
+    fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
+        let write_len = values.len();
+
+        // We should not throw error at any time if there is no byte to write.
+        if unsafe { unlikely(write_len == 0) } {
+            return Ok(());
+        }
+
+        let pos = self.position() as usize;
+        let slice = self.get_mut().as_mut();
+        if unsafe { unlikely(pos + write_len >= slice.len()) } {
+            return Err(Error::eof());
+        }
+        let new_pos = pos + write_len;
+        slice[pos..new_pos].copy_from_slice(values);
+        self.set_position(new_pos as u64);
+        Ok(())
     }
 }
 
@@ -126,6 +206,17 @@ impl<'a> BufferWriter for &'a mut [u8] {
     unsafe fn advance_mut(&mut self, count: usize) {
         let original_self = std::mem::replace(self, &mut []);
         *self = &mut original_self[count..];
+    }
+
+    fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
+        let write_len = values.len();
+        if unsafe { unlikely(self.len() < write_len) } {
+            return Err(Error::eof());
+        }
+        let original_self = std::mem::replace(self, &mut []);
+        original_self[..write_len].copy_from_slice(values);
+        *self = &mut original_self[write_len..];
+        Ok(())
     }
 }
 
@@ -145,6 +236,12 @@ impl BufferWriter for Vec<u8> {
         let len = self.len();
         self.set_len(len + count);
     }
+
+    #[inline]
+    fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
+        self.extend_from_slice(values);
+        Ok(())
+    }
 }
 
 impl<'a, T: BufferWriter + ?Sized> BufferWriter for &'a mut T {
@@ -157,6 +254,11 @@ impl<'a, T: BufferWriter + ?Sized> BufferWriter for &'a mut T {
     unsafe fn advance_mut(&mut self, count: usize) {
         (**self).advance_mut(count)
     }
+
+    #[inline]
+    fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
+        (**self).write_bytes(values)
+    }
 }
 
 impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
@@ -168,6 +270,11 @@ impl<T: BufferWriter + ?Sized> BufferWriter for Box<T> {
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
         (**self).advance_mut(count)
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
+        (**self).write_bytes(values)
     }
 }
 
@@ -194,6 +301,14 @@ mod tests {
         assert_eq!(buffer.position(), 18);
         assert_eq!(buffer.bytes(), &base[18..40]);
 
+        assert_eq!(buffer.read_bytes(0).unwrap(), &[]);
+        assert_eq!(buffer.position(), 18);
+        assert_eq!(buffer.bytes(), &base[18..40]);
+
+        assert_eq!(buffer.read_bytes(2).unwrap(), &base[18..20]);
+        assert_eq!(buffer.position(), 20);
+        assert_eq!(buffer.bytes(), &base[20..40]);
+
         // Reset to valid position
         buffer.set_position(7);
         assert_eq!(buffer.bytes(), &base[7..40]);
@@ -218,6 +333,13 @@ mod tests {
         // Reset to invalid position
         buffer.set_position(100);
         assert_eq!(buffer.bytes(), &base[40..40]);
+        assert_eq!(buffer.read_bytes(0).unwrap(), &[]);
+
+        // Read more bytes than available
+        buffer.set_position(39);
+        assert!(buffer.read_bytes(2).is_err());
+        assert_eq!(buffer.position(), 39);
+        assert_eq!(buffer.bytes(), &base[39..40]);
     }
 
     #[test]
@@ -241,9 +363,23 @@ mod tests {
         assert_eq!(buffer, &base[18..40]);
         assert_eq!(buffer.bytes(), &base[18..40]);
 
-        buffer.advance(22);
-        assert_eq!(buffer, &base[40..40]);
-        assert_eq!(buffer.bytes(), &base[40..40]);
+        assert_eq!(buffer.read_bytes(0).unwrap(), &[]);
+        assert_eq!(buffer, &base[18..40]);
+        assert_eq!(buffer.bytes(), &base[18..40]);
+
+        buffer.advance(1);
+        assert_eq!(buffer.read_bytes(2).unwrap(), &base[19..21]);
+        assert_eq!(buffer, &base[21..40]);
+        assert_eq!(buffer.bytes(), &base[21..40]);
+
+        assert!(buffer.read_bytes(20).is_err());
+
+        buffer.advance(19);
+        assert_eq!(buffer, &[]);
+        assert_eq!(buffer.bytes(), &[]);
+
+        assert_eq!(buffer.read_bytes(0).unwrap(), &[]);
+        assert!(buffer.read_bytes(1).is_err());
     }
 
     #[test]
@@ -274,6 +410,18 @@ mod tests {
             assert_eq!(&buffer.get_ref()[0..18], &base_write[0..18]);
             assert_eq!(&buffer.get_ref()[18..], &base[18..]);
             assert_eq!(buffer.position(), 18);
+
+            // Write 2 bytes
+            buffer.write_bytes(&base_write[18..20]).unwrap();
+            assert_eq!(&buffer.get_ref()[0..20], &base_write[0..20]);
+            assert_eq!(&buffer.get_ref()[20..], &base[20..]);
+            assert_eq!(buffer.position(), 20);
+
+            // Write more bytes than available size
+            assert!(buffer.write_bytes(&base_write[20..]).is_err());
+            assert_eq!(&buffer.get_ref()[0..20], &base_write[0..20]);
+            assert_eq!(&buffer.get_ref()[20..], &base[20..]);
+            assert_eq!(buffer.position(), 20);
 
             // Reset to valid position
             buffer.set_position(7);
@@ -315,6 +463,12 @@ mod tests {
             assert_eq!(&buffer.get_ref()[0..5], &base_write[51..56]);
             assert_eq!(&buffer.get_ref()[5..7], &base_write[5..7]);
             assert_eq!(&buffer.get_ref()[7..40], &base_write[18..51]);
+
+            buffer.write_bytes(&[]).unwrap();
+            assert_eq!(buffer.bytes_mut(1).len(), 0);
+            assert_eq!(&buffer.get_ref()[0..5], &base_write[51..56]);
+            assert_eq!(&buffer.get_ref()[5..7], &base_write[5..7]);
+            assert_eq!(&buffer.get_ref()[7..40], &base_write[18..51]);
         }
     }
 
@@ -333,25 +487,49 @@ mod tests {
             }
 
             let mut buffer = base.clone();
-            let mut buffer = buffer.as_mut_slice();
+            let mut buf_slice = buffer.as_mut_slice();
+            // let buffer_viewer = std::slice::from_raw_parts(buffer as *const u8, buffer.len());
 
-            buffer.bytes_mut(13)[..13].clone_from_slice(&base_write[0..13]);
+            buf_slice.bytes_mut(13)[..13].clone_from_slice(&base_write[0..13]);
+            assert_eq!(&buf_slice[0..13], &base_write[0..13]);
+            assert_eq!(&buf_slice[13..], &base[13..]);
+            buf_slice.advance_mut(13);
+            assert_eq!(buf_slice.as_ptr(), buffer[13..].as_ptr());
             assert_eq!(&buffer[0..13], &base_write[0..13]);
             assert_eq!(&buffer[13..], &base[13..]);
-            buffer.advance_mut(13);
+            let mut buf_slice = &mut buffer[13..];
 
             // Acquire 10, only write 5.
-            buffer.bytes_mut(10)[..5].clone_from_slice(&base_write[13..18]);
-            assert_eq!(&buffer[0..5], &base_write[13..18]);
-            assert_eq!(&buffer[5..], &base[18..]);
-            buffer.advance_mut(5);
+            buf_slice.bytes_mut(10)[..5].clone_from_slice(&base_write[13..18]);
+            assert_eq!(&buf_slice[0..5], &base_write[13..18]);
+            assert_eq!(&buf_slice[5..], &base[18..]);
+            buf_slice.advance_mut(5);
+            assert_eq!(buf_slice.as_ptr(), buffer[18..].as_ptr());
+            assert_eq!(&buffer[0..18], &base_write[0..18]);
+            assert_eq!(&buffer[18..], &base[18..]);
+            let mut buf_slice = &mut buffer[18..];
 
-            buffer.bytes_mut(22)[..22].clone_from_slice(&base_write[18..40]);
-            assert_eq!(&buffer[0..22], &base_write[18..40]);
-            assert_eq!(&buffer[22..], &base[40..]);
-            buffer.advance_mut(22);
+            buf_slice.write_bytes(&base_write[18..20]).unwrap();
+            assert_eq!(buf_slice, &base[20..]);
+            assert_eq!(buf_slice.as_ptr(), buffer[20..].as_ptr());
+            assert_eq!(&buffer[0..20], &base_write[0..20]);
+            assert_eq!(&buffer[20..], &base[20..]);
+            let mut buf_slice = &mut buffer[20..];
 
-            assert_eq!(buffer, &base[40..]);
+            // Buffer remain 20, write 21 bytes shall fail.
+            assert!(buf_slice.write_bytes(&base_write[20..41]).is_err());
+
+            // Write remaining 20 bytes
+            buf_slice.bytes_mut(20)[..20].clone_from_slice(&base_write[20..40]);
+            assert_eq!(&buf_slice[0..20], &base_write[20..40]);
+            buf_slice.advance_mut(20);
+            assert_eq!(buf_slice.as_ptr(), buffer[40..].as_ptr());
+            assert_eq!(buffer, &base_write[0..40]);
+            let mut buf_slice = &mut buffer[40..];
+
+            // Buffer remain 0, write 0 bytes shall success.
+            buf_slice.write_bytes(&base_write[40..40]).unwrap();
+            assert_eq!(buf_slice.as_ptr(), buffer[40..].as_ptr());
         }
     }
 
@@ -376,6 +554,11 @@ mod tests {
             buffer.advance_mut(5);
             assert_eq!(&buffer[0..18], &base_write[0..18]);
             assert_eq!(buffer.len(), 18);
+
+            // Vec remaining 5, write 10
+            buffer.write_bytes(&base_write[18..28]).unwrap();
+            assert_eq!(&buffer[0..28], &base_write[0..28]);
+            assert_eq!(buffer.len(), 28);
 
             // Reset len
             buffer.set_len(7);
