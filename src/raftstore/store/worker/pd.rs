@@ -49,6 +49,7 @@ pub enum Task {
         callback: Callback,
     },
     Heartbeat {
+        term: u64,
         region: metapb::Region,
         peer: metapb::Peer,
         down_peers: Vec<pdpb::PeerStats>,
@@ -335,6 +336,7 @@ impl<T: PdClient> Runner<T> {
     fn handle_heartbeat(
         &self,
         handle: &Handle,
+        term: u64,
         region: metapb::Region,
         peer: metapb::Peer,
         region_stat: RegionStat,
@@ -354,7 +356,7 @@ impl<T: PdClient> Runner<T> {
 
         let f = self
             .pd_client
-            .region_heartbeat(region.clone(), peer.clone(), region_stat)
+            .region_heartbeat(term, region.clone(), peer.clone(), region_stat)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -658,6 +660,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 callback,
             ),
             Task::Heartbeat {
+                term,
                 region,
                 peer,
                 down_peers,
@@ -707,6 +710,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 };
                 self.handle_heartbeat(
                     handle,
+                    term,
                     region,
                     peer,
                     RegionStat {
