@@ -823,9 +823,17 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
+        let split_keys = if !req.get_split_key().is_empty() {
+            vec![Key::from_raw(req.get_split_key()).into_encoded()]
+        } else {
+            req.take_split_keys()
+                .into_iter()
+                .map(|x| Key::from_raw(&x).into_encoded())
+                .collect()
+        };
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
-            split_keys: vec![Key::from_raw(req.get_split_key()).into_encoded()],
+            split_keys,
             callback: Callback::Write(cb),
         };
 
@@ -842,7 +850,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
                     let admin_resp = v.response.mut_admin_response();
-                    if admin_resp.get_splits().get_regions().len() != 2 {
+                    let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
+                    if regions.len() < 2 {
                         error!(
                             "invalid split response";
                             "region_id" => region_id,
@@ -853,10 +862,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                             admin_resp
                         ));
                     } else {
-                        let mut regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
-                        let mut d = regions.drain(..);
-                        resp.set_left(d.next().unwrap());
-                        resp.set_right(d.next().unwrap());
+                        if regions.len() == 2 {
+                            resp.set_left(regions[0].clone());
+                            resp.set_right(regions[1].clone());
+                        }
+                        resp.set_regions(regions.into());
                     }
                 }
                 resp
@@ -961,7 +971,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
             let requests: Vec<_> = req.take_requests().into();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
+                handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
             }
             future::ok::<_, _>(())
         });
@@ -1048,7 +1058,7 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
 fn handle_batch_commands_request<E: Engine>(
     storage: &Storage<E>,
     cop: &Endpoint<E>,
-    peer: String,
+    peer: &str,
     id: u64,
     req: batch_commands_request::Request,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1222,7 +1232,7 @@ fn handle_batch_commands_request<E: Engine>(
         }
         Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
-            let resp = future_cop(&cop, req, Some(peer))
+            let resp = future_cop(&cop, req, Some(peer.to_string()))
                 .map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
             response_batch_commands_request(id, resp, tx, timer);
