@@ -4,7 +4,7 @@ WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
-RUN rustup default nightly-2019-07-19
+RUN rustup default nightly-2019-08-26
 
 # Use Makefile to build
 COPY Makefile ./
