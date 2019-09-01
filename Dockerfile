@@ -19,6 +19,7 @@ RUN mkdir -p ./cmd/
 COPY cmd/Cargo.toml ./cmd/
 # Add components Cargo files
 # Notice: every time we add a new component, we must regenerate the dockerfile
+COPY ./components/backup/Cargo.toml ./components/backup/Cargo.toml
 COPY ./components/codec/Cargo.toml ./components/codec/Cargo.toml
 COPY ./components/engine/Cargo.toml ./components/engine/Cargo.toml
 COPY ./components/external_storage/Cargo.toml ./components/external_storage/Cargo.toml
@@ -44,6 +45,7 @@ RUN mkdir -p ./cmd/src/bin && \
     echo '' > ./cmd/src/lib.rs && \
     mkdir -p ./src/ && \
     echo '' > ./src/lib.rs && \
+    mkdir ./components/backup/src && echo '' > ./components/backup/src/lib.rs && \
     mkdir ./components/codec/src && echo '' > ./components/codec/src/lib.rs && \
     mkdir ./components/engine/src && echo '' > ./components/engine/src/lib.rs && \
     mkdir ./components/external_storage/src && echo '' > ./components/external_storage/src/lib.rs && \
@@ -66,6 +68,7 @@ RUN mkdir -p ./cmd/src/bin && \
     done
 
 RUN make build_dist_release && \
+    rm -rf ./target/release/.fingerprint/backup-* && \
     rm -rf ./target/release/.fingerprint/codec-* && \
     rm -rf ./target/release/.fingerprint/engine-* && \
     rm -rf ./target/release/.fingerprint/external_storage-* && \

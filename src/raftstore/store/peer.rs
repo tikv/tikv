@@ -454,16 +454,21 @@ impl Peer {
     }
 
     #[inline]
-    pub fn maybe_append_merge_entries(&mut self, merge: CommitMergeRequest) -> Option<u64> {
+    pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
             return None;
         }
         let first = entries.first().unwrap();
-
         // make sure message should be with index not smaller than committed
         let mut log_idx = first.get_index() - 1;
         if log_idx < self.raft_group.raft.raft_log.committed {
+            // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
+            // so the commit index may exceed the last index of the entires from CommitMergeRequest.
+            // If that, no need to append
+            if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
+                return None;
+            }
             entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
             log_idx = self.raft_group.raft.raft_log.committed;
         }
@@ -2336,6 +2341,7 @@ impl Peer {
 
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
+            term: self.term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),

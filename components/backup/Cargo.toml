@@ -1,0 +1,38 @@
+[package]
+name = "backup"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+tikv = { path = "../../", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+protobuf = "2.8"
+raft = "0.6.0-alpha"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+# better to not use slog-global, but pass in the logger
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
+engine = { path = "../engine" }
+tikv_util = { path = "../tikv_util" }
+futures = "0.1"
+tempfile = "3.0"
+tokio-threadpool = "0.1"
+grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+url = "2.0"
+hex = "0.3"
+external_storage = { path = "../external_storage" }
+serde = "1.0"
+serde_derive = "1.0"
+lazy_static = "1.3"
+failure = "0.1"
+tikv_alloc = { path = "../tikv_alloc", default-features = false }
+
+[dependencies.prometheus]
+version = "0.4.2"
+default-features = false
+features = ["nightly", "push", "process"]
+
+[dev-dependencies]
+test_util = { path = "../test_util" }
+test_raftstore = { path = "../test_raftstore" }
+uuid = { version = "0.6", features = [ "serde", "v4" ] }

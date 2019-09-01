@@ -244,6 +244,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonReplaceSig => json_replace_fn_meta(),
         ScalarFuncSig::JsonInsertSig => json_insert_fn_meta(),
         ScalarFuncSig::JsonArraySig => json_array_fn_meta(),
+        ScalarFuncSig::JsonObjectSig => json_object_fn_meta(),
         ScalarFuncSig::JsonMergeSig => json_merge_fn_meta(),
         ScalarFuncSig::JsonUnquoteSig => json_unquote_fn_meta(),
         ScalarFuncSig::CastIntAsInt |

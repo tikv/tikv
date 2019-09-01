@@ -361,6 +361,11 @@ impl BatchExecutor for BatchFixtureExecutor {
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
         // Do nothing
     }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        unreachable!()
+    }
 }
 
 pub struct NormalFixtureExecutor {
