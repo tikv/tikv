@@ -971,7 +971,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
             let requests: Vec<_> = req.take_requests().into();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
+                handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
             }
             future::ok::<_, _>(())
         });
@@ -1058,7 +1058,7 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
 fn handle_batch_commands_request<E: Engine>(
     storage: &Storage<E>,
     cop: &Endpoint<E>,
-    peer: String,
+    peer: &str,
     id: u64,
     req: batch_commands_request::Request,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1232,7 +1232,7 @@ fn handle_batch_commands_request<E: Engine>(
         }
         Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
-            let resp = future_cop(&cop, req, Some(peer))
+            let resp = future_cop(&cop, req, Some(peer.to_string()))
                 .map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
             response_batch_commands_request(id, resp, tx, timer);
