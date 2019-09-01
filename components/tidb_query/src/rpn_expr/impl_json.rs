@@ -36,7 +36,7 @@ fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
     // args >= 2
     // base Json argument
-    let base: &Option<Json> = Evaluable::borrow_scalar_value_ref(&args[0]);
+    let base: &Option<Json> = args[0].as_ref();
     let mut base = base.as_ref().map_or(Json::None, |json| json.to_owned());
 
     // args.len() / 2
@@ -46,8 +46,8 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     let mut values = Vec::with_capacity(sz);
 
     for chunk in args[1..].chunks(2) {
-        let path: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&chunk[0]);
-        let value: &Option<Json> = Evaluable::borrow_scalar_value_ref(&chunk[1]);
+        let path: &Option<Bytes> = chunk[0].as_ref();
+        let value: &Option<Json> = chunk[1].as_ref();
 
         let path = match path.as_ref() {
             None => return Ok(None),
@@ -70,17 +70,16 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 /// validate the arguments are `(&Option<Json>, &[(Option<Bytes>, Option<Json>)])`
 fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
+    if children.len() % 2 != 1 {
+        return Err(other_err!(
+            "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
+        ));
+    }
     // min_args will be validated before extra_validator, so expr.get_children() must be larger than 2
     super::function::validate_expr_return_type(&children[0], Json::EVAL_TYPE)?;
     for chunk in children[1..].chunks(2) {
-        if chunk.len() == 1 {
-            return Err(other_err!(
-                "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
-            ));
-        } else {
-            super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
-            super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
-        }
+        super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
+        super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
     }
     Ok(())
 }
