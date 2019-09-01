@@ -3,7 +3,6 @@
 #![recursion_limit = "200"]
 // TODO: remove it after all code been merged.
 #![allow(unused_imports)]
-#![feature(duration_float)]
 
 #[macro_use(
     kv,
