@@ -126,6 +126,7 @@ impl RequestHandler for BatchDAGHandler {
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
+        info!("Batch DAGHandler stream called.");
         handle_qe_stream_response(self.0.handle_streaming_request())
     }
 

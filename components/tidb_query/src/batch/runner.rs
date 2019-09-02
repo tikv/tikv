@@ -481,12 +481,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         );
         while record_cnt < 32 && already_read_cnt < 32 && !is_drained {
             info!(
-                "handle_streaming_request loop start and pass the ddl check, now record_cnt is {}, already read is {}",
+                "handle_streaming_request loop start and want to ddl checking, now record_cnt is {}, already read is {}",
                 record_cnt, already_read_cnt
             );
 
-            self.deadline.check()?;
-            info!("pass deadline checking now");
             let mut result = self.out_most_executor.next_batch(2);
 
             info!(
@@ -495,6 +493,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 result.physical_columns.rows_len(),
                 result.is_drained
             );
+
+            self.deadline.check()?;
+            info!("Pass deadline checking now");
             // fill is_drained
             match result.is_drained {
                 Err(e) => return Err(e),
