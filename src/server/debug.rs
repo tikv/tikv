@@ -701,6 +701,16 @@ impl Debugger {
             })
     }
 
+    pub fn get_cluster_id(&self) -> Result<u64> {
+        let db = &self.engines.kv;
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+            .map_err(|e| box_err!(e))
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(ident.get_cluster_id()),
+                None => Err(Error::NotFound("No cluster ident key".to_owned())),
+            })
+    }
+
     fn modify_block_cache_size(&self, db: DBType, cf_name: &str, config_value: &str) -> Result<()> {
         use super::CONFIG_ROCKSDB_GAUGE;
         let rocksdb = self.get_db_from_type(db)?;
@@ -1603,11 +1613,30 @@ mod tests {
     }
 
     impl Debugger {
-        fn set_store_id(&self, store_id: u64) {
-            let mut ident = StoreIdent::default();
-            ident.set_store_id(store_id);
+        fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
-            db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+            db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+                .map_err(|e| box_err!(e))
+                .and_then(|ident| match ident {
+                    Some(ident) => Ok(ident),
+                    None => Ok(StoreIdent::default()),
+                })
+        }
+
+        fn set_store_id(&self, store_id: u64) {
+            if let Ok(mut ident) = self.get_store_ident() {
+                ident.set_store_id(store_id);
+                let db = &self.engines.kv;
+                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+            }
+        }
+
+        fn set_cluster_id(&self, cluster_id: u64) {
+            if let Ok(mut ident) = self.get_store_ident() {
+                ident.set_cluster_id(cluster_id);
+                let db = &self.engines.kv;
+                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+            }
         }
     }
 
@@ -2268,6 +2297,20 @@ mod tests {
         check(
             debugger.raw_scan(b"za1", b"zb2\x00\x00", 8, CF_DEFAULT),
             &keys[1..9],
+        );
+    }
+
+    #[test]
+    fn test_store_region() {
+        let debugger = new_debugger();
+        let store_id: u64 = 42;
+        let cluster_id: u64 = 4242;
+        debugger.set_store_id(store_id);
+        debugger.set_cluster_id(cluster_id);
+        assert_eq!(store_id, debugger.get_store_id().expect("get store id"));
+        assert_eq!(
+            cluster_id,
+            debugger.get_cluster_id().expect("get cluster id")
         );
     }
 }

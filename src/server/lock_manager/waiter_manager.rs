@@ -184,20 +184,20 @@ impl Scheduler {
         true
     }
 
-    pub fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {
-        self.notify_scheduler(Task::WakeUp {
-            lock_ts,
-            hashes,
-            commit_ts,
-        });
-    }
-
     pub fn wait_for(&self, start_ts: u64, cb: StorageCb, pr: ProcessResult, lock: Lock) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
             cb,
             pr,
             lock,
+        });
+    }
+
+    pub fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {
+        self.notify_scheduler(Task::WakeUp {
+            lock_ts,
+            hashes,
+            commit_ts,
         });
     }
 

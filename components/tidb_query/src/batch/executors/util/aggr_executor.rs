@@ -38,6 +38,7 @@ use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::codec::data_type::*;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::RpnExpression;
+use crate::storage::IntervalRange;
 use crate::Result;
 
 pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
@@ -315,6 +316,11 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.entities.src.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.entities.src.take_scanned_range()
     }
 }
 

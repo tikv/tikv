@@ -706,9 +706,9 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                         })
                         .or_insert_with(|| {
                             if has_waiter {
-                                None
-                            } else {
                                 Some(vec![lock_manager::gen_key_hash(&current_key)])
+                            } else {
+                                None
                             }
                         });
                 }
