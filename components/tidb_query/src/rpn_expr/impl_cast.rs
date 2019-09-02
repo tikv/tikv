@@ -995,6 +995,21 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
 
 #[cfg(test)]
 mod tests {
+    use super::Result;
+    use crate::codec::data_type::{Decimal, Int, Real, ScalarValue};
+    use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+    use crate::codec::mysql::{Duration, Json, Time};
+    use crate::expr::Flag;
+    use crate::expr::{EvalConfig, EvalContext};
+    use crate::rpn_expr::impl_cast::*;
+    use crate::rpn_expr::RpnFnCallExtra;
+    use bitfield::fmt::Display;
+    use std::collections::BTreeMap;
+    use std::fmt::{Debug, Formatter};
+    use std::sync::Arc;
+    use std::{f32, f64, i64, u64};
+    use tidb_query_datatype::{FieldTypeFlag, UNSPECIFIED_LENGTH};
+
     #[test]
     fn test_in_union() {
         use super::*;
@@ -1011,5 +1026,744 @@ mod tests {
             in_union(&[ScalarValue::Int(Some(1)), ScalarValue::Int(Some(0))]),
             true
         );
+    }
+
+    fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
+    where
+        F: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<Input>) -> Result<Option<Ret>>,
+    {
+        let mut ctx = EvalContext::default();
+        let implicit_args = [ScalarValue::Int(Some(1))];
+        let ret_field_type: FieldType = FieldType::default();
+        let extra = RpnFnCallExtra {
+            ret_field_type: &ret_field_type,
+            implicit_args: &implicit_args,
+        };
+        let r = func(&mut ctx, &extra, &None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn test_none_with_ctx<F, Input, Ret>(func: F)
+    where
+        F: Fn(&mut EvalContext, &Option<Input>) -> Result<Option<Ret>>,
+    {
+        let mut ctx = EvalContext::default();
+        let r = func(&mut ctx, &None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn test_none_with_extra<F, Input, Ret>(func: F)
+    where
+        F: Fn(&RpnFnCallExtra, &Option<Input>) -> Result<Option<Ret>>,
+    {
+        let implicit_args = [ScalarValue::Int(Some(1))];
+        let ret_field_type: FieldType = FieldType::default();
+        let extra = RpnFnCallExtra {
+            ret_field_type: &ret_field_type,
+            implicit_args: &implicit_args,
+        };
+        let r = func(&extra, &None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn test_none_with_nothing<F, Input, Ret>(func: F)
+    where
+        F: Fn(&Option<Input>) -> Result<Option<Ret>>,
+    {
+        let r = func(&None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn make_ctx(
+        overflow_as_warning: bool,
+        truncate_as_warning: bool,
+        should_clip_to_zero: bool,
+    ) -> EvalContext {
+        let mut flag: Flag = Flag::default();
+        if overflow_as_warning {
+            flag |= Flag::OVERFLOW_AS_WARNING;
+        }
+        if truncate_as_warning {
+            flag |= Flag::TRUNCATE_AS_WARNING;
+        }
+        if should_clip_to_zero {
+            flag |= Flag::IN_INSERT_STMT;
+        }
+        let cfg = Arc::new(EvalConfig::from_flag(flag));
+        EvalContext::new(cfg)
+    }
+
+    fn make_implicit_args(in_union: bool) -> [ScalarValue; 1] {
+        if in_union {
+            [ScalarValue::Int(Some(1))]
+        } else {
+            [ScalarValue::Int(Some(0))]
+        }
+    }
+
+    fn make_ret_field_type(unsigned: bool) -> FieldType {
+        let mut ft = if unsigned {
+            let mut ft = FieldType::default();
+            ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
+            ft
+        } else {
+            FieldType::default()
+        };
+        let fta = ft.as_mut_accessor();
+        fta.set_flen(UNSPECIFIED_LENGTH);
+        fta.set_decimal(UNSPECIFIED_LENGTH);
+        ft
+    }
+
+    fn make_ret_field_type_2(unsigned: bool, flen: isize, decimal: isize) -> FieldType {
+        let mut ft = if unsigned {
+            let mut ft = FieldType::default();
+            ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
+            ft
+        } else {
+            FieldType::default()
+        };
+        let fta = ft.as_mut_accessor();
+        fta.set_flen(flen);
+        fta.set_decimal(decimal);
+        ft
+    }
+
+    fn make_extra<'a>(
+        ret_field_type: &'a FieldType,
+        implicit_args: &'a [ScalarValue],
+    ) -> RpnFnCallExtra<'a> {
+        RpnFnCallExtra {
+            ret_field_type,
+            implicit_args,
+        }
+    }
+
+    fn check_overflow(ctx: &EvalContext, overflow: bool) {
+        if overflow {
+            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+        } else {
+            assert_eq!(ctx.warnings.warning_cnt, 0);
+        }
+    }
+
+    fn check_truncated(ctx: &EvalContext, truncated: bool) {
+        if truncated {
+            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(ctx.warnings.warnings[0].get_code(), WARN_DATA_TRUNCATED);
+        } else {
+            assert_eq!(ctx.warnings.warning_cnt, 0);
+        }
+    }
+
+    fn check_result<P: Display, R: Display + Debug + PartialEq>(
+        input: &P,
+        expect: Option<&R>,
+        res: &Result<Option<R>>,
+    ) {
+        assert!(
+            res.is_ok(),
+            "input: {}, expect: {:?}, output: {:?}",
+            input,
+            expect,
+            res
+        );
+        let res = res.as_ref().unwrap();
+        if res.is_none() {
+            assert!(
+                expect.is_none(),
+                "input: {}, expect: {:?}, output: {:?}",
+                input,
+                expect,
+                res
+            );
+        } else {
+            let res = res.as_ref().unwrap();
+            assert_eq!(
+                res,
+                expect.unwrap(),
+                "input: {}, expect: {:?}, output: {:?}",
+                input,
+                expect,
+                res
+            );
+        }
+    }
+
+    impl Display for Json {
+        fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "{:?}", self)
+        }
+    }
+
+    // comment for all test below:
+    // if there should not be any overflow/truncate,
+    // then should not set ctx with overflow_as_warning/truncated_as_warning flag,
+    // and then if there is unexpected overflow/truncate,
+    // then we will find them in `unwrap`
+
+    #[test]
+    fn tes_signed_int_as_signed_real() {
+        test_none_with_nothing(cast_signed_int_as_signed_real);
+
+        let cs: Vec<(i64, f64)> = vec![
+            // (input, result)
+            (i64::MIN, i64::MIN as f64),
+            (0, 0f64),
+            (i64::MAX, i64::MAX as f64),
+        ];
+
+        for (input, result) in cs {
+            let r = cast_signed_int_as_signed_real(&Some(input));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+        }
+    }
+
+    #[test]
+    fn test_signed_int_as_unsigned_real() {
+        test_none_with_extra(cast_signed_int_as_unsigned_real);
+
+        let cs: Vec<(i64, f64, bool)> = vec![
+            // (input, result, in_union)
+            // not in union
+            // TODO, add test case of negative int to unsigned real
+            // (i64::MIN, i64::MIN as u64 as f64, false),
+            (i64::MAX, i64::MAX as f64, false),
+            (0, 0f64, false),
+            // in union
+            (i64::MIN, 0f64, true),
+            (-1, -1f64, true),
+            (i64::MAX, i64::MAX as f64, true),
+            (0, 0f64, true),
+        ];
+        for (input, result, in_union) in cs {
+            let ia = make_implicit_args(in_union);
+            let rft = make_ret_field_type(true);
+            let extra = make_extra(&rft, &ia);
+            let r = cast_signed_int_as_unsigned_real(&extra, &Some(input));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+        }
+    }
+
+    #[test]
+    fn test_unsigned_int_as_signed_or_unsigned_real() {
+        test_none_with_nothing(cast_unsigned_int_as_signed_or_unsigned_real);
+
+        let cs = vec![
+            // (input, result)
+            (0, 0f64),
+            (u64::MAX, u64::MAX as f64),
+            (i64::MAX as u64, i64::MAX as u64 as f64),
+        ];
+        for (input, result) in cs {
+            let r = cast_unsigned_int_as_signed_or_unsigned_real(&Some(input as i64));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+        }
+    }
+
+    #[test]
+    fn test_real_as_signed_real() {
+        test_none_with_nothing(cast_real_as_signed_real);
+
+        let cs = vec![
+            // (input, result)
+            (f32::MIN as f64, f32::MIN as f64),
+            (f32::MAX as f64, f32::MAX as f64),
+            (f64::MIN, f64::MIN),
+            (0f64, 0f64),
+            (f64::MAX, f64::MAX),
+            (i64::MIN as f64, i64::MIN as f64),
+            (i64::MAX as f64, i64::MAX as f64),
+            (u64::MAX as f64, u64::MAX as f64),
+        ];
+        for (input, result) in cs {
+            let r = cast_real_as_signed_real(&Real::new(input).ok());
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+        }
+    }
+
+    #[test]
+    fn test_real_as_unsigned_real() {
+        let cs = vec![
+            // (input, result, in_union)
+            // not in union
+            // TODO, add test case of negative real to unsigned real
+            // (-1.0, -1.0, false),
+            // (i64::MIN as f64, i64::MIN as f64, false),
+            // (f64::MIN, f64::MIN, false),
+            (u64::MIN as f64, u64::MIN as f64, false),
+            (1.0, 1.0, false),
+            (i64::MAX as f64, i64::MAX as f64, false),
+            (u64::MAX as f64, u64::MAX as f64, false),
+            (f64::MAX, f64::MAX, false),
+            // in union
+            (-1.0, 0.0, true),
+            (i64::MIN as f64, 0.0, true),
+            (u64::MIN as f64, 0.0, true),
+            (f64::MIN, 0.0, true),
+            (1.0, 1.0, true),
+            (i64::MAX as f64, i64::MAX as f64, true),
+            (u64::MAX as f64, u64::MAX as f64, true),
+            (f64::MAX, f64::MAX, true),
+        ];
+
+        for (input, result, in_union) in cs {
+            let ia = make_implicit_args(in_union);
+            let rft = make_ret_field_type(true);
+            let extra = make_extra(&rft, &ia);
+            let r = cast_real_as_unsigned_real(&extra, &Real::new(input).ok());
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+        }
+    }
+
+    #[test]
+    fn test_string_as_signed_real() {
+        test_none_with_ctx_and_extra(cast_string_as_signed_real);
+
+        let ul = UNSPECIFIED_LENGTH;
+        let cs: Vec<(String, f64, isize, isize, bool, bool)> = vec![
+            // (input, result, flen, decimal, truncated, overflow)
+            // no special flen and decimal
+            (String::from("99999999"), 99999999f64, ul, ul, false, false),
+            (String::from("1234abc"), 1234f64, ul, ul, true, false),
+            (String::from("-1234abc"), -1234f64, ul, ul, true, false),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                f64::MAX,
+                ul,
+                ul,
+                true,
+                false,
+            ),
+            (
+                (0..401)
+                    .map(|x| if x == 0 { '-' } else { '9' })
+                    .collect::<String>(),
+                f64::MAX,
+                ul,
+                ul,
+                true,
+                false,
+            ),
+            // with special flen and decimal
+            (String::from("99999999"), 99999999f64, 8, 0, false, false),
+            (String::from("99999999"), 99999999f64, 9, 0, false, false),
+            (String::from("99999999"), 9999999f64, 7, 0, false, true),
+            (String::from("99999999"), 999999f64, 8, 2, false, true),
+            (String::from("1234abc"), 0.9f64, 1, 1, false, true),
+            (String::from("-1234abc"), -0.9f64, 1, 1, false, true),
+        ];
+
+        for (input, result, flen, decimal, truncated, overflow) in cs {
+            let mut ctx = make_ctx(true, true, false);
+            let ia = make_implicit_args(false);
+            let rft = make_ret_field_type_2(false, flen, decimal);
+            let extra = make_extra(&rft, &ia);
+            let r = cast_string_as_signed_real(&mut ctx, &extra, &Some(input.clone().into_bytes()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+            check_truncated(&ctx, truncated);
+            check_overflow(&ctx, overflow);
+        }
+    }
+
+    #[test]
+    fn test_string_as_unsigned_real() {
+        test_none_with_ctx_and_extra(cast_string_as_unsigned_real);
+
+        let ul = UNSPECIFIED_LENGTH;
+        let cs: Vec<(String, f64, isize, isize, bool, bool, bool)> = vec![
+            // (input, result, flen, decimal, truncated, overflow, in_union)
+
+            // not in union
+            (
+                String::from("99999999"),
+                99999999f64,
+                ul,
+                ul,
+                false,
+                false,
+                false,
+            ),
+            (String::from("1234abc"), 1234f64, ul, ul, true, false, false),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                f64::MAX,
+                ul,
+                ul,
+                true,
+                false,
+                false,
+            ),
+            // TODO, add test case for negative float to unsigned float
+            // (String::from("-1234abc"), -1234f64, ul, ul, true, false, false),
+            // (
+            //     (0..401)
+            //         .map(|x| if x == 0 { '-' } else { '9' })
+            //         .collect::<String>(),
+            //     f64::MAX, ul, ul, true, false, false,
+            // ),
+            // (String::from("-1234abc"), -1234.0, 4, 0, true, false, false),
+            // (String::from("-1234abc"), -999.9, 4, 1, true, true, false),
+            // (String::from("-1234abc"), -99.99, 4, 2, true, true, false),
+            // (String::from("-1234abc"), -99.9, 3, 1, true, true, false),
+            // (String::from("-1234abc"), -9.999, 4, 3, true, true, false),
+            (
+                String::from("99999999"),
+                99999999f64,
+                8,
+                0,
+                false,
+                false,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                9999999.9,
+                8,
+                1,
+                false,
+                true,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                999999.99,
+                8,
+                2,
+                false,
+                true,
+                false,
+            ),
+            (String::from("99999999"), 999999.9, 7, 1, false, true, false),
+            (String::from("1234abc"), 1234.0, 4, 0, true, false, false),
+            (String::from("1234abc"), 999.9, 4, 1, true, true, false),
+            (String::from("1234abc"), 99.99, 4, 2, true, true, false),
+            (String::from("1234abc"), 99.9, 3, 1, true, true, false),
+            (String::from("1234abc"), 9.999, 4, 3, true, true, false),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                9999999999.0,
+                10,
+                0,
+                true,
+                true,
+                false,
+            ),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                999999999.9,
+                10,
+                1,
+                true,
+                true,
+                false,
+            ),
+            // (
+            //     (0..401)
+            //         .map(|x| if x == 0 { '-' } else { '9' })
+            //         .collect::<String>(),
+            //     f64::MAX, ul, ul, true, false, false,
+            // ),
+
+            // in union
+            // in union and neg
+            (String::from("-190"), 0f64, ul, ul, false, false, true),
+            (String::from("-10abc"), 0f64, ul, ul, true, false, true),
+            (
+                String::from("-1234abc"),
+                -1234f64,
+                ul,
+                ul,
+                true,
+                false,
+                true,
+            ),
+            (
+                String::from("-1234abc"),
+                -1234f64,
+                ul,
+                ul,
+                true,
+                false,
+                false,
+            ),
+            (
+                (0..401)
+                    .map(|x| if x == 0 { '-' } else { '9' })
+                    .collect::<String>(),
+                f64::MAX,
+                ul,
+                ul,
+                true,
+                false,
+                false,
+            ),
+            (String::from("-1234abc"), 0.0, 4, 0, true, false, false),
+            (String::from("-1234abc"), 0.0, 4, 1, true, false, false),
+            (String::from("-1234abc"), 0.0, 4, 2, true, false, false),
+            (String::from("-1234abc"), 0.0, 3, 1, true, false, false),
+            (String::from("-1234abc"), 0.0, 4, 3, true, false, false),
+            (
+                (0..401)
+                    .map(|x| if x == 0 { '-' } else { '9' })
+                    .collect::<String>(),
+                0.0,
+                ul,
+                ul,
+                true,
+                false,
+                false,
+            ),
+            // in union but not neg, so same as not in union
+            (
+                String::from("99999999"),
+                99999999f64,
+                8,
+                0,
+                false,
+                false,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                9999999.9,
+                8,
+                1,
+                false,
+                true,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                999999.99,
+                8,
+                2,
+                false,
+                true,
+                false,
+            ),
+            (String::from("99999999"), 999999.9, 7, 1, false, true, false),
+            (String::from("1234abc"), 1234.0, 4, 0, true, false, false),
+            (String::from("1234abc"), 999.9, 4, 1, true, true, false),
+            (String::from("1234abc"), 99.99, 4, 2, true, true, false),
+            (String::from("1234abc"), 99.9, 3, 1, true, true, false),
+            (String::from("1234abc"), 9.999, 4, 3, true, true, false),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                9999999999.0,
+                10,
+                0,
+                true,
+                true,
+                false,
+            ),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                999999999.9,
+                10,
+                1,
+                true,
+                true,
+                false,
+            ),
+        ];
+
+        for (input, result, flen, decimal, truncated, overflow, in_union) in cs {
+            let mut ctx = make_ctx(true, true, false);
+            let ia = make_implicit_args(in_union);
+            let rft = make_ret_field_type_2(true, flen, decimal);
+            let extra = make_extra(&rft, &ia);
+            let p = Some(input.clone().into_bytes());
+            let r = cast_string_as_unsigned_real(&mut ctx, &extra, &p);
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+            check_truncated(&ctx, truncated);
+            check_overflow(&ctx, overflow)
+        }
+    }
+
+    #[test]
+    fn test_decimal_as_signed_real() {
+        test_none_with_ctx(cast_any_as_any::<Decimal, Int>);
+
+        // because decimal can always be represent by signed real,
+        // so we needn't to check whether get truncated err.
+        let cs = vec![
+            // (input, result)
+            (Decimal::from_f64(-10.0).unwrap(), -10.0),
+            (Decimal::from_f64(i64::MIN as f64).unwrap(), i64::MIN as f64),
+            (Decimal::from_f64(i64::MAX as f64).unwrap(), i64::MAX as f64),
+            (Decimal::from_f64(u64::MAX as f64).unwrap(), u64::MAX as f64),
+        ];
+        for (input, result) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Decimal, Real>(&mut ctx, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+        }
+    }
+
+    #[test]
+    fn test_decimal_as_unsigned_real() {
+        test_none_with_ctx_and_extra(cast_decimal_as_unsigned_real);
+
+        let cs: Vec<(Decimal, f64, bool, bool)> = vec![
+            // (origin, result, in_union, overflow)
+            // not in union
+            (Decimal::from(0), 0.0, false, false),
+            (
+                Decimal::from(9223372036854775807u64),
+                9223372036854775807.0,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_bytes("9223372036854775809".as_bytes())
+                    .unwrap()
+                    .unwrap(),
+                9223372036854775809.0,
+                false,
+                false,
+            ),
+            // TODO, add test case for negative decimal to unsigned real
+
+            // in union
+            (Decimal::from(-1023), 0f64, true, false),
+            (Decimal::from(-10), 0f64, true, false),
+            (Decimal::from(i64::MIN), 0f64, true, false),
+            (Decimal::from(1023), 1023.0, true, false),
+            (Decimal::from(10), 10.0, true, false),
+            (Decimal::from(i64::MAX), i64::MAX as f64, true, false),
+            (Decimal::from(u64::MAX), u64::MAX as f64, true, false),
+            (
+                Decimal::from(1844674407370955161u64),
+                1844674407370955161u64 as f64,
+                true,
+                false,
+            ),
+            (
+                Decimal::from_bytes("18446744073709551616".as_bytes())
+                    .unwrap()
+                    .unwrap(),
+                // 18446744073709551616 - u64::MAX==1,
+                // but u64::MAX as f64 == 18446744073709551616
+                u64::MAX as f64,
+                true,
+                false,
+            ),
+        ];
+
+        for (input, result, in_union, overflow) in cs {
+            let mut ctx = make_ctx(true, false, false);
+            let ia = make_implicit_args(in_union);
+            let rft = make_ret_field_type(true);
+            let extra = make_extra(&rft, &ia);
+            let r = cast_decimal_as_unsigned_real(&mut ctx, &extra, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+            check_overflow(&ctx, overflow);
+        }
+    }
+
+    #[test]
+    fn test_time_as_real() {
+        test_none_with_ctx(cast_any_as_any::<Time, Real>);
+
+        // TODO, add more test case
+        let cs = vec![
+            // (input, result)
+            (Time::parse_utc_datetime("11:11:11", 0).unwrap(), 111111.0),
+            (
+                Time::parse_utc_datetime("11:11:11.6666", 4).unwrap(),
+                111111.6666,
+            ),
+        ];
+
+        for (input, result) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Time, Real>(&mut ctx, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+        }
+    }
+
+    #[test]
+    fn test_duration_as_real() {
+        // TODO, add more test case
+        let cs = vec![
+            // (input, result)
+            (
+                Duration::parse("17:51:04.78".as_bytes(), 2).unwrap(),
+                175104.78,
+            ),
+            (
+                Duration::parse("-17:51:04.78".as_bytes(), 2).unwrap(),
+                -175104.78,
+            ),
+            (
+                Duration::parse("17:51:04.78".as_bytes(), 0).unwrap(),
+                175104.0,
+            ),
+            (
+                Duration::parse("-17:51:04.78".as_bytes(), 0).unwrap(),
+                -175104.0,
+            ),
+        ];
+        for (input, result) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Duration, Real>(&mut ctx, &Some(input));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+        }
+    }
+
+    #[test]
+    fn test_json_as_real() {
+        let cs: Vec<(Json, f64, bool)> = vec![
+            // (input, result, truncated)
+            (Json::Object(BTreeMap::default()), 0f64, false),
+            (Json::Array(vec![]), 0f64, false),
+            (Json::I64(10), 10f64, false),
+            (Json::I64(i64::MAX), i64::MAX as f64, false),
+            (Json::I64(i64::MIN), i64::MIN as f64, false),
+            (Json::U64(0), 0f64, false),
+            (Json::U64(u64::MAX), u64::MAX as f64, false),
+            (Json::Double(f64::MAX), f64::MAX, false),
+            (Json::Double(f64::MIN), f64::MIN, false),
+            (Json::String(String::from("10.0")), 10.0, false),
+            (Json::String(String::from("-10.0")), -10.0, false),
+            (Json::Boolean(true), 1f64, false),
+            (Json::Boolean(false), 0f64, false),
+            (Json::None, 0f64, false),
+            (
+                Json::String((0..500).map(|_| '9').collect::<String>()),
+                f64::MAX,
+                true,
+            ),
+            (
+                Json::String(
+                    (0..500)
+                        .map(|x| if x == 0 { '-' } else { '9' })
+                        .collect::<String>(),
+                ),
+                f64::MIN,
+                true,
+            ),
+        ];
+
+        for (input, result, truncated) in cs {
+            let mut ctx = make_ctx(false, true, false);
+            let r = cast_any_as_any::<Json, Real>(&mut ctx, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            check_result(&input, Some(&result), &r);
+            check_truncated(&ctx, truncated);
+        }
     }
 }

@@ -307,6 +307,7 @@ impl ToInt for Real {
 }
 
 impl ToInt for &[u8] {
+    /// Port from TiDB's types.StrToInt
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
         let s = s.trim();
@@ -329,15 +330,16 @@ impl ToInt for &[u8] {
         }
     }
 
+    /// Port from TiDB's types.StrToUint
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
         let s = s.trim();
-        let vs = get_valid_int_prefix(ctx, s)?;
-        let val = vs.parse::<u64>();
+        let s = get_valid_int_prefix(ctx, s)?;
+        let val = s.parse::<u64>();
         match val {
             Ok(val) => val.to_uint(ctx, tp),
             Err(_) => {
-                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &vs))?;
+                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &s))?;
                 // To make compatible with TiDB,
                 // return `integer_unsigned_upper_bound(tp);` when overflow.
                 // see TiDB's `types.StrToUint` and [strconv.ParseUint](https://golang.org/pkg/strconv/#ParseUint)
@@ -437,6 +439,7 @@ impl ToInt for Duration {
 }
 
 impl ToInt for Json {
+    // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // Casts json to int has different behavior in TiDB/MySQL when the json
@@ -449,8 +452,8 @@ impl ToInt for Json {
             Json::Boolean(true) => Ok(1),
             Json::I64(d) => Ok(d),
             Json::U64(d) => Ok(d as i64),
-            Json::Double(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Json::String(ref s) => s.as_bytes().to_int(ctx, FieldTypeTp::LongLong),
+            Json::Double(d) => d.to_int(ctx, tp),
+            Json::String(ref s) => s.as_bytes().to_int(ctx, tp),
         }?;
         if tp == FieldTypeTp::LongLong {
             Ok(val)
@@ -459,6 +462,7 @@ impl ToInt for Json {
         }
     }
 
+    // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = match *self {
@@ -466,8 +470,8 @@ impl ToInt for Json {
             Json::Boolean(true) => Ok(1u64),
             Json::I64(d) => Ok(d as u64),
             Json::U64(d) => Ok(d),
-            Json::Double(d) => d.to_uint(ctx, FieldTypeTp::LongLong),
-            Json::String(ref s) => s.as_bytes().to_uint(ctx, FieldTypeTp::LongLong),
+            Json::Double(d) => d.to_uint(ctx, tp),
+            Json::String(ref s) => s.as_bytes().to_uint(ctx, tp),
         }?;
         if tp == FieldTypeTp::LongLong {
             Ok(val)
@@ -729,13 +733,21 @@ impl ConvertTo<f64> for u64 {
 }
 
 impl ConvertTo<f64> for &[u8] {
+    /// This function parse the str to float,
+    /// if the num represent by the str is too large,
+    /// it will handle truncated using ctx,
+    /// and return f64::MIN or f64::MAX according to whether isNeg of the str
+    ///
+    /// Port from TiDB's types.StrToFloat
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let s = str::from_utf8(self)?.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
         match vs.parse::<f64>() {
             Ok(val) => {
+                // In rust's parse, if the number is out of range,
+                // it will return Ok but the res is inf
                 if val.is_infinite() {
-                    ctx.handle_overflow_err(Error::overflow("DOUBLE", &vs))?;
+                    ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
                     if val.is_sign_negative() {
                         return Ok(std::f64::MIN);
                     } else {
@@ -744,7 +756,8 @@ impl ConvertTo<f64> for &[u8] {
                 }
                 Ok(val)
             }
-            Err(err) => Err(box_err!("parse float err: {}", err)),
+            // if reaches here, it means our code has bug
+            Err(err) => Err(box_err!("parse float err: {}, this is a bug", err)),
         }
     }
 }
