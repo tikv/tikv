@@ -57,6 +57,7 @@ pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
+pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use tikv_util::future_pool::FuturePool;
@@ -574,6 +575,7 @@ pub struct Options {
     pub is_pessimistic_lock: Vec<bool>,
     // How many keys this transaction involved.
     pub txn_size: u64,
+    pub min_commit_ts: u64,
 }
 
 impl Options {
@@ -587,6 +589,7 @@ impl Options {
             for_update_ts: 0,
             is_pessimistic_lock: vec![],
             txn_size: 0,
+            min_commit_ts: 0,
         }
     }
 

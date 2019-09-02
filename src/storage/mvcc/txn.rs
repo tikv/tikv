@@ -102,6 +102,7 @@ impl<S: Snapshot> MvccTxn<S> {
             short_value,
             options.for_update_ts,
             options.txn_size,
+            options.min_commit_ts,
         )
         .to_bytes();
         self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
