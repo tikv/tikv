@@ -695,8 +695,9 @@ impl ConvertTo<Decimal> for Duration {
     /// if it return err, then the err is because of bug.
     ///
     /// Port from TiDB' Duration::ToNumber
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        Ok(self.to_numeric_string().parse::<Decimal>()?)
+        self.to_numeric_string().parse()
     }
 }
 

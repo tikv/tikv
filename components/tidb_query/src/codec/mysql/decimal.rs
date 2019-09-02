@@ -1519,7 +1519,8 @@ impl Decimal {
     /// `as_i64_with_ctx` returns int part of the decimal.
     pub fn as_i64_with_ctx(&self, ctx: &mut EvalContext) -> Result<i64> {
         let res = self.as_i64();
-        res.into_result(ctx)
+        ctx.handle_truncate(res.is_truncated())?;
+        res.into()
     }
 
     /// `as_u64` returns int part of the decimal
@@ -1548,8 +1549,12 @@ impl Decimal {
 
     // TODO, add test
     pub fn from_f64(val: f64) -> Result<Decimal> {
-        let r = val.to_string();
-        Decimal::from_str(r.as_str())
+        if val.is_infinite() {
+            Err(invalid_type!("{} can't be convert to decimal'", val))
+        } else {
+            let r = val.to_string();
+            Decimal::from_str(r.as_str())
+        }
     }
 
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
