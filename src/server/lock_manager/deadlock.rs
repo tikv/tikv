@@ -5,9 +5,9 @@ use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
-use crate::raftstore::coprocessor::{Coprocessor, CoprocessorHost, ObserverContext, RoleObserver};
+use crate::raftstore::coprocessor::{Coprocessor, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
-use crate::storage::lock_manager::{Detector as LockDetector, Lock, WaiterMgr};
+use crate::storage::lock_manager::Lock;
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
@@ -25,7 +25,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::{Duration, Instant};
-use tikv_util::worker::{FutureRunnable, FutureScheduler, FutureWorker, Stopped};
+use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 
 /// `Locks` is a set of locks belonging to one transaction.
@@ -320,18 +320,16 @@ impl Scheduler {
         });
     }
 
-    fn change_role(&self, role: Role) {
-        self.notify_scheduler(Task::ChangeRole(role));
-    }
-}
-
-impl LockDetector for Scheduler {
-    fn clean_up(&self, txn_ts: u64) {
+    pub fn clean_up(&self, txn_ts: u64) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUp,
             txn_ts,
             lock: Lock::default(),
         });
+    }
+
+    fn change_role(&self, role: Role) {
+        self.notify_scheduler(Task::ChangeRole(role));
     }
 }
 
@@ -349,16 +347,6 @@ impl RoleObserver for Scheduler {
             self.change_role(role.into());
         }
     }
-}
-
-/// Creates a `Scheduler` of the worker and registers it to the `CoprocessorHost` to observe
-/// the role change events of the leader region.
-pub fn register_detector_role_change_observer(
-    host: &mut CoprocessorHost,
-    worker: &FutureWorker<Task>,
-) {
-    let scheduler = Scheduler::new(worker.scheduler());
-    host.registry.register_role_observer(1, Box::new(scheduler));
 }
 
 struct Inner {

@@ -1,25 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::txn::ProcessResult;
-use crate::storage::StorageCb;
-use std::sync::atomic::{AtomicBool, Ordering};
-
 mod util;
 
-pub use self::util::{
-    extract_lock_from_result, extract_raw_key_from_process_result, gen_key_hash, gen_key_hashes,
-};
+pub use self::util::*;
 
-// If it is true, there is no need to calculate keys' hashes and wake up waiters.
-pub static WAIT_TABLE_IS_EMPTY: AtomicBool = AtomicBool::new(true);
-
-pub fn store_wait_table_is_empty(is_empty: bool) {
-    WAIT_TABLE_IS_EMPTY.store(is_empty, Ordering::Relaxed);
-}
-
-pub fn wait_table_is_empty() -> bool {
-    WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed)
-}
+use crate::storage::txn::ProcessResult;
+use crate::storage::StorageCb;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
@@ -27,13 +13,15 @@ pub struct Lock {
     pub hash: u64,
 }
 
-pub trait Detector: Clone + Send + 'static {
-    /// Removes the entries of the transaction.
-    fn clean_up(&self, txn_ts: u64) {}
-}
-
-pub trait WaiterMgr: Clone + Send + 'static {
-    fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {}
+/// `LockMgr` manages transactions waiting for locks holden by other transactions.
+/// It has responsibility to handle deadlocks between transactions.
+pub trait LockMgr: Clone + Send + 'static {
+    /// Transaction with `start_ts` waits for `lock` released.
+    ///
+    /// If the lock is released or waiting times out or deadlock occurs, the transaction
+    /// should be waken up and call `cb` with `pr` to notify the caller.
+    ///
+    /// If the lock is the first lock the transaction waits for, it won't result in deadlock.
     fn wait_for(
         &self,
         start_ts: u64,
@@ -41,16 +29,46 @@ pub trait WaiterMgr: Clone + Send + 'static {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-    ) {
+    );
+
+    /// The locks with `lock_ts` and `hashes` are released, trys to wake up transactions.
+    fn wake_up(
+        &self,
+        lock_ts: u64,
+        hashes: Option<Vec<u64>>,
+        commit_ts: u64,
+        is_pessimistic_txn: bool,
+    );
+
+    /// Returns true if there are waiters in the `LockMgr`.
+    ///
+    /// This function is used to avoid useless calculation and wake-up.
+    fn has_waiter(&self) -> bool {
+        true
     }
 }
 
+// For test
 #[derive(Clone)]
-pub struct DummyDetector {}
+pub struct DummyLockMgr;
 
-impl Detector for DummyDetector {}
+impl LockMgr for DummyLockMgr {
+    fn wait_for(
+        &self,
+        _start_ts: u64,
+        _cb: StorageCb,
+        _pr: ProcessResult,
+        _lock: Lock,
+        _is_first_lock: bool,
+    ) {
+    }
 
-#[derive(Clone)]
-pub struct DummyWaiterMgr {}
-
-impl WaiterMgr for DummyWaiterMgr {}
+    fn wake_up(
+        &self,
+        _lock_ts: u64,
+        _hashes: Option<Vec<u64>>,
+        _commit_ts: u64,
+        _is_pessimistic_txn: bool,
+    ) {
+    }
+}

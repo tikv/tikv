@@ -2,7 +2,7 @@
 
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::txn::Error as TxnError;
+use crate::storage::txn::{Error as TxnError, ProcessResult};
 use crate::storage::Error as StorageError;
 use crate::storage::Key;
 
@@ -45,4 +45,4 @@ mod tests {
         assert_eq!(lock.ts, ts);
         assert_eq!(lock.hash, gen_key_hash(&key));
     }
-}
+
