@@ -19,6 +19,7 @@ use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
+use engine::Engines;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;
@@ -100,9 +101,9 @@ struct SendStat {
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
-fn send_snap(
+fn send_snap<E: Engines>(
     env: Arc<Environment>,
-    mgr: SnapManager,
+    mgr: SnapManager<E>,
     security_mgr: Arc<SecurityManager>,
     cfg: &Config,
     addr: &str,
@@ -181,7 +182,7 @@ struct RecvSnapContext {
 }
 
 impl RecvSnapContext {
-    fn new(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager) -> Result<Self> {
+    fn new<E: Engines>(head_chunk: Option<SnapshotChunk>, snap_mgr: &SnapManager<E>) -> Result<Self> {
         // head_chunk is None means the stream is empty.
         let mut head = head_chunk.ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
         if !head.has_message() {
@@ -217,7 +218,7 @@ impl RecvSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter>(self, raft_router: R) -> Result<()> {
+    fn finish<E: Engines, R: RaftStoreRouter<E>>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -234,10 +235,10 @@ impl RecvSnapContext {
     }
 }
 
-fn recv_snap<R: RaftStoreRouter + 'static>(
+fn recv_snap<R: RaftStoreRouter<E> + 'static, E: Engines>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<E>,
     raft_router: R,
 ) -> impl Future<Item = (), Error = Error> {
     let stream = stream.map_err(Error::from);
@@ -290,9 +291,9 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
     .map_err(Error::from)
 }
 
-pub struct Runner<R: RaftStoreRouter + 'static> {
+pub struct Runner<R: RaftStoreRouter<E> + 'static, E: Engines> {
     env: Arc<Environment>,
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<E>,
     pool: CpuPool,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
@@ -301,15 +302,15 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     recving_count: Arc<AtomicUsize>,
 }
 
-impl<R: RaftStoreRouter + 'static> Runner<R> {
+impl<R: RaftStoreRouter<E> + 'static, E: Engines> Runner<R, E> {
     pub fn new(
         env: Arc<Environment>,
-        snap_mgr: SnapManager,
+        snap_mgr: SnapManager<E>,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<Config>,
-    ) -> Runner<R> {
-        Runner {
+    ) -> Self {
+        Self {
             env,
             snap_mgr,
             pool: CpuPoolBuilder::new()
@@ -325,7 +326,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
     }
 }
 
-impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
+impl<R: RaftStoreRouter<E> + 'static, E: Engines> Runnable<Task> for Runner<R, E> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, sink } => {

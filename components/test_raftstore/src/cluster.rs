@@ -13,9 +13,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
 use tempfile::{Builder, TempDir};
 
-use engine::rocks;
-use engine::rocks::DB;
-use engine::Engines;
+use engine::rocks::{self, DB, RocksEngines};
 use engine::Peekable;
 use engine::CF_DEFAULT;
 use pd_client::PdClient;
@@ -44,9 +42,9 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Engines,
-        router: RaftRouter,
-        system: RaftBatchSystem,
+        engines: RocksEngines,
+        router: RaftRouter<RocksEngines>,
+        system: RaftBatchSystem<RocksEngines>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -58,7 +56,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngines>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -95,8 +93,8 @@ pub struct Cluster<T: Simulator> {
     count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<Engines>,
-    pub engines: HashMap<u64, Engines>,
+    pub dbs: Vec<RocksEngines>,
+    pub engines: HashMap<u64, RocksEngines>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -143,7 +141,7 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine(&raft_path, None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            let engines = Engines::new(engine, raft_engine, cache.is_some());
+            let engines = RocksEngines::new_from_dbs(engine, raft_engine, cache.is_some());
             self.dbs.push(engines);
             self.paths.push(dir);
         }
@@ -224,7 +222,7 @@ impl<T: Simulator> Cluster<T> {
         Arc::clone(&self.engines[&node_id].raft)
     }
 
-    pub fn get_all_engines(&self, node_id: u64) -> Engines {
+    pub fn get_all_engines(&self, node_id: u64) -> RocksEngines {
         self.engines[&node_id].clone()
     }
 
@@ -1002,7 +1000,7 @@ impl<T: Simulator> Cluster<T> {
         router
             .send(
                 region_id,
-                PeerMsg::CasualMessage(CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
+                PeerMsg::CasualMessage(CasualMessage::Test(Box::new(move |peer: &mut PeerFsm<RocksEngines>| {
                     let idx = peer.peer.raft_group.get_store().committed_index();
                     peer.peer.raft_group.request_snapshot(idx).unwrap();
                     debug!("{} request snapshot at {}", idx, peer.peer.tag);

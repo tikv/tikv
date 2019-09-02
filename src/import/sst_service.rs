@@ -4,12 +4,14 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
+use engine::Engines;
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
+use std::marker::PhantomData;
 
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
@@ -26,38 +28,40 @@ use super::{Config, Error, SSTImporter};
 /// It saves the SST sent from client to a file and then sends a command to
 /// raftstore to trigger the ingest process.
 #[derive(Clone)]
-pub struct ImportSSTService<Router> {
+pub struct ImportSSTService<E, Router> {
     cfg: Config,
     router: Router,
     engine: Arc<DB>,
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
+    _e: PhantomData<E>,
 }
 
-impl<Router: RaftStoreRouter> ImportSSTService<Router> {
+impl<E: Engines, Router: RaftStoreRouter<E>> ImportSSTService<E, Router> {
     pub fn new(
         cfg: Config,
         router: Router,
         engine: Arc<DB>,
         importer: Arc<SSTImporter>,
-    ) -> ImportSSTService<Router> {
+    ) -> Self {
         let threads = Builder::new()
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .create();
-        ImportSSTService {
+        Self {
             cfg,
             router,
             engine,
             threads,
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
+            _e: PhantomData,
         }
     }
 }
 
-impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
+impl<E: Engines, Router: RaftStoreRouter<E>> ImportSst for ImportSSTService<E, Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,

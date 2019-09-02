@@ -28,6 +28,7 @@ use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
+use engine::Engines;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
@@ -38,7 +39,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter<E> + 'static, S: StoreAddrResolver + 'static, E: Engines + 'static> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -46,10 +47,10 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
     // Transport.
-    trans: ServerTransport<T, S>,
+    trans: ServerTransport<E, T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<E>,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -58,16 +59,16 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter<EE>, S: StoreAddrResolver + 'static, EE: Engines> Server<T, S, EE> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockMgr>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L>,
+        storage: Storage<E, EE, L>,
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager,
+        snap_mgr: SnapManager<EE>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -141,7 +142,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         Ok(svr)
     }
 
-    pub fn transport(&self) -> ServerTransport<T, S> {
+    pub fn transport(&self) -> ServerTransport<EE, T, S> {
         self.trans.clone()
     }
 
@@ -272,12 +273,13 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct TestRaftStoreRouter {
+    struct TestRaftStoreRouter<E> {
         tx: Sender<usize>,
         significant_msg_sender: Sender<SignificantMsg>,
+        _e: PhantomData<E>,
     }
 
-    impl RaftStoreRouter for TestRaftStoreRouter {
+    impl<E: Engines> RaftStoreRouter<E> for TestRaftStoreRouter<E> {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())

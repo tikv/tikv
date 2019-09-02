@@ -17,6 +17,7 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
 use crate::storage::kv::CompactedEvent;
 use tikv_util::escape;
+use engine::Engines;
 
 use super::RegionSnapshot;
 
@@ -164,7 +165,7 @@ pub enum SignificantMsg {
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage {
+pub enum CasualMessage<E: Engines> {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
@@ -213,10 +214,10 @@ pub enum CasualMessage {
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
-    Test(Box<dyn FnOnce(&mut PeerFsm) + Send + 'static>),
+    Test(Box<dyn FnOnce(&mut PeerFsm<E>) + Send + 'static>),
 }
 
-impl fmt::Debug for CasualMessage {
+impl<E: Engines> fmt::Debug for CasualMessage<E> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
@@ -281,7 +282,7 @@ impl RaftCommand {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg {
+pub enum PeerMsg<E: Engines> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -303,12 +304,12 @@ pub enum PeerMsg {
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage),
+    CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
 }
 
-impl fmt::Debug for PeerMsg {
+impl<E: Engines> fmt::Debug for PeerMsg<E> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
@@ -381,7 +382,7 @@ impl fmt::Debug for StoreMsg {
 
 // TODO: remove this enum and utilize the actual message instead.
 #[derive(Debug)]
-pub enum Msg {
-    PeerMsg(PeerMsg),
+pub enum Msg<E: Engines> {
+    PeerMsg(PeerMsg<E>),
     StoreMsg(StoreMsg),
 }

@@ -2,10 +2,8 @@
 
 use super::setup::*;
 use super::signal_handler;
-use engine::rocks;
-use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use engine::rocks::{RocksEngines};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
-use engine::Engines;
 use fs2::FileExt;
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
@@ -15,7 +13,6 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -82,7 +79,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
     let snap_path = store_path.join(Path::new("snap"));
-    let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
     let import_path = store_path.join("import");
 
     let f = File::create(lock_path.as_path())
@@ -128,26 +124,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create block cache.
     let cache = cfg.storage.block_cache.build_shared_cache();
-
-    // Create raft engine.
-    let mut raft_db_opts = cfg.raftdb.build_opt();
-    if let Some(ref ec) = encrypted_env {
-        raft_db_opts.set_env(ec.clone());
-    }
-    let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
-    let raft_engine = rocks::util::new_engine_opt(
-        raft_db_path,
-        raft_db_opts,
-        raft_db_cf_opts,
-    )
-    .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
-
-    // Create kv engine, storage.
-    let mut kv_db_opts = cfg.rocksdb.build_opt();
-    kv_db_opts.add_event_listener(compaction_listener);
-    if let Some(ec) = encrypted_env {
-        kv_db_opts.set_env(ec);
-    }
+    let shared_block_cache = cache.is_some();
 
     // Before create kv engine we need to check whether it needs to upgrade from v2.x to v3.x.
     // if let Err(e) = tikv::raftstore::store::maybe_upgrade_from_2_to_3(
@@ -160,12 +137,22 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     //     fatal!("failed to upgrade from v2.x to v3.x: {:?}", e);
     // };
 
-    // Create kv engine, storage.
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
-    let kv_engine = rocks::util::new_engine_opt(store_path, kv_db_opts, kv_cfs_opts)
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+    let mut raft_db_opts = cfg.raftdb.build_opt();
+    if let Some(ref ec) = encrypted_env {
+        raft_db_opts.set_env(ec.clone());
+    }
+    let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
 
-    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
+    let mut kv_db_opts = cfg.rocksdb.build_opt();
+    kv_db_opts.add_event_listener(compaction_listener);
+    if let Some(ec) = encrypted_env {
+        kv_db_opts.set_env(ec);
+    }
+
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
+
+    let engines = RocksEngines::new(kv_db_opts, kv_cfs_opts, raft_db_opts, raft_db_cf_opts, 
+        shared_block_cache, &cfg.storage.data_dir, &cfg.raft_store.raftdb_path);
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
     let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
     let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
@@ -282,10 +269,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         fatal!("failed to start auto_gc on storage, error: {}", e);
     }
 
-    let mut metrics_flusher = MetricsFlusher::new(
-        engines.clone(),
-        Duration::from_millis(DEFAULT_FLUSHER_INTERVAL),
-    );
+    // Create new metrics flusher, via a method on engines, which uses RocksDB directly.
+    let mut metrics_flusher = engines.new_metrics_flusher();
 
     // Start metrics flusher
     if let Err(e) = metrics_flusher.start() {

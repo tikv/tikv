@@ -16,7 +16,7 @@ use crc::crc32::{self, Digest, Hasher32};
 use engine::rocks::util::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
 use engine::rocks::Snapshot as DbSnapshot;
 use engine::rocks::DB;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, Engines};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -982,7 +982,7 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter>) {
+fn notify_stats<E: Engines>(ch: Option<&RaftRouter<E>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
             error!(
@@ -995,16 +995,16 @@ fn notify_stats(ch: Option<&RaftRouter>) {
 
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
-pub struct SnapManager {
+pub struct SnapManager<E: Engines> {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
-    router: Option<RaftRouter>,
+    router: Option<RaftRouter<E>>,
     limiter: Option<Arc<IOLimiter>>,
     max_total_size: u64,
 }
 
-impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> SnapManager {
+impl<E: Engines> SnapManager<E> {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<E>>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1282,7 +1282,7 @@ impl SnapManager {
     }
 }
 
-impl SnapshotDeleter for SnapManager {
+impl<E: Engines> SnapshotDeleter for SnapManager<E> {
     fn delete_snapshot(&self, key: &SnapKey, snap: &dyn Snapshot, check_entry: bool) -> bool {
         let core = self.core.rl();
         if check_entry {
@@ -1315,15 +1315,15 @@ pub struct SnapManagerBuilder {
 }
 
 impl SnapManagerBuilder {
-    pub fn max_write_bytes_per_sec(&mut self, bytes: u64) -> &mut SnapManagerBuilder {
+    pub fn max_write_bytes_per_sec(&mut self, bytes: u64) -> &mut Self {
         self.max_write_bytes_per_sec = bytes;
         self
     }
-    pub fn max_total_size(&mut self, bytes: u64) -> &mut SnapManagerBuilder {
+    pub fn max_total_size(&mut self, bytes: u64) -> &mut Self {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
+    pub fn build<T: Into<String>, E: Engines>(&self, path: T, router: Option<RaftRouter<E>>) -> SnapManager<E> {
         let limiter = if self.max_write_bytes_per_sec > 0 {
             Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
         } else {
@@ -2248,7 +2248,7 @@ pub mod tests {
         assert_eq!(mgr.get_total_snap_size(), 0);
     }
 
-    fn check_registry_around_deregister(mgr: SnapManager, key: &SnapKey, entry: &SnapEntry) {
+    fn check_registry_around_deregister(mgr: SnapManager<E>, key: &SnapKey, entry: &SnapEntry) {
         let snap_keys = mgr.list_idle_snap().unwrap();
         assert!(snap_keys.is_empty());
         assert!(mgr.has_registered(key));

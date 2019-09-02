@@ -80,8 +80,8 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm {
-    pub peer: Peer,
+pub struct PeerFsm<E: Engines> {
+    pub peer: Peer<E>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     /// Ticks for speed up campaign in chaos state.
@@ -95,11 +95,11 @@ pub struct PeerFsm {
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
-    mailbox: Option<BasicMailbox<PeerFsm>>,
-    pub receiver: Receiver<PeerMsg>,
+    mailbox: Option<BasicMailbox<Self>>,
+    pub receiver: Receiver<PeerMsg<E>>,
 }
 
-impl Drop for PeerFsm {
+impl<E: Engines> Drop for PeerFsm<E> {
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
@@ -119,7 +119,7 @@ impl Drop for PeerFsm {
     }
 }
 
-impl PeerFsm {
+impl<E: Engines> PeerFsm<E> {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
@@ -127,9 +127,9 @@ impl PeerFsm {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: E,
         region: &metapb::Region,
-    ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
+    ) -> Result<(LooseBoundedSender<PeerMsg<E>>, Box<PeerFsm<E>>)> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -169,10 +169,10 @@ impl PeerFsm {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: E,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
+    ) -> Result<(LooseBoundedSender<PeerMsg<E>>, Box<PeerFsm<E>>)> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
@@ -205,7 +205,7 @@ impl PeerFsm {
     }
 
     #[inline]
-    pub fn get_peer(&self) -> &Peer {
+    pub fn get_peer(&self) -> &Peer<E> {
         &self.peer
     }
 
@@ -232,8 +232,8 @@ impl PeerFsm {
     }
 }
 
-impl Fsm for PeerFsm {
-    type Message = PeerMsg;
+impl<E: Engines> Fsm for PeerFsm<E> {
+    type Message = PeerMsg<E>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -260,17 +260,17 @@ impl Fsm for PeerFsm {
     }
 }
 
-pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm,
-    ctx: &'a mut PollContext<T, C>,
+pub struct PeerFsmDelegate<'a, T: 'static, C: 'static, E: Engines> {
+    fsm: &'a mut PeerFsm<E>,
+    ctx: &'a mut PollContext<T, C, E>,
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    pub fn new(fsm: &'a mut PeerFsm, ctx: &'a mut PollContext<T, C>) -> PeerFsmDelegate<'a, T, C> {
-        PeerFsmDelegate { fsm, ctx }
+impl<'a, T: Transport, C: PdClient, E: Engines> PeerFsmDelegate<'a, T, C, E> {
+    pub fn new(fsm: &'a mut PeerFsm<E>, ctx: &'a mut PollContext<T, C, E>) -> Self {
+        Self { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<E>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -312,7 +312,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<E>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -1102,7 +1102,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(state) = self
             .ctx
             .engines
-            .kv
+            .kv()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
             debug!(
@@ -1714,7 +1714,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let state_key = keys::region_state_key(region_id);
-        let state: RegionLocalState = match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key) {
+        let state: RegionLocalState = match self.ctx.engines.kv().get_msg_cf(CF_RAFT, &state_key) {
             Err(e) => {
                 error!(
                     "failed to load region state, ignore";
@@ -2856,7 +2856,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
+impl<'a, T: Transport, C: PdClient, E: Engines> PeerFsmDelegate<'a, T, C, E> {
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
@@ -3053,7 +3053,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
+impl<'a, T: Transport, C: PdClient, E: Engines> PeerFsmDelegate<'a, T, C, E> {
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current

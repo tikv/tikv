@@ -12,7 +12,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
-use engine::Engines;
+use engine::{rocks::RocksEngines};
 use tikv::config::{CoprReadPoolConfig, StorageReadPoolConfig, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -39,18 +39,18 @@ use tikv_util::worker::{FutureWorker, Worker};
 use super::*;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
-type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
+type SimulateStoreTransport = SimulateTransport<RocksEngines, ServerRaftStoreRouter<RocksEngines>>;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+    SimulateTransport<RocksEngines, ServerTransport<RocksEngines, SimulateStoreTransport, PdStoreAddrResolver>>;
 
-pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
+pub type SimulateEngine = RaftKv<RocksEngines, SimulateStoreTransport>;
 
 struct ServerMeta {
-    node: Node<TestPdClient>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
+    node: Node<TestPdClient, RocksEngines>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver, RocksEngines>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    raw_router: RaftRouter,
+    raw_router: RaftRouter<RocksEngines>,
     worker: Worker<ResolveTask>,
 }
 
@@ -61,7 +61,7 @@ pub struct ServerCluster {
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<RaftStoreBlackHole>,
+    raft_client: RaftClient<RocksEngines, RaftStoreBlackHole>,
     _stats_pool: tokio_threadpool::ThreadPool,
 }
 
@@ -105,9 +105,9 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: TiKvConfig,
-        engines: Engines,
-        router: RaftRouter,
-        system: RaftBatchSystem,
+        engines: RocksEngines,
+        router: RaftRouter<RocksEngines>,
+        system: RaftBatchSystem<RocksEngines>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = Builder::new().prefix("test_cluster").tempdir().unwrap();
@@ -328,7 +328,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngines>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }

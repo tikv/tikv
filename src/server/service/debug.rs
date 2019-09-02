@@ -43,21 +43,21 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter> {
+pub struct Service<T: RaftStoreRouter<E>, E: Engines> {
     pool: CpuPool,
-    debugger: Debugger,
+    debugger: Debugger<E>,
     raft_router: T,
 }
 
-impl<T: RaftStoreRouter> Service<T> {
+impl<T: RaftStoreRouter<E>, E: Engines> Service<T, E> {
     /// Constructs a new `Service` with `Engines` and a `RaftStoreRouter`.
-    pub fn new(engines: Engines, raft_router: T) -> Service<T> {
+    pub fn new(engines: E, raft_router: T) -> Self {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
         let debugger = Debugger::new(engines);
-        Service {
+        Self {
             pool,
             debugger,
             raft_router,
@@ -82,7 +82,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
+impl<T: RaftStoreRouter<E> + 'static, E: Engines> debugpb::Debug for Service<T, E> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -331,8 +331,8 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
             resp.set_prometheus(metrics::dump());
             if req.get_all() {
                 let engines = debugger.get_engine();
-                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
-                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
+                resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(engines.kv())));
+                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(engines.raft())));
                 resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)
@@ -453,7 +453,7 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
     }
 }
 
-fn region_detail<T: RaftStoreRouter>(
+fn region_detail<E: Engines, T: RaftStoreRouter<E>>(
     raft_router: T,
     region_id: u64,
     store_id: u64,
@@ -491,7 +491,7 @@ fn region_detail<T: RaftStoreRouter>(
         })
 }
 
-fn consistency_check<T: RaftStoreRouter>(
+fn consistency_check<E: Engines, T: RaftStoreRouter<E>>(
     raft_router: T,
     mut detail: RegionDetailResponse,
 ) -> impl Future<Item = (), Error = Error> {

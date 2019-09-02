@@ -15,7 +15,7 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-use engine::rocks::{CompactionJobInfo, DB};
+use engine::rocks::{CompactionJobInfo, DB, RocksEngines};
 use engine::*;
 use tikv::config::*;
 use tikv::raftstore::store::fsm::RaftRouter;
@@ -73,7 +73,7 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &RocksEngines, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
@@ -494,10 +494,10 @@ fn dummpy_filter(_: &CompactionJobInfo) -> bool {
 }
 
 pub fn create_test_engine(
-    engines: Option<Engines>,
-    router: RaftRouter,
+    engines: Option<RocksEngines>,
+    router: RaftRouter<RocksEngines>,
     cfg: &TiKvConfig,
-) -> (Engines, Option<TempDir>) {
+) -> (RocksEngines, Option<TempDir>) {
     // Create engine
     let mut path = None;
     let engines = match engines {
@@ -532,7 +532,7 @@ pub fn create_test_engine(
                 rocks::util::new_engine(&raft_path, None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            Engines::new(engine, raft_engine, cache.is_some())
+            RocksEngines::new_from_dbs(engine, raft_engine, cache.is_some())
         }
     };
     (engines, path)

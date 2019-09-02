@@ -24,6 +24,7 @@ use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
+use engine::Engines;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -176,10 +177,10 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<T: PdClient> {
+pub struct Runner<T: PdClient, E: Engines> {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter,
+    router: RaftRouter<E>,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -193,15 +194,15 @@ pub struct Runner<T: PdClient> {
     scheduler: Scheduler<Task>,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<T: PdClient, E: Engines> Runner<T, E> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter,
+        router: RaftRouter<E>,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
-    ) -> Runner<T> {
-        Runner {
+    ) -> Self {
+        Self {
             store_id,
             pd_client,
             router,
@@ -629,7 +630,7 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient, E: Engines> Runnable<Task> for Runner<T, E> {
     fn run(&mut self, task: Task, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
@@ -799,8 +800,8 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request(
-    router: &RaftRouter,
+fn send_admin_request<E: Engines>(
+    router: &RaftRouter<E>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -825,7 +826,7 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::Peer) {
+fn send_merge_fail<E: Engines>(router: &RaftRouter<E>, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
     if let Err(e) = router.send(
         source_region_id,
@@ -842,8 +843,8 @@ fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::P
 }
 
 /// Sends a raft message to destroy the specified stale Peer
-fn send_destroy_peer_message(
-    router: &RaftRouter,
+fn send_destroy_peer_message<E: Engines>(
+    router: &RaftRouter<E>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,

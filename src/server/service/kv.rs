@@ -32,6 +32,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
+use engine::Engines;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
@@ -41,9 +42,9 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
+pub struct Service<T: RaftStoreRouter<EE> + 'static, E: Engine, EE: Engines, L: LockMgr> {
     // For handling KV requests.
-    storage: Storage<E, L>,
+    storage: Storage<E, EE, L>,
     // For handling coprocessor requests.
     cop: Endpoint<E>,
     // For handling raft messages.
@@ -54,16 +55,16 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     thread_load: Arc<ThreadLoad>,
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
+impl<T: RaftStoreRouter<EE> + 'static, E: Engine, EE: Engines, L: LockMgr> Service<T, E, EE, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
-        storage: Storage<E, L>,
+        storage: Storage<E, EE, L>,
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         thread_load: Arc<ThreadLoad>,
     ) -> Self {
-        Service {
+        Self {
             storage,
             cop,
             ch,
@@ -84,7 +85,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E, L> {
+impl<T: RaftStoreRouter<EE> + 'static, E: Engine, EE: Engines, L: LockMgr> Tikv for Service<T, E, EE, L> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
         let future = future_get(&self.storage, req)
@@ -832,7 +833,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
                 .map(|x| Key::from_raw(&x).into_encoded())
                 .collect()
         };
-        let req = CasualMessage::SplitRegion {
+        let req = CasualMessage::<EE>::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
             split_keys,
             callback: Callback::Write(cb),
@@ -1056,8 +1057,8 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
     notify.notify(0);
 }
 
-fn handle_batch_commands_request<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn handle_batch_commands_request<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     cop: &Endpoint<E>,
     peer: &str,
     id: u64,
@@ -1283,8 +1284,8 @@ fn future_handle_empty(
         .map_err(|_| unreachable!())
 }
 
-fn future_get<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_get<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
     storage
@@ -1308,8 +1309,8 @@ fn future_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_scan<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_scan<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: ScanRequest,
 ) -> impl Future<Item = ScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1342,8 +1343,8 @@ fn future_scan<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_prewrite<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_prewrite<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
     let mutations = req
@@ -1385,8 +1386,8 @@ fn future_prewrite<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_acquire_pessimistic_lock<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: PessimisticLockRequest,
 ) -> impl Future<Item = PessimisticLockResponse, Error = Error> {
     let keys = req
@@ -1426,8 +1427,8 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_pessimistic_rollback<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_pessimistic_rollback<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: PessimisticRollbackRequest,
 ) -> impl Future<Item = PessimisticRollbackResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1451,8 +1452,8 @@ fn future_pessimistic_rollback<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_commit<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_commit<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: CommitRequest,
 ) -> impl Future<Item = CommitResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1476,8 +1477,8 @@ fn future_commit<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_cleanup<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_cleanup<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: CleanupRequest,
 ) -> impl Future<Item = CleanupResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1503,8 +1504,8 @@ fn future_cleanup<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_batch_get<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_batch_get<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: BatchGetRequest,
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1521,8 +1522,8 @@ fn future_batch_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_batch_rollback<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_batch_rollback<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: BatchRollbackRequest,
 ) -> impl Future<Item = BatchRollbackResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1541,8 +1542,8 @@ fn future_batch_rollback<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_scan_lock<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_scan_lock<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: ScanLockRequest,
 ) -> impl Future<Item = ScanLockResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1568,8 +1569,8 @@ fn future_scan_lock<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_resolve_lock<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_resolve_lock<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: ResolveLockRequest,
 ) -> impl Future<Item = ResolveLockResponse, Error = Error> {
     let resolve_keys: Vec<Key> = req
@@ -1611,8 +1612,8 @@ fn future_resolve_lock<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_gc<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_gc<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: GcRequest,
 ) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1629,8 +1630,8 @@ fn future_gc<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_delete_range<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_delete_range<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1653,8 +1654,8 @@ fn future_delete_range<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_get<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_get<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawGetRequest,
 ) -> impl Future<Item = RawGetResponse, Error = Error> {
     storage
@@ -1674,8 +1675,8 @@ fn future_raw_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_batch_get<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_batch_get<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
     let keys = req.take_keys().into();
@@ -1692,8 +1693,8 @@ fn future_raw_batch_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_put<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_put<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawPutRequest,
 ) -> impl Future<Item = RawPutResponse, Error = Error> {
     let (cb, future) = paired_future_callback();
@@ -1716,8 +1717,8 @@ fn future_raw_put<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_batch_put<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_batch_put<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawBatchPutRequest,
 ) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
     let cf = req.take_cf();
@@ -1741,8 +1742,8 @@ fn future_raw_batch_put<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_delete<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_delete<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -1759,8 +1760,8 @@ fn future_raw_delete<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_batch_delete<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_batch_delete<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
     let cf = req.take_cf();
@@ -1779,8 +1780,8 @@ fn future_raw_batch_delete<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_scan<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_scan<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawScanRequest,
 ) -> impl Future<Item = RawScanResponse, Error = Error> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1809,8 +1810,8 @@ fn future_raw_scan<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_batch_scan<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawBatchScanRequest,
 ) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
     storage
@@ -1833,8 +1834,8 @@ fn future_raw_batch_scan<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_delete_range<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_raw_delete_range<E: Engine, EE: Engines, L: LockMgr>(
+    storage: &Storage<E, EE, L>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();

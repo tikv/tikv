@@ -23,7 +23,7 @@ use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
-use engine::rocks;
+use engine::rocks::{self, RocksEngines};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -89,7 +89,7 @@ fn new_debug_executor(
             let raft_db = rocks::util::new_engine_opt(Path::new(&raft_path), raft_db_opts, 
                     raft_db_cf_opts).unwrap();
 
-            Box::new(Debugger::new(Engines::new(
+            Box::new(Debugger::new(RocksEngines::new_from_dbs(
                 Arc::new(kv_db),
                 Arc::new(raft_db),
                 cache.is_some(),
@@ -767,7 +767,7 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl DebugExecutor for Debugger {
+impl<E: Engines> DebugExecutor for Debugger<E> {
     fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {

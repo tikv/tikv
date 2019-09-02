@@ -4,10 +4,11 @@ use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine::util;
-use engine::CF_WRITE;
+use engine::{CF_WRITE, Engines};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::Mutex;
+use std::marker::PhantomData;
 
 use super::super::error::Result;
 use super::super::metrics::*;
@@ -81,32 +82,34 @@ impl SplitChecker for Checker {
     }
 }
 
-pub struct KeysCheckObserver<C> {
+pub struct KeysCheckObserver<E, C> {
     region_max_keys: u64,
     split_keys: u64,
     batch_split_limit: u64,
     router: Mutex<C>,
+    _e: PhantomData<E>,
 }
 
-impl<C: CasualRouter> KeysCheckObserver<C> {
+impl<E: Engines, C: CasualRouter<E> + Send> KeysCheckObserver<E, C> {
     pub fn new(
         region_max_keys: u64,
         split_keys: u64,
         batch_split_limit: u64,
         router: C,
-    ) -> KeysCheckObserver<C> {
-        KeysCheckObserver {
+    ) -> Self {
+        Self {
             region_max_keys,
             split_keys,
             batch_split_limit,
             router: Mutex::new(router),
+            _e: PhantomData,
         }
     }
 }
 
-impl<C> Coprocessor for KeysCheckObserver<C> {}
+impl<E, C> Coprocessor for KeysCheckObserver<E, C> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<E: Engines, C: CasualRouter<E> + Send> SplitCheckObserver for KeysCheckObserver<E, C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,

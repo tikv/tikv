@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
+use engine::Engines;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -119,7 +120,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: CasualRouter + Clone + Send + 'static>(cfg: Config, ch: C) -> CoprocessorHost {
+    pub fn new<E: Engines, C: CasualRouter<E> + Clone + Send + 'static>(cfg: Config, ch: C) -> Self {
         let mut registry = Registry::default();
         let split_size_check_observer = SizeCheckObserver::new(
             cfg.region_max_size.0,
@@ -145,7 +146,7 @@ impl CoprocessorHost {
         if cfg.split_region_on_table {
             registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
         }
-        CoprocessorHost { registry }
+        Self { registry }
     }
 
     /// Call all prepose hooks until bypass is set to true.

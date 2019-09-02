@@ -203,16 +203,16 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext {
-    engines: Engines,
+struct SnapContext<E: Engines> {
+    engines: E,
     batch_size: usize,
-    mgr: SnapManager,
+    mgr: SnapManager<E>,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
 }
 
-impl SnapContext {
+impl<E: Engines> SnapContext<E> {
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
@@ -273,7 +273,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv().get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -290,7 +290,7 @@ impl SnapContext {
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
         box_try!(engine_util::delete_all_in_range(
-            &self.engines.kv,
+            self.engines.kv(),
             &start_key,
             &end_key,
             self.use_delete_range
@@ -299,7 +299,7 @@ impl SnapContext {
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv().get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -322,7 +322,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: Arc::clone(&self.engines.kv),
+            db: Arc::clone(self.engines.kv()),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -331,10 +331,10 @@ impl SnapContext {
 
         let wb = WriteBatch::default();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
+        let handle = box_try!(rocks::util::get_cf_handle(self.engines.kv(), CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(&wb).unwrap_or_else(|e| {
+        self.engines.kv().write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -389,7 +389,7 @@ impl SnapContext {
     ) {
         if use_delete_files {
             if let Err(e) =
-                engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
+                engine_util::delete_all_files_in_range(self.engines.kv(), start_key, end_key)
             {
                 error!(
                     "failed to delete files in range";
@@ -402,7 +402,7 @@ impl SnapContext {
             }
         }
         if let Err(e) = engine_util::delete_all_in_range(
-            &self.engines.kv,
+            self.engines.kv(),
             start_key,
             end_key,
             self.use_delete_range,
@@ -503,9 +503,9 @@ impl SnapContext {
                 continue;
             }
 
-            let handle = rocks::util::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = rocks::util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
-                let options = self.engines.kv.get_options_cf(handle);
+            let handle = rocks::util::get_cf_handle(self.engines.kv(), cf).unwrap();
+            if let Some(n) = rocks::util::get_cf_num_files_at_level(self.engines.kv(), handle, 0) {
+                let options = self.engines.kv().get_options_cf(handle);
                 let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
                 // Leave enough buffer to tolerate heavy write workload,
                 // which may flush some memtables in a short time.
@@ -518,24 +518,24 @@ impl SnapContext {
     }
 }
 
-pub struct Runner {
+pub struct Runner<E: Engines> {
     pool: ThreadPool<DefaultContext>,
-    ctx: SnapContext,
+    ctx: SnapContext<E>,
 
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task>,
 }
 
-impl Runner {
+impl<E: Engines> Runner<E> {
     pub fn new(
-        engines: Engines,
-        mgr: SnapManager,
+        engines: E,
+        mgr: SnapManager<E>,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
-    ) -> Runner {
-        Runner {
+    ) -> Self {
+        Self {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
                 .thread_count(GENERATE_POOL_SIZE)
                 .build(),
@@ -579,7 +579,7 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
+impl<E: Engines> Runnable<Task> for Runner<E> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Gen {
@@ -637,7 +637,7 @@ pub enum Event {
     CheckApply,
 }
 
-impl RunnableWithTimer<Task, Event> for Runner {
+impl<E: Engines> RunnableWithTimer<Task, Event> for Runner<E> {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {

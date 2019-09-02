@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
-use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE, Engines};
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
@@ -127,21 +127,21 @@ impl Display for GCTask {
 }
 
 /// Used to perform GC operations on the engine.
-struct GCRunner<E: Engine> {
+struct GCRunner<E: Engine, EE: Engines> {
     engine: E,
     local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<EE>>,
 
     ratio_threshold: f64,
 
     stats: Statistics,
 }
 
-impl<E: Engine> GCRunner<E> {
+impl<E: Engine, EE: Engines> GCRunner<E, EE> {
     pub fn new(
         engine: E,
         local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        raft_store_router: Option<ServerRaftStoreRouter<EE>>,
         ratio_threshold: f64,
     ) -> Self {
         Self {
@@ -408,7 +408,7 @@ impl<E: Engine> GCRunner<E> {
     }
 }
 
-impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
+impl<E: Engine, EE: Engines> Runnable<GCTask> for GCRunner<E, EE> {
     #[inline]
     fn run(&mut self, task: GCTask) {
         self.handle_gc_worker_task(task);
@@ -1050,12 +1050,12 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
 /// Used to schedule GC operations.
 #[derive(Clone)]
-pub struct GCWorker<E: Engine> {
+pub struct GCWorker<E: Engine, EE: Engines> {
     engine: E,
     /// `local_storage` represent the underlying RocksDB of the `engine`.
     local_storage: Option<Arc<DB>>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<EE>>,
 
     ratio_threshold: f64,
 
@@ -1065,20 +1065,20 @@ pub struct GCWorker<E: Engine> {
     gc_manager_handle: Arc<Mutex<Option<GCManagerHandle>>>,
 }
 
-impl<E: Engine> GCWorker<E> {
+impl<E: Engine, EE: Engines> GCWorker<E, EE> {
     pub fn new(
         engine: E,
         local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        raft_store_router: Option<ServerRaftStoreRouter<EE>>,
         ratio_threshold: f64,
-    ) -> GCWorker<E> {
+    ) -> Self {
         let worker = Arc::new(Mutex::new(
             WorkerBuilder::new("gc-worker")
                 .pending_capacity(GC_MAX_PENDING_TASKS)
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
-        GCWorker {
+        Self {
             engine,
             local_storage,
             raft_store_router,

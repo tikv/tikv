@@ -10,6 +10,9 @@ pub use util::DEFAULT_ROCKSDB_SUB_DIR;
 mod snapshot;
 pub use self::snapshot::*;
 
+mod engines;
+pub use engines::RocksEngines;
+
 pub use engine_rocksdb::rocksdb_options::UnsafeSnap;
 pub use engine_rocksdb::{
     load_latest_options, rocksdb::supported_compression, run_ldb_tool,

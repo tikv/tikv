@@ -5,11 +5,11 @@ mod imp {
     use libc::c_int;
 
     use engine::rocks::util::stats as rocksdb_stats;
-    use engine::Engines;
+    use engine::rocks::RocksEngines;
     use tikv_util::metrics;
 
     #[allow(dead_code)]
-    pub fn handle_signal(engines: Option<Engines>) {
+    pub fn handle_signal(engines: Option<RocksEngines>) {
         use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
         use signal::trap::Trap;
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);

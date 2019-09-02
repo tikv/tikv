@@ -37,14 +37,14 @@ fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Re
 }
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Result<()> {
+pub fn bootstrap_store<E: Engines>(engines: &E, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::default();
 
-    if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
+    if !is_range_empty(engines.kv(), CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!("kv store is not empty and has already had data."));
     }
 
-    if !is_range_empty(&engines.raft, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
+    if !is_range_empty(engines.raft(), CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!(
             "raft store is not empty and has already had data."
         ));
@@ -53,7 +53,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     ident.set_cluster_id(cluster_id);
     ident.set_store_id(store_id);
 
-    engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
+    engines.kv().put_msg(keys::STORE_IDENT_KEY, &ident)?;
     engines.sync_kv()?;
     Ok(())
 }
@@ -61,15 +61,15 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
 /// The first phase of bootstrap cluster
 ///
 /// Write the first region meta and prepare state.
-pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> Result<()> {
+pub fn prepare_bootstrap_cluster<E: Engines>(engines: &E, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::default();
     state.set_region(region.clone());
 
     let wb = WriteBatch::default();
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
-    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
+    let handle = rocks::util::get_cf_handle(engines.kv(), CF_RAFT)?;
     box_try!(wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state));
-    write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
+    write_initial_apply_state(engines.kv(), &wb, region.get_id())?;
     engines.write_kv(&wb)?;
     engines.sync_kv()?;
 
@@ -81,14 +81,14 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
 }
 
 // Clear first region meta and prepare key.
-pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Result<()> {
-    box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
+pub fn clear_prepare_bootstrap_cluster<E: Engines>(engines: &E, region_id: u64) -> Result<()> {
+    box_try!(engines.raft().delete(&keys::raft_state_key(region_id)));
     engines.sync_raft()?;
 
     let wb = WriteBatch::default();
     box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
     // should clear raft initial state too.
-    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
+    let handle = rocks::util::get_cf_handle(engines.kv(), CF_RAFT)?;
     box_try!(wb.delete_cf(handle, &keys::region_state_key(region_id)));
     box_try!(wb.delete_cf(handle, &keys::apply_state_key(region_id)));
     engines.write_kv(&wb)?;
@@ -97,8 +97,8 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
 }
 
 // Clear prepare key
-pub fn clear_prepare_bootstrap_key(engines: &Engines) -> Result<()> {
-    box_try!(engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY));
+pub fn clear_prepare_bootstrap_key<E: Engines>(engines: &E) -> Result<()> {
+    box_try!(engines.kv().delete(keys::PREPARE_BOOTSTRAP_KEY));
     engines.sync_kv()?;
     Ok(())
 }

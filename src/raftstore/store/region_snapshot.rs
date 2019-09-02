@@ -3,7 +3,7 @@
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use engine::{
     self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
-    SyncSnapshot,
+    SyncSnapshot, Engines,
 };
 use kvproto::metapb::Region;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ pub struct RegionSnapshot {
 }
 
 impl RegionSnapshot {
-    pub fn new(ps: &PeerStorage) -> RegionSnapshot {
+    pub fn new<E: Engines>(ps: &PeerStorage<E>) -> RegionSnapshot {
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
@@ -392,12 +392,12 @@ mod tests {
         )
     }
 
-    fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
+    fn new_peer_storage<E>(engines: Engines, r: &Region) -> PeerStorage<E> {
         let (sched, _) = worker::dummy_scheduler();
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
-    fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+    fn load_default_dataset<E>(engines: Engines) -> (PeerStorage<E>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -419,7 +419,7 @@ mod tests {
         (store, base_data)
     }
 
-    fn load_multiple_levels_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+    fn load_multiple_levels_dataset<E: Engines>(engines: E) -> (PeerStorage<E>, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);

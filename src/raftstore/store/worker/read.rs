@@ -20,7 +20,7 @@ use crate::raftstore::store::{
     RequestPolicy,
 };
 use crate::raftstore::Result;
-use engine::DB;
+use engine::{Engines, DB};
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
@@ -42,7 +42,7 @@ pub struct ReadDelegate {
 }
 
 impl ReadDelegate {
-    pub fn from_peer(peer: &Peer) -> ReadDelegate {
+    pub fn from_peer<E: Engines>(peer: &Peer<E>) -> ReadDelegate {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
@@ -167,9 +167,9 @@ pub struct LocalReader<C: ProposalRouter> {
     tag: String,
 }
 
-impl LocalReader<RaftRouter> {
-    pub fn new(kv_engine: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter) -> Self {
-        LocalReader {
+impl<E: Engines> LocalReader<RaftRouter<E>> {
+    pub fn new(kv_engine: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter<E>) -> Self {
+        Self {
             store_meta,
             kv_engine,
             router,

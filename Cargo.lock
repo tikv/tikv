@@ -2684,6 +2684,7 @@ dependencies = [
 name = "test_storage"
 version = "0.0.1"
 dependencies = [
+ "engine 0.0.1",
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "test_raftstore 0.0.1",

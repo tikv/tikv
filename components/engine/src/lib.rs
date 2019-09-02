@@ -17,6 +17,7 @@ extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 pub mod util;
@@ -39,43 +40,50 @@ pub use crate::cf::*;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
 
-#[derive(Clone, Debug)]
-pub struct Engines {
-    pub kv: Arc<DB>,
-    pub raft: Arc<DB>,
-    pub shared_block_cache: bool,
+// This is for the DB and write batches to share the same API
+trait Writable {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()>;
+    fn put_cf(&self, cf: &CFHandle, key: &[u8], value: &[u8]) -> Result<()>;
+    fn merge(&self, key: &[u8], value: &[u8]) -> Result<()>;
+    fn merge_cf(&self, cf: &CFHandle, key: &[u8], value: &[u8]) -> Result<()>;
+    fn delete(&self, key: &[u8]) -> Result<()>;
+    fn delete_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<()>;
+    fn single_delete(&self, key: &[u8]) -> Result<()>;
+    fn single_delete_cf(&self, cf: &CFHandle, key: &[u8]) -> Result<()>;
+    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()>;
+    fn delete_range_cf(
+        &self,
+        cf: &CFHandle,
+        begin_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<()>;
 }
 
-impl Engines {
-    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>, shared_block_cache: bool) -> Engines {
-        Engines {
-            kv: kv_engine,
-            raft: raft_engine,
-            shared_block_cache,
-        }
-    }
+/// Key-Value Store engine.
+pub trait KvEngine: std::fmt::Debug + Clone + Sync + Send {
+    fn write(&self, batch: &WriteBatch) -> Result<()>;
 
-    pub fn write_kv(&self, wb: &WriteBatch) -> Result<()> {
-        self.kv.write(wb).map_err(Error::RocksDb)
-    }
+    fn write_opt(&self, batch: &WriteBatch, writeopts: &WriteOptions) -> Result<()>;
 
-    pub fn write_kv_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.kv.write_opt(wb, opts).map_err(Error::RocksDb)
-    }
+    fn sync_wal(&self) -> Result<()>;
+}
 
-    pub fn sync_kv(&self) -> Result<()> {
-        self.kv.sync_wal().map_err(Error::RocksDb)
-    }
+pub trait Engines: Clone + Debug + Send + Sync + 'static {
+    fn shared_block_cache(&self) -> bool;
 
-    pub fn write_raft(&self, wb: &WriteBatch) -> Result<()> {
-        self.raft.write(wb).map_err(Error::RocksDb)
-    }
+    fn write_kv(&self, wb: &WriteBatch) -> Result<()>;
 
-    pub fn write_raft_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.raft.write_opt(wb, opts).map_err(Error::RocksDb)
-    }
+    fn write_kv_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()>;
 
-    pub fn sync_raft(&self) -> Result<()> {
-        self.raft.sync_wal().map_err(Error::RocksDb)
-    }
+    fn sync_kv(&self) -> Result<()>;
+
+    fn write_raft(&self, wb: &WriteBatch) -> Result<()>;
+
+    fn write_raft_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()>;
+
+    fn sync_raft(&self) -> Result<()>;
+
+    fn kv(&self) -> &Arc<DB>;
+
+    fn raft(&self) -> &Arc<DB>;
 }

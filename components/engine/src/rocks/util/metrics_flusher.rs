@@ -6,24 +6,27 @@ use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::rocks::util::engine_metrics::*;
-use crate::rocks::DB;
-use crate::Engines;
+use crate::rocks::{DB, util::engine_metrics::*};
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
 
 pub struct MetricsFlusher {
-    engines: Engines,
+    kv: Arc<DB>,
+    raft: Arc<DB>,
+    shared_block_cache: bool,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
     interval: Duration,
 }
 
 impl MetricsFlusher {
-    pub fn new(engines: Engines, interval: Duration) -> MetricsFlusher {
-        MetricsFlusher {
-            engines,
+    pub fn new(kv: Arc<DB>, raft: Arc<DB>, shared_block_cache: bool, 
+        interval: Duration) -> Self {
+        Self {
+            kv,
+            raft,
+            shared_block_cache,
             handle: None,
             sender: None,
             interval,
@@ -31,12 +34,12 @@ impl MetricsFlusher {
     }
 
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let db = Arc::clone(&self.engines.kv);
-        let raft_db = Arc::clone(&self.engines.raft);
+        let db = Arc::clone(&self.kv);
+        let raft_db = Arc::clone(&self.raft);
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
-        let shared_block_cache = self.engines.shared_block_cache;
         self.sender = Some(tx);
+        let shared_block_cache = self.shared_block_cache.clone();
         let h = Builder::new()
             .name("rocksdb-metrics".to_owned())
             .spawn(move || {
@@ -70,7 +73,7 @@ impl MetricsFlusher {
     }
 }
 
-fn flush_metrics(db: &DB, name: &str, shared_block_cache: bool) {
+fn flush_metrics(db: &Arc<DB>, name: &str, shared_block_cache: bool) {
     for t in ENGINE_TICKER_TYPES {
         let v = db.get_and_reset_statistics_ticker_count(*t);
         flush_engine_ticker_metrics(*t, v, name);

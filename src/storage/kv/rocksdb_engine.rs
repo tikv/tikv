@@ -5,9 +5,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use engine::rocks;
-use engine::rocks::util::CFOptions;
-use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
+use engine::rocks::{self, ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB, util::CFOptions, RocksEngines};
 use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -44,7 +42,7 @@ impl Display for Task {
     }
 }
 
-struct Runner(Engines);
+struct Runner(RocksEngines);
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
@@ -52,7 +50,7 @@ impl Runnable<Task> for Runner {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
             Task::Snapshot(cb) => cb((
                 CbContext::new(),
-                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
+                Ok(RocksSnapshot::new(self.0.kv().clone())),
             )),
         }
     }
@@ -81,7 +79,7 @@ impl Drop for RocksEngineCore {
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
-    engines: Engines,
+    engines: RocksEngines,
 }
 
 impl RocksEngine {
@@ -103,7 +101,7 @@ impl RocksEngine {
         let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(db.clone(), db, shared_block_cache);
+        let engines = RocksEngines::new_from_dbs(db.clone(), db, shared_block_cache);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -113,7 +111,7 @@ impl RocksEngine {
     }
 
     pub fn get_rocksdb(&self) -> Arc<DB> {
-        Arc::clone(&self.engines.kv)
+        self.engines.kv().clone()
     }
 
     pub fn stop(&self) {
@@ -196,7 +194,7 @@ impl TestEngineBuilder {
     }
 }
 
-fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
+fn write_modifies(engine: &RocksEngines, modifies: Vec<Modify>) -> Result<()> {
     let wb = WriteBatch::default();
     for rev in modifies {
         let res = match rev {
@@ -206,7 +204,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.delete(k.as_encoded())
                 } else {
                     trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
+                    let handle = rocks::util::get_cf_handle(engine.kv(), cf)?;
                     wb.delete_cf(handle, k.as_encoded())
                 }
             }
@@ -216,7 +214,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     wb.put(k.as_encoded(), &v)
                 } else {
                     trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
+                    let handle = rocks::util::get_cf_handle(engine.kv(), cf)?;
                     wb.put_cf(handle, k.as_encoded(), &v)
                 }
             }
@@ -229,7 +227,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
                     "notify_only" => notify_only,
                 );
                 if !notify_only {
-                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
+                    let handle = rocks::util::get_cf_handle(engine.kv(), cf)?;
                     wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
                 } else {
                     Ok(())

@@ -18,6 +18,7 @@ use tikv::raftstore::{DiscardReason, Error, Result};
 use tikv::server::transport::*;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
+use engine::Engines;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -121,16 +122,18 @@ impl Filter for DelayFilter {
 }
 
 #[derive(Clone)]
-pub struct SimulateTransport<C> {
+pub struct SimulateTransport<E, C> {
     filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
     ch: C,
+    _e: PhantomData<E>,
 }
 
-impl<C> SimulateTransport<C> {
-    pub fn new(ch: C) -> SimulateTransport<C> {
-        SimulateTransport {
+impl<E, C> SimulateTransport<E, C> {
+    pub fn new(ch: C) -> Self {
+        Self {
             filters: Arc::new(RwLock::new(vec![])),
             ch,
+            _e: PhantomData,
         }
     }
 
@@ -176,7 +179,7 @@ where
     res
 }
 
-impl<C: Transport> Transport for SimulateTransport<C> {
+impl<E: Engines, C: Transport> Transport for SimulateTransport<E, C> {
     fn send(&mut self, m: RaftMessage) -> Result<()> {
         let ch = &mut self.ch;
         filter_send(&self.filters, m, |m| ch.send(m))
@@ -187,7 +190,7 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
+impl<E: Engines, C: RaftStoreRouter<E>> RaftStoreRouter<E> for SimulateTransport<E, C> {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
@@ -196,7 +199,7 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
         self.ch.send_command(req, cb)
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()> {
         self.ch.casual_send(region_id, msg)
     }
 

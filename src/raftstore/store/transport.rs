@@ -5,6 +5,7 @@ use crate::raftstore::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
+use engine::Engines;
 
 /// Transports messages between different Raft peers.
 pub trait Transport: Send + Clone {
@@ -16,8 +17,8 @@ pub trait Transport: Send + Clone {
 /// Routes message to target region.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait CasualRouter {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()>;
+pub trait CasualRouter<E: Engines> {
+    fn send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -32,9 +33,9 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl CasualRouter for RaftRouter {
+impl<E: Engines> CasualRouter<E> for RaftRouter<E> {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()> {
         match RaftRouter::send(self, region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -43,14 +44,14 @@ impl CasualRouter for RaftRouter {
     }
 }
 
-impl ProposalRouter for RaftRouter {
+impl<E: Engines> ProposalRouter for RaftRouter<E> {
     #[inline]
     fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>> {
         self.send_raft_command(cmd)
     }
 }
 
-impl StoreRouter for RaftRouter {
+impl<E: Engines> StoreRouter for RaftRouter<E> {
     #[inline]
     fn send(&self, msg: StoreMsg) -> Result<()> {
         match self.send_control(msg) {
@@ -63,8 +64,8 @@ impl StoreRouter for RaftRouter {
     }
 }
 
-impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage)> {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+impl<E: Engines> CasualRouter<E> for mpsc::SyncSender<(u64, CasualMessage<E>)> {
+    fn send(&self, region_id: u64, msg: CasualMessage<E>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {

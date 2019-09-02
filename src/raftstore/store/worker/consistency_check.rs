@@ -1,13 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 use kvproto::metapb::Region;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use engine::CF_RAFT;
+use engine::{CF_RAFT, Engines};
 use engine::{Iterable, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
@@ -43,13 +44,14 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C: CasualRouter> {
+pub struct Runner<E, C> {
     router: C,
+    _e: PhantomData<E>,
 }
 
-impl<C: CasualRouter> Runner<C> {
-    pub fn new(router: C) -> Runner<C> {
-        Runner { router }
+impl<E: Engines, C: CasualRouter<E>> Runner<E, C> {
+    pub fn new(router: C) -> Self {
+        Self { router, _e: PhantomData, }
     }
 
     /// Computes the hash of the Region.
@@ -128,7 +130,7 @@ impl<C: CasualRouter> Runner<C> {
     }
 }
 
-impl<C: CasualRouter> Runnable<Task> for Runner<C> {
+impl<E: Engines, C: CasualRouter<E>> Runnable<Task> for Runner<E, C> {
     fn run(&mut self, task: Task) {
         match task {
             Task::ComputeHash {

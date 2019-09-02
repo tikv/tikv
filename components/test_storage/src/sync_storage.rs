@@ -12,6 +12,7 @@ use tikv::storage::{
 };
 use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv_util::collections::HashMap;
+use engine::rocks::{RocksEngines};
 
 /// A builder to build a `SyncTestStorage`.
 ///
@@ -59,7 +60,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
-    store: Storage<E, DummyLockMgr>,
+    store: Storage<E, RocksEngines, DummyLockMgr>,
 }
 
 impl<E: Engine> SyncTestStorage<E> {
@@ -70,7 +71,7 @@ impl<E: Engine> SyncTestStorage<E> {
         self.store.start_auto_gc(cfg).unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockMgr> {
+    pub fn get_storage(&self) -> Storage<E, RocksEngines, DummyLockMgr> {
         self.store.clone()
     }
 

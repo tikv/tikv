@@ -24,12 +24,13 @@ use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::worker::FutureWorker;
 
+use engine::rocks::RocksEngines;
 use super::*;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter>>,
+    snap_paths: HashMap<u64, (SnapManager<RocksEngines>, TempDir)>,
+    routers: HashMap<u64, SimulateTransport<RocksEngines, ServerRaftStoreRouter<RocksEngines>>>,
 }
 
 #[derive(Clone)]
@@ -110,12 +111,12 @@ impl Transport for ChannelTransport {
     fn flush(&mut self) {}
 }
 
-type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
+type SimulateChannelTransport = SimulateTransport<RocksEngines, ChannelTransport>;
 
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient>>,
+    nodes: HashMap<u64, Node<TestPdClient, RocksEngines>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost)>>,
 }
@@ -134,7 +135,7 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
-    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<ServerRaftStoreRouter> {
+    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<RocksEngines, ServerRaftStoreRouter<RocksEngines>> {
         self.trans
             .core
             .lock()
@@ -152,7 +153,7 @@ impl NodeCluster {
         self.post_create_coprocessor_host = Some(op)
     }
 
-    pub fn get_node(&mut self, node_id: u64) -> Option<&mut Node<TestPdClient>> {
+    pub fn get_node(&mut self, node_id: u64) -> Option<&mut Node<TestPdClient, RocksEngines>> {
         self.nodes.get_mut(&node_id)
     }
 }
@@ -162,9 +163,9 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Engines,
-        router: RaftRouter,
-        system: RaftBatchSystem,
+        engines: RocksEngines,
+        router: RaftRouter<RocksEngines>,
+        system: RaftBatchSystem<RocksEngines>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = FutureWorker::new("test-pd-worker");
@@ -338,7 +339,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngines>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }

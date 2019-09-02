@@ -5,9 +5,10 @@ use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
+use std::marker::PhantomData;
 
 use engine::rocks::DBIterator;
-use engine::{CfName, CF_WRITE, LARGE_CFS};
+use engine::{CfName, CF_WRITE, LARGE_CFS, Engines};
 use engine::{IterOption, Iterable, DB};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
@@ -147,18 +148,20 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<S> {
+pub struct Runner<E, S> {
     engine: Arc<DB>,
     router: S,
     coprocessor: Arc<CoprocessorHost>,
+    _e: PhantomData<E>,
 }
 
-impl<S: CasualRouter> Runner<S> {
-    pub fn new(engine: Arc<DB>, router: S, coprocessor: Arc<CoprocessorHost>) -> Runner<S> {
-        Runner {
+impl<E: Engines, S: CasualRouter<E>> Runner<E, S> {
+    pub fn new(engine: Arc<DB>, router: S, coprocessor: Arc<CoprocessorHost>) -> Self {
+        Self {
             engine,
             router,
             coprocessor,
+            _e: PhantomData,
         }
     }
 
@@ -264,13 +267,13 @@ impl<S: CasualRouter> Runner<S> {
     }
 }
 
-impl<S: CasualRouter> Runnable<Task> for Runner<S> {
+impl<E: Engines, S: CasualRouter<E>> Runnable<Task> for Runner<E, S> {
     fn run(&mut self, task: Task) {
         self.check_split(task);
     }
 }
 
-fn new_split_region(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage {
+fn new_split_region<E: Engines>(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<E> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

@@ -22,8 +22,8 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc};
 use std::{cmp, error, u64};
 
-use engine::rocks::DB;
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::rocks::{DB, RocksEngines};
+use engine::{IterOption, DATA_KEY_PREFIX_LEN, Engines};
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
@@ -605,7 +605,7 @@ pub struct TestStorageBuilder<E: Engine> {
     engine: E,
     config: Config,
     local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<RocksEngines>>,
 }
 
 impl TestStorageBuilder<RocksEngine> {
@@ -649,13 +649,13 @@ impl<E: Engine> TestStorageBuilder<E> {
     /// Set raft store router for GCWorker.
     ///
     /// By default, `None` will be used.
-    pub fn raft_store_router(mut self, raft_store_router: ServerRaftStoreRouter) -> Self {
+    pub fn raft_store_router(mut self, raft_store_router: ServerRaftStoreRouter<RocksEngines>) -> Self {
         self.raft_store_router = Some(raft_store_router);
         self
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, DummyLockMgr>> {
+    pub fn build(self) -> Result<Storage<E, RocksEngines, DummyLockMgr>> {
         let read_pool = self::readpool_impl::build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -691,7 +691,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 /// to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
-pub struct Storage<E: Engine, L: LockMgr> {
+pub struct Storage<E: Engine, EE: Engines, L: LockMgr> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -703,7 +703,7 @@ pub struct Storage<E: Engine, L: LockMgr> {
     read_pool_high: FuturePool,
 
     /// Used to handle requests related to GC.
-    gc_worker: GCWorker<E>,
+    gc_worker: GCWorker<E, EE>,
 
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
@@ -716,7 +716,7 @@ pub struct Storage<E: Engine, L: LockMgr> {
     pessimistic_txn_enabled: bool,
 }
 
-impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
+impl<E: Engine, EE: Engines, L: LockMgr> Clone for Storage<E, EE, L> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -739,7 +739,7 @@ impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
     }
 }
 
-impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
+impl<E: Engine, EE: Engines, L: LockMgr> Drop for Storage<E, EE, L> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -761,14 +761,14 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
     }
 }
 
-impl<E: Engine, L: LockMgr> Storage<E, L> {
+impl<E: Engine, EE: Engines, L: LockMgr> Storage<E, EE, L> {
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
         config: &Config,
         mut read_pool: Vec<FuturePool>,
         local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
+        raft_store_router: Option<ServerRaftStoreRouter<EE>>,
         lock_mgr: Option<L>,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
@@ -794,7 +794,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
         info!("Storage started.");
 
-        Ok(Storage {
+        Ok(Self {
             engine,
             sched,
             read_pool_low,
