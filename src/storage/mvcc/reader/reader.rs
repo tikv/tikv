@@ -954,7 +954,7 @@ mod tests {
         let db = open_db(path, true);
         let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
 
-        let (k1, k2, k3, v) = (b"k1", b"k2", b"k3", b"v");
+        let (k1, k2, k3, k4, v) = (b"k1", b"k2", b"k3", b"k4", b"v");
         engine.prewrite(Mutation::Put((Key::from_raw(k1), v.to_vec())), k1, 5);
         engine.prewrite(Mutation::Put((Key::from_raw(k2), v.to_vec())), k1, 5);
         engine.prewrite(Mutation::Lock(Key::from_raw(k3)), k1, 5);
@@ -986,13 +986,10 @@ mod tests {
         assert!(reader.check_lock(&Key::from_raw(k2), u64::MAX).is_err());
 
         // Pessimistic locks
-        let (k4, k5) = (b"k4", b"k5");
         engine.acquire_pessimistic_lock(Key::from_raw(k4), k4, 9, 9);
-        engine.acquire_pessimistic_lock(Key::from_raw(k5), k5, 9, 9);
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         // Pessimistic locks don't block any read operation
         assert_eq!(reader.check_lock(&Key::from_raw(k4), 10).unwrap(), 10);
-        assert_eq!(reader.check_lock(&Key::from_raw(k5), 10).unwrap(), 10);
     }
 }
