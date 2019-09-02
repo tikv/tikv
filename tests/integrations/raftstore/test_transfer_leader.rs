@@ -4,10 +4,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
@@ -174,4 +176,61 @@ fn test_server_transfer_leader_during_snapshot() {
 fn test_node_transfer_leader_during_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     test_transfer_leader_during_snapshot(&mut cluster);
+}
+
+#[test]
+fn test_propose_during_transfer_leader() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    configure_for_lease_read(&mut cluster, Some(50), Some(3_000));
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    cluster.must_put(b"k0", b"v0");
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgTimeoutNow),
+    ));
+
+    let leader = cluster.leader_of_region(r1).unwrap();
+    let epoch = cluster.get_region_epoch(r1);
+    let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
+    let mut req = new_admin_request(r1, &epoch, admin_req);
+    req.mut_header().set_peer(leader);
+    let (cb, _) = make_cb(&req);
+    cluster.sim.rl().async_command_on_node(r1, req, cb).unwrap();
+
+    // Write proposals should be dropped, but read not.
+    for (i, (cmds, read_quorum, dropped)) in vec![
+        (vec![new_put_cmd(b"k1", b"v1")], false, true),
+        (vec![new_get_cmd(b"k1")], true, false),
+        (vec![new_get_cmd(b"k1")], false, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut req = new_request(r1, epoch.clone(), cmds, read_quorum);
+        req.mut_header().set_peer(new_peer(1, 1));
+        let (cb, rx) = make_cb(&req);
+        cluster.sim.rl().async_command_on_node(r1, req, cb).unwrap();
+        let resp = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        if proposal_is_dropped(&resp) != dropped {
+            panic!("#{} proposal should be dropped: {}, but not", i, dropped);
+        }
+    }
+
+    thread::sleep(Duration::from_millis(3_000));
+    let leader = cluster.query_leader(2, 1, Duration::from_secs(1));
+    assert_eq!(leader, Some(new_peer(1, 1)));
+}
+
+fn proposal_is_dropped(resp: &RaftCmdResponse) -> bool {
+    let err = resp.get_header().get_error().get_message();
+    err.contains("proposal dropped")
 }
