@@ -105,7 +105,6 @@ mod tests {
 
     #[test]
     fn test_client_stop() {
-        test_util::init_log_for_test();
         let (_server, client, rx) = new_rpc_suite();
 
         let (tmp, endpoint) = new_endpoint();
