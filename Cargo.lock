@@ -2528,6 +2528,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ce475f424f267dbed6479cbd8f126c5e1afb053b0acdaa019c74305fc65d1"
 
 [[package]]
+name = "storage_types"
+version = "0.1.0"
+
+[[package]]
 name = "string"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2855,6 +2859,7 @@ dependencies = [
  "slog_derive",
  "spin",
  "sst_importer",
+ "storage_types",
  "sys-info",
  "tempfile",
  "test_coprocessor",
