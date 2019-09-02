@@ -2,10 +2,10 @@
 
 use super::super::types::Value;
 use super::lock::LockType;
-use super::{Error, Result};
 use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use byteorder::ReadBytesExt;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use std::io;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -123,6 +123,25 @@ impl Write {
         WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
     }
 }
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Io(err: io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Codec(err: tikv_util::codec::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        BadFormatWrite { description("bad format write data") }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
