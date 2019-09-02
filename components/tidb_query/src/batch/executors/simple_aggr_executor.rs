@@ -15,6 +15,7 @@ use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::codec::data_type::*;
 use crate::expr::EvalConfig;
 use crate::rpn_expr::RpnStackNode;
+use crate::storage::IntervalRange;
 use crate::Result;
 
 pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
@@ -42,6 +43,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.0.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.0.take_scanned_range()
     }
 }
 
