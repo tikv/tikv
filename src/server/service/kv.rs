@@ -86,9 +86,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
 impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_GET_HDR);
         let future = future_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_get",
@@ -102,9 +106,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
 
     fn kv_scan(&mut self, ctx: RpcContext<'_>, req: ScanRequest, sink: UnarySink<ScanResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_SCAN_HDR);
         let future = future_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_scan",
@@ -123,9 +131,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<PrewriteResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_PREWRITE_HDR);
         let future = future_prewrite(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_prewrite",
@@ -146,9 +158,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .kv_pessimistic_lock
             .start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_PESSIMISTIC_LOCK_HDR);
         let future = future_acquire_pessimistic_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_pessimistic_lock",
@@ -169,9 +185,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .kv_pessimistic_rollback
             .start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_PESSIMISTIC_ROLLBACK_HDR);
         let future = future_pessimistic_rollback(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_pessimistic_rollback",
@@ -190,10 +210,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<CommitResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_commit.start_coarse_timer();
-
+        let hdr_timer = HdrTimer::new(&KV_COMMIT_HDR);
         let future = future_commit(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_commit",
@@ -216,9 +239,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<CleanupResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_CLEANUP_HDR);
         let future = future_cleanup(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_cleanup",
@@ -237,9 +264,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<BatchGetResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_batch_get.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_BATCH_GET_HDR);
         let future = future_batch_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_batch_get",
@@ -260,9 +291,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .kv_batch_rollback
             .start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_BATCH_ROLLBACK_HDR);
         let future = future_batch_rollback(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_batch_rollback",
@@ -281,9 +316,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<ScanLockResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_SCAN_LOCK_HDR);
         let future = future_scan_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_scan_lock",
@@ -302,9 +341,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<ResolveLockResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_resolve_lock.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_RESOLVE_LOCK_HDR);
         let future = future_resolve_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_resolve_lock",
@@ -318,9 +361,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_GC_HDR);
         let future = future_gc(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_gc",
@@ -339,9 +386,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<DeleteRangeResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_delete_range.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&KV_DELETE_RANGE_HDR);
         let future = future_delete_range(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_delete_range",
@@ -360,9 +411,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawGetResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_get.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&RAW_GET_HDR);
         let future = future_raw_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_get",
@@ -381,10 +436,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawBatchGetResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_get.start_coarse_timer();
-
+        let hdr_timer = HdrTimer::new(&RAW_BATCH_GET_HDR);
         let future = future_raw_batch_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_batch_get",
@@ -403,10 +461,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawScanResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
-
+        let hdr_timer = HdrTimer::new(&RAW_SCAN_HDR);
         let future = future_raw_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_scan",
@@ -425,10 +486,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawBatchScanResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_scan.start_coarse_timer();
-
+        let hdr_timer = HdrTimer::new(&RAW_BATCH_SCAN_HDR);
         let future = future_raw_batch_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_batch_scan",
@@ -447,9 +511,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawPutResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_put.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&RAW_PUT_HDR);
         let future = future_raw_put(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_put",
@@ -468,10 +536,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawBatchPutResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_put.start_coarse_timer();
-
+        let hdr_timer = HdrTimer::new(&RAW_BATCH_PUT_HDR);
         let future = future_raw_batch_put(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_batch_put",
@@ -490,9 +561,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawDeleteResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&RAW_DELETE_HDR);
         let future = future_raw_delete(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_delete",
@@ -511,10 +586,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawBatchDeleteResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_delete.start_coarse_timer();
-
+        let hdr_timer = HdrTimer::new(&RAW_BATCH_DELETE_HDR);
         let future = future_raw_batch_delete(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_batch_delete",
@@ -533,10 +611,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<RawDeleteRangeResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete_range.start_coarse_timer();
-
+        let hdr_timer = HdrTimer::new(&RAW_DELETE_RANGE_HDR);
         let future = future_raw_delete_range(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_delete_range",
@@ -557,6 +638,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .unsafe_destroy_range
             .start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&UNSAFE_DESTROY_RANGE_HDR);
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
         // MAX_KEY as end here.
@@ -580,7 +662,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "unsafe_destroy_range",
@@ -594,9 +679,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&COPROCESSOR_HDR);
         let future = future_cop(&self.cop, req, Some(ctx.peer()))
             .and_then(|resp| sink.success(resp).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "coprocessor",
@@ -617,6 +706,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .coprocessor_stream
             .start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&COPROCESSOR_STREAM_HDR);
 
         let stream = self
             .cop
@@ -629,7 +719,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
             });
         let future = sink
             .send_all(stream)
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(Error::from)
             .map_err(move |e| {
                 debug!("kv rpc failed";
@@ -734,6 +827,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<MvccGetByKeyResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&MVCC_GET_BY_KEY_HDR);
 
         let key = Key::from_raw(req.get_key());
         let (cb, f) = paired_future_callback();
@@ -756,7 +850,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "mvcc_get_by_key",
@@ -777,6 +874,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .mvcc_get_by_start_ts
             .start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&MVCC_GET_BY_START_TS_HDR);
 
         let (cb, f) = paired_future_callback();
         let res = self
@@ -802,7 +900,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "mvcc_get_by_start_ts",
@@ -820,6 +921,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<SplitRegionResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&SPLIT_REGION_HDR);
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
@@ -872,7 +974,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "split_region",
@@ -891,6 +996,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         sink: UnarySink<ReadIndexResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
+        let hdr_timer = HdrTimer::new(&READ_INDEX_HDR);
 
         let region_id = req.get_context().get_region_id();
         let mut cmd = RaftCmdRequest::default();
@@ -941,7 +1047,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(|_| {
+                timer.observe_duration();
+                hdr_timer.observe_duration();
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "read_index",
@@ -1014,6 +1123,7 @@ fn response_batch_commands_request<F>(
     resp: F,
     tx: Sender<(u64, batch_commands_response::Response)>,
     timer: HistogramTimer,
+    hdr_timer: HdrTimer,
 ) where
     F: Future<Item = batch_commands_response::Response, Error = ()> + Send + 'static,
 {
@@ -1023,6 +1133,7 @@ fn response_batch_commands_request<F>(
             return Err(());
         }
         timer.observe_duration();
+        hdr_timer.observe_duration();
         Ok(())
     });
     poll_future_notify(f);
@@ -1078,193 +1189,218 @@ fn handle_batch_commands_request<E: Engine>(
         None => {
             // For some invalid requests.
             let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&INVALID_HDR);
             let resp = future::ok(batch_commands_response::Response::default());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::Get(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_GET_HDR);
             let resp = future_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Get))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::Scan(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_SCAN_HDR);
             let resp = future_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Scan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_PREWRITE_HDR);
             let resp = future_prewrite(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Prewrite))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::Commit(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_commit.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_COMMIT_HDR);
             let resp = future_commit(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Commit))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
         Some(batch_commands_request::request::Cmd::Cleanup(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_CLEANUP_HDR);
             let resp = future_cleanup(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Cleanup))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::BatchGet(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_batch_get.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_BATCH_GET_HDR);
             let resp = future_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::BatchGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::BatchRollback(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC
                 .kv_batch_rollback
                 .start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_BATCH_ROLLBACK_HDR);
             let resp = future_batch_rollback(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::BatchRollback
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::ScanLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_SCAN_LOCK_HDR);
             let resp = future_scan_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ScanLock))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::ResolveLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_resolve_lock.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_RESOLVE_LOCK_HDR);
             let resp = future_resolve_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ResolveLock))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::Gc(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_GC_HDR);
             let resp = future_gc(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Gc))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::DeleteRange(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_delete_range.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_DELETE_RANGE_HDR);
             let resp = future_delete_range(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::DeleteRange))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawGet(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_get.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_GET_HDR);
             let resp = future_raw_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawBatchGet(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_get.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_BATCH_GET_HDR);
             let resp = future_raw_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawPut(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_put.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_PUT_HDR);
             let resp = future_raw_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawPut))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_put.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawBatchPut(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_put.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_BATCH_PUT_HDR);
             let resp = future_raw_batch_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchPut))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawDelete(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_DELETE_HDR);
             let resp = future_raw_delete(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawDelete))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawBatchDelete(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_delete.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_BATCH_DELETE_HDR);
             let resp = future_raw_batch_delete(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawBatchDelete
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawScan(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_SCAN_HDR);
             let resp = future_raw_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawScan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_scan.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawDeleteRange(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete_range.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_DELETE_RANGE_HDR);
             let resp = future_raw_delete_range(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawDeleteRange
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::RawBatchScan(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_scan.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&RAW_BATCH_SCAN_HDR);
             let resp = future_raw_batch_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchScan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&COPROCESSOR_HDR);
             let resp = future_cop(&cop, req, Some(peer.to_string()))
                 .map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC
                 .kv_pessimistic_lock
                 .start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_PESSIMISTIC_LOCK_HDR);
             let resp = future_acquire_pessimistic_lock(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::PessimisticLock
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::PessimisticRollback(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC
                 .kv_pessimistic_rollback
                 .start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&KV_PESSIMISTIC_ROLLBACK_HDR);
             let resp = future_pessimistic_rollback(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::PessimisticRollback
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
         Some(batch_commands_request::request::Cmd::Empty(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
+            let hdr_timer = HdrTimer::new(&INVALID_HDR);
             let resp = future_handle_empty(req)
                 .map(oneof!(batch_commands_response::response::Cmd::Empty))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, timer, hdr_timer);
         }
     }
 }

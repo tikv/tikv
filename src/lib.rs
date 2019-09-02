@@ -55,6 +55,8 @@ extern crate tikv_util;
 #[macro_use]
 extern crate failure;
 
+extern crate hdrhistogram;
+
 #[cfg(test)]
 extern crate test;
 

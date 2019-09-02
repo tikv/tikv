@@ -2,10 +2,14 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
+use std::sync::{Arc, Mutex};
 
+use hdrhistogram::Histogram as HdrHistogram;
 use prometheus::exponential_buckets;
 
 use crate::storage::ErrorHeaderKind;
+use tikv_util::collections::HashMap;
+use tikv_util::time::Instant;
 
 make_static_metric! {
     pub label_enum GrpcTypeKind {
@@ -201,4 +205,165 @@ lazy_static! {
         )
         .unwrap()
     };
+}
+
+// Defines a HdrHistogram, its minimum resolution value and maximum trackable time interval are about 500us and 1000s, respectively.
+macro_rules! define_hdrhistogram {
+    ($NAME: ident) => {
+        lazy_static! {
+            pub static ref $NAME: Arc<Mutex<HdrHistogram<u64>>> = Arc::new(Mutex::new(
+                HdrHistogram::<u64>::new_with_bounds(1 << 9, 1 << 30, 3).unwrap()
+            ));
+        }
+    };
+}
+
+define_hdrhistogram!(INVALID_HDR);
+define_hdrhistogram!(KV_GET_HDR);
+define_hdrhistogram!(KV_SCAN_HDR);
+define_hdrhistogram!(KV_PREWRITE_HDR);
+define_hdrhistogram!(KV_PESSIMISTIC_LOCK_HDR);
+define_hdrhistogram!(KV_PESSIMISTIC_ROLLBACK_HDR);
+define_hdrhistogram!(KV_COMMIT_HDR);
+define_hdrhistogram!(KV_CLEANUP_HDR);
+define_hdrhistogram!(KV_BATCH_GET_HDR);
+define_hdrhistogram!(KV_BATCH_ROLLBACK_HDR);
+define_hdrhistogram!(KV_SCAN_LOCK_HDR);
+define_hdrhistogram!(KV_RESOLVE_LOCK_HDR);
+define_hdrhistogram!(KV_GC_HDR);
+define_hdrhistogram!(KV_DELETE_RANGE_HDR);
+define_hdrhistogram!(RAW_GET_HDR);
+define_hdrhistogram!(RAW_BATCH_GET_HDR);
+define_hdrhistogram!(RAW_SCAN_HDR);
+define_hdrhistogram!(RAW_BATCH_SCAN_HDR);
+define_hdrhistogram!(RAW_PUT_HDR);
+define_hdrhistogram!(RAW_BATCH_PUT_HDR);
+define_hdrhistogram!(RAW_DELETE_HDR);
+define_hdrhistogram!(RAW_DELETE_RANGE_HDR);
+define_hdrhistogram!(RAW_BATCH_DELETE_HDR);
+define_hdrhistogram!(UNSAFE_DESTROY_RANGE_HDR);
+define_hdrhistogram!(COPROCESSOR_HDR);
+define_hdrhistogram!(COPROCESSOR_STREAM_HDR);
+define_hdrhistogram!(MVCC_GET_BY_KEY_HDR);
+define_hdrhistogram!(MVCC_GET_BY_START_TS_HDR);
+define_hdrhistogram!(SPLIT_REGION_HDR);
+define_hdrhistogram!(READ_INDEX_HDR);
+
+pub struct HdrTimer {
+    start: Instant,
+    hdr: Arc<Mutex<HdrHistogram<u64>>>,
+}
+
+impl HdrTimer {
+    pub fn new(hdr: &Arc<Mutex<HdrHistogram<u64>>>) -> Self {
+        Self {
+            hdr: hdr.clone(),
+            start: Instant::now_coarse(),
+        }
+    }
+
+    pub fn observe_duration(self) {
+        drop(self);
+    }
+
+    fn observe(&mut self) {
+        let v = self.start.elapsed().as_micros() as u64;
+        self.hdr.lock().unwrap().record(v).unwrap();
+    }
+}
+
+impl Drop for HdrTimer {
+    fn drop(&mut self) {
+        self.observe();
+    }
+}
+
+/// Use to collect each operation's latency with specified quantile, e.g., P95 or P99 lantency.
+pub struct OpLatencyStatistics {
+    quantile: f64,
+    // Measured in the unit of microsecond (us)
+    latencies: HashMap<String, u64>,
+}
+
+impl OpLatencyStatistics {
+    pub fn new(quantile: f64) -> Self {
+        Self {
+            quantile,
+            latencies: HashMap::default(),
+        }
+    }
+
+    pub fn record(&mut self) {
+        macro_rules! update_latency {
+            ($NAME: ident) => {
+                let latency = self
+                    .latencies
+                    .entry(stringify!($NAME).to_owned())
+                    .or_insert(0);
+                *latency = $NAME.lock().unwrap().value_at_quantile(self.quantile);
+            };
+        }
+
+        update_latency!(INVALID_HDR);
+        update_latency!(KV_GET_HDR);
+        update_latency!(KV_SCAN_HDR);
+        update_latency!(KV_PREWRITE_HDR);
+        update_latency!(KV_PESSIMISTIC_LOCK_HDR);
+        update_latency!(KV_PESSIMISTIC_ROLLBACK_HDR);
+        update_latency!(KV_COMMIT_HDR);
+        update_latency!(KV_CLEANUP_HDR);
+        update_latency!(KV_BATCH_GET_HDR);
+        update_latency!(KV_BATCH_ROLLBACK_HDR);
+        update_latency!(KV_SCAN_LOCK_HDR);
+        update_latency!(KV_RESOLVE_LOCK_HDR);
+        update_latency!(KV_GC_HDR);
+        update_latency!(KV_DELETE_RANGE_HDR);
+        update_latency!(RAW_GET_HDR);
+        update_latency!(RAW_BATCH_GET_HDR);
+        update_latency!(RAW_SCAN_HDR);
+        update_latency!(RAW_BATCH_SCAN_HDR);
+        update_latency!(RAW_PUT_HDR);
+        update_latency!(RAW_BATCH_PUT_HDR);
+        update_latency!(RAW_DELETE_HDR);
+        update_latency!(RAW_DELETE_RANGE_HDR);
+        update_latency!(RAW_BATCH_DELETE_HDR);
+        update_latency!(UNSAFE_DESTROY_RANGE_HDR);
+        update_latency!(COPROCESSOR_HDR);
+        update_latency!(COPROCESSOR_STREAM_HDR);
+        update_latency!(MVCC_GET_BY_KEY_HDR);
+        update_latency!(MVCC_GET_BY_START_TS_HDR);
+        update_latency!(SPLIT_REGION_HDR);
+        update_latency!(READ_INDEX_HDR);
+    }
+
+    pub fn get_op_latencies(&self) -> HashMap<String, u64> {
+        self.latencies.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn test_hdr_histogram() {
+        let h = Arc::new(Mutex::new(
+            HdrHistogram::<u64>::new_with_bounds(1 << 9, 1 << 30, 3).unwrap(),
+        ));
+
+        let hdr_timer = HdrTimer::new(&h);
+        thread::sleep(Duration::from_millis(10));
+        hdr_timer.observe_duration();
+
+        let mut hdr_histogram = h.lock().unwrap();
+        hdr_histogram.record(20000).unwrap();
+
+        assert_eq!(hdr_histogram.len(), 2);
+
+        let count = hdr_histogram.count_between(1000, 100000);
+        assert_eq!(count, 2);
+    }
 }
