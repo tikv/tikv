@@ -52,6 +52,12 @@ bitflags! {
     }
 }
 
+impl Default for Flag {
+    fn default() -> Self {
+        Flag { bits: 0 }
+    }
+}
+
 impl SqlMode {
     /// Returns if 'STRICT_TRANS_TABLES' or 'STRICT_ALL_TABLES' mode is set.
     pub fn is_strict(self) -> bool {

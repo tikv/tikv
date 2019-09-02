@@ -795,11 +795,14 @@ impl Time {
 }
 
 impl ConvertTo<f64> for Time {
+    /// This function should not return err,
+    /// if it return err, then the err is because of bug.
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         if self.is_zero() {
             return Ok(0f64);
         }
-        Ok(self.to_numeric_string().parse()?)
+        let f: f64 = box_try!(self.to_numeric_string().parse());
+        Ok(f)
     }
 }
 
