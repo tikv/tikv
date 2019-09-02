@@ -483,8 +483,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
+            let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::CountTime, "kv");
+            perf_task.start_perf();
             self.poll_ctx
                 .engines
                 .kv
@@ -492,9 +492,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_WRITE_PERF_HISTOGRAM.local(), "kv", delta);
+            drop(perf_task);
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
                 self.poll_ctx.kv_wb = WriteBatch::with_capacity(4 * 1024);
@@ -506,8 +504,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.raft_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
+            let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::CountTime, "kv");
+            perf_task.start_perf();
             self.poll_ctx
                 .engines
                 .raft
@@ -515,9 +513,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_WRITE_PERF_HISTOGRAM.local(), "kv", delta);
+            drop(perf_task);
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
                 self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);

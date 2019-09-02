@@ -41,7 +41,7 @@ use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
-use crate::storage::kv::{PerfStatisticsInstant, persist_perf_data};
+use crate::storage::kv::{PerfStatisticsInstant, PerfTask};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
@@ -381,17 +381,15 @@ impl ApplyContext {
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(need_sync);
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
+            let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, tag.to_str());
+            perf_task.start_perf();
             self.engines
                 .kv
                 .write_opt(self.kv_wb(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
+            drop(perf_task);
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {

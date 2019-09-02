@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
-use crate::storage::kv::{PerfStatisticsInstant, persist_perf_data};
+use crate::storage::kv::{PerfStatisticsInstant, PerfTask};
 use crate::storage::lock_manager::{
     self, wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
 };
@@ -245,10 +245,13 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         let tag = task.tag;
         let cid = task.cid;
         let mut statistics = Statistics::default();
+        let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, tag.to_str());
+        perf_task.start_perf();
         let pr = match process_read_impl::<E>(task.cmd, snapshot, &mut statistics) {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
+        drop(perf_task);
         notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
         statistics
     }
@@ -258,12 +261,14 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
     fn process_write(mut self, engine: &E, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
-        let cid = task.cid;
+        let cid = task.cid
         let ts = task.ts;
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let waiter_mgr_scheduler = self.take_waiter_mgr_scheduler();
         let detector_scheduler = self.take_detector_scheduler();
+        let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, tag.to_str());
+        perf_task.start_perf();
         let msg = match process_write_impl(
             task.cmd,
             snapshot,
@@ -343,6 +348,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 Msg::FinishedWithErr { cid, err, tag }
             }
         };
+        drop(perf_task);
         notify_scheduler(scheduler, msg);
         statistics
     }
@@ -364,12 +370,7 @@ fn process_read_impl<E: Engine>(
                 None,
                 ctx.get_isolation_level(),
             );
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             let result = find_mvcc_infos_by_key(&mut reader, key, u64::MAX);
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(reader.get_statistics());
             let (lock, writes, values) = result?;
             Ok(ProcessResult::MvccKey {
@@ -389,14 +390,9 @@ fn process_read_impl<E: Engine>(
                 None,
                 ctx.get_isolation_level(),
             );
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             match reader.seek_ts(start_ts)? {
                 Some(key) => {
                     let result = find_mvcc_infos_by_key(&mut reader, &key, u64::MAX);
-                    set_perf_level(PerfLevel::EnableCount);
-                    let delta = perf_stats.delta();
-                    persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
                     statistics.add(reader.get_statistics());
                     let (lock, writes, values) = result?;
                     Ok(ProcessResult::MvccStartTs {
@@ -411,9 +407,6 @@ fn process_read_impl<E: Engine>(
                     })
                 }
                 None => {
-                    set_perf_level(PerfLevel::EnableCount);
-                    let delta = perf_stats.delta();
-                    persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
                     Ok(ProcessResult::MvccStartTs { mvcc: None })
                 },
             }
@@ -434,12 +427,7 @@ fn process_read_impl<E: Engine>(
                 None,
                 ctx.get_isolation_level(),
             );
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             let result = reader.scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit);
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(reader.get_statistics());
             let (kv_pairs, _) = result?;
             let mut locks = Vec::with_capacity(kv_pairs.len());
@@ -469,16 +457,11 @@ fn process_read_impl<E: Engine>(
                 None,
                 ctx.get_isolation_level(),
             );
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             let result = reader.scan_locks(
                 scan_key.as_ref(),
                 |lock| txn_status.contains_key(&lock.ts),
                 RESOLVE_LOCK_BATCH_SIZE,
             );
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(reader.get_statistics());
             let (kv_pairs, has_remain) = result?;
             tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
@@ -578,8 +561,6 @@ fn process_write_impl<S: Snapshot>(
 
             // If `options.for_update_ts` is 0, the transaction is optimistic
             // or else pessimistic.
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             if options.for_update_ts == 0 {
                 for m in mutations {
                     match txn.prewrite(m, &primary, &options) {
@@ -607,9 +588,6 @@ fn process_write_impl<S: Snapshot>(
                 }
             }
 
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
@@ -632,8 +610,6 @@ fn process_write_impl<S: Snapshot>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = keys.len();
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(k, &primary, should_not_exist, &options) {
                     Ok(_) => {}
@@ -644,10 +620,6 @@ fn process_write_impl<S: Snapshot>(
                     Err(e) => return Err(Error::from(e)),
                 }
             }
-
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(&txn.take_statistics());
             // no conflict
             if locks.is_empty() {
@@ -680,17 +652,12 @@ fn process_write_impl<S: Snapshot>(
             let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?;
             let mut is_pessimistic_txn = false;
             let rows = keys.len();
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             for k in keys {
                 is_pessimistic_txn = txn.commit(k, commit_ts)?;
             }
 
             notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, lock_ts, key_hashes, commit_ts);
             notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, lock_ts);
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -703,13 +670,8 @@ fn process_write_impl<S: Snapshot>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let is_pessimistic_txn = txn.rollback(keys.pop().unwrap())?;
 
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
             notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, start_ts);
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1, ctx, None)
         }
@@ -723,8 +685,6 @@ fn process_write_impl<S: Snapshot>(
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut is_pessimistic_txn = false;
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             let rows = keys.len();
             for k in keys {
                 is_pessimistic_txn = txn.rollback(k)?;
@@ -732,9 +692,6 @@ fn process_write_impl<S: Snapshot>(
 
             notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
             notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, start_ts);
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -749,17 +706,12 @@ fn process_write_impl<S: Snapshot>(
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let rows = keys.len();
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             for k in keys {
                 txn.pessimistic_rollback(k, for_update_ts)?;
             }
 
             notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
             notify_deadlock_detector_if_needed(&detector_scheduler, true, start_ts);
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(&txn.take_statistics());
             (
                 ProcessResult::MultiRes { results: vec![] },
@@ -787,8 +739,6 @@ fn process_write_impl<S: Snapshot>(
             let mut modifies: Vec<Modify> = vec![];
             let mut write_size = 0;
             let rows = key_locks.len();
-            set_perf_level(PerfLevel::EnableTime);
-            let perf_stats = PerfStatisticsInstant::new();
             for (current_key, current_lock) in key_locks {
                 if let Some(txn_to_keys) = txn_to_keys.as_mut() {
                     txn_to_keys
@@ -829,9 +779,6 @@ fn process_write_impl<S: Snapshot>(
                     txn.rollback(current_key.clone())?;
                 }
                 write_size += txn.write_size();
-                set_perf_level(PerfLevel::EnableCount);
-                let delta = perf_stats.delta();
-                persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
                 statistics.add(&txn.take_statistics());
                 modifies.append(&mut txn.into_modifies());
 
@@ -891,9 +838,6 @@ fn process_write_impl<S: Snapshot>(
 
             notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
             notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, start_ts);
-            set_perf_level(PerfLevel::EnableCount);
-            let delta = perf_stats.delta();
-            persist_perf_data(&mut ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), "kv", delta);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }

@@ -244,7 +244,7 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_rocksdb_perf_context",
         "Bucketed histogram of rocksdb perf context",
         &["type"],
