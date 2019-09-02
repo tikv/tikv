@@ -23,12 +23,13 @@ pub fn build_handler<S: Store + 'static>(
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
     let mut is_batch = false;
-    if enable_batch_if_possible && !is_streaming {
+    if enable_batch_if_possible {
         let is_supported =
             tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
         if let Err(e) = is_supported {
             // Not supported, will fallback to normal executor.
             // To avoid user worries, let's output success message.
+            info!("Err(e) = is_supported, fuck.");
             debug!("Successfully use normal Coprocessor query engine"; "start_ts" => req.get_start_ts(), "reason" => %e);
         } else {
             if is_streaming {
@@ -43,12 +44,13 @@ pub fn build_handler<S: Store + 'static>(
 
     if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        info!("Build batch executor");
+        info!("Build batch executor with streaming {}", is_streaming);
         Ok(
             BatchDAGHandler::new(req, ranges, store, deadline, batch_row_limit, is_streaming)?
                 .into_boxed(),
         )
     } else {
+        info!("Build non-batch executor with streaming {}", is_streaming);
         COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
         Ok(
             DAGHandler::new(req, ranges, store, deadline, batch_row_limit, is_streaming)?

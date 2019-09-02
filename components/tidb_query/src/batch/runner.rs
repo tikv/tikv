@@ -479,10 +479,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             "handle_streaming_request in Batch called, self.stream_batch_row_limit is {}",
             self.stream_batch_row_limit
         );
-        while record_cnt < self.stream_batch_row_limit
-            && already_read_cnt < self.stream_batch_row_limit
-            && !is_drained
-        {
+        while record_cnt < 32 && already_read_cnt < 32 && !is_drained {
             self.deadline.check()?;
             info!(
                 "handle_streaming_request loop start and pass the ddl check, now record_cnt is {}, already read is {}",
@@ -555,7 +552,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             "{} handle_streaming_request in Batch called and ready to return, record_count is {}, range {:?}",
             drained, record_cnt, range
         );
-        if record_cnt > 0 {
+        if !is_drained || record_cnt > 0 {
             return self
                 .make_stream_response(chunk, warnings)
                 .map(|r| (Some((r, range)), is_drained));
