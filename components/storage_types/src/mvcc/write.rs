@@ -1,8 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::super::types::Value;
+use keys::Value;
 use super::lock::LockType;
-use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use byteorder::ReadBytesExt;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 use std::io;
@@ -145,7 +145,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
-    use super::super::LockType;
+    use super::super::lock::LockType;
     use super::*;
 
     #[test]

@@ -6,7 +6,7 @@ use storage_types::mvcc::lock;
 mod metrics;
 mod reader;
 mod txn;
-mod write;
+use storage_types::mvcc::write;
 
 pub use self::lock::{Lock, LockType, Error as LockError};
 pub use self::reader::*;

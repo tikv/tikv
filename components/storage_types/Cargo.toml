@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 byteorder = "1.2"
+hex = "0.3"
 quick-error = "1.2.2"
 
 keys = { path = "../keys" }
