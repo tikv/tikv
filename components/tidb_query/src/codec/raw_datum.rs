@@ -66,7 +66,7 @@ fn decode_json(v: &mut &[u8]) -> Result<Json> {
 
 #[inline]
 fn decode_duration_from_i64(v: i64, field_type: &FieldType) -> Result<Duration> {
-    Duration::from_nanos(v, field_type.decimal() as i8)
+    Duration::from_nanos(v, field_type.as_accessor().decimal() as i8)
         .map_err(|_| Error::InvalidDataType("Failed to decode i64 as duration".to_owned()))
 }
 
