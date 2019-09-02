@@ -23,7 +23,7 @@ pub fn build_handler<S: Store + 'static>(
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
     let mut is_batch = false;
-    if enable_batch_if_possible {
+    if enable_batch_if_possible && !is_streaming {
         let is_supported =
             tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
         if let Err(e) = is_supported {

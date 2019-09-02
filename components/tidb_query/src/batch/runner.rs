@@ -510,10 +510,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         self.out_most_executor.schema(),
                         data,
                     )?;
+                    record_count += result.logical_rows.len();
                 }
             }
 
-            record_count += result.logical_rows.len();
             // Grow batch size
             grow_batch_size(&mut batch_size);
         }
