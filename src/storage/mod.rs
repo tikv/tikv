@@ -52,6 +52,7 @@ pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+pub type BatchCallback<T> = Box<dyn Fn(u64, Result<T>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -109,7 +110,9 @@ impl Mutation {
 
 pub enum StorageCb {
     Boolean(Callback<()>),
+    BatchBoolean(BatchCallback<()>),
     Booleans(Callback<Vec<Result<()>>>),
+    BatchBooleans(BatchCallback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
@@ -267,6 +270,10 @@ pub enum Command {
     MvccByKey { ctx: Context, key: Key },
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
     MvccByStartTs { ctx: Context, start_ts: u64 },
+    MiniBatch {
+        commands: Vec<Command>,
+        ids: Vec<u64>,
+    },
 }
 
 impl Display for Command {
@@ -383,6 +390,10 @@ impl Display for Command {
                 ref ctx,
                 ref start_ts,
             } => write!(f, "kv::command::mvccbystartts {:?} | {:?}", start_ts, ctx),
+            Command::MiniBatch {
+                ref commands,
+                ..
+            } => write!(f, "kv::command::minibatch {:?}", commands),
         }
     }
 }
@@ -451,6 +462,7 @@ impl Command {
             Command::Pause { .. } => CommandKind::pause,
             Command::MvccByKey { .. } => CommandKind::key_mvcc,
             Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
+            Command::MiniBatch { ref commands, .. } => commands[0].tag(),
         }
     }
 
@@ -469,6 +481,7 @@ impl Command {
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
             | Command::MvccByKey { .. } => 0,
+            Command::MiniBatch { ref commands, ..} => commands[0].ts(),
         }
     }
 
@@ -487,6 +500,7 @@ impl Command {
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
             | Command::MvccByStartTs { ref ctx, .. } => ctx,
+            Command::MiniBatch { ref commands, .. } => commands[0].get_context(),
         }
     }
 
@@ -505,6 +519,7 @@ impl Command {
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
             | Command::MvccByStartTs { ref mut ctx, .. } => ctx,
+            Command::MiniBatch{ ref mut commands, .. } => commands[0].mut_context(),
         }
     }
 
@@ -1067,6 +1082,37 @@ impl<E: Engine> Storage<E> {
             options,
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        Ok(())
+    }
+
+    /// The prewrite phase of a transaction. The first phase of 2PC.
+    ///
+    /// Schedules a [`Command::Prewrite`].
+    pub fn batch_prewrite(
+        &self,
+        mut command: Command,
+        // callback: Callback<Vec<Result<()>>>,
+        callback: BatchCallback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if let Command::MiniBatch {
+            ref commands, ref mut ids
+        } = command {
+            let len = commands.len();
+            for i in 0..len {
+                if let Command::Prewrite { ref mutations, ..} = commands[i] {
+                    for m in mutations {
+                        let key_size = m.key().as_encoded().len();
+                        if key_size > self.max_key_size {
+                            callback(ids[i], Err(Error::KeyTooLarge(key_size, self.max_key_size)));
+                            ids[i] = u64::max_value();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        self.schedule(command, StorageCb::BatchBooleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
     }

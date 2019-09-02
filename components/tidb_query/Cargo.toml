@@ -40,7 +40,7 @@ flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/tabokie/kvproto.git", branch = "local-test" }
 
 tipb_helper = { path = "../tipb_helper" }
 tikv_util = { path = "../tikv_util" }

@@ -35,7 +35,7 @@ use crate::storage::lock_manager::{
     self, store_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
 };
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
+use crate::storage::txn::process::{execute_batch_callback, execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
@@ -449,6 +449,69 @@ impl<E: Engine> Scheduler<E> {
         self.release_lock(&tctx.lock, cid);
     }
 
+    /// Calls the callback with an error.
+    fn batch_finish_with_err(&self, cid: u64, req: u64, err: Error) {
+        debug!("write command finished with error"; "cid" => cid);
+        let tctx = self.inner.dequeue_task_context(cid);
+
+        SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
+
+        let pr = ProcessResult::Failed {
+            err: StorageError::from(err),
+        };
+        execute_batch_callback(tctx.cb, req, pr);
+
+        self.release_lock(&tctx.lock, cid);
+    }
+
+    /// Event handler for the success of read.
+    ///
+    /// If a next command is present, continues to execute; otherwise, delivers the result to the
+    /// callback.
+    fn on_batch_read_finished(&self, cid: u64, req: u64, pr: ProcessResult, tag: CommandKind) {
+        SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
+
+        debug!("read command finished"; "cid" => cid);
+        let tctx = self.inner.dequeue_task_context(cid);
+        if let ProcessResult::NextCommand { cmd } = pr {
+            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+            self.schedule_command(cmd, tctx.cb);
+        } else {
+            execute_batch_callback(tctx.cb, req, pr);
+        }
+
+        self.release_lock(&tctx.lock, cid);
+    }
+
+    /// Event handler for the success of write.
+    fn on_batch_write_finished(
+        &self,
+        cid: u64,
+        req: u64,
+        pr: ProcessResult,
+        result: EngineResult<()>,
+        tag: CommandKind,
+    ) {
+        SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
+
+        debug!("write command finished"; "cid" => cid);
+        let tctx = self.inner.dequeue_task_context(cid);
+        let pr = match result {
+            Ok(()) => pr,
+            Err(e) => ProcessResult::Failed {
+                err: StorageError::from(e),
+            },
+        };
+        if let ProcessResult::NextCommand { cmd } = pr {
+            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+            self.schedule_command(cmd, tctx.cb);
+        } else {
+            execute_batch_callback(tctx.cb, req, pr);
+        }
+
+        self.release_lock(&tctx.lock, cid);
+    }
+
     /// Event handler for the request of waiting for lock
     fn on_wait_for_lock(
         &self,
@@ -496,6 +559,15 @@ impl<E: Engine> MsgScheduler for Scheduler<E> {
                 lock,
                 is_first_lock,
             } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock),
+            _ => unreachable!(),
+        }
+    }
+
+    fn on_batch_msg(&self, req: u64, task: Msg) {
+        match task {
+            Msg::ReadFinished { cid, tag, pr } => self.on_batch_read_finished(cid, req, pr, tag),
+            Msg::WriteFinished { cid, tag, pr, result } => self.on_batch_write_finished(cid, req, pr, result, tag),
+            Msg::FinishedWithErr { cid, err, .. } => self.batch_finish_with_err(cid, req, err),
             _ => unreachable!(),
         }
     }

@@ -13,7 +13,7 @@ use crate::server::Error;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
-use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
+use crate::storage::{self, Command, Engine, Key, Mutation, Options, Storage, Value};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -51,6 +51,91 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     snap_scheduler: Scheduler<SnapTask>,
 
     thread_load: Arc<ThreadLoad>,
+}
+
+#[derive(Eq, Hash)]
+struct RegionVerId {
+    region: u64,
+    epoch: u64,
+}
+
+impl PartialEq for RegionVerId {
+    fn eq(&self, other: &Self) -> bool {
+        self.region == other.region && self.epoch == other.epoch
+    }
+}
+struct MiniBatcher {
+    commands: Vec<Command>,
+    router: HashMap<RegionVerId, usize>,
+}
+
+impl MiniBatcher {
+    pub fn new() -> Self {
+        MiniBatcher {
+            commands: vec![],
+            router: HashMap::default(),
+        }
+    }
+
+    pub fn filter(
+        &mut self,
+        request_id: u64,
+        request: &mut batch_commands_request::Request,
+    ) -> bool {
+        match &mut request.cmd {
+            Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
+                let ver = RegionVerId {
+                    region: req.get_context().get_region_id(),
+                    epoch: req.get_context().get_region_epoch().get_version(),
+                };
+                let mutations = req
+                    .take_mutations()
+                    .into_iter()
+                    .map(|mut x| match x.get_op() {
+                        Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
+                        Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
+                        Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                        Op::Insert => Mutation::Insert((Key::from_raw(x.get_key()), x.take_value())),
+                        _ => panic!("mismatch Op in prewrite mutations"),
+                    })
+                    .collect();
+                let mut options = Options::default();
+                options.lock_ttl = req.get_lock_ttl();
+                options.skip_constraint_check = req.get_skip_constraint_check();
+                options.for_update_ts = req.get_for_update_ts();
+                options.is_pessimistic_lock = req.take_is_pessimistic_lock();
+                options.txn_size = req.get_txn_size();                
+                let cmd = Command::Prewrite {
+                    ctx: req.take_context(),
+                    mutations,
+                    primary: req.take_primary_lock(),
+                    start_ts: req.get_start_version(),
+                    options,
+                };
+                match self.router.get(&ver) {
+                    Some(&idx) => {
+                        if let Command::MiniBatch{ref mut commands, ref mut ids} = self.commands[idx] {
+                            commands.push(cmd);
+                            ids.push(request_id);
+                        }
+                    }
+                    None => {
+                        self.router.insert(ver, self.commands.len());
+                        self.commands.push(Command::MiniBatch{
+                            commands: vec![cmd],
+                            ids: vec![request_id],
+                        });
+                    }
+                }
+                true
+            }
+            _ => { false }
+        }
+    }
+
+    pub fn take_commands(self) -> Vec<Command> {
+        self.commands
+    }
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
@@ -967,11 +1052,17 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let cop = self.cop.clone();
 
         let request_handler = stream.for_each(move |mut req| {
+            let mut minibatcher = MiniBatcher::new();
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-            for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
+            for (id, mut req) in request_ids.into_iter().zip(requests) {
+                if !minibatcher.filter(id, &mut req) {
+                    handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
+                }
+            }
+            for command in minibatcher.take_commands() {
+                handle_minibatch_command(&storage, &cop, peer.clone(), command, tx.clone());
             }
             future::ok::<_, _>(())
         });
@@ -1053,6 +1144,35 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
     let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
     let notify = BatchCommandsNotify(spawn);
     notify.notify(0);
+}
+
+fn handle_minibatch_command<E: Engine> (
+    storage: &Storage<E>,
+    _cop: &Endpoint<E>,
+    _peer: String,
+    cmd: Command,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+) {
+    // let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
+    // assert(cmd.commands[0] is prewrite)
+    storage.batch_prewrite(
+        cmd,
+        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
+            // let v = v.map_err(Error::from);
+            let mut resp = PrewriteResponse::default();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                resp.set_errors(extract_key_errors(v).into());
+            }
+            let mut res = batch_commands_response::Response::default();
+            res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
+            tx.send_and_notify((id, res));
+            // if !tx.send_and_notify((id, res)).is_err() {
+                // timer.observe_duration();
+            // }
+        })
+    );
 }
 
 fn handle_batch_commands_request<E: Engine>(

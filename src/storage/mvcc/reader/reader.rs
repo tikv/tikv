@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::raftstore::coprocessor::properties::MvccProperties;
-use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{CFStatistics, Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
@@ -59,6 +59,18 @@ impl<S: Snapshot> MvccReader<S> {
         &self.statistics
     }
 
+    pub fn get_mut_statistics(&mut self) -> &mut Statistics {
+        &mut self.statistics
+    }
+
+    pub fn mut_write_statistics(&mut self) -> &mut CFStatistics {
+        &mut self.statistics.write
+    }
+
+    pub fn mut_lock_statistics(&mut self) -> &mut CFStatistics {
+        &mut self.statistics.lock
+    }
+
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
         stats.add(&self.statistics);
         self.statistics = Statistics::default();
@@ -66,6 +78,34 @@ impl<S: Snapshot> MvccReader<S> {
 
     pub fn set_key_only(&mut self, key_only: bool) {
         self.key_only = key_only;
+    }
+
+    pub fn new_write_cursor(&mut self, lo: &Key, lo_ts: u64, hi: &Key, hi_ts: u64) -> Option<Cursor<S::Iter>> {
+        let iter_opt = IterOption::new(
+            Some(KeyBuilder::from_slice(lo.clone().append_ts(lo_ts).as_encoded().as_slice(), DATA_KEY_PREFIX_LEN, 0)),
+            Some(KeyBuilder::from_slice(hi.clone().append_ts(hi_ts).as_encoded().as_slice(), DATA_KEY_PREFIX_LEN, 0)),
+            self.fill_cache)
+            .use_prefix_seek()
+            .set_prefix_same_as_start(true);
+        if let Ok(iter) = self.snapshot.iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true)) {
+            Some(iter)
+        } else {
+            None
+        }
+    }
+
+    pub fn new_lock_cursor(&mut self, lo: &Key, hi: &Key) -> Option<Cursor<S::Iter>> {
+        let iter_opt = IterOption::new(
+            Some(KeyBuilder::from_slice(lo.clone().as_encoded().as_slice(), DATA_KEY_PREFIX_LEN, 0)),
+            Some(KeyBuilder::from_slice(hi.clone().as_encoded().as_slice(), DATA_KEY_PREFIX_LEN, 0)),
+            self.fill_cache)
+            .use_prefix_seek()
+            .set_prefix_same_as_start(true);
+        if let Ok(iter) = self.snapshot.iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true)) {
+            Some(iter)
+        } else {
+            None
+        }
     }
 
     pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {

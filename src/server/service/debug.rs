@@ -83,6 +83,10 @@ impl<T: RaftStoreRouter> Service<T> {
 }
 
 impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
+    fn get_store_info(&mut self, _ctx: RpcContext<'_>, _req: GetStoreInfoRequest, _sink: UnarySink<GetStoreInfoResponse>) {}
+
+    fn get_cluster_info(&mut self, _ctx: RpcContext<'_>, _req: GetClusterInfoRequest, _sink: UnarySink<GetClusterInfoResponse>) {}
+
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
