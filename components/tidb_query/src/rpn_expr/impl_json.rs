@@ -1,6 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
+
 use tidb_query_codegen::rpn_fn;
+use tidb_query_datatype::EvalType;
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::json::*;
@@ -25,6 +28,47 @@ fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
             })
             .collect(),
     )))
+}
+
+fn json_object_validator(expr: &tipb::Expr) -> Result<()> {
+    let chunks = expr.get_children();
+    if chunks.len() % 2 == 1 {
+        return Err(other_err!(
+            "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
+        ));
+    }
+    for chunk in chunks.chunks(2) {
+        super::function::validate_expr_return_type(&chunk[0], EvalType::Bytes)?;
+        super::function::validate_expr_return_type(&chunk[1], EvalType::Json)?;
+    }
+    Ok(())
+}
+
+/// Required args like `&[(&Option<Byte>, &Option<Json>)]`.
+#[rpn_fn(raw_varg, extra_validator = json_object_validator)]
+#[inline]
+fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    let mut pairs = BTreeMap::new();
+    for chunk in raw_args.chunks(2) {
+        assert_eq!(chunk.len(), 2);
+        let key: &Option<Bytes> = chunk[0].as_ref();
+        if key.is_none() {
+            return Err(other_err!(
+                "Data truncation: JSON documents may not contain NULL member names."
+            ));
+        }
+        let key = String::from_utf8(key.as_ref().unwrap().to_owned())
+            .map_err(|e| crate::codec::Error::from(e))?;
+
+        let value: &Option<Json> = chunk[1].as_ref();
+        let value = match value {
+            None => Json::None,
+            Some(v) => v.to_owned(),
+        };
+
+        pairs.insert(key, value);
+    }
+    Ok(Some(Json::Object(pairs)))
 }
 
 // According to mysql 5.7,
@@ -149,6 +193,64 @@ mod tests {
                 .evaluate(ScalarFuncSig::JsonMergeSig)
                 .unwrap();
             assert_eq!(output, expected, "{:?}", vargs);
+        }
+    }
+
+    #[test]
+    fn test_json_object() {
+        let cases = vec![
+            (vec![], r#"{}"#),
+            (vec![("1", None)], r#"{"1":null}"#),
+            (
+                vec![
+                    ("1", None),
+                    ("2", Some(r#""sdf""#)),
+                    ("k1", Some(r#""v1""#)),
+                ],
+                r#"{"1":null,"2":"sdf","k1":"v1"}"#,
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs = vargs
+                .into_iter()
+                .map(|(key, value)| (Bytes::from(key), value.map(|s| Json::from_str(s).unwrap())))
+                .collect::<Vec<_>>();
+
+            let mut new_vargs: Vec<ScalarValue> = vec![];
+            for (key, value) in vargs.into_iter() {
+                new_vargs.push(ScalarValue::from(key));
+                new_vargs.push(ScalarValue::from(value));
+            }
+
+            let expected = Json::from_str(expected).unwrap();
+
+            let output: Json = RpnFnScalarEvaluator::new()
+                .push_params(new_vargs)
+                .evaluate(ScalarFuncSig::JsonObjectSig)
+                .unwrap()
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+
+        let err_cases = vec![
+            vec![
+                ScalarValue::from(Bytes::from("1")),
+                ScalarValue::from(None::<Json>),
+                ScalarValue::from(Bytes::from("1")),
+            ],
+            vec![
+                ScalarValue::from(None::<Bytes>),
+                ScalarValue::from(Json::from_str("1").unwrap()),
+            ],
+        ];
+
+        for err_args in err_cases {
+            let output: Result<Option<Json>> = RpnFnScalarEvaluator::new()
+                .push_params(err_args)
+                .evaluate(ScalarFuncSig::JsonObjectSig);
+
+            assert!(output.is_err());
         }
     }
 

@@ -2341,6 +2341,7 @@ impl Peer {
 
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
+            term: self.term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
