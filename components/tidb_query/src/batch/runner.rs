@@ -466,7 +466,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
-
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
@@ -477,10 +476,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut record_cnt = 0;
         // record count less than batch size and is not drained
-        info!("handle_streaming_request in Batch called, self.stream_batch_row_limit is {}", self.stream_batch_row_limit);
+        info!(
+            "handle_streaming_request in Batch called, self.stream_batch_row_limit is {}",
+            self.stream_batch_row_limit
+        );
         while record_cnt < self.stream_batch_row_limit && !is_drained {
             self.deadline.check()?;
-            info!("handle_streaming_request loop start and pass the ddl check, now record_cnt is {}", record_cnt);
+            info!(
+                "handle_streaming_request loop start and pass the ddl check, now record_cnt is {}",
+                record_cnt
+            );
 
             let mut result = self.out_most_executor.next_batch(batch_size);
             // fill is_drained
@@ -492,17 +497,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             // merge warning
             warnings.merge(&mut result.warnings);
 
-            // handle chunks here
+            record_cnt += result.logical_rows.len();
+            // Notice that logical rows len == 0 doesn't mean that it is drained.
             if !result.logical_rows.is_empty() {
                 assert_eq!(
                     result.physical_columns.columns_len(),
                     self.out_most_executor.schema().len()
                 );
                 {
-                    record_cnt += result.logical_rows.len();
-
                     let data = chunk.mut_rows_data();
-                    // handle logical/physical data
                     data.reserve(
                         result
                             .physical_columns
@@ -518,10 +521,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     )?;
                 }
 
-                info!("!result.logical_rows.is_empty() in Batch Streaming called, record_count is {} now, plen is ?",
-                      record_cnt);
+                info!(
+                    "the data this loop read is empty now, record_count is {} now, plan is ?",
+                    record_cnt
+                );
             } else {
-                info!("handle_streaming_request loop start and pass the ddl check, now record_cnt is {}", record_cnt);
+                info!(
+                    "the data this loop read is empty, now record_cnt is {}",
+                    record_cnt
+                );
             }
 
             // Grow batch size
@@ -533,12 +541,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             }
         }
 
+        let drained = if is_drained {
+            "[draied]"
+        } else {
+            "[not drained]"
+        };
+
+        let range = self.out_most_executor.take_scanned_range();
         info!(
-            "handle_streaming_request in Batch called and ready to return, record_count is {}",
-            record_cnt
+            "{} handle_streaming_request in Batch called and ready to return, record_count is {}, range {:?}",
+            drained, record_cnt, range
         );
         if record_cnt > 0 {
-            let range = self.out_most_executor.take_scanned_range();
             return self
                 .make_stream_response(chunk, warnings)
                 .map(|r| (Some((r, range)), is_drained));
