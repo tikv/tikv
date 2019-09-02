@@ -14,7 +14,7 @@
 
 #[macro_use]
 extern crate lazy_static;
-#[macro_use(slog_trace, slog_error, slog_warn, slog_info, slog_debug)]
+#[macro_use(slog_error, slog_warn, slog_info, slog_debug)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;

@@ -466,7 +466,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
-        info!("handle_streaming_request in Batch called");
+
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
@@ -475,10 +475,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut chunk = Chunk::default();
 
-        let mut record_count = 0;
+        let mut record_cnt = 0;
         // record count less than batch size and is not drained
-        while record_count < self.stream_batch_row_limit && !is_drained {
+        info!("handle_streaming_request in Batch called, self.stream_batch_row_limit is {}", self.stream_batch_row_limit);
+        while record_cnt < self.stream_batch_row_limit && !is_drained {
             self.deadline.check()?;
+            info!("handle_streaming_request loop start and pass the ddl check, now record_cnt is {}", record_cnt);
 
             let mut result = self.out_most_executor.next_batch(batch_size);
             // fill is_drained
@@ -497,6 +499,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     self.out_most_executor.schema().len()
                 );
                 {
+                    record_cnt += result.logical_rows.len();
+
                     let data = chunk.mut_rows_data();
                     // handle logical/physical data
                     data.reserve(
@@ -512,9 +516,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         self.out_most_executor.schema(),
                         data,
                     )?;
-                    record_count += result.logical_rows.len();
                 }
-                info!("!result.logical_rows.is_empty() in Batch Streaming called, record_count is {} now", record_count);
+
+                info!("!result.logical_rows.is_empty() in Batch Streaming called, record_count is {} now, plen is ?",
+                      record_cnt);
+            } else {
+                info!("handle_streaming_request loop start and pass the ddl check, now record_cnt is {}", record_cnt);
             }
 
             // Grow batch size
@@ -527,10 +534,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
 
         info!(
-            "handle_streaming_request in Batch called, record_count is {}",
-            record_count
+            "handle_streaming_request in Batch called and ready to return, record_count is {}",
+            record_cnt
         );
-        if record_count > 0 {
+        if record_cnt > 0 {
             let range = self.out_most_executor.take_scanned_range();
             return self
                 .make_stream_response(chunk, warnings)
