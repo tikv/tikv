@@ -8,7 +8,7 @@ mod reader;
 mod txn;
 mod write;
 
-pub use self::lock::{Lock, LockType};
+pub use self::lock::{Lock, LockType, Error as LockError};
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
@@ -178,6 +178,16 @@ impl Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<LockError> for Error {
+    fn from(err: LockError) -> Error {
+        match err {
+            LockError::Io(e) => Error::Io(e),
+            LockError::Codec(e) => Error::Codec(e),
+            LockError::BadFormatLock => Error::BadFormatLock,
+        }
+    }
+}
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
 pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error {
