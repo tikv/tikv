@@ -470,11 +470,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
 
         // if the data read finished, is_drained means "finished"
-        let mut is_drained = false;
+        let (mut record_cnt, mut is_drained) = (0, false);
 
         let mut chunk = Chunk::default();
 
-        let mut record_cnt = 0;
         // record count less than batch size and is not drained
         info!(
             "handle_streaming_request in Batch called, self.stream_batch_row_limit is {}",
