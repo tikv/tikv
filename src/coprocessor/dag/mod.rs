@@ -23,7 +23,7 @@ pub fn build_handler<S: Store + 'static>(
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
     let mut is_batch = false;
-    if enable_batch_if_possible && !is_streaming {
+    if enable_batch_if_possible {
         let is_supported =
             tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
         if let Err(e) = is_supported {
@@ -31,12 +31,19 @@ pub fn build_handler<S: Store + 'static>(
             // To avoid user worries, let's output success message.
             debug!("Successfully use normal Coprocessor query engine"; "start_ts" => req.get_start_ts(), "reason" => %e);
         } else {
+            if is_streaming {
+                info!("Is batch in streaming mode");
+            } else {
+                info!("Is batch, and not in streaming mode");
+            }
+
             is_batch = true;
         }
     }
 
     if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
+        info!("Build batch executor");
         Ok(
             BatchDAGHandler::new(req, ranges, store, deadline, batch_row_limit, is_streaming)?
                 .into_boxed(),

@@ -359,6 +359,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     }
 
     pub fn handle_request(&mut self) -> Result<SelectResponse> {
+        info!("handle_request in Batch called");
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
@@ -465,6 +466,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
+        info!("handle_streaming_request in Batch called");
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
@@ -512,12 +514,22 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     )?;
                     record_count += result.logical_rows.len();
                 }
+                info!("!result.logical_rows.is_empty() in Batch Streaming called, record_count is {} now", record_count);
             }
 
             // Grow batch size
-            grow_batch_size(&mut batch_size);
+            if batch_size < BATCH_MAX_SIZE {
+                batch_size *= BATCH_GROW_FACTOR;
+                if batch_size > BATCH_MAX_SIZE {
+                    batch_size = BATCH_MAX_SIZE
+                }
+            }
         }
 
+        info!(
+            "handle_streaming_request in Batch called, record_count is {}",
+            record_count
+        );
         if record_count > 0 {
             let range = self.out_most_executor.take_scanned_range();
             return self
@@ -554,16 +566,5 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.exec_stats.clear();
 
         Ok(s_resp)
-    }
-}
-
-#[inline]
-fn grow_batch_size(batch_size: &mut usize) {
-    // Grow batch size
-    if *batch_size < BATCH_MAX_SIZE {
-        *batch_size *= BATCH_GROW_FACTOR;
-        if *batch_size > BATCH_MAX_SIZE {
-            *batch_size = BATCH_MAX_SIZE
-        }
     }
 }
