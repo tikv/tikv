@@ -289,6 +289,7 @@ impl PdClient for RpcClient {
 
     fn region_heartbeat(
         &self,
+        term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
@@ -296,6 +297,7 @@ impl PdClient for RpcClient {
         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
 
         let mut req = pdpb::RegionHeartbeatRequest::default();
+        req.set_term(term);
         req.set_header(self.header());
         req.set_region(region);
         req.set_leader(leader);

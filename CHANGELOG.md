@@ -3,9 +3,7 @@ All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [Unreleased]
-
 - Make several `INFO` logs `DEBUG` and refined some log messages. (https://github.com/tikv/tikv/pull/4768)
-- Unrecognized configuration will now prevent TiKV from starting. (https://github.com/tikv/tikv/pull/5190)
 
 ## [3.0.0]
 
@@ -13,14 +11,14 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   - Introduce Titan, a key-value plugin that improves write performance for
   scenarios with value sizes greater than 1KiB, and relieves write
   amplification in certain degrees
-  - Optimize memory management to reduce memory allocation and copying for `Iterator Key Bound Option`
+  - Optimize memory management to reduce memory allocation and copying for `Iterator Key Bound Option` 
   - Support `block cache` sharing among different column families
 
 + Server
   - Support reversed `raw_scan` and `raw_batch_scan`
   - Support batch receiving and sending Raft messages, improving TPS by 7% for write intensive scenarios
   - Support getting monitoring information via HTTP
-  - Support Local Reader in RawKV to improve performance
+  - Support Local Reader in RawKV to improve performance  
   - Reduce context switch overhead from `batch commands`
 
 + Raftstore
@@ -40,15 +38,15 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 + Coprocessor
   - Refactor the computation framework to implement vector operators, computation
-  using vector expressions, and vector aggregations to improve performance
+  using vector expressions, and vector aggregations to improve performance  
   - Support providing operator execution status for the `EXPLAIN ANALYZE` statement
-  in TiDB
+  in TiDB  
   - Switch to the `work-stealing` thread pool model to reduce context switch cost
 
 + Misc
   - Develop a unified log format specification with restructured log system to
   facilitate collection and analysis by tools
-  - Add performance metrics related to configuration information and key bound crossing.
+  - Add performance metrics related to configuration information and key bound crossing. 
 
 ## [3.0.0-rc.3]
 
@@ -73,11 +71,11 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Coprocessor
     - Improve coprocessor batch executor. [4877](https://github.com/tikv/tikv/pull/4877)
 
-+ Transaction
++ Transaction 
     - Support `ResolveLockLite` to allow only resolving specified lock keys. [4882](https://github.com/tikv/tikv/pull/4882)
     - Improve pessimistic lock transaction. [4889](https://github.com/tikv/tikv/pull/4889)
 
-+ Tikv-ctl
++ Tikv-ctl 
     - Improve `bad-regions` and `tombstone` subcommands. [4862](https://github.com/tikv/tikv/pull/4862)
 
 + Misc
