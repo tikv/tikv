@@ -4,7 +4,6 @@ use std::ops::{Deref, DerefMut};
 
 use engine::rocks::{PerfContext, PerfLevel,set_perf_level};
 use prometheus::local::LocalHistogramVec;
-use criterion::BatchSize::PerIteration;
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
 pub struct PerfStatisticsFields {
@@ -261,153 +260,155 @@ impl PerfTask{
     }
 
     fn persist_perf_data(&mut self) {
-        let delte = self.init_stats.delta();
-        self.local_histogram
-            .with_label_values(&[label, "user_key_comparison_count"])
-            .observe(delta.user_key_comparison_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "block_cache_hit_count"])
-            .observe(delta.block_cache_hit_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "block_read_count"])
-            .observe(delta.block_read_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "block_read_byte"])
-            .observe(delta.block_read_byte as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "block_read_time"])
-            .observe(delta.block_read_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "block_checksum_time"])
-            .observe(delta.block_checksum_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "block_decompress_time"])
-            .observe(delta.block_decompress_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "get_read_bytes"])
-            .observe(delta.get_read_bytes as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "multiget_read_bytes"])
-            .observe(delta.multiget_read_bytes as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "iter_read_bytes"])
-            .observe(delta.iter_read_bytes as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "internal_key_skipped_count"])
-            .observe(delta.internal_key_skipped_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "internal_delete_skipped_count"])
-            .observe(delta.internal_delete_skipped_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "internal_recent_skipped_count"])
-            .observe(delta.internal_recent_skipped_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "internal_merge_count"])
-            .observe(delta.internal_merge_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "get_snapshot_time"])
-            .observe(delta.get_snapshot_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "get_from_memtable_time"])
-            .observe(delta.get_from_memtable_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "get_from_memtable_count"])
-            .observe(delta.get_from_memtable_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "get_post_process_time"])
-            .observe(delta.get_post_process_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "get_from_output_files_time"])
-            .observe(delta.get_from_output_files_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "seek_on_memtable_time"])
-            .observe(delta.seek_on_memtable_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "seek_on_memtable_count"])
-            .observe(delta.seek_on_memtable_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "next_on_memtable_count"])
-            .observe(delta.next_on_memtable_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "prev_on_memtable_count"])
-            .observe(delta.prev_on_memtable_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "seek_child_seek_time"])
-            .observe(delta.seek_child_seek_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "seek_child_seek_count"])
-            .observe(delta.seek_child_seek_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "seek_min_heap_time"])
-            .observe(delta.seek_min_heap_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "seek_max_heap_time"])
-            .observe(delta.seek_max_heap_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "seek_internal_seek_time"])
-            .observe(delta.seek_internal_seek_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "find_next_user_entry_time"])
-            .observe(delta.find_next_user_entry_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "write_wal_time"])
-            .observe(delta.write_wal_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "write_memtable_time"])
-            .observe(delta.write_memtable_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "write_delay_time"])
-            .observe(delta.write_delay_time as f64);
-        // write_perf.with_label_values(&[lebel, "write_scheduling_flushes_compactions_time"]).observe(delta.write_scheduling_flushes_compactions_time as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "write_pre_and_post_process_time"])
-            .observe(delta.write_pre_and_post_process_time as f64);
-        // write_perf.with_label_values(&[lebel, "write_thread_wait_nanos"]).observe(delta.write_thread_wait_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "db_mutex_lock_nanos"])
-            .observe(delta.db_mutex_lock_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "db_condition_wait_nanos"])
-            .observe(delta.db_condition_wait_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "merge_operator_time_nanos"])
-            .observe(delta.merge_operator_time_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "read_index_block_nanos"])
-            .observe(delta.read_index_block_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "read_filter_block_nanos"])
-            .observe(delta.read_filter_block_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "new_table_block_iter_nanos"])
-            .observe(delta.new_table_block_iter_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "new_table_iterator_nanos"])
-            .observe(delta.new_table_iterator_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "block_seek_nanos"])
-            .observe(delta.block_seek_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "find_table_nanos"])
-            .observe(delta.find_table_nanos as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "bloom_memtable_hit_count"])
-            .observe(delta.bloom_memtable_hit_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "bloom_memtable_miss_count"])
-            .observe(delta.bloom_memtable_miss_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "bloom_sst_hit_count"])
-            .observe(delta.bloom_sst_hit_count as f64);
-        self.local_histogram
-            .with_label_values(&[lebel, "bloom_sst_miss_count"])
-            .observe(delta.bloom_sst_miss_count as f64);
-        // write_perf.with_label_values(&[lebel, "key_lock_wait_time"]).observe(delta.key_lock_wait_time as f64);
-        // write_perf.with_label_values(&[lebel, "key_lock_wait_count"]).observe(delta.key_lock_wait_count as f64);
+        if let Some(stats) = self.init_stats{
+            let delta = stats.delta();
+            self.local_histogram
+                .with_label_values(&[self.label, "user_key_comparison_count"])
+                .observe(delta.user_key_comparison_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "block_cache_hit_count"])
+                .observe(delta.block_cache_hit_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "block_read_count"])
+                .observe(delta.block_read_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "block_read_byte"])
+                .observe(delta.block_read_byte as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "block_read_time"])
+                .observe(delta.block_read_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "block_checksum_time"])
+                .observe(delta.block_checksum_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "block_decompress_time"])
+                .observe(delta.block_decompress_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "get_read_bytes"])
+                .observe(delta.get_read_bytes as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "multiget_read_bytes"])
+                .observe(delta.multiget_read_bytes as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "iter_read_bytes"])
+                .observe(delta.iter_read_bytes as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "internal_key_skipped_count"])
+                .observe(delta.internal_key_skipped_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "internal_delete_skipped_count"])
+                .observe(delta.internal_delete_skipped_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "internal_recent_skipped_count"])
+                .observe(delta.internal_recent_skipped_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "internal_merge_count"])
+                .observe(delta.internal_merge_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "get_snapshot_time"])
+                .observe(delta.get_snapshot_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "get_from_memtable_time"])
+                .observe(delta.get_from_memtable_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "get_from_memtable_count"])
+                .observe(delta.get_from_memtable_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "get_post_process_time"])
+                .observe(delta.get_post_process_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "get_from_output_files_time"])
+                .observe(delta.get_from_output_files_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "seek_on_memtable_time"])
+                .observe(delta.seek_on_memtable_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "seek_on_memtable_count"])
+                .observe(delta.seek_on_memtable_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "next_on_memtable_count"])
+                .observe(delta.next_on_memtable_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "prev_on_memtable_count"])
+                .observe(delta.prev_on_memtable_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "seek_child_seek_time"])
+                .observe(delta.seek_child_seek_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "seek_child_seek_count"])
+                .observe(delta.seek_child_seek_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "seek_min_heap_time"])
+                .observe(delta.seek_min_heap_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "seek_max_heap_time"])
+                .observe(delta.seek_max_heap_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "seek_internal_seek_time"])
+                .observe(delta.seek_internal_seek_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "find_next_user_entry_time"])
+                .observe(delta.find_next_user_entry_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "write_wal_time"])
+                .observe(delta.write_wal_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "write_memtable_time"])
+                .observe(delta.write_memtable_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "write_delay_time"])
+                .observe(delta.write_delay_time as f64);
+            // write_perf.with_label_values(&[self.label, "write_scheduling_flushes_compactions_time"]).observe(delta.write_scheduling_flushes_compactions_time as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "write_pre_and_post_process_time"])
+                .observe(delta.write_pre_and_post_process_time as f64);
+            // write_perf.with_label_values(&[self.label, "write_thread_wait_nanos"]).observe(delta.write_thread_wait_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "db_mutex_lock_nanos"])
+                .observe(delta.db_mutex_lock_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "db_condition_wait_nanos"])
+                .observe(delta.db_condition_wait_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "merge_operator_time_nanos"])
+                .observe(delta.merge_operator_time_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "read_index_block_nanos"])
+                .observe(delta.read_index_block_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "read_filter_block_nanos"])
+                .observe(delta.read_filter_block_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "new_table_block_iter_nanos"])
+                .observe(delta.new_table_block_iter_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "new_table_iterator_nanos"])
+                .observe(delta.new_table_iterator_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "block_seek_nanos"])
+                .observe(delta.block_seek_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "find_table_nanos"])
+                .observe(delta.find_table_nanos as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "bloom_memtable_hit_count"])
+                .observe(delta.bloom_memtable_hit_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "bloom_memtable_miss_count"])
+                .observe(delta.bloom_memtable_miss_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "bloom_sst_hit_count"])
+                .observe(delta.bloom_sst_hit_count as f64);
+            self.local_histogram
+                .with_label_values(&[self.label, "bloom_sst_miss_count"])
+                .observe(delta.bloom_sst_miss_count as f64);
+            // write_perf.with_label_values(&[self.label, "key_lock_wait_time"]).observe(delta.key_lock_wait_time as f64);
+            // write_perf.with_label_values(&[self.label, "key_lock_wait_count"]).observe(delta.key_lock_wait_count as f64);
+        }
     }
 }
 
-impl drop for PerfTask{
+impl Drop for PerfTask{
     fn drop(&mut self){
         self.persist_perf_data();
         if self.perf_level != PerfLevel::EnableCount {

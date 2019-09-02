@@ -28,7 +28,7 @@ mod rocksdb_engine;
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::compact_listener::{CompactedEvent, CompactionListener};
 pub use self::cursor_builder::CursorBuilder;
-pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant, persist_perf_data};
+pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant, PerfTask};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 
 pub const SEEK_BOUND: u64 = 8;

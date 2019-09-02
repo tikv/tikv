@@ -3,7 +3,7 @@
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
-use engine::rocks::{set_perf_level, PerfLevel};
+use engine::rocks::PerfLevel;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -55,7 +55,7 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
-use crate::storage::kv::{PerfStatisticsInstant, persist_perf_data};
+use crate::storage::kv::PerfTask;
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use pd_client::PdClient;
@@ -483,7 +483,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::CountTime, "kv");
+            let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "kv");
             perf_task.start_perf();
             self.poll_ctx
                 .engines
@@ -504,7 +504,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.raft_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
-            let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::CountTime, "kv");
+            let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "kv");
             perf_task.start_perf();
             self.poll_ctx
                 .engines

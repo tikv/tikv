@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
-use crate::storage::kv::{PerfStatisticsInstant, PerfTask};
+use crate::storage::kv::PerfTask;
 use crate::storage::lock_manager::{
     self, wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
 };
@@ -21,7 +21,7 @@ use crate::storage::{
     metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
     ScanMode, Snapshot, Statistics, StorageCb, Value,
 };
-use engine::rocks::{set_perf_level, PerfLevel};
+use engine::rocks::PerfLevel;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
 
@@ -245,7 +245,14 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         let tag = task.tag;
         let cid = task.cid;
         let mut statistics = Statistics::default();
-        let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, tag.to_str());
+        let label = match tag{
+            CommandKind::scan_lock => "scan_lock",
+            CommandKind::key_mvcc => "key_mvcc",
+            CommandKind::resolve_lock => "resolve_lock",
+            CommandKind::start_ts_mvcc => "start_ts_mvcc",
+            _ => " ",
+        };
+        let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, label);
         perf_task.start_perf();
         let pr = match process_read_impl::<E>(task.cmd, snapshot, &mut statistics) {
             Err(e) => ProcessResult::Failed { err: e.into() },
@@ -261,13 +268,26 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
     fn process_write(mut self, engine: &E, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
-        let cid = task.cid
+        let cid = task.cid;
         let ts = task.ts;
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let waiter_mgr_scheduler = self.take_waiter_mgr_scheduler();
         let detector_scheduler = self.take_detector_scheduler();
-        let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, tag.to_str());
+        let label = match tag{
+            CommandKind::prewrite => "prewrite",
+            CommandKind::acquire_pessimistic_lock => "aquire_pessimistic_lock",
+            CommandKind::commit => "commit",
+            CommandKind::cleanup => "cleanup",
+            CommandKind::rollback => "rollback",
+            CommandKind::pessimistic_rollback => "pessimistic_rollback",
+            CommandKind::delete_range => "delete_range",
+            CommandKind::pause => "pause",
+            CommandKind::resolve_lock => "resolve_lock",
+            CommandKind::resolve_lock_lite => "resolve_lock_lite",
+            _ => " ",
+        };
+        let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, label);
         perf_task.start_perf();
         let msg = match process_write_impl(
             task.cmd,

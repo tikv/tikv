@@ -14,7 +14,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
 use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
-use engine::rocks::{set_perf_level, PerfLevel};
+use engine::rocks::PerfLevel;
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -41,7 +41,7 @@ use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
-use crate::storage::kv::{PerfStatisticsInstant, PerfTask};
+use crate::storage::kv::PerfTask;
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
@@ -381,7 +381,7 @@ impl ApplyContext {
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(need_sync);
-            let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, tag.to_str());
+            let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "raft");
             perf_task.start_perf();
             self.engines
                 .kv
