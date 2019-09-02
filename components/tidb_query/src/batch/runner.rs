@@ -471,7 +471,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         // if the data read finished, is_drained means "finished"
         let (mut record_cnt, mut is_drained) = (0, false);
-
+        let mut already_read_cnt = 0;
         let mut chunk = Chunk::default();
 
         // record count less than batch size and is not drained
@@ -479,11 +479,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             "handle_streaming_request in Batch called, self.stream_batch_row_limit is {}",
             self.stream_batch_row_limit
         );
-        while record_cnt < self.stream_batch_row_limit && !is_drained {
+        while record_cnt < self.stream_batch_row_limit
+            && already_read_cnt < self.stream_batch_row_limit
+            && !is_drained
+        {
             self.deadline.check()?;
             info!(
-                "handle_streaming_request loop start and pass the ddl check, now record_cnt is {}",
-                record_cnt
+                "handle_streaming_request loop start and pass the ddl check, now record_cnt is {}, already read is {}",
+                record_cnt, already_read_cnt
             );
 
             let mut result = self.out_most_executor.next_batch(batch_size);
@@ -497,6 +500,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             warnings.merge(&mut result.warnings);
 
             record_cnt += result.logical_rows.len();
+            already_read_cnt += result.physical_columns.rows_len();
             // Notice that logical rows len == 0 doesn't mean that it is drained.
             if !result.logical_rows.is_empty() {
                 assert_eq!(
@@ -521,13 +525,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 }
 
                 info!(
-                    "the data this loop read is empty now, record_count is {} now, plan is ?",
-                    record_cnt
+                    "the data this loop read is empty now, record_count is {} now, already read is {}",
+                    record_cnt, already_read_cnt
                 );
             } else {
                 info!(
-                    "the data this loop read is empty, now record_cnt is {}",
-                    record_cnt
+                    "the data this loop read is empty, now record_cnt is {}, already read is {}",
+                    record_cnt, already_read_cnt
                 );
             }
 
