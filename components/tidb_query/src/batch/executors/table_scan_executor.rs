@@ -14,7 +14,7 @@ use super::util::scan_executor::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::expr::{EvalConfig, EvalContext};
-use crate::storage::Storage;
+use crate::storage::{IntervalRange, Storage};
 use crate::Result;
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
@@ -108,6 +108,11 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.0.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.0.take_scanned_range()
     }
 }
 
