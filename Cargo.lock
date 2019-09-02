@@ -2531,7 +2531,10 @@ checksum = "389ce475f424f267dbed6479cbd8f126c5e1afb053b0acdaa019c74305fc65d1"
 name = "storage_types"
 version = "0.1.0"
 dependencies = [
+ "byteorder",
  "keys",
+ "quick-error",
+ "tikv_util",
 ]
 
 [[package]]

@@ -1,3 +1,8 @@
+#[macro_use]
+extern crate quick_error;
+
+pub mod mvcc;
+
 use keys::{Key, Value};
 
 // Short value max len must <= 255.

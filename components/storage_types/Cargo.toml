@@ -5,4 +5,8 @@ edition = "2018"
 publish = false
 
 [dependencies]
+byteorder = "1.2"
+quick-error = "1.2.2"
+
 keys = { path = "../keys" }
+tikv_util = { path = "../tikv_util" }

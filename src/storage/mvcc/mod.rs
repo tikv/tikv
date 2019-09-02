@@ -2,7 +2,7 @@
 
 //! Multi-version concurrency control functionality.
 
-mod lock;
+use storage_types::mvcc::lock;
 mod metrics;
 mod reader;
 mod txn;

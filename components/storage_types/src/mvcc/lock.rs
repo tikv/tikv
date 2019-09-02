@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::super::types::Value;
-use crate::storage::{
+use keys::Value;
+use crate::{
     Mutation, FOR_UPDATE_TS_PREFIX, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
 };
 use byteorder::ReadBytesExt;
@@ -159,10 +159,29 @@ impl Lock {
     }
 }
 
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Io(err: io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Codec(err: tikv_util::codec::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        BadFormatLock { description("bad format lock data") }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{Key, Mutation};
+    use crate::{Key, Mutation};
 
     #[test]
     fn test_lock_type() {
@@ -273,22 +292,3 @@ mod tests {
         assert!(Lock::parse(&v[..4]).is_err());
     }
 }
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: io::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        Codec(err: tikv_util::codec::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        BadFormatLock { description("bad format lock data") }
-    }
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
