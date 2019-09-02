@@ -1,8 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::Debug;
 use futures::Future;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
+use std::fmt::Debug;
 
 pub fn make_rpc_error<E: Debug>(err: E) -> RpcStatus {
     // FIXME: Just spewing debug error formatting here seems pretty unfriendly

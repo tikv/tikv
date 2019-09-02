@@ -14,9 +14,9 @@ use kvproto::raft_cmdpb::*;
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
+use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
-use sst_importer::send_rpc_response;
 
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;

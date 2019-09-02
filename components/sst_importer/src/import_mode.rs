@@ -119,8 +119,7 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn set_options(&self, db: &DB, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()>
-    {
+    fn set_options(&self, db: &DB, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
         let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
         cf_opts.set_block_cache_capacity(self.block_cache_size)?;
@@ -212,7 +211,7 @@ mod tests {
         let import_cf_options = ImportModeCFOptions::new();
         let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
 
-        fn mf(_cf: &str, _name: &str, _v: f64) { }
+        fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let mut switcher = ImportModeSwitcher::new();
         check_import_options(&db, &normal_db_options, &normal_cf_options);
