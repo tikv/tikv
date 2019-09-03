@@ -59,36 +59,16 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
         .map(|(config, name)| {
             let reporter = reporter.clone();
             let reporter2 = reporter.clone();
-            let engine = Arc::new(Mutex::new(engine.clone()));
-            let mut builder = Builder::from_config(config);
-            builder
+            let eng = Arc::new(Mutex::new(engine.clone()));
+            Builder::from_config(config)
                 .name_prefix(name)
                 .on_tick(move || tls_flush(&reporter))
+                .after_start(move || after_start(&eng))
                 .before_stop(move || {
                     destroy_tls_engine::<E>();
                     tls_flush(&reporter2)
-                });
-            if name == "cop-low" {
-                builder.after_start(move || {
-                    set_tls_engine(engine.lock().unwrap().clone());
-                    unsafe {
-                        // Set to lowest prio.
-                        *libc::__errno_location() = 0i32;
-                        if libc::nice(100) == -1 && *libc::__errno_location() != 0 {
-                            let msg = std::ffi::CString::new("set nice fail").unwrap();
-                            libc::perror(msg.as_c_str().as_ptr());
-                            panic!("set nice fail");
-                        }
-                        info!(
-                            "set nice to max for thread {:?}",
-                            std::thread::current().name()
-                        );
-                    }
-                });
-            } else {
-                builder.after_start(move || set_tls_engine(engine.lock().unwrap().clone()));
-            }
-            builder.build()
+                })
+                .build()
         })
         .collect()
 }
@@ -103,13 +83,36 @@ pub fn build_read_pool_for_test<E: Engine>(
     configs
         .into_iter()
         .map(|config| {
-            let engine = Arc::new(Mutex::new(engine.clone()));
+            let eng = Arc::new(Mutex::new(engine.clone()));
             Builder::from_config(config)
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                .after_start(move || after_start(&eng))
                 .before_stop(|| destroy_tls_engine::<E>())
                 .build()
         })
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn after_start<E: Engine>(engine: &Arc<Mutex<E>>) {
+    set_tls_engine(engine.lock().unwrap().clone());
+    unsafe {
+        // Set to lowest prio.
+        *libc::__errno_location() = 0i32;
+        if libc::nice(100) == -1 && *libc::__errno_location() != 0 {
+            let msg = std::ffi::CString::new("set nice fail").unwrap();
+            libc::perror(msg.as_c_str().as_ptr());
+            panic!("set nice fail");
+        }
+        info!(
+            "set nice to max for thread {:?}",
+            std::thread::current().name()
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn after_start<E: Engine>(engine: E) {
+    set_tls_engine(engine.lock().unwrap().clone());
 }
 
 fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
