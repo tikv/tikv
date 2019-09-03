@@ -103,7 +103,7 @@ where
     });
 }
 
-fn bench_raft_cluster<T, F>(c: &mut Criterion, factory: F)
+fn bench_raft_cluster<T, F>(c: &mut Criterion, factory: F, label: &str)
 where
     T: Simulator + 'static,
     F: ClusterFactory<T>,
@@ -131,9 +131,13 @@ where
             nodes,
         });
     }
-    c.bench_function_over_inputs("bench_set", bench_set, set_inputs);
-    c.bench_function_over_inputs("bench_get", bench_get, get_inputs);
-    c.bench_function_over_inputs("bench_delete", bench_delete, delete_inputs);
+    c.bench_function_over_inputs(&format!("{}/bench_set", label), bench_set, set_inputs);
+    c.bench_function_over_inputs(&format!("{}/bench_get", label), bench_get, get_inputs);
+    c.bench_function_over_inputs(
+        &format!("{}/bench_delete", label),
+        bench_delete,
+        delete_inputs,
+    );
 }
 
 trait ClusterFactory<T: Simulator>: Clone + fmt::Debug + 'static {
@@ -174,8 +178,8 @@ fn main() {
     tikv_util::config::check_max_open_fds(4096).unwrap();
 
     let mut criterion = Criterion::default().configure_from_args().sample_size(10);
-    bench_raft_cluster(&mut criterion, NodeClusterFactory {});
-    bench_raft_cluster(&mut criterion, ServerClusterFactory {});
+    bench_raft_cluster(&mut criterion, NodeClusterFactory {}, "raftstore::node");
+    bench_raft_cluster(&mut criterion, ServerClusterFactory {}, "raftstore::server");
 
     criterion.final_summary();
 }

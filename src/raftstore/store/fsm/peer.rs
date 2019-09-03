@@ -1528,11 +1528,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         };
         self.fsm.peer.last_compacted_idx = task.end_idx;
         self.fsm.peer.mut_store().compact_to(task.end_idx);
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::RaftlogGc(task))
-        {
+        if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
             error!(
                 "failed to schedule compact task";
                 "region_id" => self.fsm.region_id(),
