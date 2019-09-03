@@ -112,6 +112,8 @@ impl BackupRange {
     }
 }
 
+type BackupRes = (Vec<File>, Statistics);
+
 /// The endpoint of backup.
 ///
 /// It coordinates backup tasks and dispatches them to different workers.
@@ -153,7 +155,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             Box::new(move |iter| {
                 for info in iter {
                     let region = &info.region;
-                    if !end_key.is_none() {
+                    if end_key.is_some() {
                         let end_slice = end_key.as_ref().unwrap().as_encoded().as_slice();
                         if end_slice <= region.get_start_key() {
                             // We have reached the end.
@@ -213,7 +215,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         start_ts: u64,
         end_ts: u64,
         storage: Arc<dyn ExternalStorage>,
-        tx: mpsc::Sender<(BackupRange, Result<(Vec<File>, Statistics)>)>,
+        tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
     ) {
         // TODO: support incremental backup
         let _ = start_ts;
@@ -264,7 +266,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     error!("backup scan entries failed"; "error" => ?e);
                     return tx.send((brange, Err(e.into()))).map_err(|_| ());
                 };
-                if batch.len() == 0 {
+                if batch.is_empty() {
                     break;
                 }
                 debug!("backup scan entries"; "len" => batch.len());
@@ -538,6 +540,7 @@ pub mod tests {
         };
 
         // Test whether responses contain correct range.
+        #[allow(clippy::block_in_if_condition_stmt)]
         let tt = |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
             let tmp = TempDir::new().unwrap();
             let ls = LocalStorage::new(tmp.path()).unwrap();
@@ -568,7 +571,9 @@ pub mod tests {
             assert_eq!(counter, expect.len());
         };
 
-        let case: Vec<(&[u8], &[u8], Vec<(&[u8], &[u8])>)> = vec![
+        type Case<'a> = (&'a [u8], &'a [u8], Vec<(&'a [u8], &'a [u8])>);
+
+        let case: Vec<Case> = vec![
             (b"", b"1", vec![(b"", b"1")]),
             (b"", b"2", vec![(b"", b"1"), (b"1", b"2")]),
             (b"1", b"2", vec![(b"1", b"2")]),
