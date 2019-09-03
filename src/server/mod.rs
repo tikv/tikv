@@ -7,6 +7,7 @@ pub mod config;
 pub mod debug;
 pub mod errors;
 pub mod load_statistics;
+pub mod lock_manager;
 pub mod node;
 pub mod raftkv;
 pub mod resolve;

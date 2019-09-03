@@ -8,7 +8,7 @@ use crate::batch::interface::*;
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::expr::EvalContext;
 use crate::storage::scanner::{RangesScanner, RangesScannerOptions};
-use crate::storage::{Range, Storage};
+use crate::storage::{IntervalRange, Range, Storage};
 use crate::Result;
 
 /// Common interfaces for table scan and index scan implementations.
@@ -198,5 +198,11 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.scanner.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        // TODO: check if there is a better way to reuse this method impl.
+        self.scanner.take_scanned_range()
     }
 }
