@@ -194,6 +194,7 @@ pub fn check_environment_variables() {
     }
 }
 
+#[allow(dead_code)]
 pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
     if let Err(e) = check_critical_config(config) {
         fatal!("critical config check failed: {}", e);
