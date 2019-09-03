@@ -796,6 +796,25 @@ impl Peer {
             // As another role know we're not missing.
             self.leader_missing_time.take();
         }
+        // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
+        // request directly, rather than send a heartbeat to check quorum.
+        let msg_type = msg.get_msg_type();
+        if msg_type == MessageType::MsgReadIndex {
+            match self.inspect_lease() {
+                LeaseState::Valid => {
+                    let resp = eraftpb::Message::default();
+                    resp.set_msg_type(MessageType::MsgReadIndexResp);
+                    resp.to = m.from;
+                    resp.index = self.get_store().committed_index();
+                    resp.set_entries(m.take_entries());
+
+                    self.pending_messages.append(resp);
+                    return Ok(());
+                }
+                _ => (),
+            }
+        }
+
         self.raft_group.step(m)?;
         Ok(())
     }
