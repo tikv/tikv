@@ -14,6 +14,13 @@ use std::fmt;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
+const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
+
+// Extracts physical part of a timestamp, in milliseconds.
+fn extract_physical(ts: u64) -> u64 {
+    ts >> TSO_PHYSICAL_SHIFT_BITS
+}
+
 pub struct GcInfo {
     pub found_versions: usize,
     pub deleted_versions: usize,
@@ -86,6 +93,12 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
+    fn put_lock(&mut self, key: Key, lock: Lock) {
+        let lock = lock.to_bytes();
+        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
+        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+    }
+
     fn lock_key(
         &mut self,
         key: Key,
@@ -103,10 +116,8 @@ impl<S: Snapshot> MvccTxn<S> {
             options.for_update_ts,
             options.txn_size,
             options.min_commit_ts,
-        )
-        .to_bytes();
-        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
-        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+        );
+        self.put_lock(key, lock);
     }
 
     fn unlock_key(&mut self, key: Key) {
@@ -160,6 +171,21 @@ impl<S: Snapshot> MvccTxn<S> {
 
             self.lock_key(key, lock_type, primary, None, options);
         }
+    }
+
+    fn rollback_lock(&mut self, key: Key, lock: Lock) -> Result<()> {
+        // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
+        if lock.short_value.is_none() && lock.lock_type == LockType::Put {
+            self.delete_value(key.clone(), lock.ts);
+        }
+        let write = Write::new(WriteType::Rollback, self.start_ts, None);
+        let ts = self.start_ts;
+        self.put_write(key.clone(), ts, write.to_bytes());
+        self.unlock_key(key.clone());
+        if self.collapse_rollback {
+            self.collapse_prev_rollback(key)?;
+        }
+        Ok(())
     }
 
     /// Checks the existence of the key according to `should_not_exist`.
@@ -478,16 +504,16 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
-        let is_pessimistic_txn = match self.reader.load_lock(&key)? {
-            Some(ref lock) if lock.ts == self.start_ts => {
-                // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
-                if lock.short_value.is_none() && lock.lock_type == LockType::Put {
-                    self.delete_value(key.clone(), lock.ts);
-                }
-                lock.for_update_ts != 0
+        match self.reader.load_lock(&key)? {
+            Some(ref mut lock) if lock.ts == self.start_ts => {
+                let lock = lock.take();
+
+                let is_pessimistic_txn = lock.for_update_ts != 0;
+                self.rollback_lock(key, lock)?;
+                Ok(is_pessimistic_txn)
             }
             _ => {
-                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
+                match self.reader.get_txn_commit_info(&key, self.start_ts)? {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
@@ -517,17 +543,9 @@ impl<S: Snapshot> MvccTxn<S> {
                         self.put_write(key, ts, write.to_bytes());
                         Ok(false)
                     }
-                };
+                }
             }
-        };
-        let write = Write::new(WriteType::Rollback, self.start_ts, None);
-        let ts = self.start_ts;
-        self.put_write(key.clone(), ts, write.to_bytes());
-        self.unlock_key(key.clone());
-        if self.collapse_rollback {
-            self.collapse_prev_rollback(key)?;
         }
-        Ok(is_pessimistic_txn)
     }
 
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
@@ -550,6 +568,50 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
         Ok(())
+    }
+
+    // TODO: Documentation
+    // Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
+    pub fn check_txn_status(
+        &mut self,
+        primary_key: Key,
+        current_ts: u64,
+    ) -> Result<(u64, u64, bool)> {
+        match self.reader.load_lock(&primary_key)? {
+            Some(ref mut lock) if lock.ts == self.start_ts => {
+                let mut lock = lock.take();
+
+                let is_pessimistic_txn = lock.for_update_ts != 0;
+
+                if extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts) {
+                    // Expired. Clean up it.
+                    self.rollback_lock(primary_key, lock)?;
+                    return Ok((0, 0, is_pessimistic_txn));
+                }
+
+                let lock_ttl = lock.ttl;
+                // If this is a large transaction and the lock is active, push forward the minCommitTS.
+                // lock.minCommitTS == 0 may be a secondary lock, or not a large transaction.
+                if lock.min_commit_ts > 0 && lock.min_commit_ts < current_ts + 1 {
+                    lock.min_commit_ts = current_ts + 1;
+                    self.put_lock(primary_key, lock);
+                }
+
+                Ok((lock_ttl, 0, is_pessimistic_txn))
+            }
+            _ => {
+                // TODO: Add metrics
+                match self
+                    .reader
+                    .get_txn_commit_info(&primary_key, self.start_ts)?
+                {
+                    Some((ts, write_type)) if write_type != WriteType::Rollback => {
+                        Ok((0, ts, false))
+                    }
+                    _ => Ok((0, 0, false)),
+                }
+            }
+        }
     }
 
     pub fn gc(&mut self, key: Key, safe_point: u64) -> Result<GcInfo> {

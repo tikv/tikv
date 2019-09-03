@@ -114,6 +114,7 @@ pub enum StorageCb {
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
+    TxnStatus(Callback<(u64, u64)>),
 }
 
 /// Store Transaction scheduler commands.
@@ -194,6 +195,12 @@ pub enum Command {
         /// The transaction timestamp.
         start_ts: u64,
         for_update_ts: u64,
+    },
+    CheckTxnStatus {
+        ctx: Context,
+        primary_key: Key,
+        start_ts: u64,
+        current_ts: u64,
     },
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock {
@@ -344,6 +351,16 @@ impl Display for Command {
                 for_update_ts,
                 ctx
             ),
+            Command::CheckTxnStatus {
+                ref ctx,
+                ref primary_key,
+                start_ts,
+                current_ts,
+            } => write!(
+                f,
+                "kv::command::check_txn_status {} @ {} curr({}) | {:?}",
+                primary_key, start_ts, current_ts, ctx
+            ),
             Command::ScanLock {
                 ref ctx,
                 max_ts,
@@ -449,6 +466,7 @@ impl Command {
             Command::Cleanup { .. } => CommandKind::cleanup,
             Command::Rollback { .. } => CommandKind::rollback,
             Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
+            Command::CheckTxnStatus { .. } => CommandKind::check_txn_status,
             Command::ScanLock { .. } => CommandKind::scan_lock,
             Command::ResolveLock { .. } => CommandKind::resolve_lock,
             Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
@@ -473,7 +491,8 @@ impl Command {
             Command::ResolveLock { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
-            | Command::MvccByKey { .. } => 0,
+            | Command::MvccByKey { .. }
+            | Command::CheckTxnStatus { .. } => 0, // TODO: Should `CheckTxnStatus` be here?
         }
     }
 
@@ -485,6 +504,7 @@ impl Command {
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
             | Command::PessimisticRollback { ref ctx, .. }
+            | Command::CheckTxnStatus { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::ResolveLockLite { ref ctx, .. }
@@ -503,6 +523,7 @@ impl Command {
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
             | Command::PessimisticRollback { ref mut ctx, .. }
+            | Command::CheckTxnStatus { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::ResolveLockLite { ref mut ctx, .. }
@@ -557,6 +578,11 @@ impl Command {
             }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
+            }
+            Command::CheckTxnStatus {
+                ref primary_key, ..
+            } => {
+                bytes += primary_key.as_encoded().len();
             }
             _ => {}
         }
@@ -1249,6 +1275,26 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
+        Ok(())
+    }
+
+    // TODO: Document this function
+    pub fn async_check_txn_status(
+        &self,
+        ctx: Context,
+        primary_key: Key,
+        start_ts: u64,
+        current_ts: u64,
+        callback: Callback<(u64, u64)>,
+    ) -> Result<()> {
+        let cmd = Command::CheckTxnStatus {
+            ctx,
+            primary_key,
+            start_ts,
+            current_ts,
+        };
+        self.schedule(cmd, StorageCb::TxnStatus(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
         Ok(())
     }
 

@@ -13,6 +13,7 @@ make_static_metric! {
         kv_get,
         kv_scan,
         kv_prewrite,
+        kv_check_txn_status,
         kv_pessimistic_lock,
         kv_pessimistic_rollback,
         kv_commit,
