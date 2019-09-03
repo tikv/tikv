@@ -1,11 +1,98 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Implementation of the `rpn_fn` attribute macro.
+//!
+//! The macro should be applied to a function:
+//!
+//! ```rust
+//! #[rpb_fn]
+//! fn foo(x: &Option<u32>) -> Result<Option<u8>> {
+//!     Ok(None)
+//! }
+//! ```
+//!
+//! The expanded function implements an operation in the coprocessor.
+//!
+//! ## Arguments to macro
+//!
+//! If neither `varg` or `raw_varg` are supplied, then the generated arguments
+//! follow from the supplied function's arguments. Each argument must have a type
+//! `&Option<T>` for some `T`.
+//!
+//! ### `varg`
+//!
+//! The RPN operator takes a variable number of arguments. The arguments are passed
+//! as a `&[&Option<T>]`.
+//!
+//! ### `raw_varg`
+//!
+//! The RPN operator takes a variable number of arguments. The arguments are passed
+//! as a `&[ScalarValueRef]`.
+//!
+//! ### `min_args`
+//!
+//! The minimum number of arguments. The macro will generate code to check this
+//! as part of validation. Only valid if `varg` or `raw_varg` is also used.
+//! E.g., `#[rpn_fn(varg, min_args = 2)]`
+//!
+//! ### `extra_validator`
+//!
+//! A function name for custom validation code to be run when an operation is
+//! validated. The validator function should have the signature `&tipb::Expr -> Result<()>`.
+//! E.g., `#[rpn_fn(raw_varg, extra_validator = json_object_validator)]`
+//!
+//! ### `capture`
+//!
+//! An array of argument names which are passed from the caller to the expanded
+//! function. The argument names must be in scope in the generated `eval` or `run`
+//! methods. Currently, that includes the following arguments (the supplied
+//! function must accept these arguments with the corresponding types, in
+//! addition to any other arguments):
+//!
+//! * `ctx: &mut expr::EvalContext`
+//! * `output_rows: usize`
+//! * `args: &[rpn_expr::RpnStackNode<'_>]`
+//! * `extra: &mut rpn_expr::RpnFnCallExtra<'_>`
+//!
+//! E.g., `#[rpn_fn(capture = [ctx, extra])]`.
+//!
+//!
+//! ## Generated code
+//!
+//! ### Vararg functions
+//!
+//! This includes `varg` and `raw_varg`. The supplied function is preserved and
+//! a constructor function is generated with a `_fn_meta` suffix, e.g., `#[rpb_fn] fn foo ...`
+//! will preserve `foo` and generate `foo_fn_meta`. The constructor function
+//! returns a `rpn_expr::RpnFnMeta` value.
+//!
+//! The constructor function will include code for validating the runtime arguments
+//! and running the function, pointers to these functions are stored in the result.
+//!
+//! ### Non-vararg functions
+//!
+//! Generate the following (examples assume a supplied function called `foo_bar`:
+//!
+//! * A trait to represent the function (`FooBar_Fn`) with a single function `eval`.
+//!   - An impl of that trait for all argument types which panics
+//!   - An impl of that trait for the supported argument type which calls the supplied function.
+//! * An evaluator struct (`FooBar_Evaluator`) which implements `rpn_expr::function::Evaluator`,
+//!   which includes an `eval` method which dispatches to `FooBar_Fn::eval`.
+//! * A constructor function similar to the vararg case.
+//!
+//! The supplied function is preserved.
+//!
+//! The supported argument type is represented as a generic list, for example, a
+//! a function which takes two unsigned ints has an argument representation
+//! something like `Arg<UInt, Arg<UInt, Null>>`
+
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::punctuated::Punctuated;
 use syn::*;
 
+/// Entry point for the `rpn_fn` attribute.
 pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
     let attr = parse2::<RpnFnAttr>(attr)?;
     let item_fn = parse2::<ItemFn>(item_fn)?;
@@ -27,6 +114,12 @@ pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream>
     }
 }
 
+// ************** Parsing ******************************************************
+
+mod kw {
+    syn::custom_keyword!(Option);
+}
+
 /// Parses an attribute like `#[rpn_fn(varg, capture = [ctx, output_rows])`.
 #[derive(Debug, Default)]
 struct RpnFnAttr {
@@ -36,9 +129,9 @@ struct RpnFnAttr {
     /// Whether or not the function is a raw varg function. Raw varg function accepts `&[ScalarValueRef]`.
     is_raw_varg: bool,
 
-    /// The minimal accepted arguments, which will be checked in validator.
+    /// The minimal accepted arguments, which will be checked by the validator.
     ///
-    /// Only varg or raw varg function accepts a range of number of arguments. Other kind of
+    /// Only varg or raw_varg function accepts a range of number of arguments. Other kind of
     /// function strictly stipulates number of arguments according to the function definition.
     min_args: Option<usize>,
 
@@ -138,89 +231,6 @@ impl parse::Parse for RpnFnAttr {
     }
 }
 
-mod kw {
-    syn::custom_keyword!(Option);
-}
-
-/// Helper utility to generate RPN function validator function.
-struct ValidatorFnGenerator {
-    tokens: Vec<TokenStream>,
-}
-
-impl ValidatorFnGenerator {
-    fn new() -> Self {
-        Self { tokens: Vec::new() }
-    }
-
-    fn validate_return_type(mut self, evaluable: &TypePath) -> Self {
-        self.tokens.push(quote! {
-            function::validate_expr_return_type(expr, #evaluable::EVAL_TYPE)?;
-        });
-        self
-    }
-
-    fn validate_min_args(mut self, min_args: Option<usize>) -> Self {
-        if let Some(min_args) = min_args {
-            self.tokens.push(quote! {
-                function::validate_expr_arguments_gte(expr, #min_args)?;
-            });
-        }
-        self
-    }
-
-    fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
-        self.tokens.push(quote! {
-            for child in expr.get_children() {
-                function::validate_expr_return_type(child, #args_evaluable::EVAL_TYPE)?;
-            }
-        });
-        self
-    }
-
-    fn validate_args_type(mut self, args_evaluables: &[TypePath]) -> Self {
-        let args_len = args_evaluables.len();
-        let args_n = 0..args_len;
-        self.tokens.push(quote! {
-            function::validate_expr_arguments_eq(expr, #args_len)?;
-            let children = expr.get_children();
-            #(
-                function::validate_expr_return_type(
-                    &children[#args_n],
-                    #args_evaluables::EVAL_TYPE
-                )?;
-            )*
-        });
-        self
-    }
-
-    fn validate_by_fn(mut self, extra_validator: &Option<TokenStream>) -> Self {
-        if let Some(ts) = extra_validator {
-            self.tokens.push(quote! {
-                #ts(expr)?;
-            });
-        }
-        self
-    }
-
-    fn generate(
-        self,
-        impl_generics: &ImplGenerics<'_>,
-        where_clause: Option<&WhereClause>,
-    ) -> TokenStream {
-        let inners = self.tokens;
-        quote! {
-            fn validate #impl_generics (
-                expr: &tipb::Expr
-            ) -> crate::Result<()> #where_clause {
-                use crate::codec::data_type::Evaluable;
-                use crate::rpn_expr::function;
-                #( #inners )*
-                Ok(())
-            }
-        }
-    }
-}
-
 /// Parses an evaluable type like `Option<T>`.
 struct RpnFnEvaluableType {
     eval_type: TypePath,
@@ -311,6 +321,88 @@ impl parse::Parse for RpnFnSignatureReturnType {
     }
 }
 
+// ************** Code generation **********************************************
+
+/// Helper utility to generate RPN function validator function.
+struct ValidatorFnGenerator {
+    tokens: Vec<TokenStream>,
+}
+
+impl ValidatorFnGenerator {
+    fn new() -> Self {
+        Self { tokens: Vec::new() }
+    }
+
+    fn validate_return_type(mut self, evaluable: &TypePath) -> Self {
+        self.tokens.push(quote! {
+            function::validate_expr_return_type(expr, #evaluable::EVAL_TYPE)?;
+        });
+        self
+    }
+
+    fn validate_min_args(mut self, min_args: Option<usize>) -> Self {
+        if let Some(min_args) = min_args {
+            self.tokens.push(quote! {
+                function::validate_expr_arguments_gte(expr, #min_args)?;
+            });
+        }
+        self
+    }
+
+    fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
+        self.tokens.push(quote! {
+            for child in expr.get_children() {
+                function::validate_expr_return_type(child, #args_evaluable::EVAL_TYPE)?;
+            }
+        });
+        self
+    }
+
+    fn validate_args_type(mut self, args_evaluables: &[TypePath]) -> Self {
+        let args_len = args_evaluables.len();
+        let args_n = 0..args_len;
+        self.tokens.push(quote! {
+            function::validate_expr_arguments_eq(expr, #args_len)?;
+            let children = expr.get_children();
+            #(
+                function::validate_expr_return_type(
+                    &children[#args_n],
+                    #args_evaluables::EVAL_TYPE
+                )?;
+            )*
+        });
+        self
+    }
+
+    fn validate_by_fn(mut self, extra_validator: &Option<TokenStream>) -> Self {
+        if let Some(ts) = extra_validator {
+            self.tokens.push(quote! {
+                #ts(expr)?;
+            });
+        }
+        self
+    }
+
+    fn generate(
+        self,
+        impl_generics: &ImplGenerics<'_>,
+        where_clause: Option<&WhereClause>,
+    ) -> TokenStream {
+        let inners = self.tokens;
+        quote! {
+            fn validate #impl_generics (
+                expr: &tipb::Expr
+            ) -> crate::Result<()> #where_clause {
+                use crate::codec::data_type::Evaluable;
+                use crate::rpn_expr::function;
+                #( #inners )*
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Generates a `varg` RPN fn.
 #[derive(Debug)]
 struct VargsRpnFn {
     captures: Vec<Expr>,
@@ -425,6 +517,7 @@ impl VargsRpnFn {
     }
 }
 
+/// Generates a `raw_varg` RPN fn.
 #[derive(Debug)]
 struct RawVargsRpnFn {
     captures: Vec<Expr>,
@@ -531,6 +624,7 @@ impl RawVargsRpnFn {
     }
 }
 
+/// Generates an RPN fn which is neither `varg` or `raw_varg`.
 #[derive(Debug)]
 struct NormalRpnFn {
     captures: Vec<Expr>,
