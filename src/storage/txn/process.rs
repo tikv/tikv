@@ -846,18 +846,19 @@ fn process_write_impl<S: Snapshot>(
         Command::CheckTxnStatus {
             ctx,
             primary_key,
-            start_ts,
+            lock_ts,
+            caller_start_ts,
             current_ts,
         } => {
             let key_hashes = gen_key_hashes_if_needed(&waiter_mgr_scheduler, &[&primary_key]);
 
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !ctx.get_not_fill_cache())?;
             // Use mem::replace to avoid cloning the key.
             let (lock_ttl, commit_ts, is_pessimistic_txn) =
-                txn.check_txn_status(primary_key, current_ts)?;
+                txn.check_txn_status(primary_key, caller_start_ts, current_ts)?;
 
-            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
-            notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, start_ts);
+            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, lock_ts, key_hashes, 0);
+            notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, lock_ts);
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {

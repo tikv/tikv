@@ -575,6 +575,7 @@ impl<S: Snapshot> MvccTxn<S> {
     pub fn check_txn_status(
         &mut self,
         primary_key: Key,
+        caller_start_ts: u64,
         current_ts: u64,
     ) -> Result<(u64, u64, bool)> {
         match self.reader.load_lock(&primary_key)? {
@@ -584,7 +585,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 let is_pessimistic_txn = lock.for_update_ts != 0;
 
                 if extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts) {
-                    // Expired. Clean up it.
+                    // Expired. Clean it up.
                     self.rollback_lock(primary_key, lock)?;
                     return Ok((0, 0, is_pessimistic_txn));
                 }
@@ -592,8 +593,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 let lock_ttl = lock.ttl;
                 // If this is a large transaction and the lock is active, push forward the minCommitTS.
                 // lock.minCommitTS == 0 may be a secondary lock, or not a large transaction.
-                if lock.min_commit_ts > 0 && lock.min_commit_ts < current_ts + 1 {
-                    lock.min_commit_ts = current_ts + 1;
+                let new_min_commit_ts = ::std::cmp::max(caller_start_ts + 1, current_ts);
+                if lock.min_commit_ts > 0 && lock.min_commit_ts < new_min_commit_ts {
+                    lock.min_commit_ts = new_min_commit_ts;
                     self.put_lock(primary_key, lock);
                 }
 

@@ -1595,7 +1595,8 @@ fn future_check_txn_status<E: Engine>(
     let res = storage.async_check_txn_status(
         req.take_context(),
         primary_key,
-        req.get_start_version(),
+        req.get_lock_ts(),
+        req.get_caller_start_ts(),
         req.get_current_ts(),
         cb,
     );

@@ -199,7 +199,8 @@ pub enum Command {
     CheckTxnStatus {
         ctx: Context,
         primary_key: Key,
-        start_ts: u64,
+        lock_ts: u64,
+        caller_start_ts: u64,
         current_ts: u64,
     },
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
@@ -354,12 +355,13 @@ impl Display for Command {
             Command::CheckTxnStatus {
                 ref ctx,
                 ref primary_key,
-                start_ts,
+                lock_ts,
+                caller_start_ts,
                 current_ts,
             } => write!(
                 f,
-                "kv::command::check_txn_status {} @ {} curr({}) | {:?}",
-                primary_key, start_ts, current_ts, ctx
+                "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}",
+                primary_key, lock_ts, caller_start_ts, current_ts, ctx
             ),
             Command::ScanLock {
                 ref ctx,
@@ -1283,14 +1285,16 @@ impl<E: Engine> Storage<E> {
         &self,
         ctx: Context,
         primary_key: Key,
-        start_ts: u64,
+        lock_ts: u64,
+        caller_start_ts: u64,
         current_ts: u64,
         callback: Callback<(u64, u64)>,
     ) -> Result<()> {
         let cmd = Command::CheckTxnStatus {
             ctx,
             primary_key,
-            start_ts,
+            lock_ts,
+            caller_start_ts,
             current_ts,
         };
         self.schedule(cmd, StorageCb::TxnStatus(callback))?;
