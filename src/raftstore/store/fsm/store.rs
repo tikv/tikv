@@ -2,8 +2,9 @@
 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
-use engine::rocks::{CompactionJobInfo, WriteBatch, DB};
-use engine::{KvEngine, WriteBatch as _, WriteOptions};
+use engine::rocks::{CompactionJobInfo, Rocks, Snapshot, WriteBatch, DB};
+use engine::{Engines, KvEngine, KvEngines, WriteBatch as _, WriteOptions};
+use engine::{Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -54,8 +55,6 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
-use engine::Engines;
-use engine::{Iterable, Mutable, Peekable};
 use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -675,7 +674,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
     }
 }
 
-pub struct RaftPollerBuilder<T, C> {
+pub struct RaftPollerBuilder<T, C, E: KvEngine> {
     pub cfg: Arc<Config>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask>,
@@ -693,11 +692,11 @@ pub struct RaftPollerBuilder<T, C> {
     trans: T,
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
-    pub engines: Engines,
+    pub engines: KvEngines<E>,
     applying_snap_count: Arc<AtomicUsize>,
 }
 
-impl<T, C> RaftPollerBuilder<T, C> {
+impl<T, C> RaftPollerBuilder<T, C, Rocks> {
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
@@ -860,7 +859,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
     }
 }
 
-impl<T, C> HandlerBuilder<PeerFsm, StoreFsm> for RaftPollerBuilder<T, C>
+impl<T, C> HandlerBuilder<PeerFsm, StoreFsm> for RaftPollerBuilder<T, C, Rocks>
 where
     T: Transport + 'static,
     C: PdClient + 'static,
@@ -1002,7 +1001,7 @@ impl RaftBatchSystem {
         &mut self,
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
-        builder: RaftPollerBuilder<T, C>,
+        builder: RaftPollerBuilder<T, C, Rocks>,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 

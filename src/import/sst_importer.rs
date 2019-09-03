@@ -10,7 +10,6 @@ use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
 use engine::rocks::util::prepare_file_for_ingestion;
-use engine::rocks::Rocks;
 use engine::{IngestExternalFileOptions, KvEngine};
 
 use super::{Error, Result};
@@ -53,7 +52,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest(&self, meta: &SstMeta, db: &Rocks) -> Result<()> {
+    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, db: &E) -> Result<()> {
         match self.dir.ingest(meta, db) {
             Ok(_) => {
                 info!("ingest"; "meta" => ?meta);
@@ -142,7 +141,7 @@ impl ImportDir {
         Ok(path)
     }
 
-    fn ingest(&self, meta: &SstMeta, db: &Rocks) -> Result<()> {
+    fn ingest<E: KvEngine>(&self, meta: &SstMeta, db: &E) -> Result<()> {
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
         prepare_file_for_ingestion(&path.save, &path.clone)?;

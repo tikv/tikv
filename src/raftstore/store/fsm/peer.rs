@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use crate::raftstore::{Error, Result};
-use engine::rocks::Snapshot as EngineSnapshot;
+use engine::rocks::Snapshot as DbSnapshot;
 use engine::CF_RAFT;
 use engine::{Engines, Peekable};
 use futures::Future;
@@ -2858,7 +2858,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: DbSnapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!(
