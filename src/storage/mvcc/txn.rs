@@ -631,26 +631,61 @@ mod tests {
         Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
     };
 
+    use std::u64;
+
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_get_none(&engine, k, 1);
 
-        must_prewrite_put(&engine, k, v, k, 5);
+        must_prewrite_put(&engine, k, v, k, 2);
+        must_rollback(&engine, k, 2);
+        // should ignore rollback
         must_get_none(&engine, k, 3);
+
+        must_prewrite_lock(&engine, k, k, 3);
+        must_commit(&engine, k, 3, 4);
+        // should ignore read lock
+        must_get_none(&engine, k, 5);
+
+        must_prewrite_put(&engine, k, v, k, 5);
+        // should not be affected by later locks
+        must_get_none(&engine, k, 4);
+        // should read pending locks
         must_get_err(&engine, k, 7);
+        // should ignore the lock and get none when reading the latest record
+        must_get_none(&engine, k, u64::MAX);
 
         must_commit(&engine, k, 5, 10);
         must_get_none(&engine, k, 3);
+        // should not read with ts < commit_ts
         must_get_none(&engine, k, 7);
+        // should read with ts > commit_ts
         must_get(&engine, k, 13, v);
+        // should read the latest record if `ts == u64::MAX`
+        must_get(&engine, k, u64::MAX, v);
+
         must_prewrite_delete(&engine, k, k, 15);
+        // should ignore the lock and get previous record when reading the latest record
+        must_get(&engine, k, u64::MAX, v);
         must_commit(&engine, k, 15, 20);
         must_get_none(&engine, k, 3);
         must_get_none(&engine, k, 7);
         must_get(&engine, k, 13, v);
         must_get(&engine, k, 17, v);
         must_get_none(&engine, k, 23);
+
+        // intersecting timestamps with pessimistic txn
+        // T1: start_ts = 25, commit_ts = 27
+        // T2: start_ts = 23, commit_ts = 31
+        must_prewrite_put(&engine, k, v, k, 25);
+        must_commit(&engine, k, 25, 27);
+        must_acquire_pessimistic_lock(&engine, k, k, 23, 29);
+        must_get(&engine, k, 30, v);
+        must_pessimistic_prewrite_delete(&engine, k, k, 23, 29, true);
+        must_commit(&engine, k, 23, 31);
+        must_get(&engine, k, 30, v);
+        must_get_none(&engine, k, 32);
     }
 
     #[test]
