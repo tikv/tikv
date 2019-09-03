@@ -6,6 +6,27 @@ use quote::{quote, ToTokens};
 use syn::punctuated::Punctuated;
 use syn::*;
 
+pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
+    let attr = parse2::<RpnFnAttr>(attr)?;
+    let item_fn = parse2::<ItemFn>(item_fn)?;
+
+    // FIXME: The macro cannot handle lifetime definitions now
+    if let Some(lifetime) = item_fn.decl.generics.lifetimes().next() {
+        return Err(Error::new_spanned(
+            lifetime,
+            "Lifetime definition is not allowed",
+        ));
+    }
+
+    if attr.is_varg {
+        Ok(VargsRpnFn::new(attr, item_fn)?.generate())
+    } else if attr.is_raw_varg {
+        Ok(RawVargsRpnFn::new(attr, item_fn)?.generate())
+    } else {
+        Ok(NormalRpnFn::new(attr, item_fn)?.generate())
+    }
+}
+
 /// Parses an attribute like `#[rpn_fn(varg, capture = [ctx, output_rows])`.
 #[derive(Debug, Default)]
 struct RpnFnAttr {
@@ -127,18 +148,18 @@ struct ValidatorFnGenerator {
 }
 
 impl ValidatorFnGenerator {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self { tokens: Vec::new() }
     }
 
-    pub fn validate_return_type(mut self, evaluable: &TypePath) -> Self {
+    fn validate_return_type(mut self, evaluable: &TypePath) -> Self {
         self.tokens.push(quote! {
             function::validate_expr_return_type(expr, #evaluable::EVAL_TYPE)?;
         });
         self
     }
 
-    pub fn validate_min_args(mut self, min_args: Option<usize>) -> Self {
+    fn validate_min_args(mut self, min_args: Option<usize>) -> Self {
         if let Some(min_args) = min_args {
             self.tokens.push(quote! {
                 function::validate_expr_arguments_gte(expr, #min_args)?;
@@ -147,7 +168,7 @@ impl ValidatorFnGenerator {
         self
     }
 
-    pub fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
+    fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
         self.tokens.push(quote! {
             for child in expr.get_children() {
                 function::validate_expr_return_type(child, #args_evaluable::EVAL_TYPE)?;
@@ -156,7 +177,7 @@ impl ValidatorFnGenerator {
         self
     }
 
-    pub fn validate_args_type(mut self, args_evaluables: &[TypePath]) -> Self {
+    fn validate_args_type(mut self, args_evaluables: &[TypePath]) -> Self {
         let args_len = args_evaluables.len();
         let args_n = 0..args_len;
         self.tokens.push(quote! {
@@ -172,7 +193,7 @@ impl ValidatorFnGenerator {
         self
     }
 
-    pub fn validate_by_fn(mut self, extra_validator: &Option<TokenStream>) -> Self {
+    fn validate_by_fn(mut self, extra_validator: &Option<TokenStream>) -> Self {
         if let Some(ts) = extra_validator {
             self.tokens.push(quote! {
                 #ts(expr)?;
@@ -181,7 +202,7 @@ impl ValidatorFnGenerator {
         self
     }
 
-    pub fn generate(
+    fn generate(
         self,
         impl_generics: &ImplGenerics<'_>,
         where_clause: Option<&WhereClause>,
@@ -290,27 +311,6 @@ impl parse::Parse for RpnFnSignatureReturnType {
     }
 }
 
-pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
-    let attr = parse2::<RpnFnAttr>(attr)?;
-    let item_fn = parse2::<ItemFn>(item_fn)?;
-
-    // FIXME: The macro cannot handle lifetime definitions now
-    if let Some(lifetime) = item_fn.decl.generics.lifetimes().next() {
-        return Err(Error::new_spanned(
-            lifetime,
-            "Lifetime definition is not allowed",
-        ));
-    }
-
-    if attr.is_varg {
-        Ok(VargsRpnFn::new(attr, item_fn)?.generate())
-    } else if attr.is_raw_varg {
-        Ok(RawVargsRpnFn::new(attr, item_fn)?.generate())
-    } else {
-        Ok(NormalRpnFn::new(attr, item_fn)?.generate())
-    }
-}
-
 #[derive(Debug)]
 struct VargsRpnFn {
     captures: Vec<Expr>,
@@ -322,7 +322,7 @@ struct VargsRpnFn {
 }
 
 impl VargsRpnFn {
-    pub fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
+    fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         if item_fn.decl.inputs.len() != attr.captures.len() + 1 {
             return Err(Error::new_spanned(
                 item_fn.decl.inputs,
@@ -354,7 +354,7 @@ impl VargsRpnFn {
         })
     }
 
-    pub fn generate(self) -> TokenStream {
+    fn generate(self) -> TokenStream {
         vec![
             self.generate_constructor(),
             self.item_fn.into_token_stream(),
@@ -435,7 +435,7 @@ struct RawVargsRpnFn {
 }
 
 impl RawVargsRpnFn {
-    pub fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
+    fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         if item_fn.decl.inputs.len() != attr.captures.len() + 1 {
             return Err(Error::new_spanned(
                 item_fn.decl.inputs,
@@ -460,7 +460,7 @@ impl RawVargsRpnFn {
         })
     }
 
-    pub fn generate(self) -> TokenStream {
+    fn generate(self) -> TokenStream {
         vec![
             self.generate_constructor(),
             self.item_fn.into_token_stream(),
@@ -543,7 +543,7 @@ struct NormalRpnFn {
 }
 
 impl NormalRpnFn {
-    pub fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
+    fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         let mut arg_types = Vec::new();
         for fn_arg in item_fn.decl.inputs.iter().skip(attr.captures.len()) {
             let arg_type =
@@ -574,7 +574,7 @@ impl NormalRpnFn {
         })
     }
 
-    pub fn generate(self) -> TokenStream {
+    fn generate(self) -> TokenStream {
         vec![
             self.generate_fn_trait(),
             self.generate_dummy_fn_trait_impl(),
