@@ -23,7 +23,7 @@ use slog_async::{Async, OverflowStrategy};
 use slog_scope::GlobalLoggerGuard;
 use slog_term::{PlainDecorator, TermDecorator};
 
-use tikv::config::{MetricConfig, TiKvConfig};
+use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
 use tikv::util;
 use tikv::util::collections::HashMap;
 use tikv::util::file_log::RotatingFileLogger;
@@ -191,5 +191,23 @@ pub fn check_environment_variables() {
         if let Ok(var) = env::var(proxy) {
             info!("environment variable `{}` is present, `{}`", proxy, var);
         }
+    }
+}
+
+#[allow(dead_code)]
+pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
+    if let Err(e) = check_critical_config(config) {
+        fatal!("critical config check failed: {}", e);
+    }
+
+    if persist {
+        if let Err(e) = persist_critical_config(&config) {
+            fatal!("persist critical config failed: {}", e);
+        }
+    }
+
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {}", e.description());
     }
 }

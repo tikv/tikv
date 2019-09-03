@@ -1161,17 +1161,31 @@ impl TiKvConfig {
     }
 }
 
-pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+/// Prevents launching with an incompatible configuration
+///
+/// Loads the previously-loaded configuration from `last_tikv.toml`,
+/// compares key configuration items and fails if they are not
+/// identical.
+pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
     let store_path = Path::new(&config.storage.data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+
     if last_cfg_path.exists() {
         let last_cfg = TiKvConfig::from_file(&last_cfg_path);
         if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
             return Err(format!("check critical config failed, err {:?}", e));
         }
     }
+
+    Ok(())
+}
+
+/// Persists critical config to `last_tikv.toml`
+pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+    let store_path = Path::new(&config.storage.data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
@@ -1265,7 +1279,7 @@ mod test {
 
         let mut tikv_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = pathbuf.as_path().to_str().unwrap().to_owned();
-        assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
+        assert!(persist_critical_config(&tikv_cfg).is_ok());
     }
 
     #[test]
