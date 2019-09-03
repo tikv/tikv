@@ -15,8 +15,8 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-use engine::rocks::{CompactionJobInfo, DB};
-use engine::*;
+use engine::rocks::{self, CompactionJobInfo, DB};
+use engine::{Engines, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use tikv::config::*;
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
@@ -32,8 +32,9 @@ use super::*;
 pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
+    let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
     for _ in 1..300 {
-        let res = engine.get_cf(cf, &keys::data_key(key)).unwrap();
+        let res = engine.get_cf(handle, &keys::data_key(key)).unwrap();
         if value.is_some() && res.is_some() {
             assert_eq!(value.unwrap(), &*res.unwrap());
             return;
@@ -44,7 +45,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         thread::sleep(Duration::from_millis(20));
     }
     debug!("last try to get {}", hex::encode_upper(key));
-    let res = engine.get_cf(cf, &keys::data_key(key)).unwrap();
+    let res = engine.get_cf(handle, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {

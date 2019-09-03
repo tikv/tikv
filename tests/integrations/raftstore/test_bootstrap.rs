@@ -9,7 +9,7 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
 use engine::rocks;
-use engine::Engines;
+use engine::DbEngines;
 use engine::*;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
@@ -50,7 +50,7 @@ fn test_node_bootstrap_with_prepared_data() {
         rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
     );
     let shared_block_cache = false;
-    let engines = Engines::new(
+    let engines = DbEngines::new(
         Arc::clone(&engine),
         Arc::clone(&raft_engine),
         shared_block_cache,

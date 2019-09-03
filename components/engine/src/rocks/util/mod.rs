@@ -575,11 +575,11 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::rocks::{
-        DBOptions, RawCFOptions, RawIngestExternalFileOptions, SstFileWriter, TitanDBOptions,
-        Writable, DB,
+        DBOptions, RawCFOptions, Rocks, SstWriterBuilder, TitanDBOptions, Writable, DB,
     };
-    use crate::{CfName, CF_DEFAULT};
+    use crate::{CfName, IngestExternalFileOptions, KvEngine, Peekable, CF_DEFAULT};
     use tempfile::Builder;
+    use tikv_util::file::calc_crc32;
 
     #[test]
     fn test_cfs_diff() {
@@ -707,7 +707,7 @@ mod tests {
         writer.finish().unwrap();
     }
 
-    fn check_db_with_kvs(db: &DB, cf: &CFHandle, kvs: &[(&str, &str)]) {
+    fn check_db_with_kvs(db: &Rocks, cf: &str, kvs: &[(&str, &str)]) {
         for &(k, v) in kvs {
             assert_eq!(db.get_cf(cf, k.as_bytes()).unwrap().unwrap(), v.as_bytes());
         }
@@ -735,40 +735,43 @@ mod tests {
         let cf_name = "default";
         let db = new_engine(path_str, db_opts, &[cf_name], cf_opts)
             .map(Arc::new)
+            .map(Rocks::from_db)
             .unwrap();
-        let cf = db.cf_handle(cf_name).unwrap();
-        let mut ingest_opts = RawIngestExternalFileOptions::new();
+        let mut ingest_opts = IngestExternalFileOptions::new();
         ingest_opts.move_files(true);
 
-        gen_sst_with_kvs(db.clone(), cf_name, sst_path.to_str().unwrap(), &kvs);
+        gen_sst_with_kvs(db.get_sync_db(), cf_name, sst_path.to_str().unwrap(), &kvs);
         let size = fs::metadata(&sst_path).unwrap().len();
         let checksum = calc_crc32(&sst_path).unwrap();
 
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
         prepare_file_for_ingestion(&sst_path, &sst_clone).unwrap();
-        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
+        db.validate_file_for_ingestion(cf_name, &sst_clone, size, checksum)
+            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         // If we prepare again, it will use hard link too.
         prepare_file_for_ingestion(&sst_path, &sst_clone).unwrap();
-        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
+        db.validate_file_for_ingestion(cf_name, &sst_clone, size, checksum)
+            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(&ingest_opts, cf_name, &[sst_clone.to_str().unwrap()])
             .unwrap();
-        check_db_with_kvs(&db, cf, &kvs);
+        check_db_with_kvs(&db, cf_name, &kvs);
         assert!(!sst_clone.exists());
 
         // The second ingestion will copy sst_path to sst_clone.
         check_hard_link(&sst_path, 2);
         prepare_file_for_ingestion(&sst_path, &sst_clone).unwrap();
-        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
+        db.validate_file_for_ingestion(cf_name, &sst_clone, size, checksum)
+            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(&ingest_opts, cf_name, &[sst_clone.to_str().unwrap()])
             .unwrap();
-        check_db_with_kvs(&db, cf, &kvs);
+        check_db_with_kvs(&db, cf_name, &kvs);
         assert!(!sst_clone.exists());
     }
 

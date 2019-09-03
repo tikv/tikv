@@ -2,8 +2,8 @@
 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
-use engine::rocks::{CompactionJobInfo, Rocks, Snapshot, WriteBatch, DB};
-use engine::{Engines, KvEngine, KvEngines, WriteBatch as _, WriteOptions};
+use engine::rocks::{CompactionJobInfo, Rocks, WriteBatch, DB};
+use engine::{DbEngines, KvEngine, KvEngines, WriteBatch as _, WriteOptions};
 use engine::{Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -209,7 +209,7 @@ pub struct PollContext<T, C: 'static> {
     pub pd_client: Arc<C>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub engines: Engines,
+    pub engines: DbEngines,
     pub kv_wb: WriteBatch,
     pub raft_wb: WriteBatch,
     pub pending_count: usize,
@@ -941,7 +941,7 @@ impl RaftBatchSystem {
         &mut self,
         meta: metapb::Store,
         mut cfg: Config,
-        engines: Engines,
+        engines: DbEngines,
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,

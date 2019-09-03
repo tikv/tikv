@@ -163,6 +163,7 @@ impl Default for IterOptions {
     }
 }
 
+#[derive(Clone)]
 pub struct DeleteRangeOptions {
     pub use_delete_files: bool,
     pub use_delete_range: bool,
@@ -194,6 +195,7 @@ impl Default for DeleteRangeOptions {
     }
 }
 
+#[derive(Clone)]
 pub struct IngestExternalFileOptions {
     pub move_files: bool,
 }

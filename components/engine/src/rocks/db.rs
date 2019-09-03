@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs::File;
-use std::mem;
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
@@ -18,9 +17,13 @@ use crate::{Error, Iterable, KvEngine, Mutable, Peekable, Result, CF_LOCK, MAX_D
 
 #[derive(Clone)]
 #[repr(transparent)]
-pub struct Rocks(pub Arc<DB>);
+pub struct Rocks(Arc<DB>);
 
 impl Rocks {
+    pub fn from_db(db: Arc<DB>) -> Self {
+        Rocks(db)
+    }
+
     pub fn get_sync_db(&self) -> Arc<DB> {
         self.0.clone()
     }
@@ -40,13 +43,13 @@ impl AsMut<DB> for Rocks {
 
 impl AsRef<Rocks> for Arc<DB> {
     fn as_ref(&self) -> &Rocks {
-        unsafe { mem::transmute(self) }
+        unsafe { &*(self as *const Arc<DB> as *const Rocks) }
     }
 }
 
 impl AsMut<Rocks> for Arc<DB> {
     fn as_mut(&mut self) -> &mut Rocks {
-        unsafe { mem::transmute(self) }
+        unsafe { &mut *(self as *mut Arc<DB> as *mut Rocks) }
     }
 }
 

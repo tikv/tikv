@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
 use engine::rocks::{Snapshot, SyncSnapshot, DB};
-use engine::{Engines, KvEngine, Peekable, WriteOptions};
+use engine::{DbEngines, KvEngine, Peekable, WriteOptions};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -346,7 +346,7 @@ impl Peer {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: DbEngines,
         region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<Peer> {

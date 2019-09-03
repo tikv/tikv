@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::util::stats as rocksdb_stats;
-use engine::Engines;
+use engine::DbEngines;
 use fail;
 use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
@@ -51,7 +51,7 @@ pub struct Service<T: RaftStoreRouter> {
 
 impl<T: RaftStoreRouter> Service<T> {
     /// Constructs a new `Service` with `Engines` and a `RaftStoreRouter`.
-    pub fn new(engines: Engines, raft_router: T) -> Service<T> {
+    pub fn new(engines: DbEngines, raft_router: T) -> Service<T> {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)

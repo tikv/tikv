@@ -12,7 +12,7 @@ use std::u64;
 use engine::rocks;
 use engine::rocks::{RawWriteBatch as WriteBatch, Snapshot, Writable};
 use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Peekable};
+use engine::{util as engine_util, DbEngines, Peekable};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -203,7 +203,7 @@ impl PendingDeleteRanges {
 
 #[derive(Clone)]
 struct SnapContext {
-    engines: Engines,
+    engines: DbEngines,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -537,7 +537,7 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(
-        engines: Engines,
+        engines: DbEngines,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -682,7 +682,7 @@ mod tests {
     use engine::rocks::{
         RawCFOptions as ColumnFamilyOptions, RawWriteBatch as WriteBatch, Snapshot, Writable,
     };
-    use engine::Engines;
+    use engine::DbEngines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
@@ -810,7 +810,7 @@ mod tests {
         }
 
         let shared_block_cache = false;
-        let engines = Engines::new(
+        let engines = DbEngines::new(
             Arc::clone(&engine.kv),
             Arc::clone(&engine.kv),
             shared_block_cache,

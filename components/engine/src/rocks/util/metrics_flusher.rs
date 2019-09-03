@@ -7,20 +7,20 @@ use std::time::{Duration, Instant};
 
 use crate::rocks::util::engine_metrics::*;
 use crate::rocks::DB;
-use crate::Engines;
+use crate::DbEngines;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
 
 pub struct MetricsFlusher {
-    engines: Engines,
+    engines: DbEngines,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
     interval: Duration,
 }
 
 impl MetricsFlusher {
-    pub fn new(engines: Engines, interval: Duration) -> MetricsFlusher {
+    pub fn new(engines: DbEngines, interval: Duration) -> MetricsFlusher {
         MetricsFlusher {
             engines,
             handle: None,
@@ -87,7 +87,7 @@ mod tests {
     use super::*;
     use crate::rocks;
     use crate::rocks::util::CFOptions;
-    use crate::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions};
+    use crate::rocks::{DBOptions, RawCFOptions, Rocks};
     use crate::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use std::path::Path;
     use std::sync::Arc;
@@ -103,23 +103,27 @@ mod tests {
             .unwrap();
         let raft_path = path.path().join(Path::new("raft"));
         let db_opt = DBOptions::new();
-        let cf_opts = ColumnFamilyOptions::new();
+        let cf_opts = RawCFOptions::new();
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, rocks::util::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, rocks::util::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, RawCFOptions::new()),
+            CFOptions::new(CF_LOCK, RawCFOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
         let engine = Arc::new(
             rocks::util::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
         );
 
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, RawCFOptions::new())];
         let raft_engine = Arc::new(
             rocks::util::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
                 .unwrap(),
         );
         let shared_block_cache = false;
-        let engines = Engines::new(Rocks(engine), Rocks(raft_engine), shared_block_cache);
+        let engines = DbEngines::new(
+            Rocks::from_db(engine),
+            Rocks::from_db(raft_engine),
+            shared_block_cache,
+        );
         let mut metrics_flusher = MetricsFlusher::new(engines, Duration::from_millis(100));
 
         if let Err(e) = metrics_flusher.start() {

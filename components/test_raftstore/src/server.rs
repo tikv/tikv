@@ -12,7 +12,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
-use engine::Engines;
+use engine::DbEngines;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -105,7 +105,7 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: TiKvConfig,
-        engines: Engines,
+        engines: DbEngines,
         router: RaftRouter,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {

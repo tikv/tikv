@@ -373,7 +373,7 @@ mod tests {
     use engine::rocks::util::compact_files_in_range;
     use engine::rocks::{IngestExternalFileOptions, Snapshot, SstWriterBuilder, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
-    use engine::Engines;
+    use engine::DbEngines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
     use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -383,10 +383,10 @@ mod tests {
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
-    fn new_temp_engine(path: &TempDir) -> Engines {
+    fn new_temp_engine(path: &TempDir) -> DbEngines {
         let raft_path = path.path().join(Path::new("raft"));
         let shared_block_cache = false;
-        Engines::new(
+        DbEngines::new(
             Arc::new(
                 rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
                     .unwrap(),
@@ -399,12 +399,12 @@ mod tests {
         )
     }
 
-    fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
+    fn new_peer_storage(engines: DbEngines, r: &Region) -> PeerStorage {
         let (sched, _) = worker::dummy_scheduler();
         PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
-    fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+    fn load_default_dataset(engines: DbEngines) -> (PeerStorage, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -426,7 +426,7 @@ mod tests {
         (store, base_data)
     }
 
-    fn load_multiple_levels_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+    fn load_multiple_levels_dataset(engines: DbEngines) -> (PeerStorage, DataSet) {
         let mut r = Region::default();
         r.mut_peers().push(Peer::default());
         r.set_id(10);
@@ -838,7 +838,7 @@ mod tests {
 
         let raft_path = path.path().join(Path::new("titan"));
         let shared_block_cache = false;
-        let engines = Engines::new(
+        let engines = DbEngines::new(
             Arc::new(
                 rocks::util::new_engine(
                     path.path().to_str().unwrap(),

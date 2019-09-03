@@ -13,7 +13,7 @@ use std::{cmp, usize};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks::{Rocks, Snapshot, WriteBatch};
 use engine::{
-    DeleteRangeOptions, Engines, KvEngine, KvEngines, Mutable, Peekable, WriteBatch as _,
+    DbEngines, DeleteRangeOptions, KvEngine, KvEngines, Mutable, Peekable, WriteBatch as _,
     WriteOptions,
 };
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -312,7 +312,7 @@ impl ApplyContext<Rocks> {
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: DbEngines,
         router: BatchRouter<ApplyFsm, ControlFsm>,
         notifier: Notifier,
         cfg: &Config,
@@ -2235,7 +2235,7 @@ impl GenSnapTask {
 
     pub fn generate_and_schedule_snapshot(
         self,
-        engines: &Engines,
+        engines: &DbEngines,
         region_sched: &Scheduler<RegionTask>,
     ) -> Result<()> {
         let snapshot = RegionTask::Gen {
@@ -2922,7 +2922,7 @@ mod tests {
 
     use super::*;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
+    pub fn create_tmp_engine(path: &str) -> (TempDir, DbEngines) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = Arc::new(
             rocks::util::new_engine(
@@ -2938,7 +2938,7 @@ mod tests {
                 .unwrap(),
         );
         let shared_block_cache = false;
-        (path, Engines::new(db, raft_db, shared_block_cache))
+        (path, DbEngines::new(db, raft_db, shared_block_cache))
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {

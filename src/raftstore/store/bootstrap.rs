@@ -7,7 +7,7 @@ use super::peer_storage::{
 use super::util::new_peer;
 use crate::raftstore::Result;
 use engine::rocks::Rocks;
-use engine::{Engines, Iterable, KvEngine, Mutable};
+use engine::{DbEngines, Iterable, KvEngine, Mutable};
 use engine::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
@@ -36,7 +36,7 @@ fn is_range_empty(engine: &Rocks, cf: &str, start_key: &[u8], end_key: &[u8]) ->
 }
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
-pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Result<()> {
+pub fn bootstrap_store(engines: &DbEngines, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::default();
 
     if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
@@ -60,7 +60,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
 /// The first phase of bootstrap cluster
 ///
 /// Write the first region meta and prepare state.
-pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> Result<()> {
+pub fn prepare_bootstrap_cluster(engines: &DbEngines, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::default();
     state.set_region(region.clone());
 
@@ -79,7 +79,7 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
 }
 
 // Clear first region meta and prepare key.
-pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Result<()> {
+pub fn clear_prepare_bootstrap_cluster(engines: &DbEngines, region_id: u64) -> Result<()> {
     box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
     engines.sync_raft()?;
 
@@ -94,7 +94,7 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
 }
 
 // Clear prepare key
-pub fn clear_prepare_bootstrap_key(engines: &Engines) -> Result<()> {
+pub fn clear_prepare_bootstrap_key(engines: &DbEngines) -> Result<()> {
     box_try!(engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY));
     engines.sync_kv()?;
     Ok(())
@@ -108,7 +108,7 @@ mod tests {
     use super::*;
     use crate::raftstore::store::keys;
     use engine::rocks;
-    use engine::Engines;
+    use engine::DbEngines;
     use engine::Peekable;
     use engine::CF_DEFAULT;
 
@@ -116,7 +116,7 @@ mod tests {
     fn test_bootstrap() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let raft_path = path.path().join("raft");
-        let kv_engine = Rocks(Arc::new(
+        let kv_engine = Rocks::from_db(Arc::new(
             rocks::util::new_engine(
                 path.path().to_str().unwrap(),
                 None,
@@ -125,12 +125,12 @@ mod tests {
             )
             .unwrap(),
         ));
-        let raft_engine = Rocks(Arc::new(
+        let raft_engine = Rocks::from_db(Arc::new(
             rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                 .unwrap(),
         ));
         let shared_block_cache = false;
-        let engines = Engines::new(kv_engine.clone(), raft_engine.clone(), shared_block_cache);
+        let engines = DbEngines::new(kv_engine.clone(), raft_engine.clone(), shared_block_cache);
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());

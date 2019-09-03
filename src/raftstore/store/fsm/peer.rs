@@ -11,7 +11,7 @@ use std::{cmp, u64};
 use crate::raftstore::{Error, Result};
 use engine::rocks::Snapshot as DbSnapshot;
 use engine::CF_RAFT;
-use engine::{Engines, Peekable};
+use engine::{DbEngines, Peekable};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -127,7 +127,7 @@ impl PeerFsm {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: DbEngines,
         region: &metapb::Region,
     ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
         let meta_peer = match util::find_peer(region, store_id) {
@@ -169,7 +169,7 @@ impl PeerFsm {
         store_id: u64,
         cfg: &Config,
         sched: Scheduler<RegionTask>,
-        engines: Engines,
+        engines: DbEngines,
         region_id: u64,
         peer: metapb::Peer,
     ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {

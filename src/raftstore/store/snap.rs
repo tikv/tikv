@@ -1360,7 +1360,7 @@ pub mod tests {
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::{Engines, Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use engine::{DbEngines, Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1437,7 +1437,7 @@ pub mod tests {
         kv_db_opt: Option<DBOptions>,
         kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
-    ) -> Result<Engines> {
+    ) -> Result<DbEngines> {
         let p = path.path();
         let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft = open_test_db(
@@ -1461,7 +1461,7 @@ pub mod tests {
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
-        Ok(Engines {
+        Ok(DbEngines {
             kv,
             raft,
             shared_block_cache,

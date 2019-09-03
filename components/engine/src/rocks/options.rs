@@ -7,8 +7,7 @@ use crate::rocks::RawIngestExternalFileOptions;
 
 impl From<ReadOptions> for RawReadOptions {
     fn from(_opts: ReadOptions) -> Self {
-        let r = RawReadOptions::default();
-        r
+        RawReadOptions::default()
     }
 }
 
@@ -62,8 +61,7 @@ impl From<&IterOptions> for RawReadOptions {
 
 impl From<CFOptions> for RawCFOptions {
     fn from(_opts: CFOptions) -> Self {
-        let r = RawCFOptions::default();
-        r
+        RawCFOptions::default()
     }
 }
 

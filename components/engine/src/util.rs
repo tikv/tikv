@@ -11,40 +11,6 @@ use super::{Error, Result};
 use super::{IterOptions, MAX_DELETE_BATCH_SIZE};
 use tikv_util::keybuilder::KeyBuilder;
 
-pub fn get_msg<M: protobuf::Message + Default>(db: &DB, key: &[u8]) -> Result<Option<M>> {
-    let value = db.get(key)?;
-
-    if value.is_none() {
-        return Ok(None);
-    }
-
-    let mut m = M::default();
-    m.merge_from_bytes(&value.unwrap())?;
-    Ok(Some(m))
-}
-
-pub fn get_msg_cf<M: protobuf::Message + Default>(
-    db: &DB,
-    cf: &str,
-    key: &[u8],
-) -> Result<Option<M>> {
-    let handle = get_cf_handle(db, cf)?;
-    let value = db.get_cf(handle, key)?;
-
-    if value.is_none() {
-        return Ok(None);
-    }
-
-    let mut m = M::default();
-    m.merge_from_bytes(&value.unwrap())?;
-    Ok(Some(m))
-}
-
-pub fn put_msg<M: protobuf::Message>(wb: &RawWriteBatch, key: &[u8], m: &M) -> Result<()> {
-    wb.put(key, &m.write_to_bytes()?)?;
-    Ok(())
-}
-
 pub fn put_msg_cf<M: protobuf::Message>(
     db: &DB,
     wb: &RawWriteBatch,
@@ -171,10 +137,10 @@ mod tests {
     use crate::rocks;
     use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
     use crate::rocks::{
-        DBOptions, RawCFOptions as ColumnFamilyOptions, RawSeekKey as SeekKey, Writable,
+        DBOptions, RawCFOptions as ColumnFamilyOptions, RawSeekKey as SeekKey, RawWriteBatch,
+        Writable, DB,
     };
     use crate::ALL_CFS;
-    use crate::DB;
 
     use super::*;
 
@@ -205,7 +171,7 @@ mod tests {
             .collect();
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
-        let wb = WriteBatch::default();
+        let wb = RawWriteBatch::default();
         let ts: u8 = 12;
         let keys: Vec<_> = vec![
             b"k1".to_vec(),
@@ -312,7 +278,7 @@ mod tests {
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
         let cf = "default";
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
-        let wb = WriteBatch::default();
+        let wb = RawWriteBatch::default();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),
             (b"kabcdefg2", b"v2"),

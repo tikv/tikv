@@ -8,7 +8,7 @@ use tikv::raftstore::store::*;
 use tikv_util::collections::HashMap;
 use tikv_util::config::*;
 
-fn get_raft_msg_or_default<M: protobuf::Message + Default>(engines: &Engines, key: &[u8]) -> M {
+fn get_raft_msg_or_default<M: protobuf::Message + Default>(engines: &DbEngines, key: &[u8]) -> M {
     engines
         .kv
         .get_msg_cf(CF_RAFT, key)
@@ -42,7 +42,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn check_compacted(
-    all_engines: &HashMap<u64, Engines>,
+    all_engines: &HashMap<u64, DbEngines>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
 ) -> bool {

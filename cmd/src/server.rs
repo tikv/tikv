@@ -7,7 +7,7 @@ use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::rocks::Rocks;
-use engine::Engines;
+use engine::DbEngines;
 use fs2::FileExt;
 use kvproto::deadlock_grpc::create_deadlock;
 use kvproto::debugpb_grpc::create_debug;
@@ -179,9 +179,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-    let engines = Engines::new(
-        Rocks(Arc::new(kv_engine)),
-        Rocks(Arc::new(raft_engine)),
+    let engines = DbEngines::new(
+        Rocks::from_db(Arc::new(kv_engine)),
+        Rocks::from_db(Arc::new(raft_engine)),
         cache.is_some(),
     );
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));

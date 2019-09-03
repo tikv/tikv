@@ -21,7 +21,7 @@ use crate::server::ServerRaftStoreRouter;
 use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::{Config as StorageConfig, Storage};
 use engine::rocks::DB;
-use engine::Engines;
+use engine::DbEngines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -114,7 +114,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        engines: Engines,
+        engines: DbEngines,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
@@ -177,7 +177,7 @@ where
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &Engines) -> Result<u64> {
+    fn check_store(&self, engines: &DbEngines) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -205,7 +205,7 @@ where
         Ok(id)
     }
 
-    fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &DbEngines) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
@@ -218,7 +218,7 @@ where
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
-        engines: &Engines,
+        engines: &DbEngines,
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
@@ -242,7 +242,7 @@ where
 
     fn check_or_prepare_bootstrap_cluster(
         &self,
-        engines: &Engines,
+        engines: &DbEngines,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
@@ -256,7 +256,11 @@ where
         }
     }
 
-    fn bootstrap_cluster(&mut self, engines: &Engines, first_region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &mut self,
+        engines: &DbEngines,
+        first_region: metapb::Region,
+    ) -> Result<()> {
         let region_id = first_region.get_id();
         let mut retry = 0;
         while retry < MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
@@ -317,7 +321,7 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: Engines,
+        engines: DbEngines,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,

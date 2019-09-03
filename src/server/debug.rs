@@ -15,7 +15,7 @@ use engine::rocks::{
     RawWriteOptions as WriteOptions, Rocks, Writable, WriteBatch as RocksWriteBatch, DB,
 };
 use engine::{
-    self, Engines, IterOptions, Iterable, KvEngine, Mutable, Peekable,
+    self, DbEngines, IterOptions, Iterable, KvEngine, Mutable, Peekable,
     WriteOptions as EngineWriteOptions,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -134,15 +134,15 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 
 #[derive(Clone)]
 pub struct Debugger {
-    engines: Engines,
+    engines: DbEngines,
 }
 
 impl Debugger {
-    pub fn new(engines: Engines) -> Debugger {
+    pub fn new(engines: DbEngines) -> Debugger {
         Debugger { engines }
     }
 
-    pub fn get_engine(&self) -> &Engines {
+    pub fn get_engine(&self) -> &DbEngines {
         &self.engines
     }
 
@@ -1583,7 +1583,7 @@ mod tests {
     fn new_debugger() -> Debugger {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let engine = Rocks(Arc::new(
+        let engine = Rocks::from_db(Arc::new(
             rocks::util::new_engine_opt(
                 path,
                 DBOptions::new(),
@@ -1598,7 +1598,7 @@ mod tests {
         ));
 
         let shared_block_cache = false;
-        let engines = Engines::new(engine.clone(), engine, shared_block_cache);
+        let engines = DbEngines::new(engine.clone(), engine, shared_block_cache);
         Debugger::new(engines)
     }
 

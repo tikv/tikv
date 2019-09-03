@@ -37,9 +37,8 @@ pub use engine_rocksdb::{
 
 #[cfg(test)]
 mod tests {
-    use super::{KvEngine, Snapshot};
-    use crate::rocks::{util, Rocks, Writable};
-    use crate::{Iterable, Mutable, Peekable};
+    use crate::rocks::{util, Rocks, Snapshot};
+    use crate::{Iterable, KvEngine, Mutable, Peekable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempfile::Builder;
@@ -48,7 +47,7 @@ mod tests {
     fn test_base() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = Rocks(Arc::new(
+        let engine = Rocks::from_db(Arc::new(
             util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
 
@@ -56,29 +55,28 @@ mod tests {
         r.set_id(10);
 
         let key = b"key";
-        let handle = util::get_cf_handle(&engine, cf).unwrap();
         engine.put_msg(key, &r).unwrap();
-        engine.put_msg_cf(handle, key, &r).unwrap();
+        engine.put_msg_cf(cf, key, &r).unwrap();
 
         let snap = engine.snapshot();
 
-        let mut r1: Region = util::get_msg(&engine, key).unwrap().unwrap();
+        let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);
-        let r1_cf: Region = util::get_msg_cf(&engine, cf, key).unwrap().unwrap();
+        let r1_cf: Region = engine.get_msg_cf(cf, key).unwrap().unwrap();
         assert_eq!(r, r1_cf);
 
-        let mut r2: Region = util::get_msg(&snap, key).unwrap().unwrap();
+        let mut r2: Region = snap.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r2);
-        let r2_cf: Region = util::get_msg_cf(&snap, cf, key).unwrap().unwrap();
+        let r2_cf: Region = snap.get_msg_cf(cf, key).unwrap().unwrap();
         assert_eq!(r, r2_cf);
 
         r.set_id(11);
         engine.put_msg(key, &r).unwrap();
-        r1 = util::get_msg(&engine, key).unwrap().unwrap();
-        r2 = util::get_msg(&snap, key).unwrap().unwrap();
+        r1 = engine.get_msg(key).unwrap().unwrap();
+        r2 = snap.get_msg(key).unwrap().unwrap();
         assert_ne!(r1, r2);
 
-        let b: Option<Region> = util::get_msg(&engine, b"missing_key").unwrap();
+        let b: Option<Region> = engine.get_msg(b"missing_key").unwrap();
         assert!(b.is_none());
     }
 
@@ -86,7 +84,7 @@ mod tests {
     fn test_peekable() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = Rocks(Arc::new(
+        let engine = Rocks::from_db(Arc::new(
             util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
 
@@ -102,15 +100,14 @@ mod tests {
     fn test_scan() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = Rocks(Arc::new(
+        let engine = Rocks::from_db(Arc::new(
             util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         ));
-        let handle = engine.cf_handle(cf).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();
-        engine.put_cf(handle, b"a1", b"v1").unwrap();
-        engine.put_cf(handle, b"a2", b"v22").unwrap();
+        engine.put_cf(cf, b"a1", b"v1").unwrap();
+        engine.put_cf(cf, b"a2", b"v22").unwrap();
 
         let mut data = vec![];
         engine
@@ -161,7 +158,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let snap = Snapshot::new(Arc::clone(&engine));
+        let snap = Snapshot::new(engine.get_sync_db());
 
         engine.put(b"a3", b"v3").unwrap();
         assert!(engine.seek(b"a3").unwrap().is_some());

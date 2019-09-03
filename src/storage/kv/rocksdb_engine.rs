@@ -12,7 +12,7 @@ use engine::rocks::{
 use engine::Error as EngineError;
 use engine::{rocks, KvEngine, Mutable};
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::{Engines, IterOptions, Iterable, Peekable};
+use engine::{DbEngines, IterOptions, Iterable, Peekable};
 #[cfg(feature = "failpoints")]
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
@@ -45,7 +45,7 @@ impl Display for Task {
     }
 }
 
-struct Runner(Engines);
+struct Runner(DbEngines);
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
@@ -82,7 +82,7 @@ impl Drop for RocksEngineCore {
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
-    engines: Engines,
+    engines: DbEngines,
 }
 
 impl RocksEngine {
@@ -101,12 +101,12 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Rocks(Arc::new(rocks::util::new_engine(
+        let db = Rocks::from_db(Arc::new(rocks::util::new_engine(
             &path, None, cfs, cfs_opts,
         )?));
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(db.clone(), db, shared_block_cache);
+        let engines = DbEngines::new(db.clone(), db, shared_block_cache);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -199,7 +199,7 @@ impl TestEngineBuilder {
     }
 }
 
-fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
+fn write_modifies(engine: &DbEngines, modifies: Vec<Modify>) -> Result<()> {
     let wb = engine.kv.write_batch(0);
     for rev in modifies {
         let res = match rev {

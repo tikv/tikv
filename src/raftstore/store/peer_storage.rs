@@ -9,7 +9,7 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine::rocks::{Cache, DBOptions, Rocks, Snapshot as DbSnapshot, WriteBatch, DB};
-use engine::Engines;
+use engine::DbEngines;
 use engine::CF_RAFT;
 use engine::{rocks, KvEngine};
 use engine::{Iterable, Mutable, Peekable};
@@ -321,7 +321,7 @@ impl InvokeContext {
 }
 
 pub fn recover_from_applying_state(
-    engines: &Engines,
+    engines: &DbEngines,
     raft_wb: &WriteBatch,
     region_id: u64,
 ) -> Result<()> {
@@ -356,7 +356,7 @@ pub fn recover_from_applying_state(
     Ok(())
 }
 
-pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalState> {
+pub fn init_raft_state(engines: &DbEngines, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
     Ok(match engines.raft.get_msg(&state_key)? {
         Some(s) => s,
@@ -374,7 +374,7 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
     })
 }
 
-pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyState> {
+pub fn init_apply_state(engines: &DbEngines, region: &Region) -> Result<RaftApplyState> {
     Ok(
         match engines
             .kv
@@ -396,7 +396,7 @@ pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyS
 }
 
 fn init_last_term(
-    engines: &Engines,
+    engines: &DbEngines,
     region: &Region,
     raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
@@ -424,7 +424,7 @@ fn init_last_term(
 }
 
 pub struct PeerStorage {
-    pub engines: Engines,
+    pub engines: DbEngines,
 
     peer_id: u64,
     region: metapb::Region,
@@ -477,7 +477,7 @@ impl Storage for PeerStorage {
 
 impl PeerStorage {
     pub fn new(
-        engines: Engines,
+        engines: DbEngines,
         region: &metapb::Region,
         region_sched: Scheduler<RegionTask>,
         peer_id: u64,
@@ -1293,7 +1293,7 @@ pub fn fetch_entries_to(
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta(
-    engines: &Engines,
+    engines: &DbEngines,
     kv_wb: &WriteBatch,
     raft_wb: &WriteBatch,
     region_id: u64,
@@ -1503,7 +1503,7 @@ pub fn maybe_upgrade_from_2_to_3(
 
     // Create v2.0.x kv engine.
     let kv_cfs_opts = kv_cfg.build_cf_opts_v2(cache);
-    let mut kv_engine = Rocks(Arc::new(rocks::util::new_engine_opt(
+    let mut kv_engine = Rocks::from_db(Arc::new(rocks::util::new_engine_opt(
         kv_path,
         kv_db_opts,
         kv_cfs_opts,
@@ -1627,7 +1627,7 @@ mod tests {
     use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine::rocks::util::new_engine;
     use engine::rocks::WriteBatch;
-    use engine::Engines;
+    use engine::DbEngines;
     use engine::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
@@ -1651,7 +1651,7 @@ mod tests {
         let raft_db =
             Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
         let shared_block_cache = false;
-        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
+        let engines = DbEngines::new(kv_db, raft_db, shared_block_cache);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
