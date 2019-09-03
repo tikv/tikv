@@ -13,8 +13,6 @@ use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
-#[cfg(feature = "failpoints")]
-use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
