@@ -34,7 +34,7 @@ features = ["nightly"]
 
 [dependencies.engine_rocksdb]
 git = "https://github.com/yiwu-arbug/rust-rocksdb.git"
-branch = "upgrade_master_fix"
+branch = "upgrade_master"
 package = "rocksdb"
 
 [dev-dependencies]
