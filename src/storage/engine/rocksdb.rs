@@ -15,6 +15,7 @@ use super::{
     Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
     ScanMode, Snapshot, TEMP_DIR,
 };
+use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use raftstore::store::engine::{IterOption, Peekable};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
@@ -183,7 +184,7 @@ impl Engine for RocksEngine {
             "snapshot failed"
         )));
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            let mut header = kvproto::errorpb::Error::new();
+            let mut header = ErrorHeader::new();
             header.mut_not_leader().set_region_id(100);
             Err(Error::Request(header))
         });
