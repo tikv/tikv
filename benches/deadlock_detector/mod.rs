@@ -3,7 +3,7 @@
 use criterion::{Bencher, Criterion};
 use kvproto::deadlock::*;
 use rand::prelude::*;
-use tikv::storage::lock_manager::deadlock::DetectTable;
+use tikv::server::lock_manager::deadlock::DetectTable;
 use tikv_util::time::Duration;
 
 struct DetectGenerator {
