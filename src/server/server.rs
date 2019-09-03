@@ -17,12 +17,13 @@ use kvproto::tikvpb_grpc::*;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
-use crate::storage::lock_manager::deadlock::Service as DeadlockService;
+use crate::server::lock_manager::deadlock::Service as DeadlockService;
 use kvproto::deadlock_grpc::create_deadlock;
 
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
 use crate::raftstore::store::SnapManager;
+use crate::storage::lock_manager::LockMgr;
 use crate::storage::{Engine, Storage};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -69,10 +70,10 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine>(
+    pub fn new<E: Engine, L: LockMgr>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E>,
+        storage: Storage<E, L>,
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,

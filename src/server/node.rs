@@ -14,10 +14,10 @@ use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use crate::raftstore::store::{
     self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
 };
+use crate::server::lock_manager::LockManager;
 use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
-use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::{Config as StorageConfig, RaftKv, Storage};
 use engine::rocks::DB;
 use engine::Engines;
@@ -38,9 +38,8 @@ pub fn create_raft_storage<S>(
     read_pool: ReadPool,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
-    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-    detector_scheduler: Option<DetectorScheduler>,
-) -> Result<Storage<RaftKv<S>>>
+    lock_mgr: Option<LockManager>,
+) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
@@ -50,8 +49,7 @@ where
         read_pool,
         local_storage,
         raft_store_router,
-        waiter_mgr_scheduler,
-        detector_scheduler,
+        lock_mgr,
     )?;
     Ok(store)
 }

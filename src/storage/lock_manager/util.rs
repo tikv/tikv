@@ -2,7 +2,7 @@
 
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::txn::{Error as TxnError, ProcessResult};
+use crate::storage::txn::Error as TxnError;
 use crate::storage::Error as StorageError;
 use crate::storage::Key;
 use farmhash;
@@ -26,21 +26,6 @@ pub fn gen_key_hashes(keys: &[Key]) -> Vec<u64> {
     keys.iter().map(|key| gen_key_hash(key)).collect()
 }
 
-pub fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
-    match pr {
-        ProcessResult::MultiRes { results } => {
-            assert!(results.len() == 1);
-            match results[0] {
-                Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
-                    ref key, ..
-                }))) => key,
-                _ => panic!("unexpected mvcc error"),
-            }
-        }
-        _ => panic!("unexpected progress result"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,22 +45,5 @@ mod tests {
         let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts);
         assert_eq!(lock.hash, gen_key_hash(&key));
-    }
-
-    #[test]
-    fn test_extract_raw_key_from_process_result() {
-        let raw_key = b"foo".to_vec();
-        let pr = ProcessResult::MultiRes {
-            results: vec![Err(StorageError::from(TxnError::from(
-                MvccError::KeyIsLocked {
-                    key: raw_key.clone(),
-                    primary: vec![],
-                    ts: 0,
-                    ttl: 0,
-                    txn_size: 0,
-                },
-            )))],
-        };
-        assert_eq!(raw_key, extract_raw_key_from_process_result(&pr));
     }
 }

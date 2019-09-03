@@ -138,7 +138,6 @@ impl Simulator for ServerCluster {
             None,
             None,
             None,
-            None,
         )?;
         self.storages.insert(node_id, raft_engine);
 
