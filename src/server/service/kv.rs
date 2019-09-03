@@ -27,7 +27,7 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use prometheus::HistogramTimer;
-use tikv_util::collections::HashMap;
+use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
@@ -64,9 +64,26 @@ impl PartialEq for RegionVerId {
         self.region == other.region && self.epoch == other.epoch
     }
 }
+
+struct MiniBatchMeta {
+    idx: usize,
+    key_set: HashSet<Vec<u8>>,
+    size: u64,
+}
+
+impl MiniBatchMeta {
+    fn new() -> Self {
+        MiniBatchMeta {
+            idx: 0,
+            key_set: HashSet::default(),
+            size: 0,
+        }
+    }
+}
+
 struct MiniBatcher {
     commands: Vec<Command>,
-    router: HashMap<RegionVerId, usize>,
+    router: HashMap<RegionVerId, MiniBatchMeta>,
 }
 
 impl MiniBatcher {
@@ -88,7 +105,7 @@ impl MiniBatcher {
                     region: req.get_context().get_region_id(),
                     epoch: req.get_context().get_region_epoch().get_version(),
                 };
-                let mutations = req
+                let mutations: Vec<Mutation> = req
                     .take_mutations()
                     .into_iter()
                     .map(|mut x| match x.get_op() {
@@ -99,28 +116,47 @@ impl MiniBatcher {
                         _ => panic!("mismatch Op in prewrite mutations"),
                     })
                     .collect();
-                let mut options = Options::default();
-                options.lock_ttl = req.get_lock_ttl();
-                options.skip_constraint_check = req.get_skip_constraint_check();
-                options.for_update_ts = req.get_for_update_ts();
-                options.is_pessimistic_lock = req.take_is_pessimistic_lock();
-                options.txn_size = req.get_txn_size();                
-                let cmd = Command::Prewrite {
-                    ctx: req.take_context(),
-                    mutations,
-                    primary: req.take_primary_lock(),
-                    start_ts: req.get_start_version(),
-                    options,
+                let mut create_cmd = |mutations| {
+                    let mut options = Options::default();
+                    options.lock_ttl = req.get_lock_ttl();
+                    options.skip_constraint_check = req.get_skip_constraint_check();
+                    options.for_update_ts = req.get_for_update_ts();
+                    options.is_pessimistic_lock = req.take_is_pessimistic_lock();
+                    options.txn_size = req.get_txn_size();                
+                    Command::Prewrite {
+                        ctx: req.take_context(),
+                        mutations,
+                        primary: req.take_primary_lock(),
+                        start_ts: req.get_start_version(),
+                        options,
+                    }
                 };
-                match self.router.get(&ver) {
-                    Some(&idx) => {
-                        if let Command::MiniBatch{ref mut commands, ref mut ids} = self.commands[idx] {
+                
+                match self.router.get_mut(&ver) {
+                    Some(meta) => {
+                        for m in &mutations {
+                            if meta.key_set.contains(m.key().clone().as_encoded()) {
+                                return false;
+                            }
+                        }
+                        for m in &mutations {
+                            meta.key_set.insert(m.key().clone().into_encoded());
+                        }
+                        let cmd = create_cmd(mutations);
+                        if let Command::MiniBatch{ref mut commands, ref mut ids} = self.commands[meta.idx] {
                             commands.push(cmd);
                             ids.push(request_id);
                         }
                     }
                     None => {
-                        self.router.insert(ver, self.commands.len());
+                        let mut meta = MiniBatchMeta::new();
+                        meta.idx = self.commands.len();
+                        for m in &mutations {
+                            meta.key_set.insert(m.key().clone().into_encoded());
+                        }
+                        meta.size = 1;
+                        self.router.insert(ver, meta);
+                        let cmd = create_cmd(mutations);
                         self.commands.push(Command::MiniBatch{
                             commands: vec![cmd],
                             ids: vec![request_id],
