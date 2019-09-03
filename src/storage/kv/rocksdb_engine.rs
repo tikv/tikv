@@ -3,8 +3,8 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use engine::rocks;
 use engine::rocks::util::CFOptions;
@@ -277,7 +277,7 @@ impl Engine for RocksEngine {
             Err(Error::Request(not_leader))
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error::Request(_not_leader))
+            return Err(Error::Request(_not_leader));
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
