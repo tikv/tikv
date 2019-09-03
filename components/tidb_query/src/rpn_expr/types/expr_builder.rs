@@ -13,6 +13,7 @@ use crate::codec::mysql::Tz;
 use crate::codec::mysql::MAX_FSP;
 use crate::codec::{datum, Datum};
 use crate::Result;
+use tikv_util::box_try;
 
 /// Helper to build an `RpnExpression`.
 #[derive(Debug, Clone)]

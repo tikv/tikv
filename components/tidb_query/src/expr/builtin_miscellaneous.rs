@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
+use tikv_util::try_opt;
 
 const IPV6_LENGTH: usize = 16;
 const IPV4_LENGTH: usize = 4;

@@ -1,10 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use bitflags::bitflags;
 use std::sync::Arc;
 use std::{i64, mem, u64};
 
 use super::{Error, Result};
 use crate::codec::mysql::Tz;
+use tikv_util::box_try;
 use tipb;
 use tipb::DagRequest;
 

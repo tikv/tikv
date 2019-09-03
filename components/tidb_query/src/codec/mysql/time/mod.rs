@@ -16,6 +16,7 @@ use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 use tidb_query_datatype::FieldTypeTp;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
+use tikv_util::{box_err, box_try};
 
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};

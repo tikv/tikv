@@ -12,6 +12,7 @@ use crate::expr::EvalWarnings;
 use crate::storage::scanner::{RangesScanner, RangesScannerOptions};
 use crate::storage::{IntervalRange, Range, Storage};
 use crate::Result;
+use tikv_util::box_try;
 
 // an InnerExecutor is used in ScanExecutor,
 // hold the different logics between table scan and index scan

@@ -99,6 +99,7 @@ use super::RpnStackNode;
 use crate::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};
 use crate::expr::EvalContext;
 use crate::Result;
+use tikv_util::box_try;
 
 /// Metadata of an RPN function.
 #[derive(Clone, Copy)]

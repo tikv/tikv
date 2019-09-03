@@ -10,6 +10,7 @@ use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::codec::table;
 use crate::storage::Storage;
 use crate::Result;
+use tikv_util::box_try;
 
 pub struct IndexInnerExecutor {
     pk_col: Option<ColumnInfo>,

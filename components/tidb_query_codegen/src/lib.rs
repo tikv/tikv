@@ -3,12 +3,6 @@
 #![feature(proc_macro_diagnostic)]
 #![recursion_limit = "256"]
 
-#[macro_use]
-extern crate darling;
-#[macro_use]
-extern crate quote;
-#[macro_use]
-extern crate syn;
 extern crate proc_macro;
 
 mod aggr_function;
@@ -16,7 +10,7 @@ mod rpn_function;
 
 use darling::FromDeriveInput;
 use proc_macro::TokenStream;
-use syn::DeriveInput;
+use syn::{parse_macro_input, DeriveInput};
 
 #[proc_macro_derive(AggrFunction, attributes(aggr_function))]
 pub fn aggr_function_derive(input: TokenStream) -> TokenStream {

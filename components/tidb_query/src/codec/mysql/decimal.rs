@@ -14,7 +14,7 @@ use num;
 
 use codec::prelude::*;
 use tikv_util::codec::number::NumberEncoder;
-use tikv_util::escape;
+use tikv_util::{box_err, escape};
 
 use crate::codec::convert::{self, ConvertTo};
 use crate::codec::data_type::*;

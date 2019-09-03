@@ -12,6 +12,7 @@ use tipb::ColumnInfo;
 use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
 use crate::expr::EvalContext;
+use tikv_util::box_err;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 use tikv_util::collections::{HashMap, HashSet};
@@ -416,6 +417,7 @@ mod tests {
 
     use crate::codec::datum::{self, Datum};
     use tikv_util::collections::{HashMap, HashSet};
+    use tikv_util::map;
 
     use super::*;
 

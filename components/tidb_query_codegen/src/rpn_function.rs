@@ -2,7 +2,7 @@
 
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
-use quote::ToTokens;
+use quote::{quote, ToTokens};
 use syn::punctuated::Punctuated;
 use syn::*;
 

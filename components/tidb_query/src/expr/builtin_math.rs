@@ -12,6 +12,7 @@ use time;
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
+use tikv_util::try_opt;
 
 impl ScalarFunc {
     #[inline]

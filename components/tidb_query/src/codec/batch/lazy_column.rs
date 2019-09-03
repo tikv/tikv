@@ -10,6 +10,7 @@ use crate::codec::data_type::VectorValue;
 use crate::codec::mysql::Tz;
 use crate::codec::raw_datum::RawDatumDecoder;
 use crate::codec::Result;
+use tikv_util::box_try;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.

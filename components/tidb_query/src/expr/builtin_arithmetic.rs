@@ -8,6 +8,7 @@ use crate::codec::mysql::{Decimal, Res};
 use crate::codec::{div_i64, div_i64_with_u64, div_u64_with_i64, Datum};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
+use tikv_util::try_opt;
 
 impl ScalarFunc {
     pub fn plus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {

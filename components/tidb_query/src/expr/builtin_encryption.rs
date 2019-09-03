@@ -14,6 +14,7 @@ use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex;
 use std::io::prelude::*;
+use tikv_util::try_opt;
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;

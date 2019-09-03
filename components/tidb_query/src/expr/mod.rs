@@ -10,6 +10,7 @@ use rand_xorshift::XorShiftRng;
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
 use tikv_util::codec::number;
+use tikv_util::{box_err, try_opt};
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::mysql::charset;

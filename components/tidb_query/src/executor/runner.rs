@@ -7,6 +7,7 @@ use protobuf::Message;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
 use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
 
+use tikv_util::box_try;
 use tikv_util::deadline::Deadline;
 
 use super::Executor;

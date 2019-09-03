@@ -10,6 +10,7 @@ use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
 use crate::codec::{datum, mysql, Datum};
 use crate::expr::Expression;
+use tikv_util::try_opt;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum CmpOp {

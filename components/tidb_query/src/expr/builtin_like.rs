@@ -5,6 +5,7 @@ use regex::{bytes::Regex as BytesRegex, Regex};
 use super::{EvalContext, Result, ScalarFunc};
 use crate::codec::Datum;
 use crate::expr_util;
+use tikv_util::try_opt;
 
 impl ScalarFunc {
     /// NOTE: LIKE compare target with pattern as bytes, even if they have different

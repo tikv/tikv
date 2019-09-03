@@ -13,6 +13,7 @@ use crate::codec::mysql::decimal::RoundMode;
 use crate::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::codec::{mysql, Datum};
 use crate::expr::Flag;
+use tikv_util::try_opt;
 
 // TODO: remove it after CAST function use `in_union` function
 #[allow(dead_code)]

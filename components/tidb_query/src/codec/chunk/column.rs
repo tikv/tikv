@@ -13,6 +13,7 @@ use crate::codec::mysql::{
 };
 use crate::codec::Datum;
 
+use tikv_util::box_err;
 use tikv_util::codec::number::{self, NumberEncoder};
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;

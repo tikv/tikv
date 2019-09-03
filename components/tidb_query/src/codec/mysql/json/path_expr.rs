@@ -27,6 +27,7 @@ use super::json_unquote::unquote_string;
 use crate::codec::Result;
 use regex::Regex;
 use std::ops::Index;
+use tikv_util::{box_err, box_try};
 
 pub const PATH_EXPR_ASTERISK: &str = "*";
 
@@ -87,7 +88,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
 
     let expr = path_expr.index(dollar_index + 1..).trim_start();
 
-    lazy_static! {
+    lazy_static::lazy_static! {
         static ref RE: Regex = Regex::new(PATH_EXPR_LEG_RE_STR).unwrap();
     }
     let mut legs = vec![];
