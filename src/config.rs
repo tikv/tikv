@@ -1371,6 +1371,13 @@ impl TiKvConfig {
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
         }
+        if self.raft_store.region_split_check_diff != default_raft_store.region_split_check_diff {
+            warn!(
+                "deprecated configuration, \
+                raftstore.region-split-check-diff has been replaced with raftstore.region-split-check-size-diff",
+            );
+            self.raft_store.region_split_check_size_diff = self.raft_store.region_split_check_diff;
+        }
         if self.server.end_point_concurrency.is_some() {
             warn!(
                 "deprecated configuration, {} has been moved to {}",

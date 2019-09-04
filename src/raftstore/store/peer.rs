@@ -1513,7 +1513,9 @@ impl Peer {
         self.delete_keys_hint += apply_metrics.delete_keys_hint;
         let size_diff = self.size_diff_hint as i64 + apply_metrics.size_diff_hint;
         self.size_diff_hint = cmp::max(size_diff, 0) as u64;
-        // for txn, we only record diff in write cf
+        // A kv could be written to both default cf and write cf, we only record keys diff once.
+        // For rawkv, all kvs are written to default cf so we record diff in default cf.
+        // For txn, some small kvs would be written to write cf directly, so we record diff in write cf.
         let keys_diff = self.keys_diff_hint as i64
             + if apply_metrics.keys_diff_hint_write_cf == 0 {
                 apply_metrics.keys_diff_hint_default_cf
