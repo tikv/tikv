@@ -595,6 +595,8 @@ impl<S: Snapshot> MvccTxn<S> {
                 // lock.minCommitTS == 0 may be a secondary lock, or not a large transaction.
                 let new_min_commit_ts = ::std::cmp::max(caller_start_ts + 1, current_ts);
                 if lock.min_commit_ts > 0 && lock.min_commit_ts < new_min_commit_ts {
+                    // Pessimistic Lock shouldn't contain the min_commit_ts.
+                    assert_ne!(lock.lock_type, LockType::Pessimistic);
                     lock.min_commit_ts = new_min_commit_ts;
                     self.put_lock(primary_key, lock);
                 }
@@ -690,6 +692,7 @@ mod tests {
 
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::mvcc::txn::TSO_PHYSICAL_SHIFT_BITS;
     use crate::storage::mvcc::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{
@@ -1562,6 +1565,91 @@ mod tests {
         must_pessimistic_locked(&engine, k, 1, 2);
         must_acquire_pessimistic_lock(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
+    fn test_check_txn_status_impl<E: Engine>(engine: &E, k: &[u8], v: &[u8], is_pessimistic: bool) {
+        let ts = |physical: u64, logical: u64| (physical << TSO_PHYSICAL_SHIFT_BITS) + logical;
+
+        // Try to check a not exist thing.
+        must_check_txn_status(engine, k, ts(8, 0), ts(12, 0), ts(13, 0), 0, 0);
+
+        // Lock the key with TTL=100.
+        if is_pessimistic {
+            must_acquire_pessimistic_lock_for_large_txn(engine, k, k, ts(5, 0), ts(5, 0), 100);
+            must_prewrite_put_for_large_txn(engine, k, v, k, ts(5, 0), 100, ts(5, 0));
+        } else {
+            must_prewrite_put_for_large_txn(engine, k, v, k, ts(5, 0), 100, 0);
+        }
+        must_large_txn_locked(engine, k, ts(5, 0), 100, ts(5, 0), is_pessimistic);
+
+        // Update min_commit_ts to current_ts.
+        must_check_txn_status(engine, k, ts(5, 0), ts(6, 0), ts(7, 0), 100, 0);
+        must_large_txn_locked(engine, k, ts(5, 0), 100, ts(7, 0), is_pessimistic);
+
+        // Update min_commit_ts to caller_start_ts if current_ts < caller_start_ts.
+        // This case should be impossible. But if it happens, we prevents it.
+        must_check_txn_status(engine, k, ts(5, 0), ts(9, 0), ts(8, 0), 100, 0);
+        must_large_txn_locked(engine, k, ts(5, 0), 100, ts(9, 0), is_pessimistic);
+
+        // caller_start_ts < lock.min_commit_ts < current_ts
+        must_check_txn_status(engine, k, ts(5, 0), ts(8, 0), ts(10, 0), 100, 0);
+        must_large_txn_locked(engine, k, ts(5, 0), 100, ts(10, 0), is_pessimistic);
+
+        // current_ts < lock.min_commit_ts < caller_start_ts
+        must_check_txn_status(engine, k, ts(5, 0), ts(11, 0), ts(9, 0), 100, 0);
+        must_large_txn_locked(engine, k, ts(5, 0), 100, ts(11, 0), is_pessimistic);
+
+        // Logical time is also considered in the comparing
+        must_check_txn_status(engine, k, ts(5, 0), ts(11, 1), ts(11, 2), 100, 0);
+        must_large_txn_locked(engine, k, ts(5, 0), 100, ts(11, 2), is_pessimistic);
+
+        must_commit(engine, k, ts(5, 0), ts(15, 0));
+        must_unlocked(engine, k);
+
+        // Check committed key will get the commit ts.
+        must_check_txn_status(engine, k, ts(5, 0), ts(12, 0), ts(12, 0), 0, ts(15, 0));
+        must_unlocked(engine, k);
+
+        if is_pessimistic {
+            must_acquire_pessimistic_lock_for_large_txn(engine, k, k, ts(20, 0), ts(20, 0), 100);
+            must_prewrite_put_for_large_txn(engine, k, v, k, ts(20, 0), 100, ts(20, 0));
+        } else {
+            must_prewrite_put_for_large_txn(engine, k, v, k, ts(20, 0), 100, 0);
+        }
+
+        // Check a committed transaction when there is another lock. Expect getting the commit ts.
+        must_check_txn_status(engine, k, ts(5, 0), ts(12, 0), ts(12, 0), 0, ts(15, 0));
+
+        // Check a not existing transaction, gets nothing.
+        must_check_txn_status(engine, k, ts(6, 0), ts(12, 0), ts(12, 0), 0, 0);
+
+        // TTL check is based on physical time (in ms). When logical time's difference is larger
+        // than TTL, the lock won't be resolved.
+        must_check_txn_status(engine, k, ts(20, 0), ts(21, 105), ts(21, 105), 100, 0);
+        must_large_txn_locked(engine, k, ts(20, 0), 100, ts(21, 105), is_pessimistic);
+
+        // If physical time's difference exceeds TTL, lock will be resolved.
+        must_check_txn_status(engine, k, ts(20, 0), ts(121, 0), ts(121, 0), 0, 0);
+        must_unlocked(engine, k);
+
+        must_seek_write(
+            engine,
+            k,
+            ts(20, 0),
+            ts(20, 0),
+            ts(20, 0),
+            WriteType::Rollback,
+        );
+
+        // TODO: Test check_txn_lock's behavior with pessimistic locks.
+    }
+
+    #[test]
+    fn test_check_txn_status() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        test_check_txn_status_impl(&engine, b"k1", b"v1", false);
+        test_check_txn_status_impl(&engine, b"k2", b"v2", true);
     }
 
     #[test]
