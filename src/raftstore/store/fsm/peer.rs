@@ -2137,7 +2137,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "check snapshot range";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
-            "ranges" => ?meta.region_ranges,
             "prev_region" => ?prev_region,
         );
         let initialized = !prev_region.get_peers().is_empty();
