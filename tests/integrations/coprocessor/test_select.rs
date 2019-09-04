@@ -3,11 +3,13 @@
 use std::i64;
 use std::thread;
 
+use kvproto::coprocessor::Response;
 use kvproto::kvrpcpb::Context;
 use tipb::{Chunk, Expr, ExprType, ScalarFuncSig};
 
 use test_coprocessor::*;
 use test_storage::*;
+use tidb_query::batch::runner::BATCH_MAX_SIZE;
 use tidb_query::codec::{datum, Datum};
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
@@ -77,6 +79,41 @@ fn test_batch_row_limit() {
             datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
         let result_encoded = datum::encode_value(&row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
+    }
+}
+
+#[test]
+fn test_stream_batch_row_limit() {
+    let mut data = vec![];
+    for i in 0..8192 {
+        data.push((i, Some(format!("name:{}", i)), i));
+    }
+
+    let product = ProductTable::new();
+    let stream_row_limit = 128;
+    let (_, endpoint) = {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut cfg = Config::default();
+        cfg.end_point_stream_batch_row_limit = stream_row_limit;
+        init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
+    };
+
+    let req = DAGSelect::from(&product).build();
+    assert_eq!(req.get_ranges().len(), 1);
+
+    let check_range = move |_: &Response| {};
+
+    let resps = handle_streaming_select(&endpoint, req, check_range);
+    let length = resps.len();
+    for (i, resp) in resps.into_iter().enumerate() {
+        if i == length - 1 {
+            break;
+        }
+        let cnt = resp.get_output_counts();
+        assert!(
+            cnt >= &[stream_row_limit as i64]
+                && cnt <= &[(stream_row_limit + BATCH_MAX_SIZE) as i64]
+        );
     }
 }
 

@@ -452,44 +452,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             is_drained = drained;
             warnings.merge(&mut result_warnings);
 
-            //            self.deadline.check()?;
-            //
-            //            let mut result = self.out_most_executor.next_batch(self.stream_batch_size);
-            //
-            //            // fill is_drained
-            //            match result.is_drained {
-            //                Err(e) => return Err(e),
-            //                Ok(f) => is_drained = f,
-            //            }
-            //
-            //            // merge warning
-            //            warnings.merge(&mut result.warnings);
-            //
-            //            // Notice that logical rows len == 0 doesn't mean that it is drained.
-            //            if !result.logical_rows.is_empty() {
-            //                assert_eq!(
-            //                    result.physical_columns.columns_len(),
-            //                    self.out_most_executor.schema().len()
-            //                );
-            //                {
-            //                    let data = chunk.mut_rows_data();
-            //                    data.reserve(
-            //                        result
-            //                            .physical_columns
-            //                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
-            //                    );
-            //                    // Although `schema()` can be deeply nested, it is ok since we process data in
-            //                    // batch.
-            //                    result.physical_columns.encode(
-            //                        &result.logical_rows,
-            //                        &self.output_offsets,
-            //                        self.out_most_executor.schema(),
-            //                        data,
-            //                    )?;
-            //                    record_cnt += result.logical_rows.len();
-            //                }
-            //            }
-
             // Grow batch size
             grow_batch_size(&mut self.stream_batch_size)
         }
