@@ -809,18 +809,15 @@ impl Peer {
         // request directly, rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
-            match self.inspect_lease() {
-                LeaseState::Valid => {
-                    let mut resp = eraftpb::Message::default();
-                    resp.set_msg_type(MessageType::MsgReadIndexResp);
-                    resp.to = m.from;
-                    resp.index = self.get_store().committed_index();
-                    resp.set_entries(m.take_entries());
+            if let LeaseState::Valid = self.inspect_lease() {
+                let mut resp = eraftpb::Message::default();
+                resp.set_msg_type(MessageType::MsgReadIndexResp);
+                resp.to = m.from;
+                resp.index = self.get_store().committed_index();
+                resp.set_entries(m.take_entries());
 
-                    self.pending_messages.push(resp);
-                    return Ok(());
-                }
-                _ => (),
+                self.pending_messages.push(resp);
+                return Ok(());
             }
         }
 
