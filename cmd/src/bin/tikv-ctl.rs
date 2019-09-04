@@ -557,6 +557,10 @@ trait DebugExecutor {
     fn dump_metrics(&self, tags: Vec<&str>);
 
     fn dump_region_properties(&self, region_id: u64);
+
+    fn dump_store_info(&self);
+
+    fn dump_cluster_info(&self);
 }
 
 impl DebugExecutor for DebugClient {
@@ -742,6 +746,22 @@ impl DebugExecutor for DebugClient {
         for prop in resp.get_props() {
             v1!("{}: {}", prop.get_name(), prop.get_value());
         }
+    }
+
+    fn dump_store_info(&self) {
+        let req = GetStoreInfoRequest::default();
+        let resp = self
+            .get_store_info(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_store_info", e));
+        v1!("{}", resp.get_store_id())
+    }
+
+    fn dump_cluster_info(&self) {
+        let req = GetClusterInfoRequest::default();
+        let resp = self
+            .get_cluster_info(&req)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
+        v1!("{}", resp.get_cluster_id())
     }
 }
 
@@ -941,6 +961,20 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_region_properties", e));
         for (name, value) in props {
             v1!("{}: {}", name, value);
+        }
+    }
+
+    fn dump_store_info(&self) {
+        let store_id = self.get_store_id();
+        if let Ok(id) = store_id {
+            v1!("store id: {}", id);
+        }
+    }
+
+    fn dump_cluster_info(&self) {
+        let cluster_id = self.get_cluster_id();
+        if let Ok(id) = cluster_id {
+            v1!("cluster id: {}", id);
         }
     }
 }
@@ -1520,7 +1554,7 @@ fn main() {
         .subcommand(SubCommand::with_name("bad-regions").about("Get all regions with corrupt raft"))
         .subcommand(
             SubCommand::with_name("modify-tikv-config")
-                .about("Modify tikv config, eg. ./tikv-ctl -h ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
+                .about("Modify tikv config, eg. tikv-ctl --host ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
                 .arg(
                     Arg::with_name("module")
                         .required(true)
@@ -1694,6 +1728,14 @@ fn main() {
                         .default_value("1024")
                         .help("the length"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("store")
+                .about("Print the store id"),
+        )
+        .subcommand(
+            SubCommand::with_name("cluster")
+                .about("Print the cluster id"),
         );
 
     let matches = app.clone().get_matches();
@@ -2014,6 +2056,10 @@ fn main() {
             let resp = client.list_fail_points_opt(&list_req, option).unwrap();
             v1!("{:?}", resp.get_entries());
         }
+    } else if matches.subcommand_matches("store").is_some() {
+        debug_executor.dump_store_info();
+    } else if matches.subcommand_matches("cluster").is_some() {
+        debug_executor.dump_cluster_info();
     } else {
         let _ = app.print_help();
     }
