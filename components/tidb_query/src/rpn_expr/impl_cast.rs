@@ -972,9 +972,6 @@ macro_rules! cast_as_duration {
                     let result = Duration::parse($extra, extra.ret_field_type.get_decimal() as i8);
                     match result {
                         Ok(dur) => Ok(Some(dur)),
-                        // TODO, here is not same as TiDB's because
-                        //  1. Duration::parse is not same as TiDB's impl
-                        //  2. if parse return err, tidb can get res, too, however, we can't.
                         Err(e) => match e.code() {
                             ERR_DATA_OUT_OF_RANGE => {
                                 ctx.handle_overflow_err(e)?;

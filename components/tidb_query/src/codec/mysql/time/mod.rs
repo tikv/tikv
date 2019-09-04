@@ -807,6 +807,7 @@ impl ConvertTo<f64> for Time {
 }
 
 impl ConvertTo<Decimal> for Time {
+    // Port from TiDB's Time::ToNumber
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         if self.is_zero() {
@@ -818,6 +819,8 @@ impl ConvertTo<Decimal> for Time {
 }
 
 impl ConvertTo<MyDuration> for Time {
+    /// Port from TiDB's Time::ConvertToDuration
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<MyDuration> {
         if self.is_zero() {
             return Ok(MyDuration::zero());
