@@ -4,7 +4,6 @@ use std::fmt::{self, Display, Formatter};
 
 use super::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 use super::compact::{Runner as CompactRunner, Task as CompactTask};
-use super::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 
 use crate::raftstore::store::StoreRouter;
 use pd_client::PdClient;
@@ -12,7 +11,6 @@ use tikv_util::worker::Runnable;
 
 pub enum Task {
     Compact(CompactTask),
-    RaftlogGc(RaftlogGcTask),
     CleanupSST(CleanupSSTTask),
 }
 
@@ -20,7 +18,6 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::Compact(ref t) => t.fmt(f),
-            Task::RaftlogGc(ref t) => t.fmt(f),
             Task::CleanupSST(ref t) => t.fmt(f),
         }
     }
@@ -28,19 +25,13 @@ impl Display for Task {
 
 pub struct Runner<C, S> {
     compact: CompactRunner,
-    raftlog_gc: RaftlogGcRunner,
     cleanup_sst: CleanupSSTRunner<C, S>,
 }
 
 impl<C: PdClient, S: StoreRouter> Runner<C, S> {
-    pub fn new(
-        compact: CompactRunner,
-        raftlog_gc: RaftlogGcRunner,
-        cleanup_sst: CleanupSSTRunner<C, S>,
-    ) -> Runner<C, S> {
+    pub fn new(compact: CompactRunner, cleanup_sst: CleanupSSTRunner<C, S>) -> Runner<C, S> {
         Runner {
             compact,
-            raftlog_gc,
             cleanup_sst,
         }
     }
@@ -50,7 +41,6 @@ impl<C: PdClient, S: StoreRouter> Runnable<Task> for Runner<C, S> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact(t) => self.compact.run(t),
-            Task::RaftlogGc(t) => self.raftlog_gc.run(t),
             Task::CleanupSST(t) => self.cleanup_sst.run(t),
         }
     }
