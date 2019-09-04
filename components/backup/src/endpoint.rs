@@ -288,7 +288,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let (res_tx, res_rx) = mpsc::channel();
         for brange in rx {
             let tx = res_tx.clone();
-            self.dispatch_backup_range(brange, task.end_ts, task.end_ts, task.storage.clone(), tx);
+            self.dispatch_backup_range(brange, task.start_ts, task.end_ts, task.storage.clone(), tx);
         }
 
         // Drop the extra sender so that for loop does not hang up.
