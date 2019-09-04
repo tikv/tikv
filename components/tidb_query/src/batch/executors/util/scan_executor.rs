@@ -84,7 +84,6 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
                     .collect(),
                 scan_backward_in_range: is_backward,
                 is_key_only,
-                // TODO: modify this and update this to be choosable
                 is_scanned_range_aware,
             }),
             is_ended: false,

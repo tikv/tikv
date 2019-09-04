@@ -296,12 +296,9 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                 }
             }
         }
-        let range = self.executor.take_scanned_range();
-        info!(
-            "handle_streaming_request has range {:?} and record_cnt {}, is_finished {}",
-            range, record_cnt, finished
-        );
+
         if record_cnt > 0 {
+            let range = self.executor.take_scanned_range();
             return self
                 .make_stream_response(chunk)
                 .map(|r| (Some((r, range)), finished));
