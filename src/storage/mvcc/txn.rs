@@ -531,7 +531,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     } else {
                         break 'out;
                     }
-                    if ids[min_idx.1] < u64::max_value() {
+                    if ids[min_idx.0] < u64::max_value() {
                         min_ts = if let Command::Prewrite{ start_ts, .. } = commands[min_idx.0] { start_ts } else { 0 };
                         break;
                     }
@@ -571,7 +571,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     } else {
                         break 'out2;
                     }
-                    if ids[min_idx.1] < u64::max_value() {
+                    if ids[min_idx.0] < u64::max_value() {
                         break;
                     }
                 }

@@ -408,6 +408,13 @@ pub const CMD_TAG_GC: &str = "gc";
 pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
 
 impl Command {
+    pub fn batched(&self) -> bool {
+        match *self {
+            Command::MiniBatch { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn readonly(&self) -> bool {
         match *self {
             Command::ScanLock { .. } |
@@ -462,7 +469,7 @@ impl Command {
             Command::Pause { .. } => CommandKind::pause,
             Command::MvccByKey { .. } => CommandKind::key_mvcc,
             Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
-            Command::MiniBatch { ref commands, .. } => commands[0].tag(),
+            Command::MiniBatch { .. } => CommandKind::batch_command,
         }
     }
 

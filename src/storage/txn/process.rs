@@ -190,14 +190,32 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 self.take_pool()
                     .pool
                     .spawn(move || {
-                        notify_scheduler(
-                            self.take_scheduler(),
-                            Msg::FinishedWithErr {
-                                cid: task.cid,
-                                err: Error::from(err),
-                                tag: task.tag,
-                            },
-                        );
+                        let sched = self.take_scheduler();
+                        if task.cmd().batched() {
+                            let ids = if let Command::MiniBatch { ids, .. } = task.cmd() { Some(ids) } else { None };
+                            for id in ids.unwrap() {
+                                if *id < u64::max_value() {
+                                    sched.on_batch_msg(
+                                        *id,
+                                        Msg::FinishedWithErr {
+                                            cid: task.cid,
+                                            err: Error::from(err.maybe_clone().unwrap()),
+                                            tag: task.tag,
+                                        },
+                                    );
+                                }
+                            }
+                            sched.on_batch_finished(task.cid);
+                        } else {
+                            notify_scheduler(
+                                sched,
+                                Msg::FinishedWithErr {
+                                    cid: task.cid,
+                                    err: Error::from(err),
+                                    tag: task.tag,
+                                },
+                            );
+                        }
                         future::ok::<_, ()>(())
                     })
                     .unwrap();

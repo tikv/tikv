@@ -347,7 +347,8 @@ impl<E: Engine> Scheduler<E> {
 
     fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCb) {
         // write flow control
-        if cmd.need_flow_control() && self.inner.too_busy() {
+        // batched command has batch_callback
+        if !cmd.batched() && cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             execute_callback(
                 callback,
@@ -367,6 +368,7 @@ impl<E: Engine> Scheduler<E> {
         let tag = task.tag;
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
+        let ids = if let Command::MiniBatch { ids, .. } = task.cmd() { Some(ids.clone()) } else { None };
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
@@ -377,7 +379,16 @@ impl<E: Engine> Scheduler<E> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e.into());
+                if ids.is_some() {
+                    for id in ids.unwrap() {
+                        if id < u64::max_value() {
+                            self.batch_finish_with_err(cid, id, Error::from(e.maybe_clone().unwrap()));
+                        }
+                    }
+                    self.batch_all_finished(cid);
+                } else {
+                    self.finish_with_err(cid, e.into());
+                }
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
