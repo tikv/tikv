@@ -14,7 +14,7 @@
 //! Core data types.
 
 use std::cmp::Ordering;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::u64;
 
@@ -56,8 +56,13 @@ pub struct MvccInfo {
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Debug)]
 pub struct Key(Vec<u8>);
+
+impl Debug for Key {
+    fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
+        write!(f, "{}", escape(self.0.as_slice()))
+    }
+}
 
 /// Core functions for `Key`.
 impl Key {

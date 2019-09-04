@@ -13,6 +13,7 @@
 
 mod backward_scanner;
 mod forward_scanner;
+mod point_getter;
 mod util;
 
 use super::lock::{Lock, LockType};
@@ -28,6 +29,7 @@ use util::properties::MvccProperties;
 
 pub use self::backward_scanner::{BackwardScanner, BackwardScannerBuilder};
 pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
+pub use self::point_getter::{PointGetter, PointGetterBuilder};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -94,17 +96,21 @@ impl<S: Snapshot> MvccReader<S> {
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
+        self.statistics.data.get += 1;
+
         let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
             cursor
                 .get(&k, &mut self.statistics.data)?
                 .map(|v| v.to_vec())
         } else {
-            self.statistics.data.get += 1;
             self.snapshot.get(&k)?
         };
 
-        self.statistics.data.processed += 1;
+        if res.is_some() {
+            self.statistics.data.processed += 1;
+        }
+
         Ok(res)
     }
 

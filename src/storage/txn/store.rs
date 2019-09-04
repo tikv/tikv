@@ -13,10 +13,10 @@
 
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
-use storage::mvcc::{
-    BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
-};
+use storage::mvcc::PointGetterBuilder;
+use storage::mvcc::{BackwardScanner, BackwardScannerBuilder};
 use storage::mvcc::{Error as MvccError, MvccReader};
+use storage::mvcc::{ForwardScanner, ForwardScannerBuilder};
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
 pub struct SnapshotStore<S: Snapshot> {
@@ -42,16 +42,13 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 
     pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
-        let mut reader = MvccReader::new(
-            self.snapshot.clone(),
-            None,
-            self.fill_cache,
-            None,
-            None,
-            self.isolation_level,
-        );
-        let v = reader.get(key, self.start_ts)?;
-        statistics.add(reader.get_statistics());
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .multi(false)
+            .build()?;
+        let v = point_getter.get(key)?;
+        statistics.add(&point_getter.take_statistics());
         Ok(v)
     }
 
@@ -60,6 +57,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
+        // TODO: Use PointGetter.
         // TODO: sort the keys and use ScanMode::Forward
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
