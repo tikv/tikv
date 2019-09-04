@@ -254,12 +254,11 @@ pub trait JsonDecoder: NumberDecoder {
         }
         // key_entries
         let key_entries_len = KEY_ENTRY_LEN * element_count;
-        let mut key_entries_data = &buf[..key_entries_len]; //&data[0..key_entries_len];
+        let (mut key_entries_data, buf) = buf.split_at(key_entries_len);
 
         // value-entry ::= type(byte) offset-or-inlined-value(uint32)
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
-        let mut value_entries_data = &buf[key_entries_len..key_entries_len + value_entries_len];
-        let mut data = &buf[key_entries_len + value_entries_len..left_size];
+        let (mut value_entries_data, mut data) = buf.split_at(value_entries_len);
         for _ in 0..element_count {
             let key_real_offset = key_entries_data.read_u32_le()?;
             let key_len = key_entries_data.read_u16_le()? as usize;
@@ -284,8 +283,7 @@ pub trait JsonDecoder: NumberDecoder {
             return Err(Error::unexpected_eof());
         }
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
-        let mut value_entries_data = &buf[..value_entries_len];
-        let values_data = &buf[value_entries_len..left_size];
+        let (mut value_entries_data, values_data) = buf.split_at(value_entries_len);
         let mut array_data = Vec::with_capacity(element_count);
         let data_start_offset = (U32_LEN + U32_LEN + value_entries_len) as u32;
         for _ in 0..element_count {
@@ -327,15 +325,12 @@ pub trait JsonDecoder: NumberDecoder {
     }
 
     fn decode_json_item(&mut self, values_data: &[u8], data_start_position: u32) -> Result<Json> {
-        let code = self.read_u8()?;
+        let mut entry = self.read_bytes(VALUE_ENTRY_LEN)?;
+        let code = entry.read_u8()?;
         match code {
-            TYPE_CODE_LITERAL => {
-                let value = self.decode_json_literal();
-                self.advance(U32_LEN - LITERAL_LEN);
-                value
-            }
+            TYPE_CODE_LITERAL => entry.decode_json_literal(),
             _ => {
-                let real_offset = self.read_u32_le()?;
+                let real_offset = entry.read_u32_le()?;
                 let offset_in_values = real_offset - data_start_position;
                 let mut value = &values_data[offset_in_values as usize..];
                 value.decode_json_body(code)
