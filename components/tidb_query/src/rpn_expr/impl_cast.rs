@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::convert::TryFrom;
+use std::{i64, str, u64};
 
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
@@ -64,9 +65,9 @@ fn get_cast_fn_rpn_meta(
             let fu = from_field_type.is_unsigned();
             let ru = to_field_type.is_unsigned();
             match (fu, ru) {
-                (true, _) => cast_any_as_decimal_fn_meta::<Int>(),
-                (false, false) => cast_any_as_decimal_fn_meta::<Int>(),
+                (true, _) => cast_unsigned_int_as_decimal_fn_meta(),
                 (false, true) => cast_signed_int_as_unsigned_decimal_fn_meta(),
+                (false, false) => cast_any_as_decimal_fn_meta::<Int>(),
             }
         }
         (EvalType::Real, EvalType::Decimal) => cast_real_as_decimal_fn_meta(),
@@ -226,12 +227,33 @@ fn in_union(implicit_args: &[ScalarValue]) -> bool {
 
 // cast any as decimal, some cast functions reuse `cast_any_as_decimal`
 //
-// - cast_unsigned_int_as_unsigned_decimal -> cast_any_as_decimal<Int>
-// - cast_unsigned_int_as_signed_or_unsigned_decimal -> cast_any_as_decimal<Int>
+// - cast_signed_int_as_signed_decimal -> cast_any_as_decimal<Int>
 // - cast_string_as_signed_decimal -> cast_any_as_decimal<Bytes>
 // - cast_time_as_decimal -> cast_any_as_decimal<Time>
 // - cast_duration_as_decimal -> cast_any_as_decimal<Duration>
 // - cast_json_as_decimal -> cast_any_as_decimal<Json>
+
+// because uint's upper bound is smaller than signed decimal's upper bound
+// so we can merge cast uint as signed/unsigned decimal in this function
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_unsigned_int_as_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<i64>,
+) -> Result<Option<Decimal>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let dec = Decimal::from(*val as u64);
+            Ok(Some(produce_dec_with_specified_tp(
+                ctx,
+                dec,
+                extra.ret_field_type,
+            )?))
+        }
+    }
+}
 
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
@@ -247,6 +269,8 @@ fn cast_signed_int_as_unsigned_decimal(
                 Decimal::zero()
             } else {
                 // FIXME, here TiDB has bug, fix this after fix TiDB's
+                // if val is >=0, then val as u64 is ok,
+                // if val <0, there may be bug here.
                 Decimal::from(*val as u64)
             };
             Ok(Some(produce_dec_with_specified_tp(
@@ -345,6 +369,7 @@ fn cast_decimal_as_unsigned_decimal(
                 Decimal::zero()
             } else {
                 // FIXME, here TiDB may has bug, fix this after fix TiDB's
+                // FIXME, how to make a unsigned decimal from negative decimal
                 val.clone()
             };
             Ok(Some(produce_dec_with_specified_tp(
@@ -427,6 +452,11 @@ fn cast_real_as_uint(
             if in_union(&extra.implicit_args) && val < 0f64 {
                 Ok(Some(0))
             } else {
+                // FIXME, mysql's double to unsigned is very special,
+                //  it **seems** that if the float num bigger than i64::MAX,
+                //  then return i64::MAX always.
+                //  This may be the bug of mysql.
+                //  So I don't change ours' behavior here.
                 let val: u64 = val.convert(ctx)?;
                 Ok(Some(val as i64))
             }
@@ -571,6 +601,8 @@ fn cast_signed_int_as_unsigned_real(
     }
 }
 
+// because we needn't to consider if uint overflow upper boundary of signed real,
+// so we can merge uint to signed/unsigned real in one function
 #[rpn_fn]
 #[inline]
 fn cast_unsigned_int_as_signed_or_unsigned_real(val: &Option<Int>) -> Result<Option<Real>> {
@@ -617,7 +649,7 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO, in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
+            // FIXME, in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
             //  then return evalReal directly
             let r: f64 = val.convert(ctx)?;
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
@@ -636,7 +668,7 @@ fn cast_string_as_unsigned_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO, in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
+            // FIXME, in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
             //  then return evalReal directly
             let mut r: f64 = val.convert(ctx)?;
             if in_union(extra.implicit_args) && r < 0f64 {
@@ -802,7 +834,6 @@ fn cast_duration_as_string(
     }
 }
 
-// TODO, make val Cow, then we can avoid some copy
 fn cast_as_string_helper(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,

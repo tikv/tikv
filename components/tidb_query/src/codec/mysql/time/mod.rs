@@ -802,8 +802,7 @@ impl ConvertTo<f64> for Time {
         if self.is_zero() {
             return Ok(0f64);
         }
-        let f: f64 = box_try!(self.to_numeric_string().parse());
-        Ok(f)
+        Ok(self.to_numeric_string().parse()?)
     }
 }
 

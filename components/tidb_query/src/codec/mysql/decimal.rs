@@ -1722,6 +1722,9 @@ enable_conv_for_int!(isize, i64);
 impl ConvertTo<f64> for Decimal {
     /// This function should not return err,
     /// if it return err, then the err because of bug.
+    ///
+    /// Port from TiDB's MyDecimal::ToFloat64.
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         let val = self.to_string().parse()?;
         Ok(val)
@@ -1816,8 +1819,8 @@ impl ConvertTo<Decimal> for Bytes {
 }
 
 impl ConvertTo<Decimal> for Json {
-    #[inline]
     /// Port from TiDB's types.ConvertJSONToDecimal
+    #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         match self {
             Json::String(s) => {
