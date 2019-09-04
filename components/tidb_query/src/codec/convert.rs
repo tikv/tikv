@@ -1034,7 +1034,9 @@ mod tests {
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
-    use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+    use crate::codec::error::{
+        ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
+    };
     use crate::codec::mysql::Res;
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
@@ -1760,8 +1762,8 @@ mod tests {
         let val: Result<f64> = f64::NEG_INFINITY.to_string().as_bytes().convert(&mut ctx);
         assert!(val.is_err());
 
-        // OVERFLOW_AS_WARNING
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+        // TRUNCATE_AS_WARNING
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val: f64 = (0..309)
             .map(|_| '9')
             .collect::<String>()
@@ -1770,9 +1772,12 @@ mod tests {
             .unwrap();
         assert_eq!(val, f64::MAX);
         assert_eq!(ctx.warnings.warning_cnt, 1);
-        assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            ERR_TRUNCATE_WRONG_VALUE
+        );
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val: f64 = (0..310)
             .map(|i| if i == 0 { '-' } else { '9' })
             .collect::<String>()
@@ -1781,9 +1786,11 @@ mod tests {
             .unwrap();
         assert_eq!(val, f64::MIN);
         assert_eq!(ctx.warnings.warning_cnt, 1);
-        assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            ERR_TRUNCATE_WRONG_VALUE
+        );
 
-        // TRUNCATE_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val: Result<f64> = b"".to_vec().convert(&mut ctx);
         assert!(val.is_ok());
