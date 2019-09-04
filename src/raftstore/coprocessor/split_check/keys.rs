@@ -176,15 +176,15 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
     // try to get from RangeProperties first.
     match get_region_approximate_keys_cf(db, CF_WRITE, region) {
         Ok(v) => {
-            if v > 0 {
-                return Ok(v);
-            }
+            return Ok(v);
         }
         Err(e) => debug!(
             "failed to get keys from RangeProperties";
             "err" => ?e,
         ),
     }
+
+    println!("unmatched");
 
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
@@ -382,5 +382,46 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let range_keys = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
+    }
+
+    #[test]
+    fn test_region_approximate_keys_sub_region() {
+        let path = Builder::new()
+            .prefix("_test_region_approximate_keys")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(MvccPropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let cases = [("a", 1024), ("b", 2048), ("z", 4096)];
+        for &(key, vlen) in &cases {
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
+            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_cf = db.cf_handle(CF_WRITE).unwrap();
+            db.put_cf(write_cf, &key, &write_v).unwrap();
+            db.flush_cf(write_cf, true).unwrap();
+
+            let default_v = vec![0; vlen as usize];
+            let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
+            db.put_cf(default_cf, &key, &default_v).unwrap();
+            db.flush_cf(default_cf, true).unwrap();
+        }
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(b"c".to_vec());
+        region.set_end_key(b"y".to_vec());
+        region.mut_peers().push(Peer::default());
+        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        assert_eq!(range_keys, 0);
     }
 }
