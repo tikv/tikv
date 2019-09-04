@@ -568,8 +568,15 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    // TODO: Documentation
-    // Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
+    /// Check the status of a transaction.
+    ///
+    /// This operation checks whether a transaction has expired it's Lock's TTL, rollback the
+    /// transaction if expired, and update the transaction's min_commit_ts according to the metadata
+    /// in the primary lock.
+    /// Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
+    /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
+    /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
+    /// no information about the transaction, results will be both 0.
     pub fn check_txn_status(
         &mut self,
         primary_key: Key,

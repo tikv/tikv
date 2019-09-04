@@ -1280,7 +1280,14 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    // TODO: Document this function
+    /// Check the status of a transaction.
+    ///
+    /// This operation checks whether a transaction has expired it's Lock's TTL, rollback the
+    /// transaction if expired, and update the transaction's min_commit_ts according to the metadata
+    /// in the primary lock.
+    /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
+    /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
+    /// no information about the transaction, results will be both 0.
     pub fn async_check_txn_status(
         &self,
         ctx: Context,
