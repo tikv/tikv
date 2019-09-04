@@ -64,7 +64,7 @@ where
     pub f: F,
 }
 
-type BenchFn<M, I>=Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static>;
+type BenchFn<M, I> = Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static>;
 
 pub trait IBenchCase {
     type M: criterion::measurement::Measurement + 'static;
