@@ -588,6 +588,7 @@ pub mod tests {
             .unwrap();
         assert_eq!(lock_ttl, expect_lock_ttl);
         assert_eq!(commit_ts, expect_commit_ts);
+        write(engine, &ctx, txn.into_modifies());
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {
