@@ -471,14 +471,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         // if the data read finished, is_drained means "finished"
         let (mut record_cnt, mut is_drained) = (0, false);
-        let mut already_read_cnt = 0;
         let mut chunk = Chunk::default();
 
         // record count less than batch size and is not drained
-        while record_cnt < self.stream_batch_row_limit
-            && already_read_cnt < self.stream_batch_row_limit
-            && !is_drained
-        {
+        while record_cnt < self.stream_batch_row_limit && !is_drained {
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);
@@ -492,7 +488,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             // merge warning
             warnings.merge(&mut result.warnings);
 
-            already_read_cnt += result.physical_columns.rows_len();
             // Notice that logical rows len == 0 doesn't mean that it is drained.
             if !result.logical_rows.is_empty() {
                 assert_eq!(

@@ -618,7 +618,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
             .coprocessor_stream
             .start_coarse_timer();
 
-        info!("coprocessor_stream was called.");
         let stream = self
             .cop
             .parse_and_handle_stream_request(req, Some(ctx.peer()))
@@ -678,7 +677,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
-        info!("batch_raft RPC is called, new gRPC stream established");
         let ch = self.ch.clone();
         ctx.spawn(
             stream
