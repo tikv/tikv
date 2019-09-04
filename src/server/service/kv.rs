@@ -677,6 +677,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        info!("batch_raft RPC is called, new gRPC stream established");
         let ch = self.ch.clone();
         ctx.spawn(
             stream

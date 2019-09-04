@@ -351,7 +351,6 @@ impl<E: Engine> Endpoint<E> {
                 // For last stream item, the type is `Either::Right(Tracker)` so that we can do
                 // more things for tracker later.
                 let initial_state = Some((tracker, handler, false));
-                info!("handle_stream_request_impl start to handle requests.");
                 stream::unfold(initial_state, |state| {
                     match state {
                         Some((mut tracker, mut handler, finished)) => {

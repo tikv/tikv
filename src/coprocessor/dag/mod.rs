@@ -29,28 +29,19 @@ pub fn build_handler<S: Store + 'static>(
         if let Err(e) = is_supported {
             // Not supported, will fallback to normal executor.
             // To avoid user worries, let's output success message.
-            info!("Err(e) = is_supported, fuck.");
             debug!("Successfully use normal Coprocessor query engine"; "start_ts" => req.get_start_ts(), "reason" => %e);
         } else {
-            if is_streaming {
-                info!("Is batch in streaming mode");
-            } else {
-                info!("Is batch, and not in streaming mode");
-            }
-
             is_batch = true;
         }
     }
 
     if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        info!("Build batch executor with streaming {}", is_streaming);
         Ok(
             BatchDAGHandler::new(req, ranges, store, deadline, batch_row_limit, is_streaming)?
                 .into_boxed(),
         )
     } else {
-        info!("Build non-batch executor with streaming {}", is_streaming);
         COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
         Ok(
             DAGHandler::new(req, ranges, store, deadline, batch_row_limit, is_streaming)?
@@ -126,7 +117,6 @@ impl RequestHandler for BatchDAGHandler {
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        info!("Batch DAGHandler stream called.");
         handle_qe_stream_response(self.0.handle_streaming_request())
     }
 

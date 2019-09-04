@@ -49,6 +49,9 @@ pub struct BatchExecutorsRunner<SS> {
     exec_stats: ExecuteStats,
 
     stream_batch_row_limit: usize,
+
+    /// `batch_size` in stream mode, this variable will be initialized as `BATCH_INITIAL_SIZE`.
+    stream_batch_size: usize,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -361,6 +364,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             collect_exec_summary,
             exec_stats,
             stream_batch_row_limit,
+            stream_batch_size: BATCH_INITIAL_SIZE,
         })
     }
 
@@ -370,46 +374,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
 
         loop {
-            self.deadline.check()?;
+            // return (is_drained, EvalWarnings, record_cnt, Chunk)
+            let mut chunk = Chunk::default();
+            let (is_drained, mut result_warnings, record_cnt) =
+                self.internal_handle_request(batch_size, &mut chunk)?;
 
-            let mut result = self.out_most_executor.next_batch(batch_size);
+            warnings.merge(&mut result_warnings);
 
-            let is_drained;
-
-            // Check error first, because it means that we should directly respond error.
-            match result.is_drained {
-                Err(e) => return Err(e),
-                Ok(f) => is_drained = f,
-            }
-
-            // We will only get warnings limited by max_warning_count. Note that in future we
-            // further want to ignore warnings from unused rows. See TODOs in the `result.warnings`
-            // field.
-            warnings.merge(&mut result.warnings);
-
-            // Notice that logical rows len == 0 doesn't mean that it is drained.
-            if !result.logical_rows.is_empty() {
-                assert_eq!(
-                    result.physical_columns.columns_len(),
-                    self.out_most_executor.schema().len()
-                );
-                let mut chunk = Chunk::default();
-                {
-                    let data = chunk.mut_rows_data();
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
-                    );
-                    // Although `schema()` can be deeply nested, it is ok since we process data in
-                    // batch.
-                    result.physical_columns.encode(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
-                    )?;
-                }
+            if record_cnt > 0 {
                 chunks.push(chunk);
             }
 
@@ -466,7 +438,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
-        let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
         // if the data read finished, is_drained means "finished"
@@ -475,46 +446,52 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         // record count less than batch size and is not drained
         while record_cnt < self.stream_batch_row_limit && !is_drained {
-            self.deadline.check()?;
+            let (drained, mut result_warnings, cnt) =
+                self.internal_handle_request(self.stream_batch_size, &mut chunk)?;
+            record_cnt += cnt;
+            is_drained = drained;
+            warnings.merge(&mut result_warnings);
 
-            let mut result = self.out_most_executor.next_batch(batch_size);
-
-            // fill is_drained
-            match result.is_drained {
-                Err(e) => return Err(e),
-                Ok(f) => is_drained = f,
-            }
-
-            // merge warning
-            warnings.merge(&mut result.warnings);
-
-            // Notice that logical rows len == 0 doesn't mean that it is drained.
-            if !result.logical_rows.is_empty() {
-                assert_eq!(
-                    result.physical_columns.columns_len(),
-                    self.out_most_executor.schema().len()
-                );
-                {
-                    let data = chunk.mut_rows_data();
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
-                    );
-                    // Although `schema()` can be deeply nested, it is ok since we process data in
-                    // batch.
-                    result.physical_columns.encode(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
-                    )?;
-                    record_cnt += result.logical_rows.len();
-                }
-            }
+            //            self.deadline.check()?;
+            //
+            //            let mut result = self.out_most_executor.next_batch(self.stream_batch_size);
+            //
+            //            // fill is_drained
+            //            match result.is_drained {
+            //                Err(e) => return Err(e),
+            //                Ok(f) => is_drained = f,
+            //            }
+            //
+            //            // merge warning
+            //            warnings.merge(&mut result.warnings);
+            //
+            //            // Notice that logical rows len == 0 doesn't mean that it is drained.
+            //            if !result.logical_rows.is_empty() {
+            //                assert_eq!(
+            //                    result.physical_columns.columns_len(),
+            //                    self.out_most_executor.schema().len()
+            //                );
+            //                {
+            //                    let data = chunk.mut_rows_data();
+            //                    data.reserve(
+            //                        result
+            //                            .physical_columns
+            //                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
+            //                    );
+            //                    // Although `schema()` can be deeply nested, it is ok since we process data in
+            //                    // batch.
+            //                    result.physical_columns.encode(
+            //                        &result.logical_rows,
+            //                        &self.output_offsets,
+            //                        self.out_most_executor.schema(),
+            //                        data,
+            //                    )?;
+            //                    record_cnt += result.logical_rows.len();
+            //                }
+            //            }
 
             // Grow batch size
-            grow_batch_size(&mut batch_size)
+            grow_batch_size(&mut self.stream_batch_size)
         }
 
         if !is_drained || record_cnt > 0 {
@@ -554,8 +531,56 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         Ok(s_resp)
     }
+
+    /// return (is_drained, EvalWarnings, record_cnt)
+    fn internal_handle_request(
+        &mut self,
+        batch_size: usize,
+        chunk: &mut Chunk,
+    ) -> Result<(bool, EvalWarnings, usize)> {
+        let is_drained;
+        let mut record_cnt = 0;
+
+        self.deadline.check()?;
+
+        let result = self.out_most_executor.next_batch(batch_size);
+
+        // fill is_drained
+        match result.is_drained {
+            Err(e) => return Err(e),
+            Ok(f) => is_drained = f,
+        }
+
+        // Notice that logical rows len == 0 doesn't mean that it is drained.
+        if !result.logical_rows.is_empty() {
+            assert_eq!(
+                result.physical_columns.columns_len(),
+                self.out_most_executor.schema().len()
+            );
+            {
+                let data = chunk.mut_rows_data();
+                data.reserve(
+                    result
+                        .physical_columns
+                        .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
+                );
+                // Although `schema()` can be deeply nested, it is ok since we process data in
+                // batch.
+                result.physical_columns.encode(
+                    &result.logical_rows,
+                    &self.output_offsets,
+                    self.out_most_executor.schema(),
+                    data,
+                )?;
+                record_cnt += result.logical_rows.len();
+            }
+        }
+
+        Ok((is_drained, result.warnings, record_cnt))
+    }
 }
 
+#[inline]
 fn grow_batch_size(batch_size: &mut usize) {
     if *batch_size < BATCH_MAX_SIZE {
         *batch_size *= BATCH_GROW_FACTOR;
