@@ -936,7 +936,7 @@ version = "0.5.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpcio-sys 0.5.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio-sys 0.5.0-alpha.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.60 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.5.0-alpha.3"
+version = "0.5.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bindgen 0.50.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3577,7 +3577,7 @@ dependencies = [
 "checksum glob 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 "checksum grpcio 0.5.0-alpha.4 (registry+https://github.com/rust-lang/crates.io-index)" = "ba77e7b81b58a12e2dff1271c20a1f8cd74916de09355a5777470d911e8de41c"
 "checksum grpcio-compiler 0.5.0-alpha.2 (registry+https://github.com/rust-lang/crates.io-index)" = "dd8b3213a332a2865a307e553f43d632bc4a81f0e0f5a90d194dee5b9c02d8a7"
-"checksum grpcio-sys 0.5.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)" = "85b6183af67e1609f17a193d8f21f6a40f2353d1d0bcf437d98f197e287ee471"
+"checksum grpcio-sys 0.5.0-alpha.4 (registry+https://github.com/rust-lang/crates.io-index)" = "85b6183af67e1609f17a193d8f21f6a40f2353d1d0bcf437d98f197e287ee471"
 "checksum h2 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)" = "1ac030ae20dee464c5d0f36544d8b914a6bc606da44a57e052d2b0f5dae129e0"
 "checksum hashbrown 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e1de41fb8dba9714efd92241565cdff73f78508c95697dd56787d3cba27e2353"
 "checksum heck 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "ea04fa3ead4e05e51a7c806fc07271fdbde4e246a6c6d1efd52e72230b771b82"
