@@ -112,6 +112,8 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     storage: S,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
+    // TODO: apply this on the system
+    is_streaming: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -131,12 +133,13 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
             let mut descriptor = first_ed.take_tbl_scan();
             let columns_info = descriptor.take_columns().into();
             executor = Box::new(
-                BatchTableScanExecutor::new(
+                BatchTableScanExecutor::new_with_scanned_range_aware(
                     storage,
                     config.clone(),
                     columns_info,
                     ranges,
                     descriptor.get_desc(),
+                    is_streaming,
                 )?
                 .with_summary_collector(C::new(summary_slot_index)),
             );
@@ -149,13 +152,14 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
             executor = Box::new(
-                BatchIndexScanExecutor::new(
+                BatchIndexScanExecutor::new_with_scanned_range_aware(
                     storage,
                     config.clone(),
                     columns_info,
                     ranges,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
+                    is_streaming,
                 )?
                 .with_summary_collector(C::new(summary_slot_index)),
             );
@@ -305,8 +309,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         deadline: Deadline,
 
         stream_batch_row_limit: usize,
-        // TODO: make clear if we need to add this
-        _: bool,
+        // Actually we need add this to active `self.is_scanned_range_aware` in the lower system
+        is_streaming: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -318,6 +322,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 storage,
                 ranges,
                 config.clone(),
+                is_streaming,
             )?
         } else {
             build_executors::<_, ExecSummaryCollectorDisabled>(
@@ -325,6 +330,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 storage,
                 ranges,
                 config.clone(),
+                is_streaming,
             )?
         };
 

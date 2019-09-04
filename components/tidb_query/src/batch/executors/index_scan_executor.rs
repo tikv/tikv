@@ -28,13 +28,14 @@ impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
 }
 
 impl<S: Storage> BatchIndexScanExecutor<S> {
-    pub fn new(
+    pub fn new_with_scanned_range_aware(
         storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
         is_backward: bool,
         unique: bool,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
         // it just means that we can use point-get for this index. In the following scenarios
@@ -73,8 +74,28 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             is_backward,
             is_key_only: false,
             accept_point_range: unique,
+            is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
+    }
+
+    pub fn new(
+        storage: S,
+        config: Arc<EvalConfig>,
+        columns_info: Vec<ColumnInfo>,
+        key_ranges: Vec<KeyRange>,
+        is_backward: bool,
+        unique: bool,
+    ) -> Result<Self> {
+        Self::new_with_scanned_range_aware(
+            storage,
+            config,
+            columns_info,
+            key_ranges,
+            is_backward,
+            unique,
+            false,
+        )
     }
 }
 

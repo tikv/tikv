@@ -32,12 +32,13 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
 }
 
 impl<S: Storage> BatchTableScanExecutor<S> {
-    pub fn new(
+    pub fn new_with_scanned_range_aware(
         storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
         is_backward: bool,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -82,8 +83,26 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             is_backward,
             is_key_only,
             accept_point_range: true,
+            is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
+    }
+
+    pub fn new(
+        storage: S,
+        config: Arc<EvalConfig>,
+        columns_info: Vec<ColumnInfo>,
+        key_ranges: Vec<KeyRange>,
+        is_backward: bool,
+    ) -> Result<Self> {
+        Self::new_with_scanned_range_aware(
+            storage,
+            config,
+            columns_info,
+            key_ranges,
+            is_backward,
+            false,
+        )
     }
 }
 
