@@ -165,29 +165,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         }
                     }
                     if info.role == StateRole::Leader {
-                        let (region_start, region_end) = key_from_region(region);
-                        let ekey = if region.get_end_key().is_empty() {
-                            end_key.clone()
-                        } else if end_key.is_none() {
-                            region_end
-                        } else {
-                            let end_slice = end_key.as_ref().unwrap().as_encoded().as_slice();
-                            if end_slice < region.get_end_key() {
-                                end_key.clone()
-                            } else {
-                                region_end
-                            }
-                        };
-                        let skey = if start_key.is_none() {
-                            region_start
-                        } else {
-                            let start_slice = start_key.as_ref().unwrap().as_encoded().as_slice();
-                            if start_slice < region.get_start_key() {
-                                region_start
-                            } else {
-                                start_key.clone()
-                            }
-                        };
+                        let ekey = get_min_end_key(end_key.as_ref(), &region);
+                        let skey = get_max_start_key(start_key.as_ref(), &region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
                         let leader = find_peer(region, store_id).unwrap().to_owned();
                         let backup_range = BackupRange {
@@ -306,7 +285,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         };
         let rx = self.seek_backup_range(start_key, end_key, task.cancel);
 
-        // TODO: should we combine seek_backup_range and dispatch_backup_range?
         let (res_tx, res_rx) = mpsc::channel();
         for brange in rx {
             let tx = res_tx.clone();
@@ -382,18 +360,44 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
     }
 }
 
-fn key_from_region(region: &Region) -> (Option<Key>, Option<Key>) {
-    let start = if region.get_start_key().is_empty() {
-        None
-    } else {
-        Some(Key::from_encoded_slice(region.get_start_key()))
-    };
-    let end = if region.get_end_key().is_empty() {
+/// Get the min end key from the given `end_key` and `Region`'s end key.
+fn get_min_end_key(end_key: Option<&Key>, region: &Region) -> Option<Key> {
+    let region_end = if region.get_end_key().is_empty() {
         None
     } else {
         Some(Key::from_encoded_slice(region.get_end_key()))
     };
-    (start, end)
+    if region.get_end_key().is_empty() {
+        end_key.cloned()
+    } else if end_key.is_none() {
+        region_end
+    } else {
+        let end_slice = end_key.as_ref().unwrap().as_encoded().as_slice();
+        if end_slice < region.get_end_key() {
+            end_key.cloned()
+        } else {
+            region_end
+        }
+    }
+}
+
+/// Get the max start key from the given `start_key` and `Region`'s start key.
+fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
+    let region_start = if region.get_start_key().is_empty() {
+        None
+    } else {
+        Some(Key::from_encoded_slice(region.get_start_key()))
+    };
+    if start_key.is_none() {
+        region_start
+    } else {
+        let start_slice = start_key.as_ref().unwrap().as_encoded().as_slice();
+        if start_slice < region.get_start_key() {
+            region_start
+        } else {
+            start_key.cloned()
+        }
+    }
 }
 
 /// Construct an backup file name based on the given store id and region.
@@ -428,7 +432,6 @@ pub mod tests {
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
-        // start_key -> (region_id, end_key)
         regions: Arc<Mutex<RegionCollector>>,
         cancel: Option<Arc<AtomicBool>>,
     }
@@ -507,6 +510,7 @@ pub mod tests {
             (b"7".to_vec(), b"9".to_vec(), 4),
             (b"9".to_vec(), b"".to_vec(), 5),
         ]);
+        // Test seek backup range.
         let t = |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
             let start_key = if start_key.is_empty() {
                 None
@@ -556,9 +560,7 @@ pub mod tests {
             };
             endpoint.handle_backup_task(task);
             let resps: Vec<_> = rx.collect().wait().unwrap();
-            let mut counter = 0;
             for a in &resps {
-                counter += 1;
                 assert!(
                     expect
                         .iter()
@@ -568,9 +570,11 @@ pub mod tests {
                     expect
                 );
             }
-            assert_eq!(counter, expect.len());
+            assert_eq!(resps.len(), expect.len());
         };
 
+        // Backup range from case.0 to case.1,
+        // the case.2 is the expected results.
         type Case<'a> = (&'a [u8], &'a [u8], Vec<(&'a [u8], &'a [u8])>);
 
         let case: Vec<Case> = vec![
