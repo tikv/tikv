@@ -400,7 +400,7 @@ dependencies = [
 [[package]]
 name = "criterion"
 version = "0.3.0"
-source = "git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression#932906eee1087ef6044df5a7cfaeaf5e9380ad0b"
+source = "git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression#4a5e67665f963498281cc8b096f14fa84780a513"
 dependencies = [
  "atty 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "cast 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -440,7 +440,7 @@ dependencies = [
 [[package]]
 name = "criterion-plot"
 version = "0.4.0"
-source = "git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression#932906eee1087ef6044df5a7cfaeaf5e9380ad0b"
+source = "git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression#4a5e67665f963498281cc8b096f14fa84780a513"
 dependencies = [
  "cast 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
