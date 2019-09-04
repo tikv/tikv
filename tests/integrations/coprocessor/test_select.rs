@@ -111,8 +111,8 @@ fn test_stream_batch_row_limit() {
         }
         let cnt = resp.get_output_counts();
         assert!(
-            cnt >= &[stream_row_limit as i64]
-                && cnt <= &[(stream_row_limit + BATCH_MAX_SIZE) as i64]
+            [stream_row_limit as i64].as_ref() <= cnt
+                && [(stream_row_limit + BATCH_MAX_SIZE) as i64].as_ref() >= cnt
         );
     }
 }
