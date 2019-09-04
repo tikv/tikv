@@ -3,6 +3,7 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use engine::rocks;
@@ -12,8 +13,6 @@ use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
-#[cfg(feature = "failpoints")]
-use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
@@ -82,6 +81,7 @@ pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
     engines: Engines,
+    not_leader: Arc<AtomicBool>,
 }
 
 impl RocksEngine {
@@ -108,8 +108,13 @@ impl RocksEngine {
         Ok(RocksEngine {
             sched: worker.scheduler(),
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
+            not_leader: Arc::new(AtomicBool::new(false)),
             engines,
         })
+    }
+
+    pub fn trigger_not_leader(&self) {
+        self.not_leader.store(true, Ordering::SeqCst);
     }
 
     pub fn get_rocksdb(&self) -> Arc<DB> {
@@ -260,11 +265,18 @@ impl Engine for RocksEngine {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
-        fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            let mut header = ErrorHeader::default();
+        let not_leader = {
+            let mut header = kvproto::errorpb::Error::new();
             header.mut_not_leader().set_region_id(100);
-            Err(Error::Request(header))
+            header
+        };
+        let _not_leader = not_leader.clone();
+        fail_point!("rockskv_async_snapshot_not_leader", |_| {
+            Err(Error::Request(not_leader))
         });
+        if self.not_leader.load(Ordering::SeqCst) {
+            return Err(Error::Request(_not_leader));
+        }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }
