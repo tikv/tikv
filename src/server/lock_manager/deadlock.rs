@@ -1,15 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::client::Client;
+use super::client::{self, Client};
 use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use super::{Error, Lock, Result};
-use crate::raftstore::coprocessor::{Coprocessor, CoprocessorHost, ObserverContext, RoleObserver};
+use super::{Error, Result};
+use crate::raftstore::coprocessor::{Coprocessor, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
+use crate::storage::lock_manager::Lock;
 use futures::{Future, Sink, Stream};
 use grpcio::{
-    self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink, WriteFlags,
+    self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
+    WriteFlags,
 };
 use kvproto::deadlock::*;
 use kvproto::metapb::Region;
@@ -23,7 +25,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::{Duration, Instant};
-use tikv_util::worker::{FutureRunnable, FutureScheduler, FutureWorker, Stopped};
+use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 
 /// `Locks` is a set of locks belonging to one transaction.
@@ -347,16 +349,6 @@ impl RoleObserver for Scheduler {
     }
 }
 
-/// Creates a `Scheduler` of the worker and registers it to the `CoprocessorHost` to observe
-/// the role change events of the leader region.
-pub fn register_detector_role_change_observer(
-    host: &mut CoprocessorHost,
-    worker: &FutureWorker<Task>,
-) {
-    let scheduler = Scheduler::new(worker.scheduler());
-    host.registry.register_role_observer(1, Box::new(scheduler));
-}
-
 struct Inner {
     /// The role of the deadlock detector. Default is `Role::Follower`.
     role: Role,
@@ -369,6 +361,8 @@ struct Inner {
 pub struct Detector<S: StoreAddrResolver + 'static> {
     /// The store id of the node.
     store_id: u64,
+    /// Used to create clients to the leader.
+    env: Arc<Environment>,
     /// The leader's id and address if exists.
     leader_info: Option<(u64, String)>,
     /// The connection to the leader.
@@ -399,6 +393,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         assert!(store_id != INVALID_ID);
         Self {
             store_id,
+            env: client::env(),
             leader_info: None,
             leader_client: None,
             pd_client,
@@ -514,7 +509,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         let (leader_id, leader_addr) = self.leader_info.as_ref().unwrap();
         // Create the connection to the leader and registers the callback to receive
         // the deadlock response.
-        let mut leader_client = Client::new(Arc::clone(&self.security_mgr), leader_addr);
+        let mut leader_client = Client::new(
+            Arc::clone(&self.env),
+            Arc::clone(&self.security_mgr),
+            leader_addr,
+        );
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
             let WaitForEntry {

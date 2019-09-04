@@ -145,6 +145,7 @@ pub trait PdClient: Send + Sync {
     /// Region's Leader uses this to heartbeat PD.
     fn region_heartbeat(
         &self,
+        term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
