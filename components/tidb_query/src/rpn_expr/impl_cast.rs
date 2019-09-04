@@ -1005,7 +1005,7 @@ mod tests {
     use crate::rpn_expr::RpnFnCallExtra;
     use bitfield::fmt::Display;
     use std::collections::BTreeMap;
-    use std::fmt::Debug;
+    use std::fmt::{Debug, Formatter};
     use std::sync::Arc;
     use std::{f64, i64, str, u64};
     use tidb_query_datatype::FieldTypeFlag;
@@ -1128,6 +1128,13 @@ mod tests {
         }
     }
 
+    // fn check_truncated(ctx: &EvalContext, truncated: bool) {
+    //     if truncated {
+    //         assert_eq!(ctx.warnings.warning_cnt, 1);
+    //         assert_eq!(ctx.warnings.warnings[0].get_code(), WARN_DATA_TRUNCATED);
+    //     }
+    // }
+
     fn check_result<P: Display, R: Display + Debug + PartialEq>(
         input: &P,
         expect: Option<&R>,
@@ -1161,6 +1168,18 @@ mod tests {
             );
         }
     }
+
+    impl Display for Json {
+        fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "{:?}", self)
+        }
+    }
+
+    // comment for all test below:
+    // if there should not be any overflow/truncate,
+    // then should not set ctx with overflow_as_warning/truncated_as_warning flag,
+    // and then if there is unexpected overflow/truncate,
+    // then we will find them in `unwrap`
 
     #[test]
     fn test_int_as_int() {
@@ -1321,7 +1340,6 @@ mod tests {
         }
     }
 
-    // TODO
     #[test]
     fn test_string_as_uint() {
         test_none_with_ctx_and_extra(cast_string_as_int_or_uint);
@@ -1498,6 +1516,7 @@ mod tests {
     #[test]
     fn test_time_as_int_and_uint() {
         // TODO, add more test case
+        // TODO, add test that make cast_any_as_any::<Time, Int> returning truncated error
         let cs: Vec<(Time, i64)> = vec![
             (Time::parse_utc_datetime("11:11:11", 0).unwrap(), 111111),
             (
@@ -1549,57 +1568,95 @@ mod tests {
         test_none_with_ctx(cast_any_as_any::<Json, Int>);
 
         // no overflow
-        let _cs = vec![
-            // (origin, res)
-            (Json::Object(BTreeMap::default()), 0),
-            (Json::Array(vec![]), 0),
-            (Json::I64(10), 10i64),
-            (Json::I64(i64::MAX), i64::MAX),
-            (Json::I64(i64::MIN), i64::MIN),
-            (Json::U64(0), 0),
-            (Json::U64(u64::MAX), u64::MAX as i64),
-            (Json::Double(i64::MIN as u64 as f64), i64::MAX),
-            (Json::Double(i64::MAX as u64 as f64), i64::MAX),
-            (Json::Double(i64::MIN as u64 as f64), i64::MAX),
-            (Json::Double(i64::MIN as f64), i64::MIN),
-            (Json::Double(10.5), 11),
-            (Json::Double(10.4), 10),
-            (Json::Double(-10.4), -10),
-            (Json::Double(-10.5), -11),
-            (Json::String(String::from("10.0")), 10),
-            (Json::Boolean(true), 1),
-            (Json::Boolean(false), 0),
-            (Json::None, 0),
-        ];
-
-        // TODO
-
-        // overflow
-        let _cs = vec![
+        let cs = vec![
+            // (origin, result, overflow)
+            (Json::Object(BTreeMap::default()), 0, false),
+            (Json::Array(vec![]), 0, false),
+            (Json::I64(10), 10i64, false),
+            (Json::I64(i64::MAX), i64::MAX, false),
+            (Json::I64(i64::MIN), i64::MIN, false),
+            (Json::U64(0), 0, false),
+            (Json::U64(u64::MAX), u64::MAX as i64, false),
+            (Json::Double(i64::MIN as u64 as f64), i64::MAX, false),
+            (Json::Double(i64::MAX as u64 as f64), i64::MAX, false),
+            (Json::Double(i64::MIN as u64 as f64), i64::MAX, false),
+            (Json::Double(i64::MIN as f64), i64::MIN, false),
+            (Json::Double(10.5), 11, false),
+            (Json::Double(10.4), 10, false),
+            (Json::Double(-10.4), -10, false),
+            (Json::Double(-10.5), -11, false),
+            (Json::String(String::from("10.0")), 10, false),
+            (Json::Boolean(true), 1, false),
+            (Json::Boolean(false), 0, false),
+            (Json::None, 0, false),
             (
                 Json::Double(((1u64 << 63) + (1u64 << 62)) as u64 as f64),
                 i64::MAX,
+                true,
             ),
-            (Json::Double(((1u64 << 63) + (1u64 << 62)) as f64), i64::MIN),
+            (
+                Json::Double(((1u64 << 63) + (1u64 << 62)) as f64),
+                i64::MIN,
+                true,
+            ),
         ];
 
-        // TODO
+        for (input, result, overflow) in cs {
+            let mut ctx = make_ctx(true, false, false);
+            let input_copy = input.clone();
+            let r = cast_any_as_any::<Json, Int>(&mut ctx, &Some(input));
+            check_result(&input_copy, Some(&result), &r);
+            check_overflow(&ctx, overflow);
+        }
+    }
 
-        // to unsigned int
-        let _cs = vec![
-            // (origin, res, overflow)
-            (Json::Double(-1.0), -1.0 as i64 as u64, true),
-            (Json::Double(2f64 * (u64::MAX as f64)), u64::MAX, true),
-            (Json::String(String::from("-10")), 0, true),
-            (Json::String(String::from("10")), 10, true),
+    #[test]
+    fn test_json_as_uint() {
+        // no clip to zero
+        let cs = vec![
+            // (origin, result, overflow)
+            (Json::Double(-1.0), -1.0f64 as i64 as u64, false),
+            (Json::String(String::from("10")), 10, false),
+            (Json::String(String::from("+10abc")), 10, false),
             (
                 Json::String(String::from("9999999999999999999999999")),
                 u64::MAX,
                 true,
             ),
-            (Json::String(String::from("+10abc")), 10, false),
+            (Json::Double(2f64 * (u64::MAX as f64)), u64::MAX, true),
         ];
 
-        // TODO
+        for (input, result, overflow) in cs {
+            let mut ctx = make_ctx(true, false, false);
+            let input_copy = input.clone();
+            let r = cast_json_as_uint(&mut ctx, &Some(input));
+            let r = r.map(|x| x.map(|x| x as u64));
+            check_result(&input_copy, Some(&result), &r);
+            check_overflow(&ctx, overflow);
+        }
+
+        // should clip to zero
+        let cs = vec![
+            // (origin, result, overflow)
+            (Json::Double(-1.0), 0, false),
+            (Json::String(String::from("-10")), 0, false),
+            (Json::String(String::from("10")), 10, false),
+            (Json::String(String::from("+10abc")), 10, false),
+            (
+                Json::String(String::from("9999999999999999999999999")),
+                u64::MAX,
+                true,
+            ),
+            (Json::Double(2f64 * (u64::MAX as f64)), u64::MAX, true),
+        ];
+
+        for (input, result, overflow) in cs {
+            let mut ctx = make_ctx(true, false, true);
+            let input_copy = input.clone();
+            let r = cast_json_as_uint(&mut ctx, &Some(input));
+            let r = r.map(|x| x.map(|x| x as u64));
+            check_result(&input_copy, Some(&result), &r);
+            check_overflow(&ctx, overflow);
+        }
     }
 }
