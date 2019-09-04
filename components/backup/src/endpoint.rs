@@ -517,67 +517,69 @@ pub mod tests {
             (b"9".to_vec(), b"".to_vec(), 5),
         ]);
         // Test seek backup range.
-        let t = |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
-            let start_key = if start_key.is_empty() {
-                None
-            } else {
-                Some(Key::from_raw(start_key))
-            };
-            let end_key = if end_key.is_empty() {
-                None
-            } else {
-                Some(Key::from_raw(end_key))
-            };
-            let rx = endpoint.seek_backup_range(start_key, end_key, Arc::default());
-            let ranges: Vec<BackupRange> = rx.into_iter().collect();
-            assert_eq!(
-                ranges.len(),
-                expect.len(),
-                "got {:?}, expect {:?}",
-                ranges,
-                expect
-            );
-            for (a, b) in ranges.into_iter().zip(expect) {
+        let test_seek_backup_range =
+            |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
+                let start_key = if start_key.is_empty() {
+                    None
+                } else {
+                    Some(Key::from_raw(start_key))
+                };
+                let end_key = if end_key.is_empty() {
+                    None
+                } else {
+                    Some(Key::from_raw(end_key))
+                };
+                let rx = endpoint.seek_backup_range(start_key, end_key, Arc::default());
+                let ranges: Vec<BackupRange> = rx.into_iter().collect();
                 assert_eq!(
-                    a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
-                    b.0
+                    ranges.len(),
+                    expect.len(),
+                    "got {:?}, expect {:?}",
+                    ranges,
+                    expect
                 );
-                assert_eq!(
-                    a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
-                    b.1
-                );
-            }
-        };
+                for (a, b) in ranges.into_iter().zip(expect) {
+                    assert_eq!(
+                        a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        b.0
+                    );
+                    assert_eq!(
+                        a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        b.1
+                    );
+                }
+            };
 
         // Test whether responses contain correct range.
         #[allow(clippy::block_in_if_condition_stmt)]
-        let tt = |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
-            let tmp = TempDir::new().unwrap();
-            let ls = LocalStorage::new(tmp.path()).unwrap();
-            let (tx, rx) = unbounded();
-            let task = Task {
-                start_key: start_key.to_vec(),
-                end_key: end_key.to_vec(),
-                start_ts: 1,
-                end_ts: 1,
-                resp: tx,
-                storage: Arc::new(ls),
-                cancel: Arc::default(),
+        let test_handle_backup_task_range =
+            |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
+                let tmp = TempDir::new().unwrap();
+                let ls = LocalStorage::new(tmp.path()).unwrap();
+                let (tx, rx) = unbounded();
+                let task = Task {
+                    start_key: start_key.to_vec(),
+                    end_key: end_key.to_vec(),
+                    start_ts: 1,
+                    end_ts: 1,
+                    resp: tx,
+                    storage: Arc::new(ls),
+                    cancel: Arc::default(),
+                };
+                endpoint.handle_backup_task(task);
+                let resps: Vec<_> = rx.collect().wait().unwrap();
+                for a in &resps {
+                    assert!(
+                        expect
+                            .iter()
+                            .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                        "{:?} {:?}",
+                        resps,
+                        expect
+                    );
+                }
+                assert_eq!(resps.len(), expect.len());
             };
-            endpoint.handle_backup_task(task);
-            let resps: Vec<_> = rx.collect().wait().unwrap();
-            for a in &resps {
-                assert!(
-                    expect
-                        .iter()
-                        .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
-                    "{:?} {:?}",
-                    resps,
-                    expect
-                );
-            }
-            assert_eq!(resps.len(), expect.len());
-        };
 
         // Backup range from case.0 to case.1,
         // the case.2 is the expected results.
@@ -610,8 +612,8 @@ pub mod tests {
             ),
         ];
         for (start_key, end_key, ranges) in case {
-            t(start_key, end_key, ranges.clone());
-            tt(start_key, end_key, ranges);
+            test_seek_backup_range(start_key, end_key, ranges.clone());
+            test_handle_backup_task_range(start_key, end_key, ranges);
         }
     }
 
