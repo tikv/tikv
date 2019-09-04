@@ -184,8 +184,6 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
         ),
     }
 
-    println!("unmatched");
-
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
     let cf = box_try!(rocks::util::get_cf_handle(db, CF_WRITE));
