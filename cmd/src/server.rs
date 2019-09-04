@@ -177,7 +177,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let engine = RaftKv::new(raft_router.clone());
 
     let storage_read_pool = storage::readpool_impl::build_read_pool(
-        &cfg.readpool.storage.build_config(),
+        &cfg.readpool.storage,
         pd_sender.clone(),
         engine.clone(),
     );
@@ -230,7 +230,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create coprocessor endpoint.
     let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-        &cfg.readpool.coprocessor.build_config(),
+        &cfg.readpool.coprocessor,
         pd_sender.clone(),
         engine.clone(),
     );

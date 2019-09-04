@@ -977,12 +977,12 @@ mod tests {
             Ok(Some(a.unwrap().into_inner() as i64))
         }
 
-        fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<RpnFnMeta> {
+        fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
             // fn_a: CastIntAsInt
             // fn_b: CastIntAsReal
             // fn_c: CastIntAsString
             // fn_d: CastIntAsDecimal
-            Ok(match value {
+            Ok(match expr.get_sig() {
                 ScalarFuncSig::CastIntAsInt => fn_a_fn_meta(),
                 ScalarFuncSig::CastIntAsReal => fn_b_fn_meta(),
                 ScalarFuncSig::CastIntAsString => fn_c_fn_meta(),
