@@ -252,6 +252,7 @@ pub trait JsonDecoder: NumberDecoder {
         if buf.len() < left_size {
             return Err(Error::unexpected_eof());
         }
+        let buf = &buf[..left_size];
         // key_entries
         let key_entries_len = KEY_ENTRY_LEN * element_count;
         let (mut key_entries_data, buf) = buf.split_at(key_entries_len);
@@ -282,6 +283,7 @@ pub trait JsonDecoder: NumberDecoder {
         if buf.len() < left_size {
             return Err(Error::unexpected_eof());
         }
+        let buf = &buf[..left_size];
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let (mut value_entries_data, values_data) = buf.split_at(value_entries_len);
         let mut array_data = Vec::with_capacity(element_count);
