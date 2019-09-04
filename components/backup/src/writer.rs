@@ -127,7 +127,7 @@ mod tests {
 
     type CfKvs<'a> = (engine::CfName, &'a [(&'a [u8], &'a [u8])]);
 
-    fn check_sst(ssts: &[(engine::CfName, &Path)], kvs: &[CfKvs]) {
+    fn check_sst(ssts: &[(engine::CfName, &Path)], kvs: &[CfKvs<'_>]) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
