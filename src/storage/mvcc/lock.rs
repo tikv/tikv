@@ -280,6 +280,16 @@ mod tests {
                 0,
                 0,
             ),
+            Lock::new(
+                LockType::Put,
+                b"pkpkpk".to_vec(),
+                111,
+                222,
+                None,
+                333,
+                444,
+                555,
+            ),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
