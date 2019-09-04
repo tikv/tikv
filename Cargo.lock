@@ -461,7 +461,7 @@ replace = "criterion 0.3.0 (git+https://github.com/YangKeao/criterion.rs.git?bra
 [[package]]
 name = "criterion-cpu-time"
 version = "0.1.0"
-source = "git+https://github.com/YangKeao/criterion-cpu-time.git#caa30929e27549aecab3a255e0a6ee2eeae9d1a2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "criterion 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.60 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2854,7 +2854,7 @@ dependencies = [
  "chrono 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "criterion-cpu-time 0.1.0 (git+https://github.com/YangKeao/criterion-cpu-time.git)",
+ "criterion-cpu-time 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "derive_more 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "engine 0.0.1",
@@ -3530,7 +3530,7 @@ dependencies = [
 "checksum crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)" = "d663548de7f5cca343f1e0a48d14dcfb0e9eb4e079ec58883b7251539fa10aeb"
 "checksum criterion 0.3.0 (git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression)" = "<none>"
 "checksum criterion 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "938703e165481c8d612ea3479ac8342e5615185db37765162e762ec3523e2fc6"
-"checksum criterion-cpu-time 0.1.0 (git+https://github.com/YangKeao/criterion-cpu-time.git)" = "<none>"
+"checksum criterion-cpu-time 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "63aaaf47e457badbcb376c65a49d0f182c317ebd97dc6d1ced94c8e1d09c0f3a"
 "checksum criterion-plot 0.4.0 (git+https://github.com/YangKeao/criterion.rs.git?branch=quantile_regression)" = "<none>"
 "checksum crossbeam 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)" = "bd66663db5a988098a89599d4857919b3acf7f61402e61365acfd3919857b9be"
 "checksum crossbeam 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d1c92ff2d7a202d592f5a412d75cf421495c913817781c1cb383bf12a77e185f"
