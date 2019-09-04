@@ -9,6 +9,7 @@ mod txn;
 mod write;
 
 pub use self::lock::{Lock, LockType};
+pub use self::reader::EntryScanner;
 pub use self::reader::MvccReader;
 pub use self::reader::{Scanner, ScannerBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
