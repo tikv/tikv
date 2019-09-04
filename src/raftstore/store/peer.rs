@@ -20,7 +20,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
-use protobuf::{self, Message};
+use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
@@ -454,16 +454,21 @@ impl Peer {
     }
 
     #[inline]
-    pub fn maybe_append_merge_entries(&mut self, merge: CommitMergeRequest) -> Option<u64> {
+    pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
             return None;
         }
         let first = entries.first().unwrap();
-
         // make sure message should be with index not smaller than committed
         let mut log_idx = first.get_index() - 1;
         if log_idx < self.raft_group.raft.raft_log.committed {
+            // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
+            // so the commit index may exceed the last index of the entires from CommitMergeRequest.
+            // If that, no need to append
+            if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
+                return None;
+            }
             entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
             log_idx = self.raft_group.raft.raft_log.committed;
         }
@@ -1389,11 +1394,21 @@ impl Peer {
 
                 let term = self.term();
                 if is_read_index_request {
+                    debug!("handle reads with a read index";
+                        "request_id" => ?read.binary_id(),
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                     }
                     self.pending_reads.ready_cnt -= 1;
                 } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+                    debug!("handle reads with a read index";
+                        "request_id" => ?read.binary_id(),
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
                     for (req, cb) in read.cmds.drain(..) {
                         if req.get_header().get_replica_read() {
                             cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
@@ -1428,6 +1443,11 @@ impl Peer {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+                debug!("handle reads with a read index";
+                    "request_id" => ?read.binary_id(),
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
                 for (req, cb) in read.cmds.drain(..) {
                     cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
                 }
@@ -1496,6 +1516,11 @@ impl Peer {
             if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
                 for _ in 0..self.pending_reads.ready_cnt {
                     let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    debug!("handle reads with a read index";
+                        "request_id" => ?read.binary_id(),
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
                     RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
@@ -1911,8 +1936,6 @@ impl Peer {
             return false;
         }
 
-        poll_ctx.raft_metrics.propose.read_index += 1;
-
         let renew_lease_time = monotonic_raw_now();
         if self.is_leader() {
             match self.inspect_lease() {
@@ -1937,12 +1960,32 @@ impl Peer {
             }
         }
 
+        // When a replica cannot detect any leader, `MsgReadIndex` will be dropped, which would
+        // cause a long time waiting for a read response. Then we should return an error directly
+        // in this situation.
+        if !self.is_leader() && self.leader_id() == INVALID_ID {
+            cmd_resp::bind_error(
+                &mut err_resp,
+                box_err!("can not read index due to no leader"),
+            );
+            poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
+            cb.invoke_with_response(err_resp);
+            return false;
+        }
+
         // Should we call pre_propose here?
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
+        poll_ctx.raft_metrics.propose.read_index += 1;
+
         let id = Uuid::new_v4();
         self.raft_group.read_index(id.as_bytes().to_vec());
+        debug!("request to get a read index";
+            "request_id" => ?id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -2210,7 +2253,7 @@ impl Peer {
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = apply::get_change_peer_cmd(req).unwrap();
-        let mut cc = eraftpb::ConfChange::new();
+        let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
         cc.set_context(data);
@@ -2297,6 +2340,7 @@ impl Peer {
 
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
+            term: self.term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),

@@ -3,6 +3,7 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
+use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::{Error as MvccError, MvccReader};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
@@ -56,6 +57,79 @@ pub trait Scanner: Send {
 
     /// Take statistics.
     fn take_statistics(&mut self) -> Statistics;
+}
+
+pub trait TxnEntryStore: Send {
+    /// The scanner type returned by `scanner()`.
+    type Scanner: TxnEntryScanner;
+
+    /// Retrieve a scanner over the bounds.
+    fn entry_scanner(
+        &self,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> Result<Self::Scanner>;
+}
+
+/// [`TxnEntryScanner`] allows retrieving items or batches from a scan result.
+///
+/// Commonly they are obtained as a result of a
+/// [`entry_scanner`](TxnEntryStore::entry_scanner) operation.
+pub trait TxnEntryScanner: Send {
+    fn next_entry(&mut self) -> Result<Option<TxnEntry>>;
+
+    fn scan_entries(&mut self, batch: &mut EntryBatch) -> Result<()> {
+        while batch.entries.len() < batch.entries.capacity() {
+            match self.next_entry() {
+                Ok(Some(entry)) => {
+                    batch.entries.push(entry);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    /// Take statistics.
+    fn take_statistics(&mut self) -> Statistics;
+}
+
+/// A transaction entry in underlying storage.
+#[derive(PartialEq, Debug)]
+pub enum TxnEntry {
+    Prewrite { default: KvPair, lock: KvPair },
+    Commit { default: KvPair, write: KvPair },
+    // TOOD: Add more entry if needed.
+}
+
+/// A batch of transaction entries.
+pub struct EntryBatch {
+    entries: Vec<TxnEntry>,
+}
+
+impl EntryBatch {
+    pub fn with_capacity(cap: usize) -> EntryBatch {
+        EntryBatch {
+            entries: Vec::with_capacity(cap),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.len() == 0
+    }
+
+    pub fn drain(&mut self) -> std::vec::Drain<'_, TxnEntry> {
+        self.entries.drain(..)
+    }
 }
 
 pub struct SnapshotStore<S: Snapshot> {
@@ -118,6 +192,27 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .build()?;
+
+        Ok(scanner)
+    }
+}
+
+impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
+    type Scanner = EntryScanner<S>;
+    fn entry_scanner(
+        &self,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> Result<EntryScanner<S>> {
+        // Check request bounds with physical bound
+        self.verify_range(&lower_bound, &upper_bound)?;
+        let scanner =
+            ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
+                .range(lower_bound, upper_bound)
+                .omit_value(false)
+                .fill_cache(self.fill_cache)
+                .isolation_level(self.isolation_level)
+                .build_entry_scanner()?;
 
         Ok(scanner)
     }

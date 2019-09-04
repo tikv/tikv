@@ -228,8 +228,8 @@ impl CFStatistics {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
-    pub fn details(&self) -> Vec<(&str, usize)> {
-        vec![
+    pub fn details(&self) -> [(&'static str, usize); 8] {
+        [
             (STAT_TOTAL, self.total_op_count()),
             (STAT_PROCESSED, self.processed),
             (STAT_GET, self.get),
@@ -276,8 +276,8 @@ impl Statistics {
         self.lock.processed + self.write.processed + self.data.processed
     }
 
-    pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
-        vec![
+    pub fn details(&self) -> [(&'static str, [(&'static str, usize); 8]); 3] {
+        [
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
             (CF_WRITE, self.write.details()),

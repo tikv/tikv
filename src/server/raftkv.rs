@@ -148,7 +148,7 @@ fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Re
         return (cb_ctx, Err(e));
     }
     let resps = read_resp.response.take_responses();
-    if resps.len() >= 1 || resps[0].get_cmd_type() == CmdType::Snap {
+    if !resps.is_empty() || resps[0].get_cmd_type() == CmdType::Snap {
         (cb_ctx, Ok(CmdRes::Snap(read_resp.snapshot.unwrap())))
     } else {
         (cb_ctx, Ok(CmdRes::Resp(resps.into())))

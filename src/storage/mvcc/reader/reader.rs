@@ -161,6 +161,9 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
+    /// Checks if there is a lock which blocks reading the key at the given ts.
+    /// Returns the version which should be used for reading if there is no blocking lock.
+    /// Otherwise, returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
         if let Some(lock) = self.load_lock(key)? {
             return self.check_lock_impl(key, ts, lock);
@@ -178,8 +181,8 @@ impl<S: Snapshot> MvccReader<S> {
         }
 
         if ts == std::u64::MAX && key.to_raw()? == lock.primary {
-            // when ts==u64::MAX(which means to get latest committed version for
-            // primary key),and current key is the primary key, returns the latest
+            // when ts == u64::MAX (which means to get latest committed version for
+            // primary key), and current key is the primary key, returns the latest
             // commit version's value
             return Ok(lock.ts - 1);
         }
@@ -938,5 +941,55 @@ mod tests {
         let write = reader.get_write(&key, 15).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12);
+    }
+
+    #[test]
+    fn test_check_lock() {
+        let path = Builder::new()
+            .prefix("_test_storage_mvcc_reader_check_lock")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let (k1, k2, k3, k4, v) = (b"k1", b"k2", b"k3", b"k4", b"v");
+        engine.prewrite(Mutation::Put((Key::from_raw(k1), v.to_vec())), k1, 5);
+        engine.prewrite(Mutation::Put((Key::from_raw(k2), v.to_vec())), k1, 5);
+        engine.prewrite(Mutation::Lock(Key::from_raw(k3)), k1, 5);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        // Ignore the lock if read ts is less than the lock version
+        assert_eq!(reader.check_lock(&Key::from_raw(k1), 4).unwrap(), 4);
+        assert_eq!(reader.check_lock(&Key::from_raw(k2), 4).unwrap(), 4);
+        // Returns the lock if read ts >= lock version
+        assert!(reader.check_lock(&Key::from_raw(k1), 6).is_err());
+        assert!(reader.check_lock(&Key::from_raw(k2), 6).is_err());
+        // Read locks don't block any read operation
+        assert_eq!(reader.check_lock(&Key::from_raw(k3), 6).unwrap(), 6);
+        // Ignore the primary lock and returns the version before the lock
+        // when reading the latest committed version by setting u64::MAX as ts
+        assert_eq!(reader.check_lock(&Key::from_raw(k1), u64::MAX).unwrap(), 4);
+        // Should not ignore the secondary lock even though reading the latest version
+        assert!(reader.check_lock(&Key::from_raw(k2), u64::MAX).is_err());
+
+        // Commit the primary lock only
+        engine.commit(k1, 5, 7);
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        // Then reading the primary key should succeed
+        assert_eq!(reader.check_lock(&Key::from_raw(k1), 6).unwrap(), 6);
+        // Reading secondary keys should still fail
+        assert!(reader.check_lock(&Key::from_raw(k2), 6).is_err());
+        assert!(reader.check_lock(&Key::from_raw(k2), u64::MAX).is_err());
+
+        // Pessimistic locks
+        engine.acquire_pessimistic_lock(Key::from_raw(k4), k4, 9, 9);
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        // Pessimistic locks don't block any read operation
+        assert_eq!(reader.check_lock(&Key::from_raw(k4), 10).unwrap(), 10);
     }
 }

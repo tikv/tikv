@@ -421,7 +421,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 // A pessimistic lock cannot be committed.
                 if lock.lock_type == LockType::Pessimistic {
                     error!(
-                        "trying to committing a pessimistic lock";
+                        "trying to commit a pessimistic lock";
                         "key" => %key,
                         "start_ts" => self.start_ts,
                         "commit_ts" => commit_ts,
@@ -674,6 +674,9 @@ mod tests {
 
         must_commit(&engine, k, 5, 10);
         must_written(&engine, k, 5, 10, WriteType::Put);
+        // Delayed prewrite request after committing should do nothing.
+        must_prewrite_put_err(&engine, k, v, k, 5);
+        must_unlocked(&engine, k);
         // Write conflict.
         must_prewrite_lock_err(&engine, k, k, 6);
         must_unlocked(&engine, k);
@@ -817,21 +820,6 @@ mod tests {
         test_mvcc_txn_commit_err_imp(b"k2", &long_value);
     }
 
-    fn test_mvcc_txn_rollback_imp(k: &[u8], v: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        must_prewrite_put(&engine, k, v, k, 5);
-        must_rollback(&engine, k, 5);
-        // rollback should be idempotent
-        must_rollback(&engine, k, 5);
-        // lock should be released after rollback
-        must_unlocked(&engine, k);
-        must_prewrite_lock(&engine, k, k, 10);
-        must_rollback(&engine, k, 10);
-        // data should be dropped after rollback
-        must_get_none(&engine, k, 20);
-    }
-
     #[test]
     fn test_mvcc_txn_rollback_after_commit() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -856,29 +844,44 @@ mod tests {
         must_get(&engine, k, t4, v);
     }
 
+    fn test_mvcc_txn_rollback_imp(k: &[u8], v: &[u8]) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, k, v, k, 5);
+        must_rollback(&engine, k, 5);
+        // Rollback should be idempotent
+        must_rollback(&engine, k, 5);
+        // Lock should be released after rollback
+        must_unlocked(&engine, k);
+        must_prewrite_lock(&engine, k, k, 10);
+        must_rollback(&engine, k, 10);
+        // data should be dropped after rollback
+        must_get_none(&engine, k, 20);
+
+        // Can't rollback committed transaction.
+        must_prewrite_put(&engine, k, v, k, 25);
+        must_commit(&engine, k, 25, 30);
+        must_rollback_err(&engine, k, 25);
+        must_rollback_err(&engine, k, 25);
+
+        // Can't rollback other transaction's lock
+        must_prewrite_delete(&engine, k, k, 35);
+        must_rollback(&engine, k, 34);
+        must_rollback(&engine, k, 36);
+        must_written(&engine, k, 34, 34, WriteType::Rollback);
+        must_written(&engine, k, 36, 36, WriteType::Rollback);
+        must_locked(&engine, k, 35);
+        must_commit(&engine, k, 35, 40);
+        must_get(&engine, k, 39, v);
+        must_get_none(&engine, k, 41);
+    }
+
     #[test]
     fn test_mvcc_txn_rollback() {
         test_mvcc_txn_rollback_imp(b"k", b"v");
 
         let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_rollback_imp(b"k2", &long_value);
-    }
-
-    fn test_mvcc_txn_rollback_err_imp(k: &[u8], v: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        must_prewrite_put(&engine, k, v, k, 5);
-        must_commit(&engine, k, 5, 10);
-        must_rollback_err(&engine, k, 5);
-        must_rollback_err(&engine, k, 5);
-    }
-
-    #[test]
-    fn test_mvcc_txn_rollback_err() {
-        test_mvcc_txn_rollback_err_imp(b"k", b"v");
-
-        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_mvcc_txn_rollback_err_imp(b"k2", &long_value);
     }
 
     #[test]
@@ -1222,6 +1225,9 @@ mod tests {
         let k = b"k1";
         let v = b"v1";
 
+        // TODO: Some corner cases don't give proper results. Although they are not important, we
+        // should consider whether they are better to be fixed.
+
         // Normal
         must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
         must_pessimistic_locked(&engine, k, 1, 1);
@@ -1274,10 +1280,13 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
         must_pessimistic_locked(&engine, k, 13, 13);
         must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
+        must_pessimistic_locked(&engine, k, 13, 13);
         must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
         must_locked(&engine, k, 13);
         must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
         must_locked(&engine, k, 13);
+        must_commit(&engine, k, 13, 14);
+        must_unlocked(&engine, k);
         must_commit(&engine, k, 13, 14);
         must_unlocked(&engine, k);
 
@@ -1311,26 +1320,125 @@ mod tests {
         must_commit_err(&engine, k, 24, 25);
         must_rollback(&engine, k, 24);
 
+        // Acquire lock on a prewritten key should fail.
+        must_acquire_pessimistic_lock(&engine, k, k, 26, 26);
+        must_pessimistic_locked(&engine, k, 26, 26);
+        must_pessimistic_prewrite_delete(&engine, k, k, 26, 26, true);
+        must_locked(&engine, k, 26);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 26, 26);
+        must_locked(&engine, k, 26);
+
+        // Acquire lock on a committed key should fail.
+        must_commit(&engine, k, 26, 27);
+        must_unlocked(&engine, k);
+        must_get_none(&engine, k, 28);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 26, 26);
+        must_unlocked(&engine, k);
+        must_get_none(&engine, k, 28);
+        // Pessimistic prewrite on a committed key should fail.
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 26, 26, true);
+        must_unlocked(&engine, k);
+        must_get_none(&engine, k, 28);
+        // Currently we cannot avoid this.
+        must_acquire_pessimistic_lock(&engine, k, k, 26, 29);
+        must_pessimistic_rollback(&engine, k, 26, 29);
+        must_unlocked(&engine, k);
+
+        // Non pessimistic key in pessimistic transaction.
+        must_pessimistic_prewrite_put(&engine, k, v, k, 30, 30, false);
+        must_locked(&engine, k, 30);
+        must_commit(&engine, k, 30, 31);
+        must_unlocked(&engine, k);
+        must_get_commit_ts(&engine, k, 30, 31);
+
+        // Rollback collapsed.
+        must_rollback_collapsed(&engine, k, 32);
+        must_rollback_collapsed(&engine, k, 33);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 32, 32);
+        // Currently we cannot avoid this.
+        must_acquire_pessimistic_lock(&engine, k, k, 32, 34);
+        must_pessimistic_rollback(&engine, k, 32, 34);
+        must_unlocked(&engine, k);
+
+        // Acquire lock when there is lock with different for_update_ts.
+        must_acquire_pessimistic_lock(&engine, k, k, 35, 36);
+        must_pessimistic_locked(&engine, k, 35, 36);
+        must_acquire_pessimistic_lock(&engine, k, k, 35, 35);
+        must_pessimistic_locked(&engine, k, 35, 36);
+        must_acquire_pessimistic_lock(&engine, k, k, 35, 37);
+        must_pessimistic_locked(&engine, k, 35, 37);
+
+        // Cannot prewrite when there is another transaction's pessimistic lock.
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 36, true);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, true);
+        must_pessimistic_locked(&engine, k, 35, 37);
+        // Cannot prewrite when there is another transaction's non-pessimistic lock.
+        must_pessimistic_prewrite_put(&engine, k, v, k, 35, 37, true);
+        must_locked(&engine, k, 35);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, true);
+        must_locked(&engine, k, 35);
+
+        // Commit pessimistic transaction's key but with smaller commit_ts than for_update_ts.
+        // Currently not checked, so in this case it will actually be successfully committed.
+        must_commit(&engine, k, 35, 36);
+        must_unlocked(&engine, k);
+        must_get_commit_ts(&engine, k, 35, 36);
+
+        // Prewrite meets pessimistic lock on a non-pessimistic key.
+        // Currently not checked, so prewrite will success.
+        must_acquire_pessimistic_lock(&engine, k, k, 40, 40);
+        must_pessimistic_locked(&engine, k, 40, 40);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 40, 40, false);
+        must_locked(&engine, k, 40);
+        must_commit(&engine, k, 40, 41);
+        must_unlocked(&engine, k);
+
+        // Prewrite with different for_update_ts.
+        // Currently not checked.
+        must_acquire_pessimistic_lock(&engine, k, k, 42, 45);
+        must_pessimistic_locked(&engine, k, 42, 45);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 42, 43, true);
+        must_locked(&engine, k, 42);
+        must_commit(&engine, k, 42, 45);
+        must_unlocked(&engine, k);
+
+        must_acquire_pessimistic_lock(&engine, k, k, 46, 47);
+        must_pessimistic_locked(&engine, k, 46, 47);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 46, 48, true);
+        must_locked(&engine, k, 46);
+        must_commit(&engine, k, 46, 49);
+        must_unlocked(&engine, k);
+
+        // Prewrite on non-pessimistic key meets write with larger commit_ts than current
+        // for_update_ts (non-pessimistic data conflict).
+        // Normally non-pessimistic keys in pessimistic transactions are used when we are sure that
+        // there won't be conflicts. So this case is also not checked, and prewrite will succeeed.
+        must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, false);
+        must_locked(&engine, k, 47);
+        must_rollback(&engine, k, 47);
+        must_unlocked(&engine, k);
+
         // start_ts and commit_ts interlacing
-        for start_ts in &[40, 50, 60] {
+        for start_ts in &[140, 150, 160] {
             let for_update_ts = start_ts + 48;
             let commit_ts = start_ts + 50;
             must_acquire_pessimistic_lock(&engine, k, k, *start_ts, for_update_ts);
-            must_pessimistic_prewrite_put(&engine, k, v, k, *start_ts, *start_ts, true);
+            must_pessimistic_prewrite_put(&engine, k, v, k, *start_ts, for_update_ts, true);
             must_commit(&engine, k, *start_ts, commit_ts);
+            must_get(&engine, k, commit_ts + 1, v);
         }
 
-        must_rollback(&engine, k, 70);
+        must_rollback(&engine, k, 170);
 
         // Now the data should be like: (start_ts -> commit_ts)
-        // 40 -> 90
-        // 50 -> 100
-        // 60 -> 110
-        // 70 -> rollback
-        must_get_commit_ts(&engine, k, 40, 90);
-        must_get_commit_ts(&engine, k, 50, 100);
-        must_get_commit_ts(&engine, k, 60, 110);
-        must_get_rollback_ts(&engine, k, 70);
+        // 140 -> 190
+        // 150 -> 200
+        // 160 -> 210
+        // 170 -> rollback
+        must_get_commit_ts(&engine, k, 140, 190);
+        must_get_commit_ts(&engine, k, 150, 200);
+        must_get_commit_ts(&engine, k, 160, 210);
+        must_get_rollback_ts(&engine, k, 170);
     }
 
     #[test]
@@ -1358,23 +1466,51 @@ mod tests {
         must_pessimistic_locked(&engine, k, 1, 1);
         must_pessimistic_rollback(&engine, k, 1, 1);
         must_unlocked(&engine, k);
+        must_get_commit_ts_none(&engine, k, 1);
+        // Pessimistic rollback is idempotent
+        must_pessimistic_rollback(&engine, k, 1, 1);
+        must_unlocked(&engine, k);
+        must_get_commit_ts_none(&engine, k, 1);
 
         // Succeed if the lock doesn't exist.
         must_pessimistic_rollback(&engine, k, 2, 2);
 
-        // Succeed if for_update_ts is larger or different.
+        // Do nothing if meets other transaction's pessimistic lock
         must_acquire_pessimistic_lock(&engine, k, k, 2, 3);
+        must_pessimistic_rollback(&engine, k, 1, 1);
+        must_pessimistic_rollback(&engine, k, 1, 2);
+        must_pessimistic_rollback(&engine, k, 1, 3);
+        must_pessimistic_rollback(&engine, k, 1, 4);
+        must_pessimistic_rollback(&engine, k, 3, 3);
+        must_pessimistic_rollback(&engine, k, 4, 4);
+
+        // Succeed if for_update_ts is larger; do nothing if for_update_ts is smaller.
         must_pessimistic_locked(&engine, k, 2, 3);
         must_pessimistic_rollback(&engine, k, 2, 2);
         must_pessimistic_locked(&engine, k, 2, 3);
         must_pessimistic_rollback(&engine, k, 2, 4);
         must_unlocked(&engine, k);
 
-        // Succeed if rollbacks a non-pessimistic lock.
+        // Do nothing if rollbacks a non-pessimistic lock.
         must_prewrite_put(&engine, k, v, k, 3);
         must_locked(&engine, k, 3);
         must_pessimistic_rollback(&engine, k, 3, 3);
         must_locked(&engine, k, 3);
+
+        // Do nothing if meets other transaction's optimistic lock
+        must_pessimistic_rollback(&engine, k, 2, 2);
+        must_pessimistic_rollback(&engine, k, 2, 3);
+        must_pessimistic_rollback(&engine, k, 2, 4);
+        must_pessimistic_rollback(&engine, k, 4, 4);
+        must_locked(&engine, k, 3);
+
+        // Do nothing if committed
+        must_commit(&engine, k, 3, 4);
+        must_unlocked(&engine, k);
+        must_get_commit_ts(&engine, k, 3, 4);
+        must_pessimistic_rollback(&engine, k, 3, 3);
+        must_pessimistic_rollback(&engine, k, 3, 4);
+        must_pessimistic_rollback(&engine, k, 3, 5);
     }
 
     #[test]

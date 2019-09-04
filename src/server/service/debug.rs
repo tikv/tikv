@@ -409,6 +409,48 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
 
         self.handle_response(ctx, sink, f, TAG);
     }
+
+    fn get_store_info(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetStoreInfoRequest,
+        sink: UnarySink<GetStoreInfoResponse>,
+    ) {
+        const TAG: &str = "debug_get_store_id";
+        let debugger = self.debugger.clone();
+
+        let f = self.pool.spawn_fn(move || {
+            let mut resp = GetStoreInfoResponse::default();
+            match debugger.get_store_id() {
+                Ok(store_id) => resp.set_store_id(store_id),
+                Err(_) => resp.set_store_id(0),
+            }
+            Ok(resp)
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn get_cluster_info(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetClusterInfoRequest,
+        sink: UnarySink<GetClusterInfoResponse>,
+    ) {
+        const TAG: &str = "debug_get_cluster_id";
+        let debugger = self.debugger.clone();
+
+        let f = self.pool.spawn_fn(move || {
+            let mut resp = GetClusterInfoResponse::default();
+            match debugger.get_cluster_id() {
+                Ok(cluster_id) => resp.set_cluster_id(cluster_id),
+                Err(_) => resp.set_cluster_id(0),
+            }
+            Ok(resp)
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
 }
 
 fn region_detail<T: RaftStoreRouter>(

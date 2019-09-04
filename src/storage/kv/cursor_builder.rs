@@ -63,7 +63,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Set iterator range by giving lower and upper bound.
     /// The range is left closed right open.
     ///
-    /// Both defaults to `None`.
+    /// Both default to `None`.
     #[inline]
     pub fn range(mut self, lower: Option<Key>, upper: Option<Key>) -> Self {
         self.lower_bound = lower;
