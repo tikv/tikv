@@ -791,7 +791,7 @@ impl Peer {
     }
 
     /// Steps the raft message.
-    pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
+    pub fn step(&mut self, mut m: eraftpb::Message) -> Result<()> {
         fail_point!(
             "step_message_3_1",
             { self.peer.get_store_id() == 3 && self.region_id == 1 },
@@ -807,17 +807,17 @@ impl Peer {
         }
         // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
         // request directly, rather than send a heartbeat to check quorum.
-        let msg_type = msg.get_msg_type();
+        let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             match self.inspect_lease() {
                 LeaseState::Valid => {
-                    let resp = eraftpb::Message::default();
+                    let mut resp = eraftpb::Message::default();
                     resp.set_msg_type(MessageType::MsgReadIndexResp);
                     resp.to = m.from;
                     resp.index = self.get_store().committed_index();
                     resp.set_entries(m.take_entries());
 
-                    self.pending_messages.append(resp);
+                    self.pending_messages.push(resp);
                     return Ok(());
                 }
                 _ => (),
@@ -1843,7 +1843,7 @@ impl Peer {
 
     fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
         ctx.raft_metrics.propose.local_read += 1;
-        cb.invoke_read(self.handle_read(ctx, req, false, None))
+        cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
     }
 
     fn pre_read_index(&self) -> Result<()> {
