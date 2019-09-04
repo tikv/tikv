@@ -1167,6 +1167,7 @@ mod tests {
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::Result as EngineResult;
+    use crate::storage::lock_manager::DummyLockMgr;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
@@ -1485,7 +1486,10 @@ mod tests {
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
-    fn check_data<E: Engine>(storage: &Storage<E>, expected_data: &BTreeMap<Vec<u8>, Vec<u8>>) {
+    fn check_data<E: Engine>(
+        storage: &Storage<E, DummyLockMgr>,
+        expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
+    ) {
         let scan_res = storage
             .async_scan(
                 Context::default(),
