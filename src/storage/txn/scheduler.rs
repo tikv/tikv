@@ -200,6 +200,10 @@ impl SchedulerInner {
         }
     }
 
+    fn peek_task_mutex(&self, cid: u64) -> &Mutex<HashMap<u64, TaskContext>> {
+        &self.task_contexts[id_index(cid)]
+    }
+
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.task_contexts[id_index(cid)]
             .lock()
@@ -452,16 +456,15 @@ impl<E: Engine> Scheduler<E> {
     /// Calls the callback with an error.
     fn batch_finish_with_err(&self, cid: u64, req: u64, err: Error) {
         debug!("write command finished with error"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
+        let mut tasks = self.inner.peek_task_mutex(cid).lock();
+        let tctx = tasks.get_mut(&cid).unwrap();
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
 
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
-        execute_batch_callback(tctx.cb, req, pr);
-
-        self.release_lock(&tctx.lock, cid);
+        execute_batch_callback(&mut tctx.cb, req, pr);
     }
 
     /// Event handler for the success of read.
@@ -472,15 +475,14 @@ impl<E: Engine> Scheduler<E> {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
-        if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb);
-        } else {
-            execute_batch_callback(tctx.cb, req, pr);
-        }
-
-        self.release_lock(&tctx.lock, cid);
+        let mut tasks = self.inner.peek_task_mutex(cid).lock();
+        let tctx = tasks.get_mut(&cid).unwrap();
+        // if let ProcessResult::NextCommand { cmd } = pr {
+            // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+            // self.schedule_command(cmd, tctx.cb);
+        // } else {
+        execute_batch_callback(&mut tctx.cb, req, pr);
+        // }
     }
 
     /// Event handler for the success of write.
@@ -495,20 +497,24 @@ impl<E: Engine> Scheduler<E> {
         SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
 
         debug!("write command finished"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
+        let mut tasks = self.inner.peek_task_mutex(cid).lock();
+        let tctx = tasks.get_mut(&cid).unwrap();
         let pr = match result {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed {
                 err: StorageError::from(e),
             },
         };
-        if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb);
-        } else {
-            execute_batch_callback(tctx.cb, req, pr);
-        }
+        // if let ProcessResult::NextCommand { cmd } = pr {
+            // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+            // self.schedule_command(cmd, tctx.cb);
+        // } else {
+        execute_batch_callback(&mut tctx.cb, req, pr);
+        // }
+    }
 
+    fn batch_all_finished(&self, cid: u64) {
+        let tctx = self.inner.dequeue_task_context(cid);
         self.release_lock(&tctx.lock, cid);
     }
 
@@ -571,6 +577,10 @@ impl<E: Engine> MsgScheduler for Scheduler<E> {
             _ => unreachable!(),
         }
     }
+
+    fn on_batch_finished(&self, cid: u64) {
+        self.batch_all_finished(cid);
+    }
 }
 
 fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
@@ -595,6 +605,15 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         | Command::PessimisticRollback { ref keys, .. } => latches.gen_lock(keys),
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
+        Command::MiniBatch { ref commands, .. } => {
+            let mut keys: Vec<&Key> = vec![];
+            for cmd in commands {
+                if let Command::Prewrite { ref mutations, .. } = cmd {
+                    keys.append(&mut mutations.iter().map(|x| x.key()).collect());
+                }
+            }
+            latches.gen_lock(&keys)
+        },
         _ => Lock::new(vec![]),
     }
 }

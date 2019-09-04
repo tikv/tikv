@@ -70,7 +70,7 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
     }
 }
 
-pub fn execute_batch_callback(callback: StorageCb, req: u64, pr: ProcessResult) {
+pub fn execute_batch_callback(callback: &mut StorageCb, req: u64, pr: ProcessResult) {
     match callback {
         StorageCb::BatchBooleans(cb) => match pr {
             ProcessResult::MultiRes { results } => cb(req, Ok(results)),
@@ -119,6 +119,7 @@ impl Task {
 pub trait MsgScheduler: Clone + Send + 'static {
     fn on_msg(&self, task: Msg);
     fn on_batch_msg(&self, req: u64, task: Msg);
+    fn on_batch_finished(&self, cid: u64);
 }
 
 pub struct Executor<E: Engine, S: MsgScheduler> {
@@ -414,6 +415,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                         });
                     }
                 }
+                scheduler.on_batch_finished(cid);
             } else {
                 let sched = scheduler.clone();
                 let id_copy = ids.clone();
@@ -434,6 +436,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                                     );
                                 }
                             }
+                            sched.on_batch_finished(cid);
                             KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                 .get(tag)
                                 .observe(rows as f64);
@@ -453,6 +456,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                             );
                         }
                     }
+                    scheduler.on_batch_finished(cid);
                 }
             }
         }
