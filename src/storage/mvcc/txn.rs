@@ -1466,23 +1466,51 @@ mod tests {
         must_pessimistic_locked(&engine, k, 1, 1);
         must_pessimistic_rollback(&engine, k, 1, 1);
         must_unlocked(&engine, k);
+        must_get_commit_ts_none(&engine, k, 1);
+        // Pessimistic rollback is idempotent
+        must_pessimistic_rollback(&engine, k, 1, 1);
+        must_unlocked(&engine, k);
+        must_get_commit_ts_none(&engine, k, 1);
 
         // Succeed if the lock doesn't exist.
         must_pessimistic_rollback(&engine, k, 2, 2);
 
-        // Succeed if for_update_ts is larger or different.
+        // Do nothing if meets other transaction's pessimistic lock
         must_acquire_pessimistic_lock(&engine, k, k, 2, 3);
+        must_pessimistic_rollback(&engine, k, 1, 1);
+        must_pessimistic_rollback(&engine, k, 1, 2);
+        must_pessimistic_rollback(&engine, k, 1, 3);
+        must_pessimistic_rollback(&engine, k, 1, 4);
+        must_pessimistic_rollback(&engine, k, 3, 3);
+        must_pessimistic_rollback(&engine, k, 4, 4);
+
+        // Succeed if for_update_ts is larger; do nothing if for_update_ts is smaller.
         must_pessimistic_locked(&engine, k, 2, 3);
         must_pessimistic_rollback(&engine, k, 2, 2);
         must_pessimistic_locked(&engine, k, 2, 3);
         must_pessimistic_rollback(&engine, k, 2, 4);
         must_unlocked(&engine, k);
 
-        // Succeed if rollbacks a non-pessimistic lock.
+        // Do nothing if rollbacks a non-pessimistic lock.
         must_prewrite_put(&engine, k, v, k, 3);
         must_locked(&engine, k, 3);
         must_pessimistic_rollback(&engine, k, 3, 3);
         must_locked(&engine, k, 3);
+
+        // Do nothing if meets other transaction's optimistic lock
+        must_pessimistic_rollback(&engine, k, 2, 2);
+        must_pessimistic_rollback(&engine, k, 2, 3);
+        must_pessimistic_rollback(&engine, k, 2, 4);
+        must_pessimistic_rollback(&engine, k, 4, 4);
+        must_locked(&engine, k, 3);
+
+        // Do nothing if committed
+        must_commit(&engine, k, 3, 4);
+        must_unlocked(&engine, k);
+        must_get_commit_ts(&engine, k, 3, 4);
+        must_pessimistic_rollback(&engine, k, 3, 3);
+        must_pessimistic_rollback(&engine, k, 3, 4);
+        must_pessimistic_rollback(&engine, k, 3, 5);
     }
 
     #[test]
