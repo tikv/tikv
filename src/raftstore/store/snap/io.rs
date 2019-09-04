@@ -146,10 +146,9 @@ fn create_sst_file_writer(snap: &DbSnapshot, cf: CfName, path: &str) -> Result<S
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::raftstore::store::snap::tests::*;
+    use engine::KvEngine;
     use engine::CF_DEFAULT;
     use tempfile::Builder;
 
@@ -170,7 +169,7 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let plain_file_path = snap_cf_dir.path().join("plain");
-                let snap = DbSnapshot::new(Arc::clone(&db));
+                let snap = db.snapshot();
                 let stats = build_plain_cf_file(
                     &plain_file_path.to_str().unwrap(),
                     &snap,
@@ -196,7 +195,7 @@ mod tests {
                 apply_plain_cf_file(
                     &plain_file_path.to_str().unwrap(),
                     &detector,
-                    &db1,
+                    db1.as_ref(),
                     CF_DEFAULT,
                     16,
                 )
@@ -218,7 +217,7 @@ mod tests {
                 let sst_file_path = snap_cf_dir.path().join("sst");
                 let stats = build_sst_cf_file(
                     &sst_file_path.to_str().unwrap(),
-                    &DbSnapshot::new(Arc::clone(&db)),
+                    &db.snapshot(),
                     CF_DEFAULT,
                     b"a",
                     b"z",
@@ -238,7 +237,8 @@ mod tests {
                     .tempdir()
                     .unwrap();
                 let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
-                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
+                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), db1.as_ref(), CF_DEFAULT)
+                    .unwrap();
                 assert_eq_db(&db, &db1);
             }
         }

@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine::rocks;
 use engine::rocks::DBStatisticsTickerType;
 use engine::CF_LOCK;
 use test_raftstore::*;
@@ -7,8 +8,9 @@ use tikv_util::config::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
-        let lock_handle = engines.kv.cf_handle(CF_LOCK).unwrap();
-        engines.kv.flush_cf(lock_handle, true).unwrap();
+        let kv_engine = engines.kv.as_ref();
+        let lock_handle = rocks::util::get_cf_handle(kv_engine, CF_LOCK).unwrap();
+        kv_engine.flush_cf(lock_handle, true).unwrap();
     }
 }
 
@@ -19,6 +21,7 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
     for engines in cluster.engines.values() {
         let compact_write_bytes = engines
             .kv
+            .as_ref()
             .get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
         if written {
             assert!(compact_write_bytes > 0);

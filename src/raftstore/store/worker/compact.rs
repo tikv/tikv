@@ -248,8 +248,9 @@ mod tests {
 
     use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
     use engine::rocks::Writable;
-    use engine::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions};
-    use engine::{WriteBatch, DB};
+    use engine::rocks::{
+        DBOptions, RawCFOptions as ColumnFamilyOptions, RawWriteBatch as WriteBatch, DB,
+    };
     use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 

@@ -35,8 +35,9 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put_cf(CF_WRITE, &k, &v);
     }
     for engines in cluster.engines.values() {
-        let cf = get_cf_handle(&engines.kv, CF_WRITE).unwrap();
-        engines.kv.flush_cf(cf, true).unwrap();
+        let kv_engine = engines.kv.as_ref();
+        let cf = get_cf_handle(kv_engine, CF_WRITE).unwrap();
+        kv_engine.flush_cf(cf, true).unwrap();
     }
 
     for i in 0..1000 {
@@ -45,18 +46,19 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_delete_cf(CF_WRITE, &k);
     }
     for engines in cluster.engines.values() {
-        let cf = get_cf_handle(&engines.kv, CF_WRITE).unwrap();
-        engines.kv.flush_cf(cf, true).unwrap();
+        let kv_engine = engines.kv.as_ref();
+        let cf = get_cf_handle(kv_engine, CF_WRITE).unwrap();
+        kv_engine.flush_cf(cf, true).unwrap();
     }
 
     // wait for compaction.
     sleep_ms(300);
 
     for engines in cluster.engines.values() {
-        let cf_handle = get_cf_handle(&engines.kv, CF_WRITE).unwrap();
-        let approximate_size = engines
-            .kv
-            .get_approximate_sizes_cf(cf_handle, &[Range::new(b"", DATA_MAX_KEY)])[0];
+        let kv_engine = engines.kv.as_ref();
+        let cf_handle = get_cf_handle(kv_engine, CF_WRITE).unwrap();
+        let approximate_size =
+            kv_engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", DATA_MAX_KEY)])[0];
         assert_eq!(approximate_size, 0);
     }
 }

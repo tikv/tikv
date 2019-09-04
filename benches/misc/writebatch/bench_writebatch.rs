@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{Writable, WriteBatch, DB};
+use engine::rocks::{RawWriteBatch as WriteBatch, Writable, DB};
 use tempfile::Builder;
 use test::Bencher;
 

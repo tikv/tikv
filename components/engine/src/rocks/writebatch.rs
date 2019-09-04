@@ -33,6 +33,10 @@ impl RocksWriteBatch {
     pub fn from_raw(db: Arc<DB>, wb: RawWriteBatch) -> RocksWriteBatch {
         RocksWriteBatch { db, wb }
     }
+
+    pub fn get_db(&self) -> &DB {
+        self.db.as_ref()
+    }
 }
 
 impl crate::WriteBatch for RocksWriteBatch {

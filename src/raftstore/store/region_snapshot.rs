@@ -371,9 +371,8 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{IngestExternalFileOptions, Snapshot, SstWriterBuilder, Writable};
+    use engine::rocks::{Rocks, Snapshot, SstWriterBuilder, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
-    use engine::DbEngines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
     use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -387,14 +386,14 @@ mod tests {
         let raft_path = path.path().join(Path::new("raft"));
         let shared_block_cache = false;
         DbEngines::new(
-            Arc::new(
+            Rocks::from_db(Arc::new(
                 rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
                     .unwrap(),
-            ),
-            Arc::new(
+            )),
+            Rocks::from_db(Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
-            ),
+            )),
             shared_block_cache,
         )
     }
@@ -459,10 +458,15 @@ mod tests {
             let db = &engines.kv;
             for &(ref k, level) in &levels {
                 db.put(&data_key(k), k).unwrap();
-                db.flush(true).unwrap();
+                db.as_ref().flush(true).unwrap();
                 data.push((k.to_vec(), k.to_vec()));
-                compact_files_in_range(&db, Some(&data_key(k)), Some(&data_key(k)), Some(level))
-                    .unwrap();
+                compact_files_in_range(
+                    db.as_ref(),
+                    Some(&data_key(k)),
+                    Some(&data_key(k)),
+                    Some(level),
+                )
+                .unwrap();
             }
         }
 
@@ -839,7 +843,7 @@ mod tests {
         let raft_path = path.path().join(Path::new("titan"));
         let shared_block_cache = false;
         let engines = DbEngines::new(
-            Arc::new(
+            Rocks::from_db(Arc::new(
                 rocks::util::new_engine(
                     path.path().to_str().unwrap(),
                     Some(kv_db_opts),
@@ -847,11 +851,11 @@ mod tests {
                     Some(kv_cfs_opts),
                 )
                 .unwrap(),
-            ),
-            Arc::new(
+            )),
+            Rocks::from_db(Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
-            ),
+            )),
             shared_block_cache,
         );
 
@@ -861,33 +865,39 @@ mod tests {
         let start_ts = 7;
         let commit_ts = 8;
         let write = Write::new(WriteType::Put, start_ts, None);
-        let db = &engines.kv;
-        let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
-        let write_cf = db.cf_handle(CF_WRITE).unwrap();
-        db.put_cf(
-            &default_cf,
-            &data_key(Key::from_raw(b"a").append_ts(start_ts).as_encoded()),
-            b"a_value",
-        )
-        .unwrap();
-        db.put_cf(
-            &write_cf,
-            &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()),
-            &write.to_bytes(),
-        )
-        .unwrap();
-        db.put_cf(
-            &default_cf,
-            &data_key(Key::from_raw(b"b").append_ts(start_ts).as_encoded()),
-            b"b_value",
-        )
-        .unwrap();
-        db.put_cf(
-            &write_cf,
-            &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()),
-            &write.to_bytes(),
-        )
-        .unwrap();
+        let db = engines.kv.as_ref();
+        engines
+            .kv
+            .put_cf(
+                CF_DEFAULT,
+                &data_key(Key::from_raw(b"a").append_ts(start_ts).as_encoded()),
+                b"a_value",
+            )
+            .unwrap();
+        engines
+            .kv
+            .put_cf(
+                CF_WRITE,
+                &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()),
+                &write.to_bytes(),
+            )
+            .unwrap();
+        engines
+            .kv
+            .put_cf(
+                CF_DEFAULT,
+                &data_key(Key::from_raw(b"b").append_ts(start_ts).as_encoded()),
+                b"b_value",
+            )
+            .unwrap();
+        engines
+            .kv
+            .put_cf(
+                CF_WRITE,
+                &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()),
+                &write.to_bytes(),
+            )
+            .unwrap();
 
         // Flush and compact the kvs into L6.
         db.flush(true).unwrap();
@@ -911,7 +921,9 @@ mod tests {
         writer.finish().unwrap();
         let mut opts = IngestExternalFileOptions::new();
         opts.move_files(true);
-        db.ingest_external_file_cf(&default_cf, &opts, &[sst_file_path.to_str().unwrap()])
+        engines
+            .kv
+            .ingest_external_file_cf(&opts, CF_DEFAULT, &[sst_file_path.to_str().unwrap()])
             .unwrap();
 
         // Now the LSM structure of default cf is:
@@ -929,7 +941,6 @@ mod tests {
         assert_eq!(value, 1);
 
         // Used to trigger titan gc
-        let db = &engines.kv;
         db.put(b"1", b"1").unwrap();
         db.flush(true).unwrap();
         db.put(b"2", b"2").unwrap();
@@ -975,13 +986,13 @@ mod tests {
         // For Titan it may encounter `missing blob file` in `delete_all_in_range`,
         // so we set key_only for Titan.
         delete_all_files_in_range(
-            &engines.kv,
+            db,
             &data_key(Key::from_raw(b"a").as_encoded()),
             &data_key(Key::from_raw(b"b").as_encoded()),
         )
         .unwrap();
         delete_all_in_range(
-            &engines.kv,
+            db,
             &data_key(Key::from_raw(b"a").as_encoded()),
             &data_key(Key::from_raw(b"b").as_encoded()),
             false,
@@ -1012,7 +1023,7 @@ mod tests {
         let write_sst_file_path = path.path().join("write.sst");
         build_sst_cf_file(
             &default_sst_file_path.to_str().unwrap(),
-            &Snapshot::new(Arc::clone(&engines.kv)),
+            &Snapshot::new(engines.kv.get_sync_db()),
             CF_DEFAULT,
             b"",
             b"{",
@@ -1021,7 +1032,7 @@ mod tests {
         .unwrap();
         build_sst_cf_file(
             &write_sst_file_path.to_str().unwrap(),
-            &Snapshot::new(Arc::clone(&engines.kv)),
+            &Snapshot::new(engines.kv.get_sync_db()),
             CF_WRITE,
             b"",
             b"{",
@@ -1037,13 +1048,13 @@ mod tests {
         let engines1 = new_temp_engine(&dir1);
         apply_sst_cf_file(
             &default_sst_file_path.to_str().unwrap(),
-            &engines1.kv,
+            engines1.kv.as_ref(),
             CF_DEFAULT,
         )
         .unwrap();
         apply_sst_cf_file(
             &write_sst_file_path.to_str().unwrap(),
-            &engines1.kv,
+            engines1.kv.as_ref(),
             CF_WRITE,
         )
         .unwrap();
@@ -1053,7 +1064,7 @@ mod tests {
         r.mut_peers().push(Peer::default());
         r.set_start_key(b"a".to_vec());
         r.set_end_key(b"z".to_vec());
-        let snapshot = RegionSnapshot::from_raw(Arc::clone(&engines1.kv), r);
+        let snapshot = RegionSnapshot::from_raw(engines1.kv.get_sync_db(), r);
         let mut scanner = ScannerBuilder::new(snapshot, 10, false)
             .range(Some(Key::from_raw(b"a")), None)
             .build()

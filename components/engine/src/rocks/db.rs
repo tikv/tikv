@@ -6,14 +6,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tikv_util::file::calc_crc32;
-use tikv_util::keybuilder::KeyBuilder;
 
 use super::{
-    set_external_sst_file_global_seq_no, util, DBIterator, Iterator, RawWriteBatch, Snapshot,
-    Writable, WriteBatch, DB,
+    set_external_sst_file_global_seq_no, util, DBIterator, Iterator, Snapshot, Writable,
+    WriteBatch, DB,
 };
 use crate::options::*;
-use crate::{Error, Iterable, KvEngine, Mutable, Peekable, Result, CF_LOCK, MAX_DELETE_BATCH_SIZE};
+use crate::rocks::util::get_cf_handle;
+use crate::util as engine_util;
+use crate::{Error, Iterable, KvEngine, Mutable, Peekable, Result};
 
 #[derive(Clone)]
 #[repr(transparent)]
@@ -58,6 +59,9 @@ impl KvEngine for Rocks {
     type Batch = WriteBatch;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &WriteBatch) -> Result<()> {
+        if wb.get_db().path() != self.0.path() {
+            return Err(Error::Engine("mismatched db path".to_owned()));
+        }
         DB::write_opt(&self.0, wb.as_ref(), &opts.into()).map_err(Error::Engine)
     }
 
@@ -79,7 +83,7 @@ impl KvEngine for Rocks {
 
     fn delete_all_in_range_cf(
         &self,
-        opts: &DeleteRangeOptions,
+        t: DeleteRangeType,
         cf: &str,
         start_key: &[u8],
         end_key: &[u8],
@@ -88,48 +92,20 @@ impl KvEngine for Rocks {
             return Ok(());
         }
 
-        let handle = util::get_cf_handle(self.as_ref(), cf)?;
-        if opts.use_delete_files {
-            self.0
-                .delete_files_in_range_cf(handle, start_key, end_key, false)?;
-        } else {
-            let wb = RawWriteBatch::default();
-            if opts.use_delete_range && cf != CF_LOCK {
-                wb.delete_range_cf(handle, start_key, end_key)
-                    .map_err(Error::Engine)?;
-            } else {
-                let start = KeyBuilder::from_slice(start_key, 0, 0);
-                let end = KeyBuilder::from_slice(end_key, 0, 0);
-                let mut iter_opt = IterOptions::new(Some(start), Some(end), false);
-                if self.0.is_titan() {
-                    // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-                    // to avoid referring to missing blob files.
-                    iter_opt.key_only(true);
-
-                    let mut it = DBIterator::new_cf(self.0.clone(), handle, iter_opt.into());
-                    it.seek(start_key.into());
-                    while it.valid() {
-                        wb.delete_cf(handle, it.key()).map_err(Error::Engine)?;
-                        if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
-                            // Can't use write_without_wal here.
-                            // Otherwise it may cause dirty data when applying snapshot.
-                            DB::write(self.as_ref(), &wb).map_err(Error::Engine)?;
-                            wb.clear();
-                        }
-
-                        if !it.next() {
-                            break;
-                        }
-                    }
-                    it.status().map_err(Error::Engine)?;
-                }
-            }
-
-            if wb.count() > 0 {
-                DB::write(self.as_ref(), &wb).map_err(Error::Engine)?;
+        let db: &DB = self.0.as_ref();
+        match t {
+            DeleteRangeType::Normal => engine_util::delete_all_in_range_cf(
+                db, cf, start_key, end_key, false, /* use_delete_range*/
+            ),
+            DeleteRangeType::DeleteRange => engine_util::delete_all_in_range_cf(
+                db, cf, start_key, end_key, true, /* use_delete_range*/
+            ),
+            DeleteRangeType::DeleteFiles => {
+                let handle = get_cf_handle(db, cf)?;
+                db.delete_files_in_range_cf(handle, start_key, end_key, false)?;
+                Ok(())
             }
         }
-        Ok(())
     }
 
     fn ingest_external_file_cf(

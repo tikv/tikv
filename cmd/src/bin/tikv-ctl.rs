@@ -22,9 +22,9 @@ use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 
-use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
-use engine::Engines;
+use engine::rocks::{self, Rocks};
+use engine::DbEngines;
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -87,9 +87,9 @@ fn new_debug_executor(
             let raft_db =
                 rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
-            Box::new(Debugger::new(Engines::new(
-                Arc::new(kv_db),
-                Arc::new(raft_db),
+            Box::new(Debugger::new(DbEngines::new(
+                Rocks::from_db(Arc::new(kv_db)),
+                Rocks::from_db(Arc::new(raft_db)),
                 cache.is_some(),
             ))) as Box<dyn DebugExecutor>
         }

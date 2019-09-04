@@ -163,36 +163,11 @@ impl Default for IterOptions {
     }
 }
 
-#[derive(Clone)]
-pub struct DeleteRangeOptions {
-    pub use_delete_files: bool,
-    pub use_delete_range: bool,
-}
-
-impl DeleteRangeOptions {
-    pub fn new() -> DeleteRangeOptions {
-        DeleteRangeOptions {
-            use_delete_files: false,
-            use_delete_range: false,
-        }
-    }
-
-    pub fn use_delete_files(&mut self, v: bool) {
-        self.use_delete_files = v;
-    }
-
-    pub fn use_delete_range(&mut self, v: bool) {
-        self.use_delete_range = v;
-    }
-}
-
-impl Default for DeleteRangeOptions {
-    fn default() -> DeleteRangeOptions {
-        DeleteRangeOptions {
-            use_delete_files: false,
-            use_delete_range: false,
-        }
-    }
+#[derive(Clone, Copy)]
+pub enum DeleteRangeType {
+    Normal,
+    DeleteFiles,
+    DeleteRange,
 }
 
 #[derive(Clone)]

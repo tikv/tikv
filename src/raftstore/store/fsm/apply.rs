@@ -13,7 +13,7 @@ use std::{cmp, usize};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks::{Rocks, Snapshot, WriteBatch};
 use engine::{
-    DbEngines, DeleteRangeOptions, KvEngine, KvEngines, Mutable, Peekable, WriteBatch as _,
+    DbEngines, DeleteRangeType, KvEngine, KvEngines, Mutable, Peekable, WriteBatch as _,
     WriteOptions,
 };
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1270,12 +1270,9 @@ impl ApplyDelegate {
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
-            let mut opts = DeleteRangeOptions::default();
-            opts.use_delete_files(true);
-            opts.use_delete_range(false);
             ctx.engines
                 .kv
-                .delete_all_in_range_cf(&opts, cf, &start_key, &end_key)
+                .delete_all_in_range_cf(DeleteRangeType::DeleteFiles, cf, &start_key, &end_key)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to delete files in range [{}, {}): {:?}",
@@ -1287,11 +1284,14 @@ impl ApplyDelegate {
                 });
 
             // Delete all remaining keys.
-            opts.use_delete_files(false);
-            opts.use_delete_range(use_delete_range);
+            let delete_type = if use_delete_range {
+                DeleteRangeType::DeleteRange
+            } else {
+                DeleteRangeType::Normal
+            };
             ctx.engines
                 .kv
-                .delete_all_in_range_cf(&opts, cf, &start_key, &end_key)
+                .delete_all_in_range_cf(delete_type, cf, &start_key, &end_key)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
@@ -2909,8 +2909,8 @@ mod tests {
     use crate::raftstore::store::msg::WriteResponse;
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
-    use engine::rocks::Writable;
-    use engine::{WriteBatch, DB};
+    use engine::rocks;
+    use engine::rocks::{RawWriteBatch, Rocks, Writable};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -2924,7 +2924,7 @@ mod tests {
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, DbEngines) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db = Arc::new(
+        let db = Rocks::from_db(Arc::new(
             rocks::util::new_engine(
                 path.path().join("db").to_str().unwrap(),
                 None,
@@ -2932,11 +2932,11 @@ mod tests {
                 None,
             )
             .unwrap(),
-        );
-        let raft_db = Arc::new(
+        ));
+        let raft_db = Rocks::from_db(Arc::new(
             rocks::util::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
                 .unwrap(),
-        );
+        ));
         let shared_block_cache = false;
         (path, DbEngines::new(db, raft_db, shared_block_cache))
     }
@@ -2963,7 +2963,7 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        let wb = WriteBatch::default();
+        let wb = RawWriteBatch::default();
         assert_eq!(should_write_to_engine(&req, wb.count()), true);
 
         // IngestSst command
@@ -2972,12 +2972,12 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        let wb = WriteBatch::default();
+        let wb = RawWriteBatch::default();
         assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let wb = WriteBatch::default();
+        let wb = RawWriteBatch::default();
         for i in 0..WRITE_BATCH_MAX_KEYS {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -2986,7 +2986,7 @@ mod tests {
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::default();
-        let wb = WriteBatch::default();
+        let wb = RawWriteBatch::default();
         for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
@@ -3459,11 +3459,7 @@ mod tests {
         assert_eq!(apply_res.metrics.written_keys, 2);
         assert_eq!(apply_res.metrics.size_diff_hint, 5);
         assert_eq!(apply_res.metrics.lock_cf_written_bytes, 5);
-        let lock_handle = engines.kv.cf_handle(CF_LOCK).unwrap();
-        assert_eq!(
-            engines.kv.get_cf(lock_handle, &dk_k1).unwrap().unwrap(),
-            b"v1"
-        );
+        assert_eq!(engines.kv.get_cf(CF_LOCK, &dk_k1).unwrap().unwrap(), b"v1");
 
         let put_entry = EntryBuilder::new(3, 2)
             .put(b"k2", b"v2")
@@ -3675,7 +3671,7 @@ mod tests {
     }
 
     struct SplitResultChecker<'a> {
-        db: &'a DB,
+        db: &'a Rocks,
         origin_peers: &'a [metapb::Peer],
         epoch: Rc<RefCell<RegionEpoch>>,
     }

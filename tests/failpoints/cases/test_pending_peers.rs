@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use fail;
 
+use engine::Peekable;
 use test_raftstore::*;
 use tikv::raftstore::store::keys;
 use tikv_util::config::*;

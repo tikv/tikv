@@ -42,19 +42,15 @@ fn test_node_bootstrap_with_prepared_data() {
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
-    let engine = Arc::new(
+    let engine = rocks::Rocks::from_db(Arc::new(
         rocks::util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
-    );
+    ));
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine = Arc::new(
+    let raft_engine = rocks::Rocks::from_db(Arc::new(
         rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
-    );
+    ));
     let shared_block_cache = false;
-    let engines = DbEngines::new(
-        Arc::clone(&engine),
-        Arc::clone(&raft_engine),
-        shared_block_cache,
-    );
+    let engines = DbEngines::new(engine.clone(), raft_engine.clone(), shared_block_cache);
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
 
     let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
@@ -97,7 +93,7 @@ fn test_node_bootstrap_with_prepared_data() {
         importer,
     )
     .unwrap();
-    assert!(Arc::clone(&engine)
+    assert!(engine
         .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
         .unwrap()
         .is_none());

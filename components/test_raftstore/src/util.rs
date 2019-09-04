@@ -15,8 +15,8 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
-use engine::rocks::{self, CompactionJobInfo, DB};
-use engine::{Engines, ALL_CFS, CF_DEFAULT, CF_RAFT};
+use engine::rocks::{self, CompactionJobInfo, Rocks};
+use engine::{DbEngines, Iterable, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use tikv::config::*;
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
@@ -31,10 +31,9 @@ use super::*;
 
 pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
-pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
-    let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
+pub fn must_get(engine: &Rocks, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
-        let res = engine.get_cf(handle, &keys::data_key(key)).unwrap();
+        let res = engine.get_cf(cf, &keys::data_key(key)).unwrap();
         if value.is_some() && res.is_some() {
             assert_eq!(value.unwrap(), &*res.unwrap());
             return;
@@ -45,7 +44,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         thread::sleep(Duration::from_millis(20));
     }
     debug!("last try to get {}", hex::encode_upper(key));
-    let res = engine.get_cf(handle, &keys::data_key(key)).unwrap();
+    let res = engine.get_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {
@@ -58,23 +57,23 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     )
 }
 
-pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
+pub fn must_get_equal(engine: &Rocks, key: &[u8], value: &[u8]) {
     must_get(engine, "default", key, Some(value));
 }
 
-pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
+pub fn must_get_none(engine: &Rocks, key: &[u8]) {
     must_get(engine, "default", key, None);
 }
 
-pub fn must_get_cf_equal(engine: &Arc<DB>, cf: &str, key: &[u8], value: &[u8]) {
+pub fn must_get_cf_equal(engine: &Rocks, cf: &str, key: &[u8], value: &[u8]) {
     must_get(engine, cf, key, Some(value));
 }
 
-pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
+pub fn must_get_cf_none(engine: &Rocks, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &DbEngines, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
@@ -495,10 +494,10 @@ fn dummpy_filter(_: &CompactionJobInfo) -> bool {
 }
 
 pub fn create_test_engine(
-    engines: Option<Engines>,
+    engines: Option<DbEngines>,
     router: RaftRouter,
     cfg: &TiKvConfig,
-) -> (Engines, Option<TempDir>) {
+) -> (DbEngines, Option<TempDir>) {
     // Create engine
     let mut path = None;
     let engines = match engines {
@@ -533,7 +532,11 @@ pub fn create_test_engine(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            Engines::new(engine, raft_engine, cache.is_some())
+            DbEngines::new(
+                Rocks::from_db(engine),
+                Rocks::from_db(raft_engine),
+                cache.is_some(),
+            )
         }
     };
     (engines, path)

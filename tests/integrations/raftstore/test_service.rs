@@ -14,7 +14,6 @@ use kvproto::tikvpb::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
-use engine::rocks::Writable;
 use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use tempfile::Builder;
@@ -606,7 +605,6 @@ fn test_debug_region_info() {
 
     let raft_engine = cluster.get_raft_engine(store_id);
     let kv_engine = cluster.get_engine(store_id);
-    let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
 
     let region_id = 100;
     let raft_state_key = keys::raft_state_key(region_id);
@@ -625,7 +623,7 @@ fn test_debug_region_info() {
     let mut apply_state = raft_serverpb::RaftApplyState::default();
     apply_state.set_applied_index(42);
     kv_engine
-        .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
+        .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
         .unwrap();
     assert_eq!(
         kv_engine
@@ -639,7 +637,7 @@ fn test_debug_region_info() {
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     kv_engine
-        .put_msg_cf(raft_cf, &region_state_key, &region_state)
+        .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
         .unwrap();
     assert_eq!(
         kv_engine
@@ -680,17 +678,15 @@ fn test_debug_region_size() {
     region.set_end_key(b"z".to_vec());
     let mut state = RegionLocalState::default();
     state.set_region(region);
-    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
     engine
-        .put_msg_cf(cf_raft, &region_state_key, &state)
+        .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
     let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
     // At lease 8 bytes for the WRITE cf.
     let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {
-        let cf_handle = engine.cf_handle(cf).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+        engine.put_cf(cf, k.as_slice(), v).unwrap();
     }
 
     let mut req = debugpb::RegionSizeRequest::default();
@@ -761,8 +757,7 @@ fn test_debug_scan_mvcc() {
     ];
     for k in &keys {
         let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0, 0).to_bytes();
-        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+        engine.put_cf(CF_LOCK, k.as_slice(), &v).unwrap();
     }
 
     let mut req = debugpb::ScanMvccRequest::default();
@@ -797,7 +792,7 @@ fn test_double_run_node() {
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
     let coprocessor_host = CoprocessorHost::new(Default::default(), router.clone());
     let importer = {
-        let dir = Path::new(engines.kv.path()).join("import-sst");
+        let dir = Path::new(engines.kv.as_ref().path()).join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
 

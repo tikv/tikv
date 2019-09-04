@@ -1,0 +1,90 @@
+-                let snapshot = engine::Snapshot::new(Arc::clone(&self.db));
++                let snapshot = rocks::Snapshot::new(Arc::clone(&self.db));
+ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
+-    let snapshot = engine::Snapshot::new(Arc::clone(&db));
++    let snapshot = rocks::Snapshot::new(Arc::clone(&db));
+         snapshot: Some(RegionSnapshot::from_snapshot(
+-    fn snapshot(&self) -> Result<Self::Snap>;
++    fn snapshot(&self) -> Self::Snap;
+-    fn snapshot(&self) -> Result<RocksSnapshot> {
++    fn snapshot(&self) -> Snapshot {
+-                            // Otherwise it may cause dirty data when applying snapshot.
+ mod snapshot;
+-pub use self::snapshot::*;
++pub use self::snapshot::{RocksSnapshot as Snapshot, SyncRocksSnapshot as SyncSnapshot};
++        let snap = engine.snapshot();
+diff --git a/components/engine/src/rocks/snapshot.rs b/components/engine/src/rocks/snapshot.rs
+--- a/components/engine/src/rocks/snapshot.rs
++++ b/components/engine/src/rocks/snapshot.rs
+             opt.set_snapshot(&self.snap);
+             opt.set_snapshot(&self.snap);
+             opt.set_snapshot(&self.snap);
+             opt.set_snapshot(&self.snap);
+                 // TODO: figure out another way to do consistency check without snapshot
+                 // or short life snapshot.
++                snap: ctx.engines.kv.snapshot(),
+     pub fn generate_and_schedule_snapshot(
+         let snapshot = RegionTask::Gen {
+             // This snapshot may be held for a long time, which may cause too many
+             // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
++            raft_snap: engines.raft.snapshot(),
++            kv_snap: engines.kv.snapshot(),
+         box_try!(region_sched.schedule(snapshot));
+-    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext, snap_task: GenSnapTask) {
++    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext<Rocks>, snap_task: GenSnapTask) {
+                 "apply_on_handle_snapshot_1_1",
+     /// and their peers from it, and schedules snapshot worker if necessary.
+         // schedule applying snapshot after raft writebatch were written.
+             false, /* we don't need snapshot time */
+             snapshot
+-            snapshot
++            snapshot.get(&keys::data_key(key)).unwrap_or_else(|e| {
+     pub fn save_snapshot_raft_state_to(
+         snapshot_index: u64,
+         let mut snapshot_raft_state = self.raft_state.clone();
+             .set_commit(snapshot_index);
+         snapshot_raft_state.set_last_index(snapshot_index);
+             &keys::snapshot_raft_state_key(self.region_id),
+             &snapshot_raft_state,
+     pub fn raw_snapshot(&self) -> DbSnapshot {
++        self.engines.kv.snapshot()
+     /// Check whether the storage has finished applying snapshot.
+                 // in case of recv raft log after snapshot.
+-                ctx.save_snapshot_raft_state_to(
+-                    snapshot_index,
++                ctx.save_snapshot_raft_state_to(snapshot_index, &mut ready_ctx.kv_wb_mut())?;
+         // only when apply snapshot
+         if snapshot_index != 0 {
+         s2.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+         s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
+diff --git a/src/raftstore/store/region_snapshot.rs b/src/raftstore/store/region_snapshot.rs
+--- a/src/raftstore/store/region_snapshot.rs
++++ b/src/raftstore/store/region_snapshot.rs
+-        let snapshot = RegionSnapshot::from_raw(Arc::clone(&engines1.kv), r);
++        let snapshot = RegionSnapshot::from_raw(engines1.kv.get_sync_db(), r);
+         let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+-        let snapshot = DbSnapshot::new(Arc::clone(&db));
++        let snapshot = db.snapshot();
+         // Verify the data is correct after applying snapshot.
+-        let snapshot = DbSnapshot::new(Arc::clone(&db));
++        let snapshot = db.snapshot();
+-        let snapshot = DbSnapshot::new(db);
++        let snapshot = db.snapshot();
+-        let snapshot = DbSnapshot::new(db);
++        let snapshot = db.snapshot();
+-        let snapshot = DbSnapshot::new(open_test_db(&db_dir.path(), None, None).unwrap());
++        let snapshot = open_test_db(&db_dir.path(), None, None).unwrap().snapshot();
+-        let snapshot = DbSnapshot::new(db);
++        let snapshot = db.snapshot();
+-        let snapshot = DbSnapshot::new(engine.kv);
++        let snapshot = engine.kv.snapshot();
+         // Add an oldest snapshot for receiving.
++                let snap = db.snapshot();
++                    &db.snapshot(),
+         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
+             // apply snapshot
+         // snapshot will not ingest cause already write stall
+         // snapshot will not ingest cause it may cause write stall
+         // before two pending apply tasks should be finished and snapshots are ingested
+         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
+         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(

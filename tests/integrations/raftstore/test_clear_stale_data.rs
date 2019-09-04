@@ -86,10 +86,10 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Generate `n` files in db at level 6.
     let level = 6;
-    init_db_with_sst_files(&db, level, n);
-    check_db_files_at_level(&db, level, u64::from(n));
+    init_db_with_sst_files(db.as_ref(), level, n);
+    check_db_files_at_level(db.as_ref(), level, u64::from(n));
     for i in 0..n {
-        check_kv_in_all_cfs(&db, i, true);
+        check_kv_in_all_cfs(db.as_ref(), i, true);
     }
 
     // Remove some peers from the node.
@@ -109,9 +109,9 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Keys in removed peers should not exist.
     for i in 0..n {
-        check_kv_in_all_cfs(&db, i, i % 2 == 0);
+        check_kv_in_all_cfs(db.as_ref(), i, i % 2 == 0);
     }
-    check_db_files_at_level(&db, level, u64::from(n) / 2);
+    check_db_files_at_level(db.as_ref(), level, u64::from(n) / 2);
 }
 
 #[test]

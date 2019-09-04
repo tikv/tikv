@@ -120,12 +120,4 @@ impl Engines {
     pub fn sync_raft(&self) -> Result<()> {
         self.raft.sync_wal().map_err(Error::Engine)
     }
-
-    pub fn to_db_engines(&self) -> DbEngines {
-        DbEngines::new(
-            Rocks::from_db(self.kv.clone()),
-            Rocks::from_db(self.raft.clone()),
-            self.shared_block_cache,
-        )
-    }
 }

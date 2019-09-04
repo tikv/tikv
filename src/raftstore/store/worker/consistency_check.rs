@@ -148,8 +148,7 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
     use engine::rocks::util::new_engine;
-    use engine::rocks::Writable;
-    use engine::Snapshot;
+    use engine::rocks::{Snapshot, Writable};
     use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};

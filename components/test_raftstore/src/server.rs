@@ -124,7 +124,8 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader =
+            LocalReader::new(engines.kv.get_sync_db(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
@@ -147,13 +148,13 @@ impl Simulator for ServerCluster {
 
         // Create import service.
         let importer = {
-            let dir = Path::new(engines.kv.path()).join("import-sst");
+            let dir = Path::new(engines.kv.as_ref().path()).join("import-sst");
             Arc::new(SSTImporter::new(dir).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
             sim_router.clone(),
-            Arc::clone(&engines.kv),
+            engines.kv.get_sync_db(),
             Arc::clone(&importer),
         );
         // Create Debug service.

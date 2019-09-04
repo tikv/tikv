@@ -222,8 +222,7 @@ mod tests {
     use crate::storage::Key;
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions, Writable};
-    use engine::DB;
+    use engine::rocks::{DBOptions, RawCFOptions as ColumnFamilyOptions, Writable, DB};
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;

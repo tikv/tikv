@@ -25,7 +25,6 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::worker::FutureWorker;
 
 use super::*;
-use engine::rocks::Rocks;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 pub struct ChannelTransportCore {
@@ -163,7 +162,7 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Engines,
+        engines: DbEngines,
         router: RaftRouter,
         system: RaftBatchSystem,
     ) -> ServerResult<u64> {
@@ -204,16 +203,13 @@ impl Simulator for NodeCluster {
         }
 
         let importer = {
-            let dir = Path::new(engines.kv.path()).join("import-sst");
+            let dir = Path::new(engines.kv.as_ref().path()).join("import-sst");
             Arc::new(SSTImporter::new(dir).unwrap())
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(
-            Rocks::from_db(engines.kv.clone()),
-            store_meta.clone(),
-            router.clone(),
-        );
+        let local_reader =
+            LocalReader::new(engines.kv.get_sync_db(), store_meta.clone(), router.clone());
         node.start(
             engines.clone(),
             simulate_trans.clone(),

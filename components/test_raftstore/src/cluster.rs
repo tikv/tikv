@@ -14,8 +14,8 @@ use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
 use tempfile::{Builder, TempDir};
 
 use engine::rocks;
-use engine::rocks::DB;
-use engine::Engines;
+use engine::rocks::{Rocks, DB};
+use engine::DbEngines;
 use engine::Peekable;
 use engine::CF_DEFAULT;
 use pd_client::PdClient;
@@ -44,7 +44,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Engines,
+        engines: DbEngines,
         router: RaftRouter,
         system: RaftBatchSystem,
     ) -> ServerResult<u64>;
@@ -95,8 +95,8 @@ pub struct Cluster<T: Simulator> {
     count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<Engines>,
-    pub engines: HashMap<u64, Engines>,
+    pub dbs: Vec<DbEngines>,
+    pub engines: HashMap<u64, DbEngines>,
 
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
@@ -143,7 +143,11 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            let engines = Engines::new(engine, raft_engine, cache.is_some());
+            let engines = DbEngines::new(
+                Rocks::from_db(engine),
+                Rocks::from_db(raft_engine),
+                cache.is_some(),
+            );
             self.dbs.push(engines);
             self.paths.push(dir);
         }
@@ -171,8 +175,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let handle = rocks::util::get_cf_handle(&engine.kv, "default").unwrap();
-            rocks::util::compact_range(&engine.kv, handle, None, None, false, 1);
+            let handle = rocks::util::get_cf_handle(engine.kv.as_ref(), "default").unwrap();
+            rocks::util::compact_range(engine.kv.as_ref(), handle, None, None, false, 1);
         }
     }
 
@@ -216,15 +220,15 @@ impl<T: Simulator> Cluster<T> {
         debug!("node {} stopped", node_id);
     }
 
-    pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(&self.engines[&node_id].kv)
+    pub fn get_engine(&self, node_id: u64) -> Rocks {
+        Clone::clone(&self.engines[&node_id].kv)
     }
 
-    pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(&self.engines[&node_id].raft)
+    pub fn get_raft_engine(&self, node_id: u64) -> Rocks {
+        Clone::clone(&self.engines[&node_id].raft)
     }
 
-    pub fn get_all_engines(&self, node_id: u64) -> Engines {
+    pub fn get_all_engines(&self, node_id: u64) -> DbEngines {
         self.engines[&node_id].clone()
     }
 
@@ -433,11 +437,11 @@ impl<T: Simulator> Cluster<T> {
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
             region.mut_peers().push(peer.clone());
-            bootstrap_store(&engines.to_db_engines(), self.id(), id).unwrap();
+            bootstrap_store(&engines, self.id(), id).unwrap();
         }
 
         for engines in self.engines.values() {
-            prepare_bootstrap_cluster(&engines.to_db_engines(), &region)?;
+            prepare_bootstrap_cluster(&engines, &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -490,7 +494,7 @@ impl<T: Simulator> Cluster<T> {
         let half = self.engines.len() / 2;
         let mut qualified_cnt = 0;
         for (id, engines) in &self.engines {
-            if !condition(&engines.kv) {
+            if !condition(engines.kv.as_ref()) {
                 debug!("store {} is not qualified yet.", id);
                 continue;
             }
@@ -744,8 +748,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn must_flush_cf(&mut self, cf: &str, sync: bool) {
         for engines in &self.dbs {
-            let handle = engines.kv.cf_handle(cf).unwrap();
-            engines.kv.flush_cf(handle, sync).unwrap();
+            let handle = rocks::util::get_cf_handle(engines.kv.as_ref(), cf).unwrap();
+            engines.kv.as_ref().flush_cf(handle, sync).unwrap();
         }
     }
 

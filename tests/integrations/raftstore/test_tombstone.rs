@@ -7,10 +7,8 @@ use std::time::Duration;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::Writable;
 use engine::CF_RAFT;
-use engine::{Iterable, Mutable, Peekable};
+use engine::{Iterable, KvEngine, Mutable, Peekable};
 use test_raftstore::*;
 use tikv::raftstore::store::keys;
 
@@ -259,9 +257,8 @@ fn test_server_stale_meta() {
         .unwrap();
     state.set_state(PeerState::Tombstone);
 
-    let handle = get_cf_handle(&engine_3, CF_RAFT).unwrap();
     engine_3
-        .put_msg_cf(handle, &keys::region_state_key(1), &state)
+        .put_msg_cf(CF_RAFT, &keys::region_state_key(1), &state)
         .unwrap();
     cluster.clear_send_filters();
 

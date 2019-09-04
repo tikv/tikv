@@ -317,6 +317,8 @@ mod tests {
     use crate::import::test_helpers::*;
 
     use engine::rocks::util::new_engine;
+    use engine::rocks::Rocks;
+    use std::sync::Arc;
     use tempfile::Builder;
 
     #[test]
@@ -353,7 +355,9 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let db = new_engine(db_path.to_str().unwrap(), None, &["default"], None).unwrap();
+        let db = Rocks::from_db(Arc::new(
+            new_engine(db_path.to_str().unwrap(), None, &["default"], None).unwrap(),
+        ));
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
@@ -368,7 +372,7 @@ mod tests {
             f.finish().unwrap();
 
             dir.ingest(&meta, &db).unwrap();
-            check_db_range(&db, range);
+            check_db_range(db.as_ref(), range);
 
             ingested.push(meta);
         }

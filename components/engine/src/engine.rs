@@ -34,7 +34,7 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone {
     fn cf_names(&self) -> Vec<&str>;
     fn delete_all_in_range(
         &self,
-        opts: &DeleteRangeOptions,
+        t: DeleteRangeType,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<()> {
@@ -42,13 +42,13 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone {
             return Ok(());
         }
         for cf in self.cf_names() {
-            self.delete_all_in_range_cf(opts, cf, start_key, end_key)?;
+            self.delete_all_in_range_cf(t, cf, start_key, end_key)?;
         }
         Ok(())
     }
     fn delete_all_in_range_cf(
         &self,
-        opts: &DeleteRangeOptions,
+        t: DeleteRangeType,
         cf: &str,
         start_key: &[u8],
         end_key: &[u8],
