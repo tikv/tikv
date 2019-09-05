@@ -974,7 +974,7 @@ fn main() {
                 .required(false)
                 .long("skip-paranoid-checks")
                 .takes_value(false)
-                .help("Skip paranoid checks when open rocksdb"),
+                .help("skip paranoid checks when open rocksdb"),
         )
         .arg(
             Arg::with_name("config")
@@ -1097,7 +1097,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("size")
-                .about("Print region size")
+                .about("print region size")
                 .arg(
                     Arg::with_name("region")
                         .short("r")
@@ -1203,7 +1203,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("print")
-                .about("Print the raw value")
+                .about("print the raw value")
                 .arg(
                     Arg::with_name("cf")
                         .short("c")
@@ -1258,7 +1258,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("diff")
-                .about("Calculate difference of region keys from different dbs")
+                .about("calculate difference of region keys from different dbs")
                 .arg(
                     Arg::with_name("region")
                         .required(true)
