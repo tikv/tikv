@@ -43,13 +43,14 @@ pub use self::kv::{
     RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
     TestEngineBuilder,
 };
-use self::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
+pub use self::lock_manager::{DummyLockMgr, LockMgr};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
+
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
@@ -684,7 +685,7 @@ impl<E: Engine> TestStorageBuilder<E> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E>> {
+    pub fn build(self) -> Result<Storage<E, DummyLockMgr>> {
         let read_pool = self::readpool_impl::build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -695,7 +696,6 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
-            None,
             None,
         )
     }
@@ -721,11 +721,11 @@ impl<E: Engine> TestStorageBuilder<E> {
 /// to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
-pub struct Storage<E: Engine> {
+pub struct Storage<E: Engine, L: LockMgr> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    sched: TxnScheduler<E>,
+    sched: TxnScheduler<E, L>,
 
     /// The thread pool used to run most read operations.
     read_pool_low: FuturePool,
@@ -746,7 +746,7 @@ pub struct Storage<E: Engine> {
     pessimistic_txn_enabled: bool,
 }
 
-impl<E: Engine> Clone for Storage<E> {
+impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -769,7 +769,7 @@ impl<E: Engine> Clone for Storage<E> {
     }
 }
 
-impl<E: Engine> Drop for Storage<E> {
+impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -791,7 +791,7 @@ impl<E: Engine> Drop for Storage<E> {
     }
 }
 
-impl<E: Engine> Storage<E> {
+impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
@@ -799,15 +799,12 @@ impl<E: Engine> Storage<E> {
         mut read_pool: Vec<FuturePool>,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-        detector_scheduler: Option<DetectorScheduler>,
+        lock_mgr: Option<L>,
     ) -> Result<Self> {
-        let pessimistic_txn_enabled =
-            waiter_mgr_scheduler.is_some() && detector_scheduler.is_some();
+        let pessimistic_txn_enabled = lock_mgr.is_some();
         let sched = TxnScheduler::new(
             engine.clone(),
-            waiter_mgr_scheduler,
-            detector_scheduler,
+            lock_mgr,
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -2090,6 +2087,7 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::lock_manager::DummyLockMgr;
     use super::*;
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
@@ -3442,9 +3440,9 @@ mod tests {
         let engine = storage.get_engine();
         expect_multi_values(
             results.clone().collect(),
-            <Storage<RocksEngine>>::async_snapshot(&engine, &ctx)
+            <Storage<RocksEngine, DummyLockMgr>>::async_snapshot(&engine, &ctx)
                 .and_then(move |snapshot| {
-                    <Storage<RocksEngine>>::raw_scan(
+                    <Storage<RocksEngine, DummyLockMgr>>::raw_scan(
                         &snapshot,
                         &"".to_string(),
                         &Key::from_encoded(b"c1".to_vec()),
@@ -3458,9 +3456,9 @@ mod tests {
         );
         expect_multi_values(
             results.rev().collect(),
-            <Storage<RocksEngine>>::async_snapshot(&engine, &ctx)
+            <Storage<RocksEngine, DummyLockMgr>>::async_snapshot(&engine, &ctx)
                 .and_then(move |snapshot| {
-                    <Storage<RocksEngine>>::reverse_raw_scan(
+                    <Storage<RocksEngine, DummyLockMgr>>::reverse_raw_scan(
                         &snapshot,
                         &"".to_string(),
                         &Key::from_encoded(b"d3".to_vec()),
@@ -3496,7 +3494,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, false),
             true
         );
 
@@ -3506,7 +3504,7 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, false),
             true
         );
 
@@ -3516,7 +3514,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, false),
             false
         );
 
@@ -3527,7 +3525,7 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, false),
             false
         );
 
@@ -3537,7 +3535,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, true),
             true
         );
 
@@ -3547,7 +3545,7 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, true),
             true
         );
 
@@ -3557,7 +3555,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, true),
             false
         );
 
@@ -3567,7 +3565,7 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, true),
             false
         );
     }
