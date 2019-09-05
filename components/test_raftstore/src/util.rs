@@ -158,11 +158,11 @@ pub fn new_readpool_cfg() -> ReadPoolConfig {
             low_concurrency: 1,
             ..StorageReadPoolConfig::default()
         },
-        coprocessor: CoprReadPoolConfig {
+        coprocessor: CoprocessorReadPoolConfig {
             high_concurrency: 1,
             normal_concurrency: 1,
             low_concurrency: 1,
-            ..CoprReadPoolConfig::default()
+            ..CoprocessorReadPoolConfig::default()
         },
     }
 }
