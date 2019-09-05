@@ -309,7 +309,6 @@ pub struct RaftInvalidProposeMetrics {
     pub mismatch_peer_id: u64,
     pub stale_command: u64,
     pub epoch_not_match: u64,
-    pub read_index_no_leader: u64,
 }
 
 impl Default for RaftInvalidProposeMetrics {
@@ -321,7 +320,6 @@ impl Default for RaftInvalidProposeMetrics {
             mismatch_peer_id: 0,
             stale_command: 0,
             epoch_not_match: 0,
-            read_index_no_leader: 0,
         }
     }
 }
@@ -363,12 +361,6 @@ impl RaftInvalidProposeMetrics {
                 .with_label_values(&["epoch_not_match"])
                 .inc_by(self.epoch_not_match as i64);
             self.epoch_not_match = 0;
-        }
-        if self.read_index_no_leader > 0 {
-            RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["read_index_no_leader"])
-                .inc_by(self.read_index_no_leader as i64);
-            self.read_index_no_leader = 0;
         }
     }
 }
