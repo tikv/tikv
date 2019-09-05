@@ -444,15 +444,34 @@ fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&
 }
 
 fn round_decimal_with_ctx(ctx: &mut EvalContext, dec: Decimal) -> Result<Decimal> {
-    dec.round(0, RoundMode::HalfEven)
-        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", ""))
+    let dec = match dec.round(0, RoundMode::HalfEven) {
+        Res::Ok(d) => d,
+        Res::Overflow(d) => {
+            ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))?;
+            d
+        }
+        Res::Truncated(d) => {
+            ctx.handle_truncate(true)?;
+            d
+        }
+    };
+    Ok(dec)
 }
 
 #[inline]
 fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Result<u64> {
-    dec.as_u64()
-        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", dec))?
-        .to_uint(ctx, tp)
+    let val = match dec.as_u64() {
+        Res::Ok(val) => val,
+        Res::Overflow(val) => {
+            ctx.handle_overflow_err(Error::overflow("DECIMAL", &dec.to_string()))?;
+            val
+        }
+        Res::Truncated(val) => {
+            ctx.handle_truncate(true)?;
+            val
+        }
+    };
+    val.to_uint(ctx, tp)
 }
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
