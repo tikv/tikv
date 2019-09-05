@@ -10,10 +10,8 @@ use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
 use super::{check_fsp, Decimal};
-use crate::coprocessor::codec::convert::ConvertTo;
 use crate::coprocessor::codec::mysql::MAX_FSP;
 use crate::coprocessor::codec::{Result, TEN_POW};
-use crate::coprocessor::dag::expr::EvalContext;
 
 use bitfield::bitfield;
 
@@ -679,10 +677,8 @@ impl Duration {
         }
         buf
     }
-}
 
-impl ConvertTo<f64> for Duration {
-    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+    pub fn to_f64(self) -> Result<f64> {
         let val = self.to_numeric_string().parse()?;
         Ok(val)
     }
@@ -1012,11 +1008,10 @@ mod tests {
             ("2017-01-05 23:59:59.575601", 0, 0f64),
             ("0000-00-00 00:00:00", 6, 0f64),
         ];
-        let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
             let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
             let du = t.to_duration().unwrap();
-            let get: f64 = du.convert(&mut ctx).unwrap();
+            let get = du.to_f64().unwrap();
             assert!(
                 (expect - get).abs() < EPSILON,
                 "expect: {}, got: {}",

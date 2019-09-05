@@ -119,6 +119,7 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
 
         let _ = lhs.as_i64();
         let _ = lhs.as_u64();
+        let _ = lhs.as_f64();
         let _ = lhs.is_zero();
         let _ = lhs.approximate_encoded_size();
 
@@ -162,6 +163,7 @@ fn fuzz_time(
     let _ = t.is_zero();
     let _ = t.invalid_zero();
     let _ = t.to_decimal();
+    let _ = t.to_f64();
     let _ = t.to_duration();
     let _ = t.to_packed_u64();
     let _ = t.clone().round_frac(cursor.read_as_i8()?);

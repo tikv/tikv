@@ -8,6 +8,7 @@ mod comparison;
 mod path_expr;
 mod serde;
 // json functions
+mod json_cast;
 mod json_extract;
 mod json_merge;
 mod json_modify;
@@ -18,15 +19,11 @@ mod json_unquote;
 pub use self::binary::JsonEncoder;
 pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
-
 use std::collections::BTreeMap;
-use tikv_util::is_even;
 
 use super::super::datum::Datum;
 use super::super::{Error, Result};
-use crate::coprocessor::codec::convert::ConvertTo;
-use crate::coprocessor::codec::data_type::Decimal;
-use crate::coprocessor::dag::expr::EvalContext;
+use tikv_util::is_even;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
@@ -87,31 +84,6 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     Ok(Json::Object(map))
 }
 
-impl ConvertTo<f64> for Json {
-    ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
-        let d = match *self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0f64,
-            Json::Boolean(true) => 1f64,
-            Json::I64(d) => d as f64,
-            Json::U64(d) => d as f64,
-            Json::Double(d) => d,
-            Json::String(ref s) => s.as_bytes().convert(ctx)?,
-        };
-        Ok(d)
-    }
-}
-
-impl ConvertTo<Decimal> for Json {
-    /// Converts a `Json` to a `Decimal`
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let f = self.convert(ctx)?;
-        Decimal::from_f64(f)
-    }
-}
-
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Json {
     #[inline]
     fn as_mysql_bool(
@@ -126,10 +98,6 @@ impl crate::coprocessor::codec::data_type::AsMySQLBool for Json {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::sync::Arc;
-
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 
     #[test]
     fn test_json_array() {
@@ -181,33 +149,6 @@ mod tests {
         ];
         for (d, ep_json) in cases {
             assert_eq!(json_object(d).unwrap(), ep_json);
-        }
-    }
-
-    #[test]
-    fn test_cast_to_real() {
-        let test_cases = vec![
-            ("{}", 0f64),
-            ("[]", 0f64),
-            ("3", 3f64),
-            ("-3", -3f64),
-            ("4.5", 4.5),
-            ("true", 1f64),
-            ("false", 0f64),
-            ("null", 0f64),
-            (r#""hello""#, 0f64),
-            (r#""1234""#, 1234f64),
-        ];
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
-        for (jstr, exp) in test_cases {
-            let json: Json = jstr.parse().unwrap();
-            let get: f64 = json.convert(&mut ctx).unwrap();
-            assert!(
-                (get - exp).abs() < std::f64::EPSILON,
-                "json.as_f64 get: {}, exp: {}",
-                get,
-                exp
-            );
         }
     }
 }

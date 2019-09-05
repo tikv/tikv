@@ -16,13 +16,11 @@ use cop_datatype::FieldTypeTp;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use crate::coprocessor::codec::convert::ConvertTo;
 use crate::coprocessor::codec::mysql::duration::{
     Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
 };
 use crate::coprocessor::codec::mysql::{self, Decimal};
 use crate::coprocessor::codec::{Error, Result, TEN_POW};
-use crate::coprocessor::dag::expr::EvalContext;
 
 pub use self::extension::*;
 pub use self::tz::Tz;
@@ -312,6 +310,15 @@ impl Time {
         }
 
         self.to_numeric_string().parse()
+    }
+
+    /// Returns the `Decimal` representaton of the `DateTime/Date`
+    pub fn to_f64(&self) -> Result<f64> {
+        if self.is_zero() {
+            return Ok(0f64);
+        }
+        let f: f64 = box_try!(self.to_numeric_string().parse());
+        Ok(f)
     }
 
     fn parse_datetime_format(s: &str) -> Vec<&str> {
@@ -811,16 +818,6 @@ impl Time {
         } else {
             None
         }
-    }
-}
-
-impl ConvertTo<f64> for Time {
-    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        if self.is_zero() {
-            return Ok(0f64);
-        }
-        let f: f64 = box_try!(self.to_numeric_string().parse());
-        Ok(f)
     }
 }
 
@@ -1375,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_to_f64() {
+    fn test_to_f64() {
         let cases = vec![
             ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),
             ("2012-12-31 11:30:45.123456", 6, 20121231113045.123456f64),
@@ -1385,10 +1382,9 @@ mod tests {
             ("2017-01-05 23:59:59.575601", 0, 20170106000000f64),
             ("0000-00-00 00:00:00", 6, 0f64),
         ];
-        let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
-            let get: f64 = t.convert(&mut ctx).unwrap();
+            let get = t.to_f64().unwrap();
             assert!(
                 (expect - get).abs() < EPSILON,
                 "expect: {}, got: {}",

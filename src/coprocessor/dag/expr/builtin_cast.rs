@@ -156,7 +156,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let res = val.convert(ctx)?;
+        let res = val.as_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
@@ -165,13 +165,13 @@ impl ScalarFunc {
             return self.children[0].eval_real(ctx, row);
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let res = val.convert(ctx)?;
+        let res = convert_bytes_to_f64(ctx, &val)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
     pub fn cast_time_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let res = val.convert(ctx)?;
+        let res = val.to_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
@@ -182,13 +182,13 @@ impl ScalarFunc {
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let val = Decimal::try_from(val)?;
-        let res = val.convert(ctx)?;
+        let res = val.as_f64()?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
     pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.convert(ctx)?;
+        let val = val.cast_to_real(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
@@ -276,7 +276,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.convert(ctx)?;
+        let val = val.cast_to_real(ctx)?;
         let dec = Decimal::from_f64(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
@@ -555,7 +555,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let val = val.convert(ctx)?;
+        let val = val.as_f64()?;
         let j = Json::Double(val);
         Ok(Some(Cow::Owned(j)))
     }
