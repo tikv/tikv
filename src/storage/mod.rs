@@ -487,14 +487,13 @@ impl Command {
             | Command::Rollback { start_ts, .. }
             | Command::PessimisticRollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
-            Command::Commit { lock_ts, .. } => lock_ts,
+            Command::Commit { lock_ts, .. } | Command::CheckTxnStatus { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::ResolveLockLite { start_ts, .. } => start_ts,
             Command::ResolveLock { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
-            | Command::MvccByKey { .. }
-            | Command::CheckTxnStatus { .. } => 0, // TODO: Should `CheckTxnStatus` be here?
+            | Command::MvccByKey { .. } => 0,
         }
     }
 
