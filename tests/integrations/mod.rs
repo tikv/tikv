@@ -4,7 +4,16 @@
 
 extern crate test;
 
-#[macro_use(slog_error, slog_info, slog_debug)]
+#[macro_use(
+    slog_kv,
+    slog_error,
+    slog_info,
+    slog_debug,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static
+)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;

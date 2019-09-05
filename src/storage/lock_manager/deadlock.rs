@@ -13,7 +13,7 @@ use crate::tikv_util::security::SecurityManager;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::{Future, Sink, Stream};
 use grpcio::{
-    self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*, UnarySink, WriteFlags,
+    self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink, WriteFlags,
 };
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
@@ -472,7 +472,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     ) {
         if !self.inner.borrow().is_leader() {
             let status = RpcStatus::new(
-                GRPC_STATUS_FAILED_PRECONDITION,
+                RpcStatusCode::FailedPrecondition,
                 Some("i'm not the leader of deadlock detector".to_string()),
             );
             handle.spawn(sink.fail(status).map_err(|_| ()));
@@ -579,7 +579,7 @@ impl deadlock_grpc::Deadlock for Service {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
             let status = RpcStatus::new(
-                GRPC_STATUS_RESOURCE_EXHAUSTED,
+                RpcStatusCode::ResourceExhausted,
                 Some("waiter manager has stopped".to_owned()),
             );
             ctx.spawn(sink.fail(status).map_err(|_| ()))
@@ -609,7 +609,7 @@ impl deadlock_grpc::Deadlock for Service {
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {
             let status = RpcStatus::new(
-                GRPC_STATUS_RESOURCE_EXHAUSTED,
+                RpcStatusCode::ResourceExhausted,
                 Some("deadlock detector has stopped".to_owned()),
             );
             ctx.spawn(sink.fail(status).map_err(|_| ()));

@@ -109,7 +109,7 @@ To build TiKV you'll need to at least have the following installed:
 * `cmake` - Build tool (required for gRPC)
 * `go` - Programming language (required for gRPC)
 * `make` - Build tool (run common workflows)
-* `llvm` and `clang` - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb)
+* `clang` or `gcc` - C compiler toolchain
 
 ### Getting the repository
 
