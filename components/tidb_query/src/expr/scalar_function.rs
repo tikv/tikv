@@ -200,8 +200,8 @@ impl ScalarFunc {
             | ScalarFuncSig::WeekOfYear
             | ScalarFuncSig::Year
             | ScalarFuncSig::UnaryNotInt
-            | ScalarFuncSig::UnaryNotReal
             | ScalarFuncSig::UnaryNotDecimal
+            | ScalarFuncSig::UnaryNotReal
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
             | ScalarFuncSig::UnaryMinusDecimal
@@ -765,9 +765,11 @@ dispatch_call! {
         LogicalOr => logical_or,
         LogicalXor => logical_xor,
 
-        UnaryNotInt => unary_not_int,
-        UnaryNotReal => unary_not_real,
-        UnaryNotDecimal => unary_not_decimal,
+        // FIXME(@lonng)
+        UnaryNotInt => unary_not,
+        UnaryNotDecimal => unary_not,
+        UnaryNotReal => unary_not,
+
         UnaryMinusInt => unary_minus_int,
         IntIsNull => int_is_null,
         IntIsFalse => int_is_false,
@@ -1272,8 +1274,8 @@ mod tests {
                     ScalarFuncSig::WeekOfYear,
                     ScalarFuncSig::Year,
                     ScalarFuncSig::UnaryNotInt,
-                    ScalarFuncSig::UnaryNotReal,
                     ScalarFuncSig::UnaryNotDecimal,
+                    ScalarFuncSig::UnaryNotReal,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
                     ScalarFuncSig::UnaryMinusDecimal,
