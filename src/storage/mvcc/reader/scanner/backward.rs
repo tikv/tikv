@@ -1134,4 +1134,5 @@ mod tests {
         assert_eq!(statistics.lock.prev, 15);
         assert_eq!(statistics.write.prev, 1);
     }
+
 }
