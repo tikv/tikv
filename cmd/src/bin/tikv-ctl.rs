@@ -1520,7 +1520,7 @@ fn main() {
         .subcommand(SubCommand::with_name("bad-regions").about("Get all regions with corrupt raft"))
         .subcommand(
             SubCommand::with_name("modify-tikv-config")
-                .about("Modify tikv config, eg. tikv-ctl --host ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
+                .about("Modify tikv config, eg. ./tikv-ctl -h ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
                 .arg(
                     Arg::with_name("module")
                         .required(true)
