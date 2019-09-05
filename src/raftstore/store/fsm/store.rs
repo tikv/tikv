@@ -216,6 +216,7 @@ pub struct PollContext<T, C: 'static> {
     pub raft_wb: WriteBatch,
     pub pending_count: usize,
     pub sync_log: bool,
+    pub is_busy: bool,
     pub has_ready: bool,
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
@@ -530,13 +531,13 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         let dur = self.timer.elapsed();
-        if !self.poll_ctx.store_stat.is_busy {
+        if !self.poll_ctx.is_busy {
             let election_timeout = Duration::from_millis(
                 self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
                     * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
             );
             if dur >= election_timeout {
-                self.poll_ctx.store_stat.is_busy = true;
+                self.poll_ctx.is_busy = true;
             }
         }
 
@@ -901,6 +902,7 @@ where
             raft_wb: WriteBatch::with_capacity(4 * 1024),
             pending_count: 0,
             sync_log: false,
+            is_busy: false,
             has_ready: false,
             ready_res: Vec::new(),
             need_flush_trans: false,
@@ -1058,16 +1060,15 @@ impl RaftBatchSystem {
             mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
         }
         self.router.register_all(mailboxes);
-
         // Make sure Msg::Start is the first message each FSM received.
-        for addr in address {
-            self.router.force_send(addr, PeerMsg::Start).unwrap();
-        }
         self.router
             .send_control(StoreMsg::Start {
                 store: store.clone(),
             })
             .unwrap();
+        for addr in address {
+            self.router.force_send(addr, PeerMsg::Start).unwrap();
+        }
 
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);

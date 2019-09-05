@@ -167,6 +167,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let server = sb.build()?;
         let (ref host, port) = server.bind_addrs()[0];
         let addr = SocketAddr::new(IpAddr::from_str(host)?, port as u16);
+        info!("listening on addr"; "addr" => addr);
         self.local_addr = addr;
         self.builder_or_server = Some(Either::Right(server));
         Ok(addr)
@@ -183,9 +184,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&cfg),
         );
         box_try!(self.snap_worker.start(snap_runner));
-
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
-        info!("listening on addr"; "addr" => &self.local_addr);
         grpc_server.start();
         self.builder_or_server = Some(Either::Right(grpc_server));
 
