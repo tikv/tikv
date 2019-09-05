@@ -240,7 +240,7 @@ impl StatsMonitor {
         let scheduler = self.scheduler.clone();
         self.sender = Some(tx);
         let h = Builder::new()
-            .name("pd-stats-collector".to_owned())
+            .name(thd_name!("pd-stats-collector"))
             .spawn(move || {
                 let mut thread_stats = ThreadInfoStatistics::new();
 
@@ -297,7 +297,7 @@ pub struct Runner<T: PdClient> {
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task>,
-    stats_montor: StatsMonitor,
+    stats_monitor: StatsMonitor,
 }
 
 impl<T: PdClient> Runner<T> {
@@ -313,8 +313,8 @@ impl<T: PdClient> Runner<T> {
         if monitor_interval == 0 {
             monitor_interval = 1;
         }
-        let mut stats_montor = StatsMonitor::new(monitor_interval, scheduler.clone());
-        if let Err(e) = stats_montor.start() {
+        let mut stats_monitor = StatsMonitor::new(monitor_interval, scheduler.clone());
+        if let Err(e) = stats_monitor.start() {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -328,7 +328,7 @@ impl<T: PdClient> Runner<T> {
             store_stat: StoreStat::default(),
             start_ts: time_now_sec(),
             scheduler,
-            stats_montor,
+            stats_monitor,
         }
     }
 
@@ -880,7 +880,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
     }
 
     fn shutdown(&mut self) {
-        self.stats_montor.stop();
+        self.stats_monitor.stop();
     }
 }
 
@@ -1016,7 +1016,7 @@ mod tests {
 
     struct RunnerTest {
         store_stat: Arc<Mutex<StoreStat>>,
-        stats_montor: StatsMonitor,
+        stats_monitor: StatsMonitor,
     }
 
     impl RunnerTest {
@@ -1025,14 +1025,14 @@ mod tests {
             scheduler: Scheduler<Task>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
-            let mut stats_montor = StatsMonitor::new(interval, scheduler.clone());
-            if let Err(e) = stats_montor.start() {
+            let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
+            if let Err(e) = stats_monitor.start() {
                 error!("failed to start stats collector, error = {:?}", e);
             }
 
             RunnerTest {
                 store_stat,
-                stats_montor,
+                stats_monitor,
             }
         }
 
@@ -1062,7 +1062,7 @@ mod tests {
         }
 
         fn shutdown(&mut self) {
-            self.stats_montor.stop();
+            self.stats_monitor.stop();
         }
     }
 
