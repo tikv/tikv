@@ -48,7 +48,10 @@ use tikv_util::Either;
 use tikv_util::MustConsumeVec;
 
 use super::metrics::*;
-use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use super::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, Mailbox, NormalScheduler,
+    PollHandler,
+};
 
 use super::super::RegionTask;
 
@@ -175,7 +178,10 @@ pub enum ExecResult {
         region: Region,
         state: MergeState,
     },
-    CatchUpLogs(CatchUpLogs),
+    CatchUpLogs {
+        merge: CommitMergeRequest,
+        logs_up_to_date: Arc<AtomicU64>,
+    },
     CommitMerge {
         region: Region,
         source: Region,
@@ -1732,7 +1738,7 @@ impl ApplyDelegate {
                 self.tag, merging_state, region, e
             )
         });
-        fail_point!("apply_after_prepare_merge");
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "success"])
             .inc();
@@ -1799,17 +1805,26 @@ impl ApplyDelegate {
             );
 
             // Sends message to the source apply worker and pause `exec_commit_merge` process
-            let logs_up_to_date = Arc::new(AtomicU64::new(0));
-            let msg = Msg::CatchUpLogs(CatchUpLogs {
-                target_region_id: self.region_id(),
-                merge: merge.to_owned(),
-                logs_up_to_date: logs_up_to_date.clone(),
-            });
-            ctx.router.schedule_task(source_region_id, msg);
-            return Ok((
-                AdminResponse::default(),
-                ApplyResult::WaitMergeSource(logs_up_to_date),
-            ));
+            if let Some(mailbox) = ctx.router.mailbox(self.region_id()) {
+                let logs_up_to_date = Arc::new(AtomicU64::new(0));
+                let msg = Msg::CatchUpLogs(CatchUpLogs {
+                    target_mailbox: mailbox,
+                    merge: merge.to_owned(),
+                    logs_up_to_date: logs_up_to_date.clone(),
+                });
+                ctx.router.schedule_task(source_region_id, msg);
+                return Ok((
+                    AdminResponse::default(),
+                    ApplyResult::WaitMergeSource(logs_up_to_date),
+                ));
+            } else {
+                info!(
+                    "failed to get mailbox, are we shutting down?";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                );
+                return Err(box_err!("failed to get mailbox"));
+            }
         }
 
         info!(
@@ -2194,10 +2209,9 @@ pub struct Destroy {
 
 /// A message that asks the delegate to apply to the given logs and then reply to
 /// target mailbox.
-#[derive(Default, Debug)]
 pub struct CatchUpLogs {
-    /// The target region to be notified when given logs are applied.
-    pub target_region_id: u64,
+    /// Mailbox to notify when given logs are applied.
+    pub target_mailbox: DelegateMailbox,
     /// Merge request that contains logs to be applied.
     pub merge: CommitMergeRequest,
     /// A flag indicate that all source region's logs are applied.
@@ -2208,6 +2222,8 @@ pub struct CatchUpLogs {
     /// ready when polling.
     pub logs_up_to_date: Arc<AtomicU64>,
 }
+
+type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
 
 pub struct GenSnapTask {
     region_id: u64,
@@ -2531,25 +2547,27 @@ impl ApplyFsm {
         }
 
         // if it is already up to date, no need to catch up anymore
-        let apply_index = self.delegate.apply_state.get_applied_index();
-        if apply_index < catch_up_logs.merge.get_commit() {
-            fail_point!("on_handle_catch_up_logs_for_merge");
-            let mut res = VecDeque::new();
-            // send logs to raftstore to append
-            res.push_back(ExecResult::CatchUpLogs(catch_up_logs));
+        if catch_up_logs.logs_up_to_date.load(Ordering::SeqCst) == 0 {
+            let apply_index = self.delegate.apply_state.get_applied_index();
+            if apply_index < catch_up_logs.merge.get_commit() {
+                let mut res = VecDeque::new();
+                // send logs to raftstore to append
+                res.push_back(ExecResult::CatchUpLogs {
+                    merge: catch_up_logs.merge,
+                    logs_up_to_date: catch_up_logs.logs_up_to_date,
+                });
 
-            // TODO: can we use `ctx.finish_for()` directly? is it safe here?
-            ctx.apply_res.push(ApplyRes {
-                region_id: self.delegate.region_id(),
-                apply_state: self.delegate.apply_state.clone(),
-                exec_res: res,
-                metrics: self.delegate.metrics.clone(),
-                applied_index_term: self.delegate.applied_index_term,
-            });
-            return;
+                // TODO: can we use `ctx.finish_for()` directly? is it safe here?
+                ctx.apply_res.push(ApplyRes {
+                    region_id: self.delegate.region_id(),
+                    apply_state: self.delegate.apply_state.clone(),
+                    exec_res: res,
+                    metrics: self.delegate.metrics.clone(),
+                    applied_index_term: self.delegate.applied_index_term,
+                });
+                return;
+            }
         }
-
-        fail_point!("after_handle_catch_up_logs_for_merge");
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1000_1003",
             self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
@@ -2563,19 +2581,12 @@ impl ApplyFsm {
             .store(region_id, Ordering::SeqCst);
         info!(
             "source logs are all applied now";
-            "region_id" => region_id,
+            "region_id" => self.delegate.region_id(),
             "peer_id" => self.delegate.id(),
         );
-
-        if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
-            let _ = mailbox.force_send(Msg::LogsUpToDate(region_id));
-        } else {
-            error!(
-                "failed to get mailbox, are we shutting down?";
-                "region_id" => region_id,
-                "peer_id" => self.delegate.id(),
-            );
-        }
+        let _ = catch_up_logs
+            .target_mailbox
+            .force_send(Msg::LogsUpToDate(region_id));
     }
 
     #[allow(unused_mut)]
@@ -2855,14 +2866,10 @@ impl ApplyRouter {
                     );
                     return;
                 }
-                Msg::CatchUpLogs(cul) => {
-                    warn!(
-                        "region is removed before merged, are we shutting down?";
-                        "region_id" => region_id,
-                        "merge" => ?cul.merge,
-                    );
-                    return;
-                }
+                Msg::CatchUpLogs(cul) => panic!(
+                    "[region {}] is removed before merged, failed to schedule {:?}",
+                    region_id, cul.merge
+                ),
                 #[cfg(test)]
                 Msg::Validate(_, _) => return,
             },
