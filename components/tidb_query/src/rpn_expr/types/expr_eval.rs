@@ -306,7 +306,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_scalar());
         assert_eq!(*val.scalar_value().unwrap().as_real(), Real::new(1.5).ok());
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
     /// Creates fixture to be used in `test_eval_single_column_node_xxx`.
@@ -356,7 +356,7 @@ mod tests {
             val.vector_value().unwrap().logical_rows(),
             logical_rows.as_slice()
         );
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
@@ -542,7 +542,7 @@ mod tests {
             [Some(8), Some(0), Some(-2)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 
     /// Binary function (arguments are scalar, scalar)
@@ -700,7 +700,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
 
     /// Binary function (arguments are both raw columns). The same column is referred multiple times

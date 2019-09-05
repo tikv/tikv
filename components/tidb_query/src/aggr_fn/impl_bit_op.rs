@@ -67,9 +67,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         // Int and does not support other types (which need casting).
         // TODO: remove this check after implementing `CAST as Int`
         let child = &aggr_def.get_children()[0];
-        let eval_type = box_try!(EvalType::try_from(
-            child.get_field_type().as_accessor().tp()
-        ));
+        let eval_type = box_try!(EvalType::try_from(child.get_field_type().tp()));
         match eval_type {
             EvalType::Int => {}
             _ => return Err(other_err!("Cast from {:?} is not supported", eval_type)),
@@ -153,7 +151,7 @@ mod tests {
     use super::super::AggrFunction;
     use super::*;
 
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb_helper::ExprDefBuilder;
 
     use crate::aggr_fn::parser::AggrDefinitionParser;
@@ -392,21 +390,21 @@ mod tests {
             .parse(bit_and, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 1);
-        assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[0].tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 1);
 
         let bit_or_fn = bit_or_parser
             .parse(bit_or, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 2);
-        assert_eq!(schema[1].as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[1].tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 2);
 
         let bit_xor_fn = bit_xor_parser
             .parse(bit_xor, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 3);
-        assert_eq!(schema[2].as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[2].tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 3);
 
         let mut ctx = EvalContext::default();

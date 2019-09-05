@@ -169,7 +169,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
                     true,
                     None,
                     None,
-                    ctx.get_isolation_level(),
+                    ctx.isolation_level,
                 );
                 black_box(reader.load_lock(&key).unwrap());
             }
@@ -206,7 +206,7 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
                     true,
                     None,
                     None,
-                    ctx.get_isolation_level(),
+                    ctx.isolation_level,
                 );
                 black_box(reader.seek_write(&key, u64::max_value()).unwrap());
             }

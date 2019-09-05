@@ -47,11 +47,7 @@ impl InnerExecutor for IndexInnerExecutor {
         };
 
         if let Some(ref pk_col) = self.pk_col {
-            let handle_datum = if pk_col
-                .as_accessor()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED)
-            {
+            let handle_datum = if pk_col.flag().contains(FieldTypeFlag::UNSIGNED) {
                 // PK column is unsigned
                 datum::Datum::U64(handle as u64)
             } else {

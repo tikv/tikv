@@ -56,7 +56,7 @@ pub struct TopNExecutor<Src: Executor> {
 
 impl<Src: Executor> TopNExecutor<Src> {
     pub fn new(mut meta: TopN, eval_cfg: Arc<EvalConfig>, src: Src) -> Result<Self> {
-        let order_by: Vec<_> = meta.take_order_by().into();
+        let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         for by_item in &order_by {

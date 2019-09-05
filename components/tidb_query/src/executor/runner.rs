@@ -161,7 +161,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
 
         let executor = if !(req.get_collect_execution_summaries()) {
             build_executors::<_, ExecSummaryCollectorDisabled>(
-                req.take_executors().into(),
+                req.take_executors().into_vec(),
                 storage,
                 ranges,
                 config,
@@ -169,7 +169,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
             )?
         } else {
             build_executors::<_, ExecSummaryCollectorEnabled>(
-                req.take_executors().into(),
+                req.take_executors().into_vec(),
                 storage,
                 ranges,
                 config,

@@ -24,7 +24,7 @@ impl RpnExpressionBuilder {
         // TODO: This logic relies on the correctness of the passed in GROUP BY eval type. However
         // it can be different from the one we calculated (e.g. pass a column / fn with different
         // type).
-        box_try!(EvalType::try_from(c.get_field_type().as_accessor().tp()));
+        box_try!(EvalType::try_from(c.get_field_type().tp()));
 
         match c.get_tp() {
             ExprType::ScalarFunc => {
@@ -305,7 +305,7 @@ where
         )
     })?;
 
-    let args: Vec<_> = tree_node.take_children().into();
+    let args = tree_node.take_children().into_vec();
     let args_len = args.len();
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
@@ -344,9 +344,7 @@ fn handle_node_constant(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     time_zone: &Tz,
 ) -> Result<()> {
-    let eval_type = box_try!(EvalType::try_from(
-        tree_node.get_field_type().as_accessor().tp()
-    ));
+    let eval_type = box_try!(EvalType::try_from(tree_node.get_field_type().tp()));
 
     let scalar_value = match tree_node.get_tp() {
         ExprType::Null => get_scalar_value_null(eval_type),
@@ -435,9 +433,8 @@ fn extract_scalar_value_date_time(
     let v = number::decode_u64(&mut val.as_slice())
         .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     let fsp = field_type.decimal() as i8;
-    let value =
-        DateTime::from_packed_u64(v, field_type.as_accessor().tp().try_into()?, fsp, time_zone)
-            .map_err(|_| other_err!("Unable to decode date time from the request"))?;
+    let value = DateTime::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
+        .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
 

@@ -46,7 +46,7 @@ impl Column {
         }
 
         if !ctx.cfg.flag.contains(Flag::PAD_CHAR_TO_FULL_LENGTH)
-            || self.field_type.as_accessor().tp() != FieldTypeTp::String
+            || self.field_type.tp() != FieldTypeTp::String
         {
             return row[self.offset].as_string();
         }

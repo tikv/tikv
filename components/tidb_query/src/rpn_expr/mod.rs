@@ -41,12 +41,10 @@ where
     }
     let lhs_is_unsigned = children[0]
         .get_field_type()
-        .as_accessor()
         .flag()
         .contains(FieldTypeFlag::UNSIGNED);
     let rhs_is_unsigned = children[1]
         .get_field_type()
-        .as_accessor()
         .flag()
         .contains(FieldTypeFlag::UNSIGNED);
     Ok(mapper(lhs_is_unsigned, rhs_is_unsigned))

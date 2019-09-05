@@ -33,7 +33,7 @@ pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {
 /// TODO: This logic should be performed by TiDB.
 pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) -> Result<()> {
     let ret_field_type = exp.ret_field_type(schema);
-    let ret_eval_type = box_try!(EvalType::try_from(ret_field_type.as_accessor().tp()));
+    let ret_eval_type = box_try!(EvalType::try_from(ret_field_type.tp()));
     let new_ret_field_type = match ret_eval_type {
         EvalType::Decimal | EvalType::Real => {
             // No need to cast. Return directly without changing anything.
@@ -57,7 +57,7 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
 /// Rewrites the expression to insert necessary cast functions for Bit operation family functions.
 pub fn rewrite_exp_for_bit_op(schema: &[FieldType], exp: &mut RpnExpression) -> Result<()> {
     let ret_field_type = exp.ret_field_type(schema);
-    let ret_eval_type = box_try!(EvalType::try_from(ret_field_type.as_accessor().tp()));
+    let ret_eval_type = box_try!(EvalType::try_from(ret_field_type.tp()));
     let new_ret_field_type = match ret_eval_type {
         EvalType::Int => {
             return Ok(());

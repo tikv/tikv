@@ -95,7 +95,7 @@ pub fn is_point(range: &coppb::KeyRange) -> bool {
 pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
 
-    if col.as_accessor().flag().contains(FieldTypeFlag::UNSIGNED) {
+    if col.flag().contains(FieldTypeFlag::UNSIGNED) {
         // PK column is unsigned
         Datum::U64(h as u64)
     } else {

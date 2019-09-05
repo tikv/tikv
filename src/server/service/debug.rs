@@ -174,7 +174,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
         const TAG: &str = "debug_region_size";
 
         let region_id = req.get_region_id();
-        let cfs = req.take_cfs().into();
+        let cfs = req.take_cfs().into_vec();
 
         let f = self
             .pool
@@ -188,7 +188,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
                     entries
                         .into_iter()
                         .map(|(cf, size)| {
-                            let mut entry = region_size_response::Entry::default();
+                            let mut entry = RegionSizeResponse_Entry::default();
                             entry.set_cf(cf);
                             entry.set_size(size as u64);
                             entry
@@ -304,7 +304,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
         let f = self.pool.spawn_fn(move || {
             let list = fail::list().into_iter().map(|(name, actions)| {
-                let mut entry = list_fail_points_response::Entry::default();
+                let mut entry = ListFailPointsResponse_Entry::default();
                 entry.set_name(name);
                 entry.set_actions(actions);
                 entry
@@ -478,12 +478,4 @@ fn consistency_check<T: RaftStoreRouter>(
                     Ok(())
                 })
         })
-}
-
-mod region_size_response {
-    pub type Entry = kvproto::debugpb::RegionSizeResponse_Entry;
-}
-
-mod list_fail_points_response {
-    pub type Entry = kvproto::debugpb::ListFailPointsResponse_Entry;
 }

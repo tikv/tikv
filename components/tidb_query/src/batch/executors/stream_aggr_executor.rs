@@ -147,7 +147,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
                 // The unwrap is fine because aggregate function parser should never return an
                 // eval type that we cannot process later. If we made a mistake there, then we
                 // should panic.
-                EvalType::try_from(exp.ret_field_type(src.schema()).as_accessor().tp()).unwrap()
+                EvalType::try_from(exp.ret_field_type(src.schema()).tp()).unwrap()
             })
             .collect();
 

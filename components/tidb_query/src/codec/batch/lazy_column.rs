@@ -161,7 +161,8 @@ impl LazyBatchColumn {
         if self.is_decoded() {
             return Ok(());
         }
-        let eval_type = box_try!(EvalType::try_from(field_type.as_accessor().tp()));
+
+        let eval_type = box_try!(EvalType::try_from(field_type.tp()));
         let raw_vec = self.raw();
         let raw_vec_len = raw_vec.len();
 

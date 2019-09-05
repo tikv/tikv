@@ -162,7 +162,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 // The unwrap is fine because aggregate function parser should never return an
                 // eval type that we cannot process later. If we made a mistake there, then we
                 // should panic.
-                EvalType::try_from(ft.as_accessor().tp()).unwrap()
+                EvalType::try_from(ft.tp()).unwrap()
             })
             .collect();
 

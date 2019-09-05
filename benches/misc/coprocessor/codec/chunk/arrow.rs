@@ -23,18 +23,14 @@ impl Chunk {
             }
         }
 
-        match field_type.as_accessor().tp() {
+        match field_type.tp() {
             FieldTypeTp::Tiny
             | FieldTypeTp::Short
             | FieldTypeTp::Int24
             | FieldTypeTp::Long
             | FieldTypeTp::LongLong
             | FieldTypeTp::Year => {
-                if field_type
-                    .as_accessor()
-                    .flag()
-                    .contains(FieldTypeFlag::UNSIGNED)
-                {
+                if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                     let data = self
                         .data
                         .column(col_id)
@@ -83,18 +79,14 @@ impl ChunkBuilder {
         let mut fields = Vec::with_capacity(tps.len());
         let mut arrays: Vec<Arc<dyn array::Array>> = Vec::with_capacity(tps.len());
         for (field_type, column) in tps.iter().zip(self.columns.into_iter()) {
-            let (field, data) = match field_type.as_accessor().tp() {
+            let (field, data) = match field_type.tp() {
                 FieldTypeTp::Tiny
                 | FieldTypeTp::Short
                 | FieldTypeTp::Int24
                 | FieldTypeTp::Long
                 | FieldTypeTp::LongLong
                 | FieldTypeTp::Year => {
-                    if field_type
-                        .as_accessor()
-                        .flag()
-                        .contains(FieldTypeFlag::UNSIGNED)
-                    {
+                    if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                         column.into_u64_array()
                     } else {
                         column.into_i64_array()

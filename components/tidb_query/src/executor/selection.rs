@@ -20,7 +20,7 @@ pub struct SelectionExecutor<Src: Executor> {
 
 impl<Src: Executor> SelectionExecutor<Src> {
     pub fn new(mut meta: Selection, eval_cfg: Arc<EvalConfig>, src: Src) -> Result<Self> {
-        let conditions: Vec<_> = meta.take_conditions().into();
+        let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
         let ctx = EvalContext::new(eval_cfg);

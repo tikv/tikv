@@ -282,7 +282,7 @@ impl<T: PdClient> Runner<T> {
 
                         let req = new_batch_split_region_request(
                             split_keys,
-                            resp.take_ids().into(),
+                            resp.take_ids().into_vec(),
                             right_derive,
                         );
                         let region_id = region.get_id();

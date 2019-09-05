@@ -239,11 +239,7 @@ impl VectorValue {
                     }
                     Some(val) => {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
-                        if field_type
-                            .as_accessor()
-                            .flag()
-                            .contains(FieldTypeFlag::UNSIGNED)
-                        {
+                        if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                             output.push(datum::UINT_FLAG);
                             output.encode_u64(val as u64)?;
                         } else {
