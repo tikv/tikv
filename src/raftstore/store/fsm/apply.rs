@@ -417,6 +417,7 @@ impl ApplyContext {
                     w.clear();
                 }
             }
+            self.kv_wb = 0;
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
@@ -791,8 +792,7 @@ impl ApplyDelegate {
 
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
-
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
+            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) || self.kv_wb > 6 {
                 apply_ctx.commit(self);
             }
             apply_ctx.check_switch_write_batch();
