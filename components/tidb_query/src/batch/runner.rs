@@ -506,7 +506,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             Ok(f) => is_drained = f,
         }
 
-        warnings.merge(&mut result.warnings);
         // Notice that logical rows len == 0 doesn't mean that it is drained.
         if !result.logical_rows.is_empty() {
             assert_eq!(
@@ -531,7 +530,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 record_len += result.logical_rows.len();
             }
         }
-
+        warnings.merge(&mut result.warnings);
         Ok((is_drained, record_len))
     }
 }
