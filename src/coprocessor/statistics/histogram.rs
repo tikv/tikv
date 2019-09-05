@@ -155,11 +155,9 @@ impl Histogram {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::coprocessor::codec::datum;
+    use crate::coprocessor::codec::datum::Datum;
     use std::iter::repeat;
-
-    use tidb_query::codec::datum;
-    use tidb_query::codec::datum::Datum;
 
     #[test]
     fn test_histogram() {

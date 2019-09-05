@@ -7,7 +7,7 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use test::black_box;
 use test::Bencher;
 
-use tidb_query::codec::table::*;
+use tikv::coprocessor::codec::table::*;
 
 #[bench]
 fn bench_table_prefix_start_with(b: &mut Bencher) {

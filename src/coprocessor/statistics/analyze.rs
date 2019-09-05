@@ -2,22 +2,25 @@
 
 use std::mem;
 
-use rand::rngs::ThreadRng;
-use rand::{thread_rng, Rng};
-
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tidb_query::codec::datum;
-use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
+use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
+
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
+
+use crate::coprocessor::codec::datum;
+use crate::coprocessor::dag::executor::{
+    Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor,
+};
+use crate::coprocessor::*;
 
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
-use crate::coprocessor::dag::TiKVStorage;
-use crate::coprocessor::*;
-use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use crate::coprocessor::dag::storage_impl::TiKVStorage;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -131,7 +134,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             }
             Err(Error::Other(e)) => {
                 let mut resp = Response::default();
-                resp.set_other_error(e.to_string());
+                resp.set_other_error(format!("{}", e));
                 Ok(resp)
             }
             Err(e) => Err(e),
@@ -292,9 +295,8 @@ impl SampleCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use tidb_query::codec::datum;
-    use tidb_query::codec::datum::Datum;
+    use crate::coprocessor::codec::datum;
+    use crate::coprocessor::codec::datum::Datum;
 
     #[test]
     fn test_sample_collector() {

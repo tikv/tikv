@@ -144,7 +144,7 @@ impl Tracker {
         // Print slow log if *process* time is long.
         if time::duration_to_sec(self.total_process_time) > SLOW_QUERY_LOWER_BOUND {
             let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
-                tidb_query::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
+                super::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
             });
 
             info!("slow-query";

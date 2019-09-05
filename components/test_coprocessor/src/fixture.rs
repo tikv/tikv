@@ -4,7 +4,7 @@ use super::*;
 
 use kvproto::kvrpcpb::Context;
 
-use tidb_query::codec::Datum;
+use tikv::coprocessor::codec::Datum;
 use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;

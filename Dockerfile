@@ -23,13 +23,12 @@ COPY etc/cargo.config.dist ./etc/cargo.config.dist
 # Add components Cargo files
 # Notice: every time we add a new component, we must regenerate the dockerfile
 COPY ./components/codec/Cargo.toml ./components/codec/Cargo.toml
+COPY ./components/cop_codegen/Cargo.toml ./components/cop_codegen/Cargo.toml
+COPY ./components/cop_datatype/Cargo.toml ./components/cop_datatype/Cargo.toml
 COPY ./components/engine/Cargo.toml ./components/engine/Cargo.toml
 COPY ./components/log_wrappers/Cargo.toml ./components/log_wrappers/Cargo.toml
 COPY ./components/match_template/Cargo.toml ./components/match_template/Cargo.toml
 COPY ./components/panic_hook/Cargo.toml ./components/panic_hook/Cargo.toml
-COPY ./components/tidb_query/Cargo.toml ./components/tidb_query/Cargo.toml
-COPY ./components/tidb_query_codegen/Cargo.toml ./components/tidb_query_codegen/Cargo.toml
-COPY ./components/tidb_query_datatype/Cargo.toml ./components/tidb_query_datatype/Cargo.toml
 COPY ./components/tikv_alloc/Cargo.toml ./components/tikv_alloc/Cargo.toml
 COPY ./components/tikv_util/Cargo.toml ./components/tikv_util/Cargo.toml
 COPY ./components/tipb_helper/Cargo.toml ./components/tipb_helper/Cargo.toml
@@ -41,25 +40,23 @@ RUN mkdir -p ./src/bin && \
     echo 'fn main() {}' > ./src/bin/tikv-server.rs && \
     echo '' > ./src/lib.rs && \
     mkdir ./components/codec/src && echo '' > ./components/codec/src/lib.rs && \
+    mkdir ./components/cop_codegen/src && echo '' > ./components/cop_codegen/src/lib.rs && \
+    mkdir ./components/cop_datatype/src && echo '' > ./components/cop_datatype/src/lib.rs && \
     mkdir ./components/engine/src && echo '' > ./components/engine/src/lib.rs && \
     mkdir ./components/log_wrappers/src && echo '' > ./components/log_wrappers/src/lib.rs && \
     mkdir ./components/match_template/src && echo '' > ./components/match_template/src/lib.rs && \
     mkdir ./components/panic_hook/src && echo '' > ./components/panic_hook/src/lib.rs && \
-    mkdir ./components/tidb_query/src && echo '' > ./components/tidb_query/src/lib.rs && \
-    mkdir ./components/tidb_query_codegen/src && echo '' > ./components/tidb_query_codegen/src/lib.rs && \
-    mkdir ./components/tidb_query_datatype/src && echo '' > ./components/tidb_query_datatype/src/lib.rs && \
     mkdir ./components/tikv_alloc/src && echo '' > ./components/tikv_alloc/src/lib.rs && \
     mkdir ./components/tikv_util/src && echo '' > ./components/tikv_util/src/lib.rs && \
     mkdir ./components/tipb_helper/src && echo '' > ./components/tipb_helper/src/lib.rs && \
     make build_dist_release && \
     rm -rf ./target/release/.fingerprint/codec-* && \
+    rm -rf ./target/release/.fingerprint/cop_codegen-* && \
+    rm -rf ./target/release/.fingerprint/cop_datatype-* && \
     rm -rf ./target/release/.fingerprint/engine-* && \
     rm -rf ./target/release/.fingerprint/log_wrappers-* && \
     rm -rf ./target/release/.fingerprint/match_template-* && \
     rm -rf ./target/release/.fingerprint/panic_hook-* && \
-    rm -rf ./target/release/.fingerprint/tidb_query-* && \
-    rm -rf ./target/release/.fingerprint/tidb_query_codegen-* && \
-    rm -rf ./target/release/.fingerprint/tidb_query_datatype-* && \
     rm -rf ./target/release/.fingerprint/tikv_alloc-* && \
     rm -rf ./target/release/.fingerprint/tikv_util-* && \
     rm -rf ./target/release/.fingerprint/tipb_helper-* && \

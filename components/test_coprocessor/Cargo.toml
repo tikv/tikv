@@ -5,12 +5,10 @@ edition = "2018"
 publish = false
 
 [dependencies]
+tikv_util = { path = "../tikv_util" }
 tikv = { path = "../../", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 protobuf = "2"
-futures = "0.1"
-
-tikv_util = { path = "../tikv_util" }
 test_storage = { path = "../test_storage" }
-tidb_query = { path = "../tidb_query" }
+futures = "0.1"

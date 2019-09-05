@@ -19,9 +19,13 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::{self, Engine, SnapshotStore};
 use tikv_util::Either;
 
+use crate::coprocessor::dag::storage_impl::TiKVStorage;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+
+const OUTDATED_ERROR_MSG: &str = "request outdated.";
+const BUSY_ERROR_MSG: &str = "server is busy (coprocessor full).";
 
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
@@ -124,10 +128,11 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                     );
-                    dag::build_handler(
+                    let storage = TiKVStorage::from(store);
+                    dag::DAGBuilder::build(
                         dag,
                         ranges,
-                        store,
+                        storage,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
@@ -214,7 +219,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
-        future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
+        future::result(tracker.req_ctx.deadline.check_if_exceeded())
             .and_then(move |_| {
                 with_tls_engine(|engine| {
                     Self::async_snapshot(engine, &tracker.req_ctx.context)
@@ -223,7 +228,7 @@ impl<E: Engine> Endpoint<E> {
             })
             .and_then(move |(tracker, snapshot)| {
                 // When snapshot is retrieved, deadline may exceed.
-                future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
+                future::result(tracker.req_ctx.deadline.check_if_exceeded())
                     .map(|_| (tracker, snapshot))
             })
             .and_then(move |(tracker, snapshot)| {
@@ -273,7 +278,7 @@ impl<E: Engine> Endpoint<E> {
             .spawn_handle(priority, move || {
                 Self::handle_unary_request_impl(tracker, handler_builder)
             })
-            .map_err(|_| Error::MaxPendingTasksExceeded)
+            .map_err(|_| Error::Full)
     }
 
     /// Parses and handles a unary request. Returns a future that will never fail. If there are
@@ -310,7 +315,7 @@ impl<E: Engine> Endpoint<E> {
         // deadline may exceed.
 
         let tracker_and_handler_future =
-            future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
+            future::result(tracker.req_ctx.deadline.check_if_exceeded())
                 .and_then(move |_| {
                     with_tls_engine(|engine| {
                         Self::async_snapshot(engine, &tracker.req_ctx.context)
@@ -319,7 +324,7 @@ impl<E: Engine> Endpoint<E> {
                 })
                 .and_then(move |(tracker, snapshot)| {
                     // When snapshot is retrieved, deadline may exceed.
-                    future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
+                    future::result(tracker.req_ctx.deadline.check_if_exceeded())
                         .map(|_| (tracker, snapshot))
                 })
                 .and_then(move |(tracker, snapshot)| {
@@ -408,7 +413,7 @@ impl<E: Engine> Endpoint<E> {
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })
-            .map_err(|_| Error::MaxPendingTasksExceeded)?;
+            .map_err(|_| Error::Full)?;
         Ok(rx.then(|r| r.unwrap()))
     }
 
@@ -442,7 +447,7 @@ fn make_tag(is_table_scan: bool) -> &'static str {
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
-    warn!(
+    error!(
         "error-response";
         "err" => %e
     );
@@ -454,25 +459,28 @@ fn make_error_response(e: Error) -> coppb::Response {
             resp.set_region_error(e);
         }
         Error::Locked(info) => {
-            tag = "meet_lock";
+            tag = "lock";
             resp.set_locked(info);
         }
-        Error::MaxExecuteTimeExceeded => {
-            tag = "max_execute_time_exceeded";
-            resp.set_other_error(e.to_string());
+        Error::Outdated(elapsed, scan_tag) => {
+            tag = "outdated";
+            OUTDATED_REQ_WAIT_TIME
+                .with_label_values(&[scan_tag])
+                .observe(elapsed.as_secs() as f64);
+            resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
         }
-        Error::MaxPendingTasksExceeded => {
-            tag = "max_pending_tasks_exceeded";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(e.to_string());
+        Error::Full => {
+            tag = "full";
             let mut errorpb = errorpb::Error::default();
-            errorpb.set_message(e.to_string());
+            errorpb.set_message("Coprocessor end-point is full".to_owned());
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(BUSY_ERROR_MSG.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
         }
-        Error::Other(_) => {
+        Error::Other(_) | Error::Eval(_) => {
             tag = "other";
-            resp.set_other_error(e.to_string());
+            resp.set_other_error(format!("{}", e));
         }
     };
     COPR_REQ_ERROR.with_label_values(&[tag]).inc();
@@ -779,8 +787,9 @@ mod tests {
         let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
-        let handler_builder =
-            Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed())
+        });
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -797,8 +806,9 @@ mod tests {
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         // Fail immediately
-        let handler_builder =
-            Box::new(|_, _: &_| Ok(StreamFixture::new(vec![Err(box_err!("foo"))]).into_boxed()));
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(StreamFixture::new(vec![Err(Error::Other(box_err!("foo")))]).into_boxed())
+        });
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -816,7 +826,7 @@ mod tests {
             resp.set_data(vec![1, 2, i]);
             responses.push(Ok(resp));
         }
-        responses.push(Err(box_err!("foo")));
+        responses.push(Err(Error::Other(box_err!("foo"))));
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
         let resp_vec = cop

@@ -2,8 +2,8 @@
 
 use criterion::black_box;
 
-use tidb_query::batch::interface::*;
-use tidb_query::executor::Executor;
+use tikv::coprocessor::dag::batch::interface::*;
+use tikv::coprocessor::dag::executor::Executor;
 use tikv::coprocessor::RequestHandler;
 
 pub trait Bencher {

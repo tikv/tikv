@@ -57,12 +57,10 @@ impl FMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::coprocessor::codec::datum;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::coprocessor::codec::Result;
     use std::iter::repeat;
-
-    use tidb_query::codec::datum;
-    use tidb_query::codec::datum::Datum;
-    use tidb_query::codec::Result;
     use tikv_util::as_slice;
 
     struct TestData {

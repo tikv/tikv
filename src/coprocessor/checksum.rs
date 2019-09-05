@@ -1,17 +1,16 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crc::crc64::{self, Digest, Hasher64};
-
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
-use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query::storage::Range;
-
-use crate::coprocessor::dag::TiKVStorage;
-use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
+
+use crate::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
+use crate::coprocessor::dag::storage::Range;
+use crate::coprocessor::dag::storage_impl::TiKVStorage;
+use crate::coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {

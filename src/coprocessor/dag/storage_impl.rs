@@ -1,8 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query::storage::{IntervalRange, OwnedKvPair, PointRange, Result as QEResult, Storage};
-
-use crate::coprocessor::Error;
+use crate::coprocessor::dag::storage::{IntervalRange, OwnedKvPair, PointRange, Storage};
+use crate::coprocessor::Result;
 use crate::storage::Statistics;
 use crate::storage::{Key, Scanner, Store};
 
@@ -37,7 +36,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
-    ) -> QEResult<()> {
+    ) -> Result<()> {
         if let Some(scanner) = &mut self.scanner {
             self.cf_stats_backlog.add(&scanner.take_statistics());
         }
@@ -45,27 +44,23 @@ impl<S: Store> Storage for TiKVStorage<S> {
         let upper = Some(Key::from_raw(&range.upper_exclusive));
         self.scanner = Some(
             self.store
-                .scanner(is_backward_scan, is_key_only, lower, upper)
-                .map_err(Error::from)?,
-            // There is no transform from storage error to QE's StorageError,
-            // so an intermediate error is needed.
+                .scanner(is_backward_scan, is_key_only, lower, upper)?,
         );
         Ok(())
     }
 
-    fn scan_next(&mut self) -> QEResult<Option<OwnedKvPair>> {
+    fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
         // Unwrap is fine because we must have called `reset_range` before calling `scan_next`.
-        let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
+        let kv = self.scanner.as_mut().unwrap().next()?;
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
     }
 
-    fn get(&mut self, _is_key_only: bool, range: PointRange) -> QEResult<Option<OwnedKvPair>> {
+    fn get(&mut self, _is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {
         // TODO: Default CF does not need to be accessed if KeyOnly.
         let key = range.0;
         let value = self
             .store
-            .get(&Key::from_raw(&key), &mut self.cf_stats_backlog)
-            .map_err(Error::from)?;
+            .get(&Key::from_raw(&key), &mut self.cf_stats_backlog)?;
         Ok(value.map(move |v| (key, v)))
     }
 

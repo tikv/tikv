@@ -5,6 +5,7 @@ use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::{Error as TxnError, ProcessResult};
 use crate::storage::Error as StorageError;
 use crate::storage::Key;
+use farmhash;
 
 pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
     match res {

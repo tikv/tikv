@@ -8,7 +8,7 @@ use std::thread;
 
 use test::Bencher;
 
-use tidb_query::codec::mysql::{Json, JsonEncoder};
+use tikv::coprocessor::codec::mysql::{Json, JsonEncoder};
 
 fn download_and_extract_file(url: &str) -> io::Result<String> {
     let mut dl_child = Command::new("curl")
