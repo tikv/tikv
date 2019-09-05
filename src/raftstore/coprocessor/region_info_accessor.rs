@@ -149,7 +149,7 @@ fn register_region_event_listener(
 /// `RegionCollector` is the place where we hold all region information we collected, and the
 /// underlying runner of `RegionInfoAccessor`. It listens on events sent by the `RegionEventListener` and
 /// keeps information of all regions. Role of each region are also tracked.
-struct RegionCollector {
+pub struct RegionCollector {
     // HashMap: region_id -> (Region, State)
     regions: RegionsMap,
     // BTreeMap: data_end_key -> region_id
@@ -157,14 +157,14 @@ struct RegionCollector {
 }
 
 impl RegionCollector {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             regions: HashMap::default(),
             region_ranges: BTreeMap::default(),
         }
     }
 
-    fn create_region(&mut self, region: Region, role: StateRole) {
+    pub fn create_region(&mut self, region: Region, role: StateRole) {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
@@ -340,7 +340,7 @@ impl RegionCollector {
         true
     }
 
-    fn handle_seek_region(&self, from_key: Vec<u8>, callback: SeekRegionCallback) {
+    pub fn handle_seek_region(&self, from_key: Vec<u8>, callback: SeekRegionCallback) {
         let from_key = data_key(&from_key);
         let mut iter = self
             .region_ranges
