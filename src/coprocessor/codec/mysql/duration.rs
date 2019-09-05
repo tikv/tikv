@@ -677,11 +677,6 @@ impl Duration {
         }
         buf
     }
-
-    pub fn to_f64(self) -> Result<f64> {
-        let val = self.to_numeric_string().parse()?;
-        Ok(val)
-    }
 }
 
 // TODO: define a convert::Convert trait for all conversion
@@ -769,8 +764,6 @@ impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::EPSILON;
-
     use super::*;
     use crate::coprocessor::codec::convert::convert_bytes_to_decimal;
     use crate::coprocessor::codec::data_type::DateTime;
@@ -993,30 +986,6 @@ mod tests {
                 convert_bytes_to_decimal(&mut ctx, expect.as_bytes()).unwrap(),
                 "convert duration {} to decimal",
                 s
-            );
-        }
-    }
-
-    #[test]
-    fn test_to_f64() {
-        let cases = vec![
-            ("2012-12-31 11:30:45.123456", 4, 113045.1235f64),
-            ("2012-12-31 11:30:45.123456", 6, 113045.123456f64),
-            ("2012-12-31 11:30:45.123456", 0, 113045f64),
-            ("2012-12-31 11:30:45.999999", 0, 113046f64),
-            ("2017-01-05 08:40:59.575601", 0, 084100f64),
-            ("2017-01-05 23:59:59.575601", 0, 0f64),
-            ("0000-00-00 00:00:00", 6, 0f64),
-        ];
-        for (s, fsp, expect) in cases {
-            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
-            let du = t.to_duration().unwrap();
-            let get = du.to_f64().unwrap();
-            assert!(
-                (expect - get).abs() < EPSILON,
-                "expect: {}, got: {}",
-                expect,
-                get
             );
         }
     }

@@ -14,7 +14,6 @@ use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::{number, BytesSlice};
 use tikv_util::escape;
 
-use super::convert::convert_bytes_to_f64;
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
     PathExpression, RoundMode, Time, DEFAULT_FSP, MAX_FSP,
@@ -167,7 +166,7 @@ impl Datum {
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
             Datum::Bytes(ref bs) => {
-                let ff = convert_bytes_to_f64(ctx, bs)?;
+                let ff = convert::bytes_to_f64(ctx, bs)?;
                 cmp_f64(ff, f)
             }
             Datum::Dec(ref d) => {
@@ -206,7 +205,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = convert_bytes_to_f64(ctx, bs)?;
+                let f = convert::bytes_to_f64(ctx, bs)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -329,9 +328,17 @@ impl Datum {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
             Datum::F64(f) => Ok(f),
-            Datum::Bytes(bs) => convert_bytes_to_f64(ctx, &bs),
-            Datum::Time(t) => t.to_f64(),
-            Datum::Dur(d) => d.to_f64(),
+            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs),
+            Datum::Time(t) => {
+                // TODO: replace with `convert_datetime_to_f64` after implementing
+                let d = t.to_decimal()?;
+                d.as_f64()
+            }
+            Datum::Dur(d) => {
+                // TODO: replace with `convert_duration_to_f64` after implementing
+                let d = Decimal::try_from(d)?;
+                d.as_f64()
+            }
             Datum::Dec(d) => d.as_f64(),
             Datum::Json(j) => j.cast_to_real(ctx),
             _ => Err(box_err!("failed to convert {} to f64", self)),
@@ -401,7 +408,7 @@ impl Datum {
     pub fn into_arith(self, ctx: &mut EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => convert_bytes_to_f64(ctx, &bs).map(From::from),
+            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec = t.to_decimal()?;
@@ -1840,7 +1847,11 @@ mod tests {
             (Datum::Bytes(b"123".to_vec()), f64::from(123)),
             (
                 Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap()),
-                20121231113045f64,
+                Decimal::from_bytes(b"20121231113045")
+                    .unwrap()
+                    .unwrap()
+                    .as_f64()
+                    .unwrap(),
             ),
             (
                 Datum::Dur(Duration::parse(b"11:30:45", 0).unwrap()),

@@ -973,7 +973,6 @@ mod tests {
     use super::*;
 
     use std::cmp::Ordering;
-    use std::f64::EPSILON;
 
     use chrono::{Duration, Local};
 
@@ -1368,29 +1367,6 @@ mod tests {
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
             });
-        }
-    }
-
-    #[test]
-    fn test_to_f64() {
-        let cases = vec![
-            ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),
-            ("2012-12-31 11:30:45.123456", 6, 20121231113045.123456f64),
-            ("2012-12-31 11:30:45.123456", 0, 20121231113045f64),
-            ("2012-12-31 11:30:45.999999", 0, 20121231113046f64),
-            ("2017-01-05 08:40:59.575601", 0, 20170105084100f64),
-            ("2017-01-05 23:59:59.575601", 0, 20170106000000f64),
-            ("0000-00-00 00:00:00", 6, 0f64),
-        ];
-        for (s, fsp, expect) in cases {
-            let t = Time::parse_utc_datetime(s, fsp).unwrap();
-            let get = t.to_f64().unwrap();
-            assert!(
-                (expect - get).abs() < EPSILON,
-                "expect: {}, got: {}",
-                expect,
-                get
-            );
         }
     }
 
