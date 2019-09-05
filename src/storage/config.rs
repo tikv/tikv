@@ -27,6 +27,7 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
@@ -66,6 +67,7 @@ impl Config {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct BlockCacheConfig {
     pub shared: bool,
