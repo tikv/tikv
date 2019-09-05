@@ -551,7 +551,7 @@ pub mod tests {
             .txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
             .unwrap();
         write(engine, &ctx, txn.into_modifies());
-        assert!(ttl, expect_ttl);
+        assert_eq!(ttl, expect_ttl);
     }
 
     pub fn must_txn_heart_beat_err<E: Engine>(
