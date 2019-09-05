@@ -72,7 +72,7 @@ fn json_with_bytes_validator(expr: &tipb::Expr) -> Result<()> {
 #[inline]
 fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     // args should be at least 2
-    let j: &Option<Json> = Evaluable::borrow_scalar_value_ref(&args[0]);
+    let j: &Option<Json> = args[0].as_ref();
     let j = match j.as_ref() {
         None => return Ok(None),
         Some(j) => j.to_owned(),
@@ -80,7 +80,7 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
     let mut path_expr_list = vec![];
     for i in 1..args.len() {
-        let json_path: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&args[i]);
+        let json_path: &Option<Bytes> = args[i].as_ref();
 
         let json_path = match json_path.as_ref() {
             None => return Ok(None),
@@ -101,7 +101,7 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 #[inline]
 fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     // args should be at least 2
-    let j: &Option<Json> = Evaluable::borrow_scalar_value_ref(&args[0]);
+    let j: &Option<Json> = args[0].as_ref();
     let mut j = match j.as_ref() {
         None => return Ok(None),
         Some(j) => j.to_owned(),
@@ -109,7 +109,7 @@ fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
     let mut path_expr_list = vec![];
     for i in 1..args.len() {
-        let json_path: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&args[i]);
+        let json_path: &Option<Bytes> = args[i].as_ref();
 
         let json_path = match json_path.as_ref() {
             None => return Ok(None),
@@ -313,15 +313,13 @@ mod tests {
 
     #[test]
     fn test_json_remove() {
-        let cases: Vec<(Vec<ScalarValue>, _)> = vec![
-            (
-                vec![
-                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
-                    Some(b"$[1]".to_vec()).into(),
-                ],
-                Some(r#"["a", "d"]"#),
-            )
-        ];
+        let cases: Vec<(Vec<ScalarValue>, _)> = vec![(
+            vec![
+                Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+                Some(b"$[1]".to_vec()).into(),
+            ],
+            Some(r#"["a", "d"]"#),
+        )];
 
         for (vargs, expected) in cases {
             let expected = expected.map(|s| Json::from_str(s).unwrap());
