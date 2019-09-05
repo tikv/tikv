@@ -184,12 +184,12 @@ impl ToInt for i64 {
         let lower_bound = integer_signed_lower_bound(tp);
         // https://dev.mysql.com/doc/refman/8.0/en/out-of-range-and-overflow.html
         if *self < lower_bound {
-            ctx.handle_overflow_err(overflow!(self, lower_bound))?;
+            ctx.handle_overflow(overflow!(self, lower_bound))?;
             return Ok(lower_bound);
         }
         let upper_bound = integer_signed_upper_bound(tp);
         if *self > upper_bound {
-            ctx.handle_overflow_err(overflow!(self, upper_bound))?;
+            ctx.handle_overflow(overflow!(self, upper_bound))?;
             return Ok(upper_bound);
         }
         Ok(*self)
@@ -197,13 +197,13 @@ impl ToInt for i64 {
 
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         if *self < 0 && ctx.should_clip_to_zero() {
-            ctx.handle_overflow_err(overflow!(self, 0))?;
+            ctx.handle_overflow(overflow!(self, 0))?;
             return Ok(0);
         }
 
         let upper_bound = integer_unsigned_upper_bound(tp);
         if *self as u64 > upper_bound {
-            ctx.handle_overflow_err(overflow!(self, upper_bound))?;
+            ctx.handle_overflow(overflow!(self, upper_bound))?;
             return Ok(upper_bound);
         }
         Ok(*self as u64)
@@ -214,7 +214,7 @@ impl ToInt for u64 {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let upper_bound = integer_signed_upper_bound(tp);
         if *self > upper_bound as u64 {
-            ctx.handle_overflow_err(overflow!(self, upper_bound))?;
+            ctx.handle_overflow(overflow!(self, upper_bound))?;
             return Ok(upper_bound);
         }
         Ok(*self as i64)
@@ -223,7 +223,7 @@ impl ToInt for u64 {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let upper_bound = integer_unsigned_upper_bound(tp);
         if *self > upper_bound {
-            ctx.handle_overflow_err(overflow!(self, upper_bound))?;
+            ctx.handle_overflow(overflow!(self, upper_bound))?;
             return Ok(upper_bound);
         }
         Ok(*self)
@@ -235,13 +235,13 @@ impl ToInt for f64 {
         let val = (*self).round();
         let lower_bound = integer_signed_lower_bound(tp);
         if val < lower_bound as f64 {
-            ctx.handle_overflow_err(overflow!(val, lower_bound))?;
+            ctx.handle_overflow(overflow!(val, lower_bound))?;
             return Ok(lower_bound);
         }
 
         let upper_bound = integer_signed_upper_bound(tp);
         if val > upper_bound as f64 {
-            ctx.handle_overflow_err(overflow!(val, upper_bound))?;
+            ctx.handle_overflow(overflow!(val, upper_bound))?;
             return Ok(upper_bound);
         }
         Ok(val as i64)
@@ -250,7 +250,7 @@ impl ToInt for f64 {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = (*self).round();
         if val < 0f64 {
-            ctx.handle_overflow_err(overflow!(val, 0))?;
+            ctx.handle_overflow(overflow!(val, 0))?;
             if ctx.should_clip_to_zero() {
                 return Ok(0);
             } else {
@@ -260,7 +260,7 @@ impl ToInt for f64 {
 
         let upper_bound = integer_unsigned_upper_bound(tp);
         if val > upper_bound as f64 {
-            ctx.handle_overflow_err(overflow!(val, upper_bound))?;
+            ctx.handle_overflow(overflow!(val, upper_bound))?;
             return Ok(upper_bound);
         }
         Ok(val as u64)
@@ -288,7 +288,7 @@ impl ToInt for &[u8] {
         match val {
             Ok(val) => val.to_int(ctx, tp),
             Err(_) => {
-                ctx.handle_overflow_err(Error::overflow("BIGINT", &vs))?;
+                ctx.handle_overflow(Error::overflow("BIGINT", &vs))?;
                 let val = if vs.starts_with('-') {
                     integer_signed_lower_bound(tp)
                 } else {
@@ -306,7 +306,7 @@ impl ToInt for &[u8] {
         match val {
             Ok(val) => val.to_uint(ctx, tp),
             Err(_) => {
-                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &vs))?;
+                ctx.handle_overflow(Error::overflow("BIGINT UNSIGNED", &vs))?;
                 let val = integer_unsigned_upper_bound(tp);
                 Ok(val)
             }
@@ -447,7 +447,7 @@ fn round_decimal_with_ctx(ctx: &mut EvalContext, dec: Decimal) -> Result<Decimal
     let dec = match dec.round(0, RoundMode::HalfEven) {
         Res::Ok(d) => d,
         Res::Overflow(d) => {
-            ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))?;
+            ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
             d
         }
         Res::Truncated(d) => {
@@ -463,7 +463,7 @@ fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Resul
     let val = match dec.as_u64() {
         Res::Ok(val) => val,
         Res::Overflow(val) => {
-            ctx.handle_overflow_err(Error::overflow("DECIMAL", &dec.to_string()))?;
+            ctx.handle_overflow(Error::overflow("DECIMAL", &dec.to_string()))?;
             val
         }
         Res::Truncated(val) => {
@@ -554,7 +554,7 @@ impl ConvertTo<f64> for &[u8] {
         match vs.parse::<f64>() {
             Ok(val) => {
                 if val.is_infinite() {
-                    ctx.handle_overflow_err(Error::overflow("DOUBLE", &vs))?;
+                    ctx.handle_overflow(Error::overflow("DOUBLE", &vs))?;
                     if val.is_sign_negative() {
                         return Ok(std::f64::MIN);
                     } else {

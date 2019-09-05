@@ -505,10 +505,7 @@ impl ArithmeticOpWithCtx for DecimalDivide {
                 Res::Ok(value) => Some(value),
                 Res::Truncated(_) => ctx.handle_truncate(true).map(|_| None)?,
                 Res::Overflow(_) => ctx
-                    .handle_overflow_err(Error::overflow(
-                        "DECIMAL",
-                        &format!("({} / {})", lhs, rhs),
-                    ))
+                    .handle_overflow(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))
                     .map(|_| None)?,
             },
             None => ctx.handle_division_by_zero().map(|_| None)?,
@@ -527,7 +524,7 @@ impl ArithmeticOpWithCtx for RealDivide {
         } else {
             let result = *lhs / *rhs;
             if result.is_infinite() {
-                ctx.handle_overflow_err(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
+                ctx.handle_overflow(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
                     .map(|_| None)?
             } else {
                 Some(result)
