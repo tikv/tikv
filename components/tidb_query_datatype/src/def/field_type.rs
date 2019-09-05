@@ -2,12 +2,12 @@
 
 use std::fmt;
 
-use tipb::ColumnInfo;
-use tipb::FieldType;
+use tipb::expression::FieldType;
+use tipb::schema::ColumnInfo;
 
 use num_traits::FromPrimitive;
 
-/// Valid values of `tipb::FieldType::tp` and `tipb::ColumnInfo::tp`.
+/// Valid values of `tipb::expression::FieldType::tp` and `tipb::schema::ColumnInfo::tp`.
 ///
 /// `FieldType` is the field type of a column defined by schema.
 ///
@@ -54,8 +54,8 @@ impl fmt::Display for FieldTypeTp {
     }
 }
 
-/// Valid values of `tipb::FieldType::collate` and
-/// `tipb::ColumnInfo::collation`.
+/// Valid values of `tipb::expression::FieldType::collate` and
+/// `tipb::schema::ColumnInfo::collation`.
 ///
 /// The default value if `UTF8Bin`.
 #[derive(Primitive, PartialEq, Debug, Clone, Copy)]

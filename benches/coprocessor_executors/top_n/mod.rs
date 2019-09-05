@@ -3,7 +3,7 @@
 mod util;
 
 use tidb_query_datatype::FieldTypeTp;
-use tipb::ScalarFuncSig;
+use tipb::expression::ScalarFuncSig;
 use tipb_helper::ExprDefBuilder;
 
 use crate::util::{BenchCase, FixtureBuilder};

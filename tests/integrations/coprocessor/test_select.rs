@@ -4,10 +4,12 @@ use std::cmp;
 use std::i64;
 use std::thread;
 
+use protobuf::Message;
+
 use kvproto::coprocessor::Response;
 use kvproto::kvrpcpb::Context;
-use protobuf::Message;
-use tipb::{Chunk, Expr, ExprType, ScalarFuncSig};
+use tipb::expression::{Expr, ExprType, ScalarFuncSig};
+use tipb::select::Chunk;
 
 use test_coprocessor::*;
 use test_storage::*;

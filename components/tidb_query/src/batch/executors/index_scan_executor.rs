@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::EvalType;
-use tipb::ColumnInfo;
-use tipb::FieldType;
-use tipb::IndexScan;
+use tipb::executor::IndexScan;
+use tipb::expression::FieldType;
+use tipb::schema::ColumnInfo;
 
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
@@ -224,7 +224,7 @@ mod tests {
 
     use kvproto::coprocessor::KeyRange;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use tipb::ColumnInfo;
+    use tipb::schema::ColumnInfo;
 
     use crate::codec::data_type::*;
     use crate::codec::mysql::Tz;

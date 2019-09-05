@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::Aggregation;
-use tipb::Expr;
+use tipb::executor::Aggregation;
+use tipb::expression::Expr;
 
 use tidb_query::batch::executors::BatchFastHashAggregationExecutor;
 use tidb_query::batch::executors::BatchSlowHashAggregationExecutor;

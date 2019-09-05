@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tipb::FieldType;
+use tipb::expression::FieldType;
 
 use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
@@ -283,7 +283,7 @@ mod tests {
 
     use tidb_query_codegen::rpn_fn;
     use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
-    use tipb::FieldType;
+    use tipb::expression::FieldType;
     use tipb_helper::ExprDefBuilder;
 
     use crate::codec::batch::LazyBatchColumn;
@@ -942,7 +942,7 @@ mod tests {
     /// Parse from an expression tree then evaluate.
     #[test]
     fn test_parse_and_eval() {
-        use tipb::{Expr, ScalarFuncSig};
+        use tipb::expression::{Expr, ScalarFuncSig};
 
         // We will build an expression tree from:
         //      fn_d(

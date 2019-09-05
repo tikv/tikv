@@ -3,10 +3,11 @@
 use std::sync::Arc;
 use std::{i64, mem, u64};
 
+use tipb::select;
+use tipb::select::DAGRequest;
+
 use super::{Error, Result};
 use crate::codec::mysql::Tz;
-use tipb;
-use tipb::DAGRequest;
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
@@ -169,7 +170,7 @@ pub struct EvalWarnings {
     // number of warnings
     pub warning_cnt: usize,
     // details of previous max_warning_cnt warnings
-    pub warnings: Vec<tipb::Error>,
+    pub warnings: Vec<select::Error>,
 }
 
 impl EvalWarnings {

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::usize;
 use std::vec::IntoIter;
 
-use tipb::ByItem;
-use tipb::TopN;
+use tipb::executor::TopN;
+use tipb::expression::ByItem;
 
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExprColumnRefVisitor, Row};
@@ -155,7 +155,7 @@ pub mod tests {
     use tidb_query_datatype::FieldTypeTp;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::collections::HashMap;
-    use tipb::{Expr, ExprType};
+    use tipb::expression::{Expr, ExprType};
 
     use crate::codec::table::RowColsDict;
     use crate::codec::Datum;

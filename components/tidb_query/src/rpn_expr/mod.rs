@@ -15,7 +15,7 @@ pub mod impl_time;
 pub use self::types::*;
 
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
-use tipb::{Expr, ScalarFuncSig};
+use tipb::expression::{Expr, ScalarFuncSig};
 
 use crate::codec::data_type::*;
 use crate::Result;
@@ -175,7 +175,7 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Rpn
         ScalarFuncSig::DecimalIsFalse => decimal_is_false_fn_meta(),
         ScalarFuncSig::LogicalAnd => logical_and_fn_meta(),
         ScalarFuncSig::LogicalOr => logical_or_fn_meta(),
-        ScalarFuncSig::UnaryNotInt | ScalarFuncSig::UnaryNotDecimal | ScalarFuncSig::UnaryNotReal => unary_not_fn_meta(),
+        ScalarFuncSig::UnaryNot => unary_not_fn_meta(),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => arithmetic_fn_meta::<RealPlus>(),
         ScalarFuncSig::PlusDecimal => arithmetic_fn_meta::<DecimalPlus>(),

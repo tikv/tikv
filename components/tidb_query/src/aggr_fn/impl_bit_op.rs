@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::{Expr, ExprType, FieldType};
+use tipb::expression::{Expr, ExprType, FieldType};
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::Tz;

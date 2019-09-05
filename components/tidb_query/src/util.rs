@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor as coppb;
-use tipb::ColumnInfo;
+use tipb::schema::ColumnInfo;
 
 use crate::codec::datum::Datum;
 

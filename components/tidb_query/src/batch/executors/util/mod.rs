@@ -7,7 +7,7 @@ pub mod mock_executor;
 pub mod scan_executor;
 
 use tikv_util::{erase_lifetime, erase_lifetime_mut};
-use tipb::FieldType;
+use tipb::expression::FieldType;
 
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::mysql::Tz;

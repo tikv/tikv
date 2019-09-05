@@ -1,7 +1,7 @@
 use std::usize;
 use test::{black_box, Bencher};
 use tikv_util::collections::HashMap;
-use tipb::ScalarFuncSig;
+use tipb::expression::ScalarFuncSig;
 
 fn get_scalar_args_with_match(sig: ScalarFuncSig) -> (usize, usize) {
     // Only select some functions to benchmark

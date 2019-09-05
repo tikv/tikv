@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::ColumnInfo;
+use tipb::schema::ColumnInfo;
 
 use test_coprocessor::*;
 use tidb_query::batch::interface::*;

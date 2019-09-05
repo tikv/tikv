@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use tikv_util::collections::HashMap;
 use tikv_util::collections::HashMapEntry;
-use tipb::Aggregation;
-use tipb::{Expr, FieldType};
+use tipb::executor::Aggregation;
+use tipb::expression::{Expr, FieldType};
 
 use crate::aggr_fn::*;
 use crate::batch::executors::util::aggr_executor::*;
@@ -379,7 +379,7 @@ mod tests {
     use super::*;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::ScalarFuncSig;
+    use tipb::expression::ScalarFuncSig;
 
     use crate::batch::executors::util::aggr_executor::tests::*;
     use crate::codec::data_type::*;
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
-        use tipb::ExprType;
+        use tipb::expression::ExprType;
         use tipb_helper::ExprDefBuilder;
 
         // This test creates a hash aggregation executor with the following aggregate functions:

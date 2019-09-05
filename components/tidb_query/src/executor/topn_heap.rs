@@ -5,7 +5,7 @@ use std::cmp::{self, Ordering};
 use std::collections::BinaryHeap;
 use std::sync::Arc;
 use std::usize;
-use tipb::ByItem;
+use tipb::expression::ByItem;
 
 use crate::codec::datum::Datum;
 use crate::executor::OriginCols;
@@ -173,7 +173,7 @@ mod tests {
     use std::cell::RefCell;
     use std::sync::Arc;
 
-    use tipb::{ByItem, Expr, ExprType};
+    use tipb::expression::{ByItem, Expr, ExprType};
 
     use crate::codec::table::RowColsDict;
     use crate::codec::Datum;

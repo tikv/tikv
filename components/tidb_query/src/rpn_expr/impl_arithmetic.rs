@@ -541,7 +541,7 @@ mod tests {
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
-    use tipb::ScalarFuncSig;
+    use tipb::expression::ScalarFuncSig;
 
     use crate::codec::error::ERR_DIVISION_BY_ZERO;
     use crate::expr::{EvalConfig, Flag, SqlMode};

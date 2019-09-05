@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::ColumnInfo;
-use tipb::IndexScan;
+use tipb::executor::IndexScan;
+use tipb::schema::ColumnInfo;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::codec::table;
@@ -118,7 +118,7 @@ pub mod tests {
     use std::i64;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::ColumnInfo;
+    use tipb::schema::ColumnInfo;
 
     use super::super::tests::*;
     use super::super::Executor;

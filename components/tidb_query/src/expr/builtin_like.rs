@@ -43,7 +43,7 @@ mod tests {
     use crate::codec::Datum;
     use crate::expr::tests::{datum_expr, scalar_func_expr};
     use crate::expr::{EvalContext, Expression};
-    use tipb::ScalarFuncSig;
+    use tipb::expression::ScalarFuncSig;
 
     #[test]
     fn test_like() {

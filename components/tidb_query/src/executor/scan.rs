@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::ColumnInfo;
+use tipb::schema::ColumnInfo;
 
 use super::{Executor, Row};
 use crate::codec::table;

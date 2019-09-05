@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
-use tipb::FieldType;
+use tipb::expression::FieldType;
 
 use super::*;
 use crate::codec::data_type::scalar::ScalarValueRef;

@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Stream};
+use protobuf::{CodedInputStream, Message};
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
-use protobuf::{CodedInputStream, Message};
-use tipb::{AnalyzeReq, AnalyzeType};
-use tipb::{ChecksumRequest, ChecksumScanOn};
-use tipb::{DAGRequest, ExecType};
+use tipb::analyze::{AnalyzeReq, AnalyzeType};
+use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
+use tipb::executor::ExecType;
+use tipb::select::DAGRequest;
 
 use crate::server::readpool::{self, ReadPool};
 use crate::server::Config;
@@ -486,13 +487,12 @@ mod tests {
     use std::thread;
     use std::vec;
 
-    use tipb::Executor;
-    use tipb::Expr;
+    use tipb::executor::Executor;
+    use tipb::expression::Expr;
 
     use crate::coprocessor::readpool_impl::build_read_pool_for_test;
     use crate::storage::kv::{destroy_tls_engine, set_tls_engine, RocksEngine};
     use crate::storage::TestEngineBuilder;
-    use protobuf::Message;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {

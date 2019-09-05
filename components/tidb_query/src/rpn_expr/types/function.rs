@@ -93,7 +93,7 @@
 use std::convert::TryFrom;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::{Expr, FieldType};
+use tipb::expression::{Expr, FieldType};
 
 use super::RpnStackNode;
 use crate::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};

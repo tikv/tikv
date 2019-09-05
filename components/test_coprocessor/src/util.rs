@@ -6,8 +6,8 @@ use futures::{Future, Stream};
 use protobuf::Message;
 
 use kvproto::coprocessor::{Request, Response};
-use tipb::ColumnInfo;
-use tipb::{SelectResponse, StreamResponse};
+use tipb::schema::ColumnInfo;
+use tipb::select::{SelectResponse, StreamResponse};
 
 use tikv::coprocessor::Endpoint;
 use tikv::storage::Engine;

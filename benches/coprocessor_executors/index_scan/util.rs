@@ -6,8 +6,8 @@ use std::sync::Arc;
 use criterion::black_box;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::ColumnInfo;
-use tipb::IndexScan;
+use tipb::executor::IndexScan;
+use tipb::schema::ColumnInfo;
 
 use test_coprocessor::*;
 use tidb_query::batch::executors::BatchIndexScanExecutor;

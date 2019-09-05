@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 
 use tidb_query_datatype::builder::FieldTypeBuilder;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
-use tipb::{Expr, FieldType};
+use tipb::expression::{Expr, FieldType};
 
 use crate::rpn_expr::impl_cast::get_cast_fn_rpn_node;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};

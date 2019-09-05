@@ -10,8 +10,8 @@ use rand_xorshift::XorShiftRng;
 use test_coprocessor::*;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::collections::HashMap;
-use tipb::ColumnInfo;
-use tipb::FieldType;
+use tipb::expression::FieldType;
+use tipb::schema::ColumnInfo;
 
 use tidb_query::batch::interface::*;
 use tidb_query::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};

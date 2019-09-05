@@ -39,7 +39,7 @@ pub fn date_format(
 mod tests {
     use super::*;
 
-    use tipb::ScalarFuncSig;
+    use tipb::expression::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 

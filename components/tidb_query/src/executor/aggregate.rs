@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use tipb::ExprType;
+use tipb::expression::ExprType;
 
 use crate::codec::mysql::Decimal;
 use crate::codec::Datum;

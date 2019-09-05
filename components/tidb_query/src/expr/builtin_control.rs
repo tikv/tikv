@@ -218,7 +218,7 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use tipb::{Expr, ExprType, ScalarFuncSig};
+    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use crate::codec::mysql::{Duration, Json, Time};
     use crate::codec::Datum;

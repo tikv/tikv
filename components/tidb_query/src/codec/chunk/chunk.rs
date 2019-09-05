@@ -6,7 +6,7 @@ use crate::codec::Datum;
 use std::io::Write;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
-use tipb::FieldType;
+use tipb::expression::FieldType;
 
 /// `Chunk` stores multiple rows of data in Apache Arrow format.
 /// See https://arrow.apache.org/docs/memory_layout.html

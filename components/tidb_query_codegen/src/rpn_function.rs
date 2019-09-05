@@ -189,7 +189,7 @@ impl ValidatorFnGenerator {
         let inners = self.tokens;
         quote! {
             fn validate #impl_generics (
-                expr: &tipb::Expr
+                expr: &tipb::expression::Expr
             ) -> crate::Result<()> #where_clause {
                 use crate::codec::data_type::Evaluable;
                 use crate::rpn_expr::function;
@@ -892,7 +892,7 @@ mod tests_normal {
                     )
                     .eval(Null, ctx, output_rows, args, extra)
                 }
-                fn validate(expr: &tipb::Expr) -> crate::Result<()> {
+                fn validate(expr: &tipb::expression::Expr) -> crate::Result<()> {
                     use crate::codec::data_type::Evaluable;
                     use crate::rpn_expr::function;
                     function::validate_expr_return_type(expr, Decimal::EVAL_TYPE)?;
@@ -1061,7 +1061,7 @@ mod tests_normal {
                         extra
                     )
                 }
-                fn validate<A: M, B>(expr: &tipb::Expr) -> crate::Result<()>
+                fn validate<A: M, B>(expr: &tipb::expression::Expr) -> crate::Result<()>
                 where
                     B: N<M>
                 {

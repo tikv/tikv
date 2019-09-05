@@ -18,7 +18,7 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
 mod tests {
     use super::*;
 
-    use tipb::ScalarFuncSig;
+    use tipb::expression::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 

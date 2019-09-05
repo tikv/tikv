@@ -6,7 +6,7 @@
 
 pub use super::super::execute_stats::{ExecSummaryCollector, ExecuteStats, WithSummaryCollector};
 
-use tipb::FieldType;
+use tipb::expression::FieldType;
 
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::expr::EvalWarnings;

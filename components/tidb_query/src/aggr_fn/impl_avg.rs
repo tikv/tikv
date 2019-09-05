@@ -3,7 +3,7 @@
 use tidb_query_codegen::AggrFunction;
 use tidb_query_datatype::builder::FieldTypeBuilder;
 use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
-use tipb::{Expr, ExprType, FieldType};
+use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
 use crate::codec::data_type::*;

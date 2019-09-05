@@ -5,7 +5,7 @@ use super::*;
 use std::collections::BTreeMap;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::{self, ColumnInfo};
+use tipb::schema::{self, ColumnInfo};
 
 use tidb_query::codec::table;
 use tikv_util::codec::number::NumberEncoder;
@@ -38,9 +38,9 @@ impl Table {
         idx.map(|idx| &self.columns[*idx].1)
     }
 
-    /// Create `tipb::TableInfo` from current table.
-    pub fn table_info(&self) -> tipb::TableInfo {
-        let mut info = tipb::TableInfo::default();
+    /// Create `schema::TableInfo` from current table.
+    pub fn table_info(&self) -> schema::TableInfo {
+        let mut info = schema::TableInfo::default();
         info.set_table_id(self.id);
         info.set_columns(self.columns_info().into());
         info
@@ -54,9 +54,9 @@ impl Table {
             .collect()
     }
 
-    /// Create `tipb::IndexInfo` from current table.
-    pub fn index_info(&self, index: i64, store_handle: bool) -> tipb::IndexInfo {
-        let mut idx_info = tipb::IndexInfo::default();
+    /// Create `schema::IndexInfo` from current table.
+    pub fn index_info(&self, index: i64, store_handle: bool) -> schema::IndexInfo {
+        let mut idx_info = schema::IndexInfo::default();
         idx_info.set_table_id(self.id);
         idx_info.set_index_id(index);
         let mut has_pk = false;
