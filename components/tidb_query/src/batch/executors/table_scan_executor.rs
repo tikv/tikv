@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use smallvec::SmallVec;
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
@@ -18,8 +17,6 @@ use crate::storage::Storage;
 use crate::Result;
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
-
-type HandleIndicesVec = SmallVec<[usize; 2]>;
 
 // We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
 // when calling `check_supported`.
@@ -41,7 +38,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
-        let mut handle_indices = HandleIndicesVec::new();
+        let mut handle_index = None;
         let mut schema = Vec::with_capacity(columns_info.len());
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
         let mut column_id_index = HashMap::default();
@@ -54,10 +51,10 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // - Prepare column default value (will be used to fill missing column later).
             columns_default_value.push(ci.take_default_val());
 
-            // - Store the index of the PK handles.
+            // - Store the index of the PK handle.
             // - Check whether or not we don't need KV values (iff PK handle is given).
             if ci.get_pk_handle() {
-                handle_indices.push(index);
+                handle_index = Some(index);
             } else {
                 is_key_only = false;
                 column_id_index.insert(ci.get_column_id(), index);
@@ -72,7 +69,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             schema,
             columns_default_value,
             column_id_index,
-            handle_indices,
+            handle_index,
             is_column_filled,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -127,8 +124,8 @@ struct TableScanExecutorImpl {
     /// The output position in the schema giving the column id.
     column_id_index: HashMap<i64, usize>,
 
-    /// Vec of indices in output row to put the handle. The indices must be sorted in the vec.
-    handle_indices: HandleIndicesVec,
+    /// The index in output row to put the handle.
+    handle_index: Option<usize>,
 
     /// A vector of flags indicating whether corresponding column is filled in `next_batch`.
     /// It is a struct level field in order to prevent repeated memory allocations since its length
@@ -152,40 +149,32 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
-        // If there are any PK columns, for each of them, fill non-PK columns before it and push the
-        // PK column.
-        // For example, consider:
-        //                  non-pk non-pk non-pk pk non-pk non-pk pk pk non-pk non-pk
-        // handle_indices:                       ^3               ^6 ^7
-        // Each turn of the following loop will push this to `columns`:
-        // 1st turn: [non-pk, non-pk, non-pk, pk]
-        // 2nd turn: [non-pk, non-pk, pk]
-        // 3rd turn: [pk]
-        let mut last_index = 0usize;
-        for handle_index in &self.handle_indices {
-            // `handle_indices` is expected to be sorted.
-            assert!(*handle_index >= last_index);
+        if let Some(handle_index) = self.handle_index {
+            // PK is specified in schema. PK column should be decoded and the rest is in raw format
+            // like this:
+            // non-pk non-pk non-pk pk non-pk non-pk non-pk
+            //                      ^handle_index = 3
+            //                                             ^columns_len = 7
 
-            // Fill last `handle_index - 1` columns.
-            for _ in last_index..*handle_index {
+            // Columns before `handle_index` (if any) should be raw.
+            for _ in 0..handle_index {
                 columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
-
-            // For PK handles, we construct a decoded `VectorValue` because it is directly
+            // For PK handle, we construct a decoded `VectorValue` because it is directly
             // stored as i64, without a datum flag, at the end of key.
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                 scan_rows,
                 EvalType::Int,
             ));
-
-            last_index = *handle_index + 1;
-        }
-
-        // Then fill remaining columns after the last handle column. If there are no PK columns,
-        // the previous loop will be skipped and this loop will be run on 0..columns_len.
-        // For the example above, this loop will push: [non-pk, non-pk]
-        for _ in last_index..columns_len {
-            columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+            // Columns after `handle_index` (if any) should also be raw.
+            for _ in handle_index + 1..columns_len {
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+            }
+        } else {
+            // PK is unspecified in schema. All column should be in raw format.
+            for _ in 0..columns_len {
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+            }
         }
 
         assert_eq!(columns.len(), columns_len);
@@ -204,17 +193,15 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
-        if !self.handle_indices.is_empty() {
+        if let Some(handle_index) = self.handle_index {
             let handle_id = table::decode_handle(key)?;
-            for handle_index in &self.handle_indices {
-                // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
-                // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
-                columns[*handle_index]
-                    .mut_decoded()
-                    .push_int(Some(handle_id));
-                decoded_columns += 1;
-                self.is_column_filled[*handle_index] = true;
-            }
+            // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
+            // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
+            columns[handle_index]
+                .mut_decoded()
+                .push_int(Some(handle_id));
+            decoded_columns += 1;
+            self.is_column_filled[handle_index] = true;
         }
 
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
@@ -297,7 +284,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 mod tests {
     use super::*;
 
-    use std::iter;
     use std::sync::Arc;
 
     use kvproto::coprocessor::KeyRange;
@@ -1007,80 +993,5 @@ mod tests {
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
-    }
-
-    fn test_multi_handle_column_impl(columns_is_pk: &[bool]) {
-        const TABLE_ID: i64 = 42;
-
-        // This test makes a pk column with id = 1 and non-pk columns with id
-        // in 10 to 10 + columns_is_pk.len().
-        // PK columns will be set to column 1 and others will be set to column 10 + i, where i is
-        // the index of each column.
-
-        let mut columns_info = Vec::new();
-        for (i, is_pk) in columns_is_pk.iter().enumerate() {
-            let mut ci = ColumnInfo::default();
-            ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            ci.set_pk_handle(*is_pk);
-            ci.set_column_id(if *is_pk { 1 } else { i as i64 + 10 });
-            columns_info.push(ci);
-        }
-
-        let mut schema = Vec::new();
-        schema.resize(columns_is_pk.len(), FieldTypeTp::LongLong.into());
-
-        let key = table::encode_row_key(TABLE_ID, 1);
-        let col_ids = (10..10 + schema.len() as i64).collect::<Vec<_>>();
-        let row = col_ids.iter().map(|i| Datum::I64(*i)).collect();
-        let value = table::encode_row(row, &col_ids).unwrap();
-
-        let mut key_range = KeyRange::default();
-        key_range.set_start(table::encode_row_key(TABLE_ID, std::i64::MIN));
-        key_range.set_end(table::encode_row_key(TABLE_ID, std::i64::MAX));
-
-        let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
-
-        let mut executor = BatchTableScanExecutor::new(
-            store.clone(),
-            Arc::new(EvalConfig::default()),
-            columns_info,
-            vec![key_range],
-            false,
-        )
-        .unwrap();
-
-        let mut result = executor.next_batch(10);
-        assert_eq!(result.is_drained.unwrap(), true);
-        assert_eq!(result.logical_rows.len(), 1);
-        assert_eq!(result.physical_columns.columns_len(), columns_is_pk.len());
-        for i in 0..columns_is_pk.len() {
-            result.physical_columns[i]
-                .ensure_all_decoded(&Tz::utc(), &schema[i])
-                .unwrap();
-            if columns_is_pk[i] {
-                assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
-                    &[Some(1)]
-                );
-            } else {
-                assert_eq!(
-                    result.physical_columns[i].decoded().as_int_slice(),
-                    &[Some(i as i64 + 10)]
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_multi_handle_column() {
-        test_multi_handle_column_impl(&[true]);
-        test_multi_handle_column_impl(&[false]);
-        test_multi_handle_column_impl(&[true, false]);
-        test_multi_handle_column_impl(&[false, true]);
-        test_multi_handle_column_impl(&[true, true]);
-        test_multi_handle_column_impl(&[true, false, true]);
-        test_multi_handle_column_impl(&[
-            false, false, false, true, false, false, true, true, false, false,
-        ]);
     }
 }
