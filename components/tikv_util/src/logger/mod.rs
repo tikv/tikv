@@ -318,6 +318,7 @@ impl<'a> Drop for Serializer<'a> {
     fn drop(&mut self) {}
 }
 
+#[allow(clippy::write_literal)]
 impl<'a> slog::ser::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))

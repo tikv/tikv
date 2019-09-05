@@ -80,6 +80,7 @@ pub enum Mutation {
     Insert((Key, Value)),
 }
 
+#[allow(clippy::match_same_arms)]
 impl Mutation {
     pub fn key(&self) -> &Key {
         match self {
