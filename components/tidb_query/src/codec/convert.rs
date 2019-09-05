@@ -524,7 +524,7 @@ pub fn produce_dec_with_specified_tp(
     mut dec: Decimal,
     ft: &FieldType,
 ) -> Result<Decimal> {
-    let (flen, decimal) = (ft.as_accessor().flen(), ft.as_accessor().decimal());
+    let (flen, decimal) = (ft.flen(), ft.decimal());
     if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
         if flen < decimal {
             return Err(Error::m_bigger_than_d(""));
@@ -619,7 +619,7 @@ pub fn produce_str_with_specified_tp<'a>(
         let mut res = s.into_owned();
         truncate_binary(&mut res, flen as isize);
         Ok(Cow::Owned(res))
-    } else if ft.as_accessor().tp() == FieldTypeTp::String
+    } else if ft.tp() == FieldTypeTp::String
         && s.len() < flen
         && ft.is_binary_string_like()
         && pad_zero
@@ -638,8 +638,7 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
         return;
     }
     let flen = flen as usize;
-    if ft.as_accessor().tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen
-    {
+    if ft.tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
         // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
         s.resize(flen, 0);
     }
@@ -1883,7 +1882,7 @@ mod tests {
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
-        let mut ft = FieldType::default();
+        let mut ft = FieldType::new();
 
         for (s, char_num, cs) in cases {
             ft.set_charset(cs.to_string());
@@ -1919,7 +1918,7 @@ mod tests {
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
-        let mut ft = FieldType::default();
+        let mut ft = FieldType::new();
         <FieldType as FieldTypeAccessor>::set_tp(&mut ft, FieldTypeTp::String);
         <FieldType as FieldTypeAccessor>::set_collation(&mut ft, Collation::Binary);
 
@@ -1970,7 +1969,7 @@ mod tests {
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
         let mut ctx = EvalContext::new(Arc::new(cfg));
-        let mut ft = FieldType::default();
+        let mut ft = FieldType::new();
 
         for (dec, flen, decimal, want) in cases {
             ft.set_flen(flen);

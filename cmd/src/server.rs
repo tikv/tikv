@@ -8,9 +8,9 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
-use kvproto::deadlock::create_deadlock;
-use kvproto::debugpb::create_debug;
-use kvproto::import_sstpb::create_import_sst;
+use kvproto::deadlock_grpc::create_deadlock;
+use kvproto::debugpb_grpc::create_debug;
+use kvproto::import_sstpb_grpc::create_import_sst;
 use pd_client::{PdClient, RpcClient};
 use std::fs::File;
 use std::path::Path;

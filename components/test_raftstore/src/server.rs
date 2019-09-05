@@ -6,8 +6,8 @@ use std::time::Duration;
 use std::{thread, usize};
 
 use grpcio::{EnvBuilder, Error as GrpcError};
-use kvproto::debugpb::create_debug;
-use kvproto::import_sstpb::create_import_sst;
+use kvproto::debugpb_grpc::create_debug;
+use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};

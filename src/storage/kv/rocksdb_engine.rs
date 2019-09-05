@@ -261,7 +261,7 @@ impl Engine for RocksEngine {
             "snapshot failed"
         )));
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            let mut header = ErrorHeader::default();
+            let mut header = ErrorHeader::new();
             header.mut_not_leader().set_region_id(100);
             Err(Error::Request(header))
         });
