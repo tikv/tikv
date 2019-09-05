@@ -10,6 +10,7 @@ use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
+use prometheus::local::LocalHistogram;
 use time::Timespec;
 
 use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
@@ -306,7 +307,6 @@ impl<C: ProposalRouter> LocalReader<C> {
                         self.delegates
                             .borrow_mut()
                             .insert(region_id, Some(delegate));
-                        metrics.local_executed_requests += 1;
                         return;
                     }
                     break;
@@ -431,7 +431,9 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
 struct ReadMetrics {
-    local_executed_requests: i64,
+    requests_wait_duration: LocalHistogram,
+    batch_requests_size: LocalHistogram,
+
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: i64,
     rejected_by_peer_id_mismatch: i64,
@@ -450,7 +452,8 @@ struct ReadMetrics {
 impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
-            local_executed_requests: 0,
+            requests_wait_duration: LOCAL_READ_WAIT_DURATION.local(),
+            batch_requests_size: LOCAL_READ_BATCH_REQUESTS.local(),
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
             rejected_by_term_mismatch: 0,
@@ -475,6 +478,8 @@ impl ReadMetrics {
     }
 
     fn flush(&mut self) {
+        self.requests_wait_duration.flush();
+        self.batch_requests_size.flush();
         if self.rejected_by_store_id_mismatch > 0 {
             LOCAL_READ_REJECT
                 .with_label_values(&["store_id_mismatch"])
@@ -529,9 +534,11 @@ impl ReadMetrics {
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
         }
-        if self.local_executed_requests > 0 {
-            LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
-            self.local_executed_requests = 0;
+        if self.rejected_by_cache_miss > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["cache_miss"])
+                .inc_by(self.rejected_by_cache_miss);
+            self.rejected_by_cache_miss = 0;
         }
     }
 }
