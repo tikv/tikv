@@ -818,11 +818,13 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
 
             let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !ctx.get_not_fill_cache())?;
-            // Use mem::replace to avoid cloning the key.
             let (lock_ttl, commit_ts, is_pessimistic_txn) =
                 txn.check_txn_status(primary_key, caller_start_ts, current_ts)?;
 
-            wake_up_waiters_if_needed(&lock_mgr, lock_ts, key_hashes, 0, is_pessimistic_txn);
+            // The lock is possibly resolved here only when lock_ttl and commit_ts are both 0.
+            if lock_ttl == 0 && commit_ts == 0 {
+                wake_up_waiters_if_needed(&lock_mgr, lock_ts, key_hashes, 0, is_pessimistic_txn);
+            }
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
