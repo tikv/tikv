@@ -1183,9 +1183,11 @@ version = "0.1.0"
 dependencies = [
  "byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "derive_more 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "panic_hook 0.0.1",
+ "tikv_alloc 0.1.0",
  "tikv_util 0.1.0",
 ]
 

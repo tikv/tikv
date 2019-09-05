@@ -4,11 +4,12 @@
 
 #[macro_use]
 extern crate derive_more;
+#[macro_use]
+extern crate failure;
 
 use byteorder::{BigEndian, ByteOrder};
 
 use kvproto::metapb::Region;
-use std::error::Error as StdError;
 use std::mem;
 
 mod types;
@@ -230,7 +231,7 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
     }
 }
 
-#[derive(Debug, Display)]
+#[derive(Debug, Display, Fail)]
 pub enum Error {
     #[display(fmt = "{} is not a valid raft log key", "hex::encode_upper(_0)")]
     InvalidLogKey(Vec<u8>),
@@ -247,8 +248,6 @@ pub enum Error {
     )]
     InvalidRegionPrefix(String, Vec<u8>),
 }
-
-impl StdError for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
