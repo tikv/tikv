@@ -6,6 +6,7 @@ use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{Evaluable, ScalarValue};
 use crate::expr::EvalContext;
 use crate::rpn_expr::RpnExpressionBuilder;
+use crate::rpn_expr::RpnStackNode;
 use crate::Result;
 
 /// Helper utility to evaluate RPN function over scalar inputs.
@@ -71,17 +72,16 @@ impl RpnFnScalarEvaluator {
         self
     }
 
-    /// Evaluates the given function.
-    ///
-    /// Note that this function does not respect previous `return_field_type()` call.
-    ///
-    /// This function exposes low-level evaluate results. Prefer to use `evaluate()` instead for
-    /// normal use case.
-    pub fn evaluate_raw(
+    /// Evaluates the given function by using collected parameters.
+    /// Then return the evaluation result and the inner `EvalContext`
+    pub fn evaluate_ctx<T: Evaluable>(
         self,
-        ret_field_type: impl Into<FieldType>,
         sig: ScalarFuncSig,
-    ) -> (Result<ScalarValue>, EvalContext) {
+    ) -> (Result<Option<T>>, EvalContext) {
+        let return_field_type = match self.return_field_type {
+            Some(ft) => ft,
+            None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
+        };
         let mut context = match self.context {
             Some(ctx) => ctx,
             None => EvalContext::default(),
@@ -102,27 +102,27 @@ impl RpnFnScalarEvaluator {
 
         let expr = self
             .rpn_expr_builder
-            .push_fn_call(func, children_ed.len(), ret_field_type)
+            .push_fn_call(func, children_ed.len(), return_field_type)
             .build();
 
         let mut columns = LazyBatchColumnVec::empty();
         let ret = expr.eval(&mut context, &[], &mut columns, &[0], 1);
-        let result = ret.map(|ret| ret.get_logical_scalar_ref(0).to_owned());
+        let result = ret.map(|ret| {
+            match ret {
+                // Only used in tests, so clone is fine.
+                RpnStackNode::Scalar { value, .. } => T::borrow_scalar_value(value).clone(),
+                RpnStackNode::Vector { value, .. } => {
+                    assert_eq!(value.as_ref().len(), 1);
+                    T::borrow_vector_value(value.as_ref())[0].clone()
+                }
+            }
+        });
 
         (result, context)
     }
 
     /// Evaluates the given function by using collected parameters.
-    pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>>
-    where
-        Option<T>: From<ScalarValue>,
-    {
-        let return_field_type = match &self.return_field_type {
-            Some(ft) => ft.clone(),
-            None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
-        };
-
-        let result = self.evaluate_raw(return_field_type, sig).0;
-        result.map(|v| v.into())
+    pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>> {
+        self.evaluate_ctx(sig).0
     }
 }

@@ -48,24 +48,6 @@ impl ScalarValue {
             }
         }
     }
-
-    #[inline]
-    pub fn is_none(&self) -> bool {
-        match_template_evaluable! {
-            TT, match self {
-                ScalarValue::TT(v) => v.is_none(),
-            }
-        }
-    }
-
-    #[inline]
-    pub fn is_some(&self) -> bool {
-        match_template_evaluable! {
-            TT, match self {
-                ScalarValue::TT(v) => v.is_some(),
-            }
-        }
-    }
 }
 
 impl AsMySQLBool for ScalarValue {
@@ -94,20 +76,6 @@ macro_rules! impl_from {
                 ScalarValue::$ty(Some(s))
             }
         }
-
-        impl From<ScalarValue> for Option<$ty> {
-            #[inline]
-            fn from(s: ScalarValue) -> Option<$ty> {
-                match s {
-                    ScalarValue::$ty(v) => v,
-                    _ => panic!(
-                        "Cannot cast {} scalar value into {}",
-                        s.eval_type(),
-                        stringify!($ty),
-                    ),
-                }
-            }
-        }
     };
 }
 
@@ -130,16 +98,6 @@ impl From<f64> for ScalarValue {
     #[inline]
     fn from(s: f64) -> ScalarValue {
         ScalarValue::Real(Real::new(s).ok())
-    }
-}
-
-impl From<ScalarValue> for Option<f64> {
-    #[inline]
-    fn from(s: ScalarValue) -> Option<f64> {
-        match s {
-            ScalarValue::Real(v) => v.map(|v| v.into_inner()),
-            _ => panic!("Cannot cast {} scalar value into f64", s.eval_type()),
-        }
     }
 }
 
