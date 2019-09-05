@@ -8,8 +8,7 @@ use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use super::{Error, Result};
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
-    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationEncoder, Json, JsonEncoder, Time,
-    TimeEncoder,
+    Decimal, DecimalEncoder, Duration, DurationEncoder, Json, JsonEncoder, Time, TimeEncoder,
 };
 use crate::codec::Datum;
 
@@ -305,7 +304,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_decimal_from_chunk()
+        Decimal::decode_from_chunk(&mut data)
     }
 
     /// Append a json datum to the column.

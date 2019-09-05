@@ -452,10 +452,7 @@ fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
 
 #[inline]
 fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
-    use crate::codec::mysql::DecimalDecoder;
-    let value = val
-        .as_slice()
-        .decode_decimal()
+    let value = Decimal::decode(&mut val.as_slice())
         .map_err(|_| other_err!("Unable to decode decimal from the request"))?;
     Ok(ScalarValue::Decimal(Some(value)))
 }
