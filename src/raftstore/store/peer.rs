@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice, u64};
@@ -13,9 +13,8 @@ use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest,
-    RaftCmdResponse, ReadIndexResponse, Request, Response, TransferLeaderRequest,
-    TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse,
+    Request, Response, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
@@ -341,8 +340,6 @@ pub struct Peer {
     pub pending_merge_state: Option<MergeState>,
     /// The state to wait for `PrepareMerge` apply result.
     pub pending_merge_apply_result: Option<WaitApplyResultState>,
-    /// source region is catching up logs for merge
-    pub catch_up_logs: Option<Arc<AtomicU64>>,
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
@@ -423,7 +420,6 @@ impl Peer {
             pending_messages: vec![],
             pending_merge_apply_result: None,
             peer_stat: PeerStat::default(),
-            catch_up_logs: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -450,36 +446,6 @@ impl Peer {
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
-    }
-
-    #[inline]
-    pub fn get_index_term(&self, idx: u64) -> u64 {
-        match self.raft_group.raft.raft_log.term(idx) {
-            Ok(t) => t,
-            Err(e) => panic!("{} fail to load term for {}: {:?}", self.tag, idx, e),
-        }
-    }
-
-    #[inline]
-    pub fn maybe_append_merge_entries(&mut self, merge: CommitMergeRequest) -> Option<u64> {
-        let mut entries = merge.get_entries();
-        if entries.is_empty() {
-            return None;
-        }
-        let first = entries.first().unwrap();
-
-        // make sure message should be with index not smaller than committed
-        let mut log_idx = first.get_index() - 1;
-        if log_idx < self.raft_group.raft.raft_log.committed {
-            entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
-            log_idx = self.raft_group.raft.raft_log.committed;
-        }
-        let log_term = self.get_index_term(log_idx);
-
-        self.raft_group
-            .raft
-            .raft_log
-            .maybe_append(log_idx, log_term, merge.get_commit(), entries)
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
@@ -1329,7 +1295,7 @@ impl Peer {
                 if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
                     let ctx = ProposalContext::from_bytes(&entry.context);
                     if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
-                        // We don't need to suspect its lease because peers of new region that
+                        // We dont need to suspect its lease because peers of new region that
                         // in other store do not start election before theirs election timeout
                         // which is longer than the max leader lease.
                         // It's safe to read local within its current lease, however, it's not
@@ -1474,6 +1440,7 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         apply_state: RaftApplyState,
         applied_index_term: u64,
+        merged: bool,
         apply_metrics: &ApplyMetrics,
     ) -> bool {
         let mut has_ready = false;
@@ -1482,8 +1449,10 @@ impl Peer {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        self.raft_group
-            .advance_apply(apply_state.get_applied_index());
+        if !merged {
+            self.raft_group
+                .advance_apply(apply_state.get_applied_index());
+        }
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
