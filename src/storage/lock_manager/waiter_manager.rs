@@ -273,7 +273,6 @@ impl WaiterManager {
                         .borrow_mut()
                         .remove_waiter(start_ts, lock.clone())
                         .and_then(|waiter| {
-                            // TODO: remove it
                             detector_scheduler.clean_up_wait_for(start_ts, lock);
                             execute_callback(waiter.cb, waiter.pr);
                             Some(())

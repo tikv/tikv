@@ -59,11 +59,6 @@ path = "benches/hierarchy/mod.rs"
 name = "misc"
 path = "benches/misc/mod.rs"
 
-[[bench]]
-name = "deadlock_detector"
-harness = false
-path = "benches/deadlock_detector/mod.rs"
-
 [dependencies]
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
