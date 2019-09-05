@@ -9,7 +9,9 @@ use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
-use crate::storage::lock_manager::{self, LockMgr};
+use crate::storage::lock_manager::{
+    self, wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
+};
 use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
@@ -106,23 +108,30 @@ pub trait MsgScheduler: Clone + Send + 'static {
     fn on_msg(&self, task: Msg);
 }
 
-pub struct Executor<E: Engine, S: MsgScheduler, L: LockMgr> {
+pub struct Executor<E: Engine, S: MsgScheduler> {
     // We put time consuming tasks to the thread pool.
     sched_pool: Option<SchedPool>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<S>,
     // If the task releases some locks, we wake up waiters waiting for them.
-    lock_mgr: Option<L>,
+    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+    detector_scheduler: Option<DetectorScheduler>,
 
     _phantom: PhantomData<E>,
 }
 
-impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
-    pub fn new(scheduler: S, pool: SchedPool, lock_mgr: Option<L>) -> Self {
+impl<E: Engine, S: MsgScheduler> Executor<E, S> {
+    pub fn new(
+        scheduler: S,
+        pool: SchedPool,
+        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+        detector_scheduler: Option<DetectorScheduler>,
+    ) -> Self {
         Executor {
             sched_pool: Some(pool),
             scheduler: Some(scheduler),
-            lock_mgr,
+            waiter_mgr_scheduler,
+            detector_scheduler,
             _phantom: Default::default(),
         }
     }
@@ -139,8 +148,12 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         self.scheduler.take().unwrap()
     }
 
-    fn take_lock_mgr(&mut self) -> Option<L> {
-        self.lock_mgr.take()
+    fn take_waiter_mgr_scheduler(&mut self) -> Option<WaiterMgrScheduler> {
+        self.waiter_mgr_scheduler.take()
+    }
+
+    fn take_detector_scheduler(&mut self) -> Option<DetectorScheduler> {
+        self.detector_scheduler.take()
     }
 
     /// Start the execution of the task.
@@ -247,8 +260,15 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         let ts = task.ts;
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
-        let lock_mgr = self.take_lock_mgr();
-        let msg = match process_write_impl(task.cmd, snapshot, lock_mgr, &mut statistics) {
+        let waiter_mgr_scheduler = self.take_waiter_mgr_scheduler();
+        let detector_scheduler = self.take_detector_scheduler();
+        let msg = match process_write_impl(
+            task.cmd,
+            snapshot,
+            waiter_mgr_scheduler,
+            detector_scheduler,
+            &mut statistics,
+        ) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
@@ -460,28 +480,43 @@ fn process_read_impl<E: Engine>(
     }
 }
 
-// If lock_mgr has waiters, there may be some transactions waiting for these keys,
+// If waiter_mgr_scheduler is some and wait_table is not empty,
+// there may be some transactions waiting for these keys,
 // so calculates keys' hashes to wake up them.
-fn gen_key_hashes_if_needed<L: LockMgr>(lock_mgr: &Option<L>, keys: &[Key]) -> Option<Vec<u64>> {
-    lock_mgr.as_ref().and_then(|lm| {
-        if lm.has_waiter() {
-            Some(lock_manager::gen_key_hashes(keys))
-        } else {
-            None
-        }
-    })
+fn gen_key_hashes_if_needed(
+    waiter_mgr_scheduler: &Option<WaiterMgrScheduler>,
+    keys: &[Key],
+) -> Option<Vec<u64>> {
+    if waiter_mgr_scheduler.is_some() && !wait_table_is_empty() {
+        Some(lock_manager::gen_key_hashes(keys))
+    } else {
+        None
+    }
 }
 
 // Wake up pessimistic transactions that waiting for these locks
-fn wake_up_waiters_if_needed<L: LockMgr>(
-    lock_mgr: &Option<L>,
+fn notify_waiter_mgr_if_needed(
+    waiter_mgr_scheduler: &Option<WaiterMgrScheduler>,
     lock_ts: u64,
     key_hashes: Option<Vec<u64>>,
     commit_ts: u64,
-    is_pessimistic_txn: bool,
 ) {
-    if let Some(lm) = lock_mgr {
-        lm.wake_up(lock_ts, key_hashes, commit_ts, is_pessimistic_txn);
+    if waiter_mgr_scheduler.is_some() && key_hashes.is_some() {
+        waiter_mgr_scheduler
+            .as_ref()
+            .unwrap()
+            .wake_up(lock_ts, key_hashes.unwrap(), commit_ts);
+    }
+}
+
+// When it is a pessimistic transaction, we need to clean up `wait_for_entries`.
+fn notify_deadlock_detector_if_needed(
+    detector_scheduler: &Option<DetectorScheduler>,
+    is_pessimistic_txn: bool,
+    txn_ts: u64,
+) {
+    if detector_scheduler.is_some() && is_pessimistic_txn {
+        detector_scheduler.as_ref().unwrap().clean_up(txn_ts);
     }
 }
 
@@ -494,10 +529,11 @@ struct WriteResult {
     lock_info: Option<(lock_manager::Lock, bool)>,
 }
 
-fn process_write_impl<S: Snapshot, L: LockMgr>(
+fn process_write_impl<S: Snapshot>(
     cmd: Command,
     snapshot: S,
-    lock_mgr: Option<L>,
+    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+    detector_scheduler: Option<DetectorScheduler>,
     statistics: &mut Statistics,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
@@ -602,7 +638,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 });
             }
             // Pessimistic txn needs key_hashes to wake up waiters
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+            let key_hashes = gen_key_hashes_if_needed(&waiter_mgr_scheduler, &keys);
 
             let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?;
             let mut is_pessimistic_txn = false;
@@ -611,13 +647,8 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 is_pessimistic_txn = txn.commit(k, commit_ts)?;
             }
 
-            wake_up_waiters_if_needed(
-                &lock_mgr,
-                lock_ts,
-                key_hashes,
-                commit_ts,
-                is_pessimistic_txn,
-            );
+            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, lock_ts, key_hashes, commit_ts);
+            notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, lock_ts);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -625,12 +656,13 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             ctx, key, start_ts, ..
         } => {
             let mut keys = vec![key];
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+            let key_hashes = gen_key_hashes_if_needed(&waiter_mgr_scheduler, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let is_pessimistic_txn = txn.rollback(keys.pop().unwrap())?;
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
+            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, start_ts);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1, ctx, None)
         }
@@ -640,7 +672,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             start_ts,
             ..
         } => {
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+            let key_hashes = gen_key_hashes_if_needed(&waiter_mgr_scheduler, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut is_pessimistic_txn = false;
@@ -649,7 +681,8 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 is_pessimistic_txn = txn.rollback(k)?;
             }
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
+            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, start_ts);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -659,8 +692,8 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             start_ts,
             for_update_ts,
         } => {
-            assert!(lock_mgr.is_some());
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+            assert!(waiter_mgr_scheduler.is_some());
+            let key_hashes = gen_key_hashes_if_needed(&waiter_mgr_scheduler, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let rows = keys.len();
@@ -668,7 +701,8 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 txn.pessimistic_rollback(k, for_update_ts)?;
             }
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, true);
+            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector_if_needed(&detector_scheduler, true, start_ts);
             statistics.add(&txn.take_statistics());
             (
                 ProcessResult::MultiRes { results: vec![] },
@@ -684,11 +718,12 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             mut scan_key,
             key_locks,
         } => {
+            let wait_table_is_empty = wait_table_is_empty();
             // Map (txn's start_ts, is_pessimistic_txn) => Option<key_hashes>
-            let (mut txn_to_keys, has_waiter) = if let Some(lm) = lock_mgr.as_ref() {
-                (Some(HashMap::default()), lm.has_waiter())
+            let mut txn_to_keys = if waiter_mgr_scheduler.is_some() {
+                Some(HashMap::default())
             } else {
-                (None, false)
+                None
             };
 
             let mut scan_key = scan_key.take();
@@ -700,15 +735,18 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                     txn_to_keys
                         .entry((current_lock.ts, current_lock.for_update_ts != 0))
                         .and_modify(|key_hashes: &mut Option<Vec<u64>>| {
-                            if let Some(key_hashes) = key_hashes {
-                                key_hashes.push(lock_manager::gen_key_hash(&current_key));
+                            if key_hashes.is_some() {
+                                key_hashes
+                                    .as_mut()
+                                    .unwrap()
+                                    .push(lock_manager::gen_key_hash(&current_key));
                             }
                         })
                         .or_insert_with(|| {
-                            if has_waiter {
-                                Some(vec![lock_manager::gen_key_hash(&current_key)])
-                            } else {
+                            if wait_table_is_empty {
                                 None
+                            } else {
+                                Some(vec![lock_manager::gen_key_hash(&current_key)])
                             }
                         });
                 }
@@ -745,7 +783,12 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 txn_to_keys
                     .into_iter()
                     .for_each(|((ts, is_pessimistic_txn), key_hashes)| {
-                        wake_up_waiters_if_needed(&lock_mgr, ts, key_hashes, 0, is_pessimistic_txn);
+                        notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, ts, key_hashes, 0);
+                        notify_deadlock_detector_if_needed(
+                            &detector_scheduler,
+                            is_pessimistic_txn,
+                            ts,
+                        );
                     });
             }
 
@@ -770,7 +813,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             commit_ts,
             resolve_keys,
         } => {
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &resolve_keys);
+            let key_hashes = gen_key_hashes_if_needed(&waiter_mgr_scheduler, &resolve_keys);
 
             let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
             let rows = resolve_keys.len();
@@ -785,13 +828,8 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 }
             }
 
-            wake_up_waiters_if_needed(
-                &lock_mgr,
-                start_ts,
-                key_hashes,
-                commit_ts,
-                is_pessimistic_txn,
-            );
+            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, start_ts);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
