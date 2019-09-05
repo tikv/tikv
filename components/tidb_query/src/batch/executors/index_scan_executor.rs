@@ -28,7 +28,7 @@ impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
 }
 
 impl<S: Storage> BatchIndexScanExecutor<S> {
-    pub fn new_with_scanned_range_aware(
+    pub fn new(
         storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -77,25 +77,6 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
-    }
-
-    pub fn new(
-        storage: S,
-        config: Arc<EvalConfig>,
-        columns_info: Vec<ColumnInfo>,
-        key_ranges: Vec<KeyRange>,
-        is_backward: bool,
-        unique: bool,
-    ) -> Result<Self> {
-        Self::new_with_scanned_range_aware(
-            storage,
-            config,
-            columns_info,
-            key_ranges,
-            is_backward,
-            unique,
-            false,
-        )
     }
 }
 
@@ -339,6 +320,7 @@ mod tests {
                 key_ranges,
                 true,
                 false,
+                false,
             )
             .unwrap();
 
@@ -391,6 +373,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
+                false,
                 false,
                 false,
             )
@@ -468,6 +451,7 @@ mod tests {
                 key_ranges,
                 false,
                 false,
+                false,
             )
             .unwrap();
 
@@ -522,6 +506,7 @@ mod tests {
                 key_ranges,
                 false,
                 true,
+                false,
             )
             .unwrap();
 

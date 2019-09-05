@@ -48,9 +48,10 @@ pub struct BatchExecutorsRunner<SS> {
 
     exec_stats: ExecuteStats,
 
-    stream_batch_row_limit: usize,
+    /// Minimum rows to return in batch stream mode.
+    stream_min_rows_each_iter: usize,
 
-    /// `batch_size` in stream mode, this variable will be initialized as `BATCH_INITIAL_SIZE`.
+    /// `batch_size` in strReam mode, this variable will be initialized as `BATCH_INITIAL_SIZE`.
     stream_batch_size: usize,
 }
 
@@ -115,7 +116,6 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     storage: S,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
-    // TODO: apply this on the system
     is_streaming: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
@@ -136,7 +136,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
             let mut descriptor = first_ed.take_tbl_scan();
             let columns_info = descriptor.take_columns().into();
             executor = Box::new(
-                BatchTableScanExecutor::new_with_scanned_range_aware(
+                BatchTableScanExecutor::new(
                     storage,
                     config.clone(),
                     columns_info,
@@ -155,7 +155,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
             executor = Box::new(
-                BatchIndexScanExecutor::new_with_scanned_range_aware(
+                BatchIndexScanExecutor::new(
                     storage,
                     config.clone(),
                     columns_info,
@@ -311,7 +311,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         storage: S,
         deadline: Deadline,
 
-        stream_batch_row_limit: usize,
+        stream_min_rows_each_iter: usize,
         // To activate `is_scanned_range_aware` in scanner
         is_streaming: bool,
     ) -> Result<Self> {
@@ -363,7 +363,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             config,
             collect_exec_summary,
             exec_stats,
-            stream_batch_row_limit,
+            stream_min_rows_each_iter,
             stream_batch_size: BATCH_INITIAL_SIZE,
         })
     }
@@ -374,14 +374,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
 
         loop {
-            // return (is_drained, EvalWarnings, record_cnt, Chunk)
             let mut chunk = Chunk::default();
-            let (is_drained, mut result_warnings, record_cnt) =
-                self.internal_handle_request(batch_size, &mut chunk)?;
+            let (is_drained, record_len) =
+                // return (is_drained, record_len)
+                self.internal_handle_request(batch_size, &mut chunk, &mut warnings)?;
 
-            warnings.merge(&mut result_warnings);
-
-            if record_cnt > 0 {
+            if record_len > 0 {
                 chunks.push(chunk);
             }
 
@@ -434,7 +432,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         self.out_most_executor.collect_storage_stats(dest);
     }
 
-    // TODO: do not copy from the origin
     pub fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
@@ -445,12 +442,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut chunk = Chunk::default();
 
         // record count less than batch size and is not drained
-        while record_cnt < self.stream_batch_row_limit && !is_drained {
-            let (drained, mut result_warnings, cnt) =
-                self.internal_handle_request(self.stream_batch_size, &mut chunk)?;
+        while record_cnt < self.stream_min_rows_each_iter && !is_drained {
+            let (drained, cnt) =
+                self.internal_handle_request(self.stream_batch_size, &mut chunk, &mut warnings)?;
             record_cnt += cnt;
             is_drained = drained;
-            warnings.merge(&mut result_warnings);
 
             // Grow batch size
             grow_batch_size(&mut self.stream_batch_size)
@@ -476,7 +472,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut s_resp = StreamResponse::default();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
-        // TODO: now how to fill this and give warnings to Response
 
         s_resp.set_output_counts(
             self.exec_stats
@@ -499,13 +494,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         &mut self,
         batch_size: usize,
         chunk: &mut Chunk,
-    ) -> Result<(bool, EvalWarnings, usize)> {
+        warnings: &mut EvalWarnings,
+    ) -> Result<(bool, usize)> {
         let is_drained;
         let mut record_cnt = 0;
 
         self.deadline.check()?;
 
-        let result = self.out_most_executor.next_batch(batch_size);
+        let mut result = self.out_most_executor.next_batch(batch_size);
 
         // fill is_drained
         match result.is_drained {
@@ -513,6 +509,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             Ok(f) => is_drained = f,
         }
 
+        warnings.merge(&mut result.warnings);
         // Notice that logical rows len == 0 doesn't mean that it is drained.
         if !result.logical_rows.is_empty() {
             assert_eq!(
@@ -538,7 +535,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             }
         }
 
-        Ok((is_drained, result.warnings, record_cnt))
+        Ok((is_drained, record_cnt))
     }
 }
 

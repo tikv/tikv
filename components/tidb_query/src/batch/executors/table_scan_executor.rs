@@ -32,7 +32,7 @@ impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
 }
 
 impl<S: Storage> BatchTableScanExecutor<S> {
-    pub fn new_with_scanned_range_aware(
+    pub fn new(
         storage: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -86,23 +86,6 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
-    }
-
-    pub fn new(
-        storage: S,
-        config: Arc<EvalConfig>,
-        columns_info: Vec<ColumnInfo>,
-        key_ranges: Vec<KeyRange>,
-        is_backward: bool,
-    ) -> Result<Self> {
-        Self::new_with_scanned_range_aware(
-            storage,
-            config,
-            columns_info,
-            key_ranges,
-            is_backward,
-            false,
-        )
     }
 }
 
@@ -586,6 +569,7 @@ mod tests {
             columns_info.clone(),
             ranges,
             false,
+            false,
         )
         .unwrap();
 
@@ -666,6 +650,7 @@ mod tests {
             Arc::new(EvalConfig::default()),
             helper.columns_info_by_idx(&[0]),
             vec![helper.whole_table_range()],
+            false,
             false,
         )
         .unwrap()
@@ -801,6 +786,7 @@ mod tests {
                     key_range_point[corrupted_row_index].clone(),
                 ],
                 false,
+                false,
             )
             .unwrap();
 
@@ -904,6 +890,7 @@ mod tests {
                     key_range_point[2].clone(),
                 ],
                 false,
+                false,
             )
             .unwrap();
 
@@ -937,6 +924,7 @@ mod tests {
                     key_range_point[1].clone(),
                     key_range_point[2].clone(),
                 ],
+                false,
                 false,
             )
             .unwrap();
@@ -974,6 +962,7 @@ mod tests {
                 columns_info.clone(),
                 vec![key_range_point[1].clone(), key_range_point[2].clone()],
                 false,
+                false,
             )
             .unwrap();
 
@@ -991,6 +980,7 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
                 vec![key_range_point[2].clone(), key_range_point[0].clone()],
+                false,
                 false,
             )
             .unwrap();
@@ -1022,6 +1012,7 @@ mod tests {
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
                 vec![key_range_point[1].clone()],
+                false,
                 false,
             )
             .unwrap();
@@ -1069,6 +1060,7 @@ mod tests {
             Arc::new(EvalConfig::default()),
             columns_info,
             vec![key_range],
+            false,
             false,
         )
         .unwrap();
