@@ -136,7 +136,7 @@ where
             meta.store_id = Some(store_id);
         }
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
-            debug!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
+            info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
             fail_point!("node_after_prepare_bootstrap_cluster", |_| Err(box_err!(
                 "injected error: node_after_prepare_bootstrap_cluster"
@@ -203,7 +203,7 @@ where
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = self.alloc_id()?;
-        debug!("alloc store id"; "store_id" => store_id);
+        info!("alloc store id"; "store_id" => store_id);
 
         store::bootstrap_store(engines, self.cluster_id, store_id)?;
 
@@ -218,14 +218,14 @@ where
         store_id: u64,
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
-        debug!(
+        info!(
             "alloc first region id";
             "region_id" => region_id,
             "cluster_id" => self.cluster_id,
             "store_id" => store_id
         );
         let peer_id = self.alloc_id()?;
-        debug!(
+        info!(
             "alloc first peer id for first region";
             "peer_id" => peer_id,
             "region_id" => region_id,

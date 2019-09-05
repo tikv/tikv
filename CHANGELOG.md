@@ -3,7 +3,6 @@ All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [Unreleased]
-- Make several `INFO` logs `DEBUG` and refined some log messages. (https://github.com/tikv/tikv/pull/4768)
 
 ## [3.0.0]
 
