@@ -16,7 +16,8 @@ use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
 };
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
+use kvproto::tikvpb::BatchRaftMessage;
+use kvproto::tikvpb_grpc::TikvClient;
 use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;

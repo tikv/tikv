@@ -5,6 +5,7 @@ use futures::unsync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
 use grpcio::{ChannelBuilder, EnvBuilder, WriteFlags};
 use kvproto::deadlock::*;
+use kvproto::deadlock_grpc::DeadlockClient;
 use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::security::SecurityManager;

@@ -11,6 +11,7 @@ use grpcio::{
     self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink, WriteFlags,
 };
 use kvproto::deadlock::*;
+use kvproto::deadlock_grpc;
 use pd_client::{RpcClient, INVALID_ID};
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
@@ -620,7 +621,7 @@ impl Service {
     }
 }
 
-impl Deadlock for Service {
+impl deadlock_grpc::Deadlock for Service {
     // TODO: remove it
     fn get_wait_for_entries(
         &mut self,

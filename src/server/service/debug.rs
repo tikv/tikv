@@ -8,7 +8,8 @@ use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use kvproto::debugpb::{self, *};
+use kvproto::debugpb::*;
+use kvproto::debugpb_grpc;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
     StatusCmdType, StatusRequest,
@@ -82,7 +83,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
+impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
