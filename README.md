@@ -39,14 +39,6 @@ TiKV has the following key features:
 
     Thanks to the internal optimization, TiKV and TiDB can work together to be a compelling database solution with high horizontal scalability, externally-consistent transactions, support for RDBMS, and NoSQL design patterns.
 
-## Docs
-
-For instructions on deployment, configuration, and maintenance of TiKV, see our Documentation on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) or on our [website](https://tikv.org/docs/3.0/tasks/getting-started/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
-
-> **Note:**
->
-> We are currently migrating our documentation from the [TiKV's wiki page](https://github.com/tikv/tikv/wiki/) to the [official website](https://tikv.org/docs). We'd appreciate if you could check out the new look on the website and offer your feedback [here](https://github.com/tikv/website). The Wiki page will be discontinued when the migration is finished. Stay tuned!
-
 ## TiKV Adopters
 
 You can view the list of [TiKV Adopters](docs/adopters.md).
