@@ -7,6 +7,10 @@ use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
 use crate::pd::{RpcClient, INVALID_ID};
 use crate::server::resolve::StoreAddrResolver;
+use crate::tikv_util::collections::{HashMap, HashSet};
+use crate::tikv_util::future::paired_future_callback;
+use crate::tikv_util::security::SecurityManager;
+use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*, UnarySink, WriteFlags,
@@ -18,11 +22,7 @@ use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::future::paired_future_callback;
-use tikv_util::security::SecurityManager;
 use tikv_util::time;
-use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
 

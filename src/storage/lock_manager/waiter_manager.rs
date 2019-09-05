@@ -9,6 +9,8 @@ use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
 use crate::storage::txn::{execute_callback, ProcessResult};
 use crate::storage::{Error as StorageError, StorageCb};
+use crate::tikv_util::collections::HashMap;
+use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
@@ -17,8 +19,6 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tikv_util::collections::HashMap;
-use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
@@ -510,8 +510,8 @@ mod tests {
 
     #[test]
     fn test_waiter_manager() {
+        use crate::tikv_util::worker::FutureWorker;
         use std::sync::mpsc;
-        use tikv_util::worker::FutureWorker;
 
         let detect_worker = FutureWorker::new("dummy-deadlock");
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
