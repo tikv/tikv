@@ -437,15 +437,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
         let mut warnings = self.config.new_eval_warnings();
 
-        // if the data read finished, is_drained means "finished"
         let (mut record_len, mut is_drained) = (0, false);
         let mut chunk = Chunk::default();
 
         // record count less than batch size and is not drained
         while record_len < self.stream_min_rows_each_iter && !is_drained {
-            let (drained, cnt) =
+            let (drained, len) =
                 self.internal_handle_request(self.stream_batch_size, &mut chunk, &mut warnings)?;
-            record_len += cnt;
+            record_len += len;
             is_drained = drained;
 
             // Grow batch size
@@ -488,7 +487,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         Ok(s_resp)
     }
 
-    /// return (is_drained, EvalWarnings, record_cnt)
     fn internal_handle_request(
         &mut self,
         batch_size: usize,
@@ -496,13 +494,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         warnings: &mut EvalWarnings,
     ) -> Result<(bool, usize)> {
         let is_drained;
-        let mut record_cnt = 0;
+        let mut record_len = 0;
 
         self.deadline.check()?;
 
         let mut result = self.out_most_executor.next_batch(batch_size);
 
-        // fill is_drained
         match result.is_drained {
             Err(e) => return Err(e),
             Ok(f) => is_drained = f,
@@ -530,11 +527,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     self.out_most_executor.schema(),
                     data,
                 )?;
-                record_cnt += result.logical_rows.len();
+                record_len += result.logical_rows.len();
             }
         }
 
-        Ok((is_drained, record_cnt))
+        Ok((is_drained, record_len))
     }
 }
 

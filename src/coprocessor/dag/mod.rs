@@ -94,7 +94,7 @@ impl BatchDAGHandler {
         ranges: Vec<KeyRange>,
         store: S,
         deadline: Deadline,
-        stream_batch_row_limit: usize,
+        stream_min_rows_each_iter: usize,
         is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self(
@@ -103,7 +103,7 @@ impl BatchDAGHandler {
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
-                stream_batch_row_limit,
+                stream_min_rows_each_iter,
                 is_streaming,
             )?,
         ))
