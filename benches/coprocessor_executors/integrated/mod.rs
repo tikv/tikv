@@ -3,6 +3,8 @@
 mod fixture;
 mod util;
 
+use criterion::measurement::Measurement;
+
 use tidb_query_datatype::FieldTypeTp;
 use tipb::{ExprType, ScalarFuncSig};
 use tipb_helper::ExprDefBuilder;
@@ -16,7 +18,7 @@ use tikv::storage::RocksEngine;
 /// SELECT COUNT(1) FROM Table, or SELECT COUNT(PrimaryKey) FROM Table
 fn bench_select_count_1<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
@@ -38,7 +40,7 @@ where
 /// SELECT COUNT(column) FROM Table
 fn bench_select_count_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
@@ -59,7 +61,7 @@ where
 /// SELECT column FROM Table WHERE column
 fn bench_select_where_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
@@ -78,7 +80,7 @@ fn bench_select_col_where_fn_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
@@ -102,7 +104,7 @@ fn bench_select_col_where_fn_impl<M>(
 /// SELECT column FROM Table WHERE column > X (selectivity = 5%)
 fn bench_select_col_where_fn_sel_l<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_col_where_fn_impl(0.05, b, input);
 }
@@ -110,7 +112,7 @@ where
 /// SELECT column FROM Table WHERE column > X (selectivity = 50%)
 fn bench_select_col_where_fn_sel_m<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_col_where_fn_impl(0.5, b, input);
 }
@@ -118,7 +120,7 @@ where
 /// SELECT column FROM Table WHERE column > X (selectivity = 95%)
 fn bench_select_col_where_fn_sel_h<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_col_where_fn_impl(0.95, b, input);
 }
@@ -128,7 +130,7 @@ fn bench_select_count_1_where_fn_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
@@ -157,7 +159,7 @@ fn bench_select_count_1_where_fn_impl<M>(
 /// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 5%)
 fn bench_select_count_1_where_fn_sel_l<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_count_1_where_fn_impl(0.05, b, input);
 }
@@ -165,7 +167,7 @@ where
 /// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 50%)
 fn bench_select_count_1_where_fn_sel_m<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_count_1_where_fn_impl(0.5, b, input);
 }
@@ -173,7 +175,7 @@ where
 /// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 95%)
 fn bench_select_count_1_where_fn_sel_h<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_count_1_where_fn_impl(0.95, b, input);
 }
@@ -184,7 +186,7 @@ fn bench_select_count_1_group_by_int_col_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -208,7 +210,7 @@ fn bench_select_count_1_group_by_int_col_group_few<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_two_groups(input.rows);
     bench_select_count_1_group_by_int_col_impl(table, store, b, input);
@@ -219,7 +221,7 @@ fn bench_select_count_1_group_by_int_col_group_many<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
     bench_select_count_1_group_by_int_col_impl(table, store, b, input);
@@ -231,7 +233,7 @@ fn bench_select_count_1_group_by_int_col_stream_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -255,7 +257,7 @@ fn bench_select_count_1_group_by_int_col_group_few_stream<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_two_groups_ordered(input.rows);
     bench_select_count_1_group_by_int_col_stream_impl(table, store, b, input);
@@ -266,7 +268,7 @@ fn bench_select_count_1_group_by_int_col_group_many_stream<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
     bench_select_count_1_group_by_int_col_stream_impl(table, store, b, input);
@@ -278,7 +280,7 @@ fn bench_select_count_1_group_by_fn_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -305,7 +307,7 @@ fn bench_select_count_1_group_by_fn_impl<M>(
 /// SELECT COUNT(1) FROM Table GROUP BY int_col + 1 (2 groups)
 fn bench_select_count_1_group_by_fn_group_few<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_two_groups(input.rows);
     bench_select_count_1_group_by_fn_impl(table, store, b, input);
@@ -314,7 +316,7 @@ where
 /// SELECT COUNT(1) FROM Table GROUP BY int_col + 1 (n groups, n = row_count)
 fn bench_select_count_1_group_by_fn_group_many<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
     bench_select_count_1_group_by_fn_impl(table, store, b, input);
@@ -326,7 +328,7 @@ fn bench_select_count_1_group_by_2_col_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -354,7 +356,7 @@ fn bench_select_count_1_group_by_2_col_impl<M>(
 /// SELECT COUNT(1) FROM Table GROUP BY int_col, int_col + 1 (2 groups)
 fn bench_select_count_1_group_by_2_col_group_few<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_two_groups(input.rows);
     bench_select_count_1_group_by_2_col_impl(table, store, b, input);
@@ -365,7 +367,7 @@ fn bench_select_count_1_group_by_2_col_group_many<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
     bench_select_count_1_group_by_2_col_impl(table, store, b, input);
@@ -377,7 +379,7 @@ fn bench_select_count_1_group_by_2_col_stream_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -407,7 +409,7 @@ fn bench_select_count_1_group_by_2_col_group_few_stream<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_two_groups_ordered(input.rows);
     bench_select_count_1_group_by_2_col_stream_impl(table, store, b, input);
@@ -418,7 +420,7 @@ fn bench_select_count_1_group_by_2_col_group_many_stream<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
     bench_select_count_1_group_by_2_col_stream_impl(table, store, b, input);
@@ -429,7 +431,7 @@ fn bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_two_groups(input.rows);
 
@@ -464,7 +466,7 @@ fn bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l_stream<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_int_column_two_groups_ordered(input.rows);
 
@@ -498,7 +500,7 @@ fn bench_select_order_by_3_col_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_3_int_columns_random(input.rows);
 
@@ -529,7 +531,7 @@ fn bench_select_order_by_3_col_impl<M>(
 /// SELECT id, col1, col2 FROM Table ORDER BY isnull(col1), col1, col2 DESC LIMIT 10
 fn bench_select_order_by_3_col_limit_small<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_order_by_3_col_impl(10, b, input);
 }
@@ -537,7 +539,7 @@ where
 /// SELECT id, col1, col2 FROM Table ORDER BY isnull(col1), col1, col2 DESC LIMIT 4000
 fn bench_select_order_by_3_col_limit_large<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     if input.rows < 4000 {
         // Skipped
@@ -552,7 +554,7 @@ fn bench_select_where_fn_order_by_3_col_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = self::fixture::table_with_3_int_columns_random(input.rows);
 
@@ -592,7 +594,7 @@ fn bench_select_where_fn_order_by_3_col_limit_small<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_where_fn_order_by_3_col_impl(10, b, input);
 }
@@ -603,7 +605,7 @@ fn bench_select_where_fn_order_by_3_col_limit_large<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     if input.rows < 4000 {
         // Skipped
@@ -618,7 +620,7 @@ fn bench_select_50_col_order_by_1_col_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let (table, store) = crate::table_scan::fixture::table_with_multi_columns(input.rows, 50);
 
@@ -641,7 +643,7 @@ fn bench_select_50_col_order_by_1_col_limit_small<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_select_50_col_order_by_1_col_impl(10, b, input);
 }
@@ -651,7 +653,7 @@ fn bench_select_50_col_order_by_1_col_limit_large<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     if input.rows < 4000 {
         // Skipped
@@ -664,7 +666,7 @@ fn bench_select_50_col_order_by_1_col_limit_large<M>(
 #[derive(Clone)]
 struct Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     rows: usize,
     bencher: Box<dyn util::IntegratedBencher<M>>,
@@ -672,7 +674,7 @@ where
 
 impl<M> std::fmt::Display for Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/rows={}", self.bencher.name(), self.rows)
@@ -681,7 +683,7 @@ where
 
 pub fn bench<M>(c: &mut criterion::Criterion<M>)
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     let mut inputs = vec![];
 

@@ -3,6 +3,8 @@
 pub mod fixture;
 mod util;
 
+use criterion::measurement::Measurement;
+
 use crate::util::scan_bencher::ScanBencher;
 use crate::util::store::*;
 use crate::util::BenchCase;
@@ -15,7 +17,7 @@ const ROWS: usize = 5000;
 /// will be performed so that PK is needed.
 fn bench_index_scan_primary_key<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     let (index_id, table, store) = fixture::table_with_2_columns_and_one_index(ROWS);
     input.0.bench(
@@ -33,7 +35,7 @@ where
 /// `SELECT index FROM .. WHERE index = X`. There is no double read.
 fn bench_index_scan_index<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     let (index_id, table, store) = fixture::table_with_2_columns_and_one_index(ROWS);
     input.0.bench(
@@ -48,11 +50,11 @@ where
 #[derive(Clone)]
 struct Input<M>(Box<dyn ScanBencher<util::IndexScanParam, M>>)
 where
-    M: criterion::measurement::Measurement + 'static;
+    M: Measurement + 'static;
 
 impl<M> Input<M>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     pub fn new<T: ScanBencher<util::IndexScanParam, M> + 'static>(b: T) -> Self {
         Self(Box::new(b))
@@ -61,7 +63,7 @@ where
 
 impl<M> std::fmt::Display for Input<M>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.name())
@@ -70,7 +72,7 @@ where
 
 pub fn bench<M>(c: &mut criterion::Criterion<M>)
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     let mut inputs = vec![
         Input::new(util::NormalIndexScanNext1024Bencher::<MemStore>::new()),

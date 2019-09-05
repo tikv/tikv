@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use criterion::black_box;
+use criterion::measurement::Measurement;
 
 use tipb::Expr;
 
@@ -18,7 +19,7 @@ use crate::util::FixtureBuilder;
 
 pub trait SimpleAggrBencher<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> &'static str;
 
@@ -29,7 +30,7 @@ where
 
 impl<M> Clone for Box<dyn SimpleAggrBencher<M>>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -43,7 +44,7 @@ pub struct NormalBencher;
 
 impl<M> SimpleAggrBencher<M> for NormalBencher
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> &'static str {
         "normal"
@@ -76,7 +77,7 @@ pub struct BatchBencher;
 
 impl<M> SimpleAggrBencher<M> for BatchBencher
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> &'static str {
         "batch"

@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use criterion::black_box;
+use criterion::measurement::Measurement;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::Executor as PbExecutor;
@@ -19,7 +20,7 @@ use crate::util::store::StoreDescriber;
 
 pub trait IntegratedBencher<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String;
 
@@ -36,7 +37,7 @@ where
 
 impl<M> Clone for Box<dyn IntegratedBencher<M>>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -60,7 +61,7 @@ impl<T: TxnStore + 'static> NormalBencher<T> {
 impl<T, M> IntegratedBencher<M> for NormalBencher<T>
 where
     T: TxnStore + 'static,
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String {
         format!("{}/normal", <T as StoreDescriber>::name())
@@ -107,7 +108,7 @@ impl<T: TxnStore + 'static> BatchBencher<T> {
 impl<T, M> IntegratedBencher<M> for BatchBencher<T>
 where
     T: TxnStore + 'static,
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String {
         format!("{}/batch", <T as StoreDescriber>::name())
@@ -154,7 +155,7 @@ impl<T: TxnStore + 'static> DAGBencher<T> {
 impl<T, M> IntegratedBencher<M> for DAGBencher<T>
 where
     T: TxnStore + 'static,
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String {
         let tag = if self.batch { "batch" } else { "normal" };

@@ -2,6 +2,8 @@
 
 mod util;
 
+use criterion::measurement::Measurement;
+
 use tidb_query_datatype::FieldTypeTp;
 use tipb::ScalarFuncSig;
 use tipb_helper::ExprDefBuilder;
@@ -14,7 +16,7 @@ fn bench_top_n_1_order_by_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     assert!(columns >= 1);
     assert!(n > 0);
@@ -29,7 +31,7 @@ fn bench_top_n_1_order_by_impl<M>(
 /// ORDER BY col LIMIT 10. 1 projection field.
 fn bench_top_n_1_order_by_1_column_limit_10<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_top_n_1_order_by_impl(1, 10, b, input);
 }
@@ -37,7 +39,7 @@ where
 /// ORDER BY col LIMIT 4000. 1 projection field.
 fn bench_top_n_1_order_by_1_column_limit_4000<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_top_n_1_order_by_impl(1, 4000, b, input);
 }
@@ -45,7 +47,7 @@ where
 /// ORDER BY col LIMIT 10. 50 projection fields.
 fn bench_top_n_1_order_by_50_column_limit_10<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_top_n_1_order_by_impl(50, 10, b, input);
 }
@@ -53,7 +55,7 @@ where
 /// ORDER BY col LIMIT 4000. 50 projection fields.
 fn bench_top_n_1_order_by_50_column_limit_4000<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_top_n_1_order_by_impl(50, 4000, b, input);
 }
@@ -64,7 +66,7 @@ fn bench_top_n_3_order_by_impl<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     assert!(columns >= 3);
     assert!(n > 0);
@@ -87,7 +89,7 @@ fn bench_top_n_3_order_by_impl<M>(
 /// ORDER BY isnull(col0), col0, col1 DESC LIMIT 10. 3 projection fields.
 fn bench_top_n_3_order_by_3_column_limit_10<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_top_n_3_order_by_impl(3, 10, b, input)
 }
@@ -95,7 +97,7 @@ where
 /// ORDER BY isnull(col0), col0, col1 DESC LIMIT 4000. 3 projection fields.
 fn bench_top_n_3_order_by_3_column_limit_4000<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_top_n_3_order_by_impl(3, 4000, b, input)
 }
@@ -103,7 +105,7 @@ where
 /// ORDER BY isnull(col0), col0, col1 DESC LIMIT 10. 50 projection fields.
 fn bench_top_n_3_order_by_50_column_limit_10<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_top_n_3_order_by_impl(50, 10, b, input)
 }
@@ -111,7 +113,7 @@ where
 /// ORDER BY isnull(col0), col0, col1 DESC LIMIT 4000. 50 projection fields.
 fn bench_top_n_3_order_by_50_column_limit_4000<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     bench_top_n_3_order_by_impl(50, 4000, b, input)
 }
@@ -119,7 +121,7 @@ where
 #[derive(Clone)]
 struct Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     /// How many rows to sort
     src_rows: usize,
@@ -130,7 +132,7 @@ where
 
 impl<M> std::fmt::Display for Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/rows={}", self.bencher.name(), self.src_rows)
@@ -139,7 +141,7 @@ where
 
 pub fn bench<M>(c: &mut criterion::Criterion<M>)
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     let mut inputs = vec![];
 

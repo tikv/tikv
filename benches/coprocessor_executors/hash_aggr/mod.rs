@@ -2,6 +2,8 @@
 
 mod util;
 
+use criterion::measurement::Measurement;
+
 use tidb_query_datatype::FieldTypeTp;
 use tipb::{ExprType, ScalarFuncSig};
 use tipb_helper::ExprDefBuilder;
@@ -12,7 +14,7 @@ use crate::util::{BenchCase, FixtureBuilder};
 /// Each row is a new group.
 fn bench_hash_aggr_count_1_group_by_int_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_0_n();
     let group_by = vec![ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build()];
@@ -28,7 +30,7 @@ fn bench_hash_aggr_count_1_group_by_int_col_2_groups<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_sampled(&[0x123456, 0xCCCC]);
     let group_by = vec![ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build()];
@@ -43,7 +45,7 @@ fn bench_hash_aggr_count_1_group_by_int_col_2_groups<M>(
 /// totally two groups.
 fn bench_hash_aggr_count_1_group_by_fn_2_groups<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_0_n();
     let group_by = vec![
@@ -62,7 +64,7 @@ where
 /// Each row is a new group.
 fn bench_hash_aggr_count_1_group_by_decimal_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_decimal_0_n();
     let group_by = vec![ExprDefBuilder::column_ref(0, FieldTypeTp::NewDecimal).build()];
@@ -78,7 +80,7 @@ fn bench_hash_aggr_count_1_group_by_decimal_col_2_groups<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_decimal_sampled(&["680644618.9451818", "767257805709854474.824642776567"]);
@@ -95,7 +97,7 @@ fn bench_hash_aggr_count_1_group_by_int_col_real_col<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_random()
@@ -116,7 +118,7 @@ fn bench_hash_aggr_count_1_group_by_int_col_real_col_2_groups<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_sampled(&[0xDEADBEEF, 0xFEE1DEAD])
@@ -137,7 +139,7 @@ fn bench_hash_aggr_count_1_first_group_by_int_col_real_col<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_random()
@@ -164,7 +166,7 @@ fn bench_hash_aggr_count_1_first_group_by_int_col_real_col_2_groups<M>(
     b: &mut criterion::Bencher<M>,
     input: &Input<M>,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_sampled(&[0xDEADBEEF, 0xFEE1DEAD])
@@ -188,7 +190,7 @@ fn bench_hash_aggr_count_1_first_group_by_int_col_real_col_2_groups<M>(
 #[derive(Clone)]
 struct Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     /// How many rows to aggregate
     src_rows: usize,
@@ -199,7 +201,7 @@ where
 
 impl<M> std::fmt::Display for Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/rows={}", self.bencher.name(), self.src_rows)
@@ -208,7 +210,7 @@ where
 
 pub fn bench<M>(c: &mut criterion::Criterion<M>)
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     let mut inputs = vec![];
 

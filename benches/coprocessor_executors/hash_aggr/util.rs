@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use criterion::black_box;
+use criterion::measurement::Measurement;
 
 use tipb::Aggregation;
 use tipb::Expr;
@@ -20,7 +21,7 @@ use crate::util::FixtureBuilder;
 
 pub trait HashAggrBencher<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> &'static str;
 
@@ -37,7 +38,7 @@ where
 
 impl<M> Clone for Box<dyn HashAggrBencher<M>>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -51,7 +52,7 @@ pub struct NormalBencher;
 
 impl<M> HashAggrBencher<M> for NormalBencher
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> &'static str {
         "normal"
@@ -89,7 +90,7 @@ pub struct BatchBencher;
 
 impl<M> HashAggrBencher<M> for BatchBencher
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> &'static str {
         "batch"

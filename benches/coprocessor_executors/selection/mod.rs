@@ -2,6 +2,8 @@
 
 mod util;
 
+use criterion::measurement::Measurement;
+
 use tidb_query_datatype::FieldTypeTp;
 use tipb::ScalarFuncSig;
 use tipb_helper::ExprDefBuilder;
@@ -11,7 +13,7 @@ use crate::util::{BenchCase, FixtureBuilder};
 /// For SQLs like `WHERE column`.
 fn bench_selection_column<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_random();
     let expr = ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build();
@@ -21,7 +23,7 @@ where
 /// For SQLs like `WHERE a > b`.
 fn bench_selection_binary_func_column_column<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_f64_random()
@@ -36,7 +38,7 @@ where
 /// For SQLS like `WHERE a > 1`.
 fn bench_selection_binary_func_column_constant<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_f64_random();
     let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GtReal, FieldTypeTp::LongLong)
@@ -49,7 +51,7 @@ where
 /// For SQLs like `WHERE a > 1 AND b > 2`.
 fn bench_selection_multiple_predicate<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_random()
@@ -70,7 +72,7 @@ where
 #[derive(Clone)]
 struct Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     /// How many rows to filter
     src_rows: usize,
@@ -81,7 +83,7 @@ where
 
 impl<M> std::fmt::Display for Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/rows={}", self.bencher.name(), self.src_rows)
@@ -90,7 +92,7 @@ where
 
 pub fn bench<M>(c: &mut criterion::Criterion<M>)
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     let mut inputs = vec![];
 

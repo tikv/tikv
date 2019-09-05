@@ -9,6 +9,7 @@ pub mod store;
 pub use self::fixture::FixtureBuilder;
 
 use criterion::black_box;
+use criterion::measurement::Measurement;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::Executor as PbExecutor;
@@ -55,7 +56,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
 
 pub struct InnerBenchCase<I, M, F>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
     F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
 {
     pub _phantom_input: PhantomData<I>,
@@ -67,7 +68,7 @@ where
 type BenchFn<M, I> = Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static>;
 
 pub trait IBenchCase {
-    type M: criterion::measurement::Measurement + 'static;
+    type M: Measurement + 'static;
     type I;
 
     fn get_fn(&self) -> BenchFn<Self::M, Self::I>;
@@ -77,7 +78,7 @@ pub trait IBenchCase {
 
 impl<I, M, F> IBenchCase for InnerBenchCase<I, M, F>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
     F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
 {
     type M = M;
@@ -94,14 +95,14 @@ where
 
 pub struct BenchCase<I, M>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     inner: Box<dyn IBenchCase<I = I, M = M>>,
 }
 
 impl<I, M> BenchCase<I, M>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
     I: 'static,
 {
     pub fn new<F>(name: &'static str, f: F) -> Self
@@ -129,7 +130,7 @@ where
 
 impl<I, M> PartialEq for BenchCase<I, M>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
     I: 'static,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -139,7 +140,7 @@ where
 
 impl<I, M> PartialOrd for BenchCase<I, M>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
     I: 'static,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -149,7 +150,7 @@ where
 
 impl<I, M> Ord for BenchCase<I, M>
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
     I: 'static,
 {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -159,7 +160,7 @@ where
 
 impl<I, M> Eq for BenchCase<I, M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
     I: 'static,
 {
 }

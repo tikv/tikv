@@ -2,6 +2,8 @@
 
 use std::marker::PhantomData;
 
+use criterion::measurement::Measurement;
+
 use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
 
@@ -42,7 +44,7 @@ pub trait ScanExecutorDAGHandlerBuilder: 'static {
 pub trait ScanBencher<P, M>: 'static
 where
     P: Copy + 'static,
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String;
 
@@ -61,7 +63,7 @@ where
 impl<P, M> Clone for Box<dyn ScanBencher<P, M>>
 where
     P: Copy + 'static,
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -93,7 +95,7 @@ impl<B, M> ScanBencher<B::P, M> for NormalScanNext1Bencher<B>
 where
     B: ScanExecutorBuilder,
     B::E: Executor,
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String {
         format!("{}/normal/next=1", <B::T as StoreDescriber>::name())
@@ -142,7 +144,7 @@ impl<B, M> ScanBencher<B::P, M> for NormalScanNext1024Bencher<B>
 where
     B: ScanExecutorBuilder,
     B::E: Executor,
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String {
         format!("{}/normal/next=1024", <B::T as StoreDescriber>::name())
@@ -191,7 +193,7 @@ impl<B, M> ScanBencher<B::P, M> for BatchScanNext1024Bencher<B>
 where
     B: ScanExecutorBuilder,
     B::E: BatchExecutor,
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String {
         format!("{}/batch/next=1024", <B::T as StoreDescriber>::name())
@@ -235,7 +237,7 @@ impl<B: ScanExecutorDAGHandlerBuilder> ScanDAGBencher<B> {
 impl<B, M> ScanBencher<B::P, M> for ScanDAGBencher<B>
 where
     B: ScanExecutorDAGHandlerBuilder,
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn name(&self) -> String {
         let tag = if self.batch { "batch" } else { "normal" };

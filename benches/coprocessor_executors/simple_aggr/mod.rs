@@ -2,6 +2,8 @@
 
 mod util;
 
+use criterion::measurement::Measurement;
+
 use tidb_query_datatype::FieldTypeTp;
 use tipb::ExprType;
 use tipb_helper::ExprDefBuilder;
@@ -11,7 +13,7 @@ use crate::util::{BenchCase, FixtureBuilder};
 /// COUNT(1)
 fn bench_simple_aggr_count_1<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_random();
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -23,7 +25,7 @@ where
 /// COUNT(COL) where COL is a int column
 fn bench_simple_aggr_count_int_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_random();
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -35,7 +37,7 @@ where
 /// COUNT(COL) where COL is a real column
 fn bench_simple_aggr_count_real_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_f64_random();
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -47,7 +49,7 @@ where
 /// COUNT(COL) where COL is a bytes column (note: the column is very short)
 fn bench_simple_aggr_count_bytes_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_bytes_random_fixed_len(10);
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -59,7 +61,7 @@ where
 #[derive(Clone)]
 struct Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     /// How many rows to aggregate
     src_rows: usize,
@@ -70,7 +72,7 @@ where
 
 impl<M> std::fmt::Display for Input<M>
 where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/rows={}", self.bencher.name(), self.src_rows)
@@ -79,7 +81,7 @@ where
 
 pub fn bench<M>(c: &mut criterion::Criterion<M>)
 where
-    M: criterion::measurement::Measurement + 'static,
+    M: Measurement + 'static,
 {
     let mut inputs = vec![];
 
