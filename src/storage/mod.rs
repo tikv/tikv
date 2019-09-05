@@ -1752,8 +1752,11 @@ mod tests {
                 )
                 .wait(),
         );
-        expect_multi_values(
-            vec![None, None],
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
             storage
                 .async_batch_get(
                     Context::new(),

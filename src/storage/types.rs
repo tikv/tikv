@@ -13,9 +13,7 @@
 
 //! Core data types.
 
-use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
 use std::u64;
 
 use byteorder::{ByteOrder, NativeEndian};
@@ -56,11 +54,18 @@ pub struct MvccInfo {
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Key(Vec<u8>);
 
 impl Debug for Key {
     fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
-        write!(f, "{}", escape(self.0.as_slice()))
+        write!(f, "{}", escape(&self.0))
+    }
+}
+
+impl Display for Key {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", escape(&self.0))
     }
 }
 
@@ -223,33 +228,6 @@ impl Clone for Key {
         let mut key = Vec::with_capacity(self.0.capacity());
         key.extend_from_slice(&self.0);
         Key(key)
-    }
-}
-
-/// Hash for `Key`.
-impl Hash for Key {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_encoded().hash(state)
-    }
-}
-
-/// Display for `Key`.
-impl Display for Key {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", escape(&self.0))
-    }
-}
-
-/// Partial equality for `Key`.
-impl PartialEq for Key {
-    fn eq(&self, other: &Key) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl PartialOrd for Key {
-    fn partial_cmp(&self, other: &Key) -> Option<Ordering> {
-        Some(self.0.cmp(&other.0))
     }
 }
 

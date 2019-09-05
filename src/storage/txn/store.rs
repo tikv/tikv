@@ -12,10 +12,11 @@
 // limitations under the License.
 
 use super::{Error, Result};
+use alloc::vec::Vec;
 use kvproto::kvrpcpb::IsolationLevel;
+use storage::mvcc::Error as MvccError;
 use storage::mvcc::PointGetterBuilder;
 use storage::mvcc::{BackwardScanner, BackwardScannerBuilder};
-use storage::mvcc::{Error as MvccError, MvccReader};
 use storage::mvcc::{ForwardScanner, ForwardScannerBuilder};
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
@@ -57,22 +58,27 @@ impl<S: Snapshot> SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        // TODO: Use PointGetter.
-        // TODO: sort the keys and use ScanMode::Forward
-        let mut reader = MvccReader::new(
-            self.snapshot.clone(),
-            None,
-            self.fill_cache,
-            None,
-            None,
-            self.isolation_level,
-        );
-        let mut results = Vec::with_capacity(keys.len());
-        for k in keys {
-            results.push(reader.get(k, self.start_ts).map_err(Error::from));
+        use std::mem;
+
+        let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
+        order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .build()?;
+
+        let mut values = Vec::with_capacity(keys.len());
+        unsafe {
+            for (original_order, key) in order_and_keys {
+                let value = point_getter.get(key).map_err(Error::from);
+                mem::forget(mem::replace(values.get_unchecked_mut(original_order), value));
+            }
+            values.set_len(keys.len());
         }
-        statistics.add(reader.get_statistics());
-        Ok(results)
+
+        statistics.add(&point_getter.take_statistics());
+        Ok(values)
     }
 
     /// Create a scanner.

@@ -22,8 +22,6 @@ extern crate kvproto;
 extern crate raft;
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate log;
 
 extern crate test_coprocessor;
 extern crate test_raftstore;
