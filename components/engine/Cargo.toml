@@ -33,8 +33,9 @@ rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 features = ["nightly", "push", "process"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/Little-Wallace/rust-rocksdb.git"
 package = "rocksdb"
+branch = "multi_thread_memtable"
 
 [dev-dependencies]
 tempfile = "3.0"
