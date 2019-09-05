@@ -103,7 +103,7 @@ zipf = "5.0.1"
 bitflags = "1.0.1"
 fail = "0.3"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+grpcio = { version = "0.5.0-alpha.3", features = [ "secure" ] }
 raft = "0.6.0-alpha"
 crossbeam = "0.5"
 derive_more = "0.11.0"
@@ -153,10 +153,8 @@ features = ["nightly", "push", "process"]
 version = "0.1.4"
 default-features = false
 
-[replace]
-# Replace openssl with libressl
-"openssl-src:111.3.0" = { git = "https://github.com/BusyJay/libressl-src.git" }
 # TODO: remove this when slog is compatible with the log 0.4
+[replace]
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
 
