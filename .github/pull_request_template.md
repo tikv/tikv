@@ -13,12 +13,12 @@ Please explain **IN DETAIL** what the changes are in this PR and why they are ne
 Please **NOTE** that:
 - Do not assume reviewers understand the original issue
 
-## What are the type of changes? (mandatory)
+## What are the type of the changes? (mandatory)
 
 The currently defined types are listed below, please pick one of the types for this PR by removing the others:
-- New feature (a change which adds functionality)
-- Improvement (a change which is an improvement to an existing feature)
-- Bugfix (a change which fixes an issue)
+- New feature (change which adds functionality)
+- Improvement (change which is an improvement to an existing feature)
+- Bug fix (change which fixes an issue)
 - Engineering (engineering change which doesn't change any feature or fix any issue)
 - Misc (other changes)
 
@@ -31,7 +31,7 @@ Please describe the tests that you ran to verify your changes. Have you finished
 - If there is a document change, please file a PR in ([docs](https://github.com/tikv/tikv/tree/master/docs)) and add the PR number here.
 - If this PR should be mentioned in the release note, please update the [release note](https://github.com/tikv/tikv/blob/master/CHANGELOG.md).
 
-## Does this PR affect `tidb-ansible` update? (mandatory)
+## Does this PR affect tidb-ansible update? (mandatory)
 
 If there is a configuration or metrics change, please file a PR in [tidb-ansible](https://github.com/pingcap/tidb-ansible), and add the PR number here.
 
