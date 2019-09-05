@@ -3,8 +3,7 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use super::util::extract_raw_key_from_process_result;
-use super::Lock;
+use crate::storage::lock_manager::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
 use crate::storage::txn::{execute_callback, ProcessResult};
@@ -15,23 +14,15 @@ use prometheus::HistogramTimer;
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
-
-// If it is true, there is no need to calculate keys' hashes and wake up waiters.
-pub static WAIT_TABLE_IS_EMPTY: AtomicBool = AtomicBool::new(true);
-
-pub fn store_wait_table_is_empty(is_empty: bool) {
-    WAIT_TABLE_IS_EMPTY.store(is_empty, Ordering::Relaxed);
-}
-
-pub fn wait_table_is_empty() -> bool {
-    WAIT_TABLE_IS_EMPTY.load(Ordering::Relaxed)
-}
 
 pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
@@ -42,7 +33,6 @@ pub enum Task {
         cb: StorageCb,
         pr: ProcessResult,
         lock: Lock,
-        is_first_lock: bool,
     },
     WakeUp {
         // lock info
@@ -93,28 +83,32 @@ type Waiters = Vec<Waiter>;
 
 struct WaitTable {
     wait_table: HashMap<u64, Waiters>,
+    has_waiter: Arc<AtomicBool>,
 }
 
 impl WaitTable {
-    fn new() -> Self {
+    fn new(has_waiter: Arc<AtomicBool>) -> Self {
         Self {
             wait_table: HashMap::default(),
+            has_waiter,
         }
     }
 
-    #[allow(unused)]
+    #[cfg(test)]
     fn size(&self) -> usize {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
     }
 
-    fn set_wait_table_is_empty(&self) {
+    fn remove(&mut self, ts: u64) {
+        self.wait_table.remove(&ts);
         if self.wait_table.is_empty() {
-            store_wait_table_is_empty(true);
+            self.has_waiter.store(false, Ordering::Relaxed);
         }
     }
 
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
         self.wait_table.entry(ts).or_default().push(waiter);
+        self.has_waiter.store(true, Ordering::Relaxed);
         true
     }
 
@@ -133,9 +127,8 @@ impl WaitTable {
                 count -= 1;
             }
             if waiters.is_empty() {
-                self.wait_table.remove(&ts);
+                self.remove(ts);
             }
-            self.set_wait_table_is_empty();
         }
         ready_waiters
     }
@@ -148,9 +141,8 @@ impl WaitTable {
             if let Some(idx) = idx {
                 let waiter = waiters.remove(idx);
                 if waiters.is_empty() {
-                    self.wait_table.remove(&lock.ts);
+                    self.remove(lock.ts);
                 }
-                self.set_wait_table_is_empty();
                 return Some(waiter);
             }
         }
@@ -192,20 +184,12 @@ impl Scheduler {
         true
     }
 
-    pub fn wait_for(
-        &self,
-        start_ts: u64,
-        cb: StorageCb,
-        pr: ProcessResult,
-        lock: Lock,
-        is_first_lock: bool,
-    ) {
+    pub fn wait_for(&self, start_ts: u64, cb: StorageCb, pr: ProcessResult, lock: Lock) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
             cb,
             pr,
             lock,
-            is_first_lock,
         });
     }
 
@@ -241,23 +225,23 @@ pub struct WaiterManager {
 unsafe impl Send for WaiterManager {}
 
 impl WaiterManager {
-    pub fn new(detector_scheduler: DetectorScheduler, cfg: &Config) -> Self {
+    pub fn new(
+        has_waiter: Arc<AtomicBool>,
+        detector_scheduler: DetectorScheduler,
+        cfg: &Config,
+    ) -> Self {
         Self {
-            wait_table: Rc::new(RefCell::new(WaitTable::new())),
+            wait_table: Rc::new(RefCell::new(WaitTable::new(has_waiter))),
             detector_scheduler,
             wait_for_lock_timeout: cfg.wait_for_lock_timeout,
             wake_up_delay_duration: cfg.wake_up_delay_duration,
         }
     }
 
-    fn handle_wait_for(&mut self, handle: &Handle, is_first_lock: bool, waiter: Waiter) {
+    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
         let lock = waiter.lock;
         let start_ts = waiter.start_ts;
 
-        // If it is the first lock, deadlock never occur
-        if !is_first_lock {
-            self.detector_scheduler.detect(start_ts, lock);
-        }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
             let when = Instant::now() + Duration::from_millis(self.wait_for_lock_timeout);
@@ -338,11 +322,9 @@ impl FutureRunnable<Task> for WaiterManager {
                 cb,
                 pr,
                 lock,
-                is_first_lock,
             } => {
                 self.handle_wait_for(
                     handle,
-                    is_first_lock,
                     Waiter {
                         start_ts,
                         cb,
@@ -396,10 +378,25 @@ fn wake_up_waiter(waiter: Waiter, commit_ts: u64) {
     execute_callback(waiter.cb, pr);
 }
 
+fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
+    match pr {
+        ProcessResult::MultiRes { results } => {
+            assert!(results.len() == 1);
+            match &results[0] {
+                Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info)))) => {
+                    info.get_key()
+                }
+                _ => panic!("unexpected mvcc error"),
+            }
+        }
+        _ => panic!("unexpected progress result"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::util::*;
     use super::*;
+    use crate::storage::lock_manager::gen_key_hash;
     use crate::storage::Key;
     use std::time::Duration;
     use test_util::KvGenerator;
@@ -416,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_wait_table_add_and_remove() {
-        let mut wait_table = WaitTable::new();
+        let mut wait_table = WaitTable::new(Arc::new(AtomicBool::new(false)));
         for i in 0..10 {
             let n = i as u64;
             wait_table.add_waiter(n, dummy_waiter(0, n, n));
@@ -436,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_wait_table_get_ready_waiters() {
-        let mut wait_table = WaitTable::new();
+        let mut wait_table = WaitTable::new(Arc::new(AtomicBool::new(false)));
         let ts = 100;
         let mut hashes: Vec<u64> = KvGenerator::new(64, 0)
             .generate(10)
@@ -466,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_wait_table_to_wait_for_entries() {
-        let mut wait_table = WaitTable::new();
+        let mut wait_table = WaitTable::new(Arc::new(AtomicBool::new(false)));
         assert!(wait_table.to_wait_for_entries().is_empty());
 
         for i in 1..5 {
@@ -491,20 +488,22 @@ mod tests {
 
     #[test]
     fn test_wait_table_is_empty() {
-        let mut wait_table = WaitTable::new();
+        let has_waiter = Arc::new(AtomicBool::new(false));
+        let mut wait_table = WaitTable::new(Arc::clone(&has_waiter));
+        assert_eq!(has_waiter.load(Ordering::Relaxed), false);
         wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
-        store_wait_table_is_empty(false);
+        assert_eq!(has_waiter.load(Ordering::Relaxed), true);
         assert!(wait_table
             .remove_waiter(1, Lock { ts: 2, hash: 2 })
             .is_some());
-        assert_eq!(wait_table_is_empty(), true);
+        assert_eq!(has_waiter.load(Ordering::Relaxed), false);
         wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
         wait_table.add_waiter(3, dummy_waiter(2, 3, 3));
-        store_wait_table_is_empty(false);
+        assert_eq!(has_waiter.load(Ordering::Relaxed), true);
         wait_table.get_ready_waiters(2, vec![2]);
-        assert_eq!(wait_table_is_empty(), false);
+        assert_eq!(has_waiter.load(Ordering::Relaxed), true);
         wait_table.get_ready_waiters(3, vec![3]);
-        assert_eq!(wait_table_is_empty(), true);
+        assert_eq!(has_waiter.load(Ordering::Relaxed), false);
     }
 
     #[test]
@@ -519,7 +518,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.wait_for_lock_timeout = 1000;
         cfg.wake_up_delay_duration = 1;
-        let waiter_mgr_runner = WaiterManager::new(detector_scheduler, &cfg);
+        let waiter_mgr_runner =
+            WaiterManager::new(Arc::new(AtomicBool::new(false)), detector_scheduler, &cfg);
         let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 
@@ -529,7 +529,7 @@ mod tests {
             tx.send(result).unwrap();
         });
         let pr = ProcessResult::Res;
-        waiter_mgr_scheduler.wait_for(0, StorageCb::Boolean(cb), pr, Lock { ts: 0, hash: 0 }, true);
+        waiter_mgr_scheduler.wait_for(0, StorageCb::Boolean(cb), pr, Lock { ts: 0, hash: 0 });
         assert_eq!(
             rx.recv_timeout(Duration::from_millis(2000))
                 .unwrap()
@@ -547,12 +547,26 @@ mod tests {
             StorageCb::Boolean(cb),
             ProcessResult::Res,
             Lock { ts: 0, hash: 1 },
-            true,
         );
         waiter_mgr_scheduler.wake_up(0, vec![3, 1, 2], 1);
         assert!(rx
             .recv_timeout(Duration::from_millis(500))
             .unwrap()
             .is_err());
+    }
+
+    #[test]
+    fn test_extract_raw_key_from_process_result() {
+        use kvproto::kvrpcpb::LockInfo;
+
+        let raw_key = b"foo".to_vec();
+        let mut info = LockInfo::default();
+        info.set_key(raw_key.clone());
+        let pr = ProcessResult::MultiRes {
+            results: vec![Err(StorageError::from(TxnError::from(
+                MvccError::KeyIsLocked(info),
+            )))],
+        };
+        assert_eq!(raw_key, extract_raw_key_from_process_result(&pr));
     }
 }
