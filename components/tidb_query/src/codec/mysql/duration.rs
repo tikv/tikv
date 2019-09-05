@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::{i64, u64};
@@ -681,17 +682,17 @@ impl Duration {
 }
 
 impl ConvertTo<f64> for Duration {
-    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         let val = self.to_numeric_string().parse()?;
         Ok(val)
     }
 }
 
-impl ConvertTo<Decimal> for Duration {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        self.to_numeric_string().parse()
+// TODO: define a convert::Convert trait for all conversion
+impl TryFrom<Duration> for Decimal {
+    type Error = crate::codec::Error;
+    fn try_from(duration: Duration) -> Result<Decimal> {
+        duration.to_numeric_string().parse()
     }
 }
 
@@ -772,6 +773,7 @@ mod tests {
     use std::f64::EPSILON;
 
     use super::*;
+    use crate::codec::convert::convert_bytes_to_decimal;
     use crate::codec::data_type::DateTime;
     use crate::expr::EvalContext;
 
@@ -968,11 +970,9 @@ mod tests {
             ("-11:30:45.9233456", 0, "-113046"),
         ];
 
-        let mut ctx = EvalContext::default();
         for (input, fsp, exp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
-            let dec: Decimal = t.convert(&mut ctx).unwrap();
-            let res = format!("{}", dec);
+            let res = format!("{}", Decimal::try_from(t).unwrap());
             assert_eq!(exp, res);
         }
         let cases = vec![
@@ -984,13 +984,14 @@ mod tests {
             ("2017-01-05 23:59:59.575601", 0, "000000"),
             ("0000-00-00 00:00:00", 6, "000000"),
         ];
+        let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
             let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
             let du = t.to_duration().unwrap();
-            let get: Decimal = du.convert(&mut ctx).unwrap();
+            let get = Decimal::try_from(du).unwrap();
             assert_eq!(
                 get,
-                expect.as_bytes().convert(&mut ctx).unwrap(),
+                convert_bytes_to_decimal(&mut ctx, expect.as_bytes()).unwrap(),
                 "convert duration {} to decimal",
                 s
             );
@@ -1145,8 +1146,7 @@ mod benches {
         let duration = Duration::parse(b"-12:34:56.123456", 6).unwrap();
         b.iter(|| {
             let duration = test::black_box(duration);
-            let dec: Result<Decimal> = duration.convert(&mut EvalContext::default());
-            let _ = test::black_box(dec.unwrap());
+            let _ = test::black_box(Decimal::try_from(duration).unwrap());
         })
     }
 

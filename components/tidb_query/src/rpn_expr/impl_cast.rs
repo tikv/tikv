@@ -23,6 +23,13 @@ pub fn get_cast_fn_rpn_node(
     let from = box_try!(EvalType::try_from(from_field_type.tp()));
     let to = box_try!(EvalType::try_from(to_field_type.tp()));
     let func_meta = match (from, to) {
+        (EvalType::Int, EvalType::Decimal) => {
+            if !from_field_type.is_unsigned() && !to_field_type.is_unsigned() {
+                cast_int_as_decimal_fn_meta()
+            } else {
+                cast_uint_as_decimal_fn_meta()
+            }
+        }
         (EvalType::Int, EvalType::Real) => {
             if !from_field_type.is_unsigned() {
                 cast_any_as_any_fn_meta::<Int, Real>()
@@ -34,18 +41,7 @@ pub fn get_cast_fn_rpn_node(
         (EvalType::Decimal, EvalType::Real) => cast_any_as_any_fn_meta::<Decimal, Real>(),
         (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
         (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
-        (EvalType::Int, EvalType::Decimal) => {
-            if !from_field_type.is_unsigned() && !to_field_type.is_unsigned() {
-                cast_any_as_decimal_fn_meta::<Int>()
-            } else {
-                cast_uint_as_decimal_fn_meta()
-            }
-        }
-        (EvalType::Bytes, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Bytes>(),
-        (EvalType::Real, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Real>(),
-        (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
-        (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
-        (EvalType::Json, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Json>(),
+        (EvalType::Json, EvalType::Real) => cast_any_as_any_fn_meta::<Json, Real>(),
         (EvalType::Int, EvalType::Int) => {
             match (from_field_type.is_unsigned(), to_field_type.is_unsigned()) {
                 (false, false) => cast_any_as_any_fn_meta::<Int, Int>(),
@@ -171,15 +167,15 @@ pub fn cast_uint_as_decimal(
 /// The signed int implementation for push down signature `CastIntAsDecimal`.
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-pub fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
+pub fn cast_int_as_decimal(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra<'_>,
-    val: &Option<From>,
+    val: &Option<i64>,
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            let dec: Decimal = val.convert(ctx)?;
+            let dec = Decimal::from(*val);
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 dec,

@@ -16,7 +16,6 @@ use tikv_util::codec::BytesSlice;
 use tikv_util::escape;
 
 use crate::codec::convert::{self, ConvertTo};
-use crate::codec::data_type::*;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -93,9 +92,9 @@ impl<T> DerefMut for Res<T> {
 }
 
 // A `Decimal` holds 9 words.
-const WORD_BUF_LEN: u8 = 9;
+pub const WORD_BUF_LEN: u8 = 9;
 // A word holds 9 digits.
-const DIGITS_PER_WORD: u8 = 9;
+pub const DIGITS_PER_WORD: u8 = 9;
 // A word is 4 bytes i32.
 const WORD_SIZE: u8 = 4;
 const DIG_MASK: u32 = TEN_POW[8];
@@ -397,7 +396,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 /// Get the max possible decimal with giving precision and fraction digit count.
-fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
+pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     let int_cnt = prec - frac_cnt;
     let mut res = Decimal::new(int_cnt, frac_cnt, false);
     let mut idx = 0;
@@ -1504,6 +1503,19 @@ impl Decimal {
         Res::Ok(x)
     }
 
+    /// Convert a float number to decimal.
+    ///
+    /// This function will use float's canonical string representation
+    /// rather than the accurate value the float represent.
+    pub fn from_f64(f: f64) -> Result<Decimal> {
+        if !f.is_finite() {
+            return Err(invalid_type!("{} can't be convert to decimal'", f));
+        }
+
+        let s = format!("{}", f);
+        s.parse()
+    }
+
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
@@ -1700,75 +1712,6 @@ impl From<u64> for Decimal {
             x /= u64::from(WORD_BASE);
         }
         d
-    }
-}
-
-impl ConvertTo<Decimal> for i64 {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        Ok(Decimal::from(*self))
-    }
-}
-
-impl ConvertTo<Decimal> for u64 {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        Ok(Decimal::from(*self))
-    }
-}
-
-impl ConvertTo<Decimal> for f64 {
-    /// Convert a float number to decimal.
-    ///
-    /// This function will use float's canonical string representation
-    /// rather than the accurate value the float represent.
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        if !self.is_finite() {
-            return Err(invalid_type!("{} can't be convert to decimal'", self));
-        }
-
-        let s = format!("{}", self);
-        s.parse()
-    }
-}
-
-impl ConvertTo<Decimal> for Real {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        self.into_inner().convert(ctx)
-    }
-}
-
-impl ConvertTo<Decimal> for &[u8] {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let dec = match Decimal::from_bytes(self)? {
-            Res::Ok(d) => d,
-            Res::Overflow(d) => {
-                ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
-                d
-            }
-            Res::Truncated(d) => {
-                ctx.handle_truncate(true)?;
-                d
-            }
-        };
-        Ok(dec)
-    }
-}
-
-impl ConvertTo<Decimal> for std::borrow::Cow<'_, [u8]> {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        self.as_ref().convert(ctx)
-    }
-}
-
-impl ConvertTo<Decimal> for Bytes {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        self.as_slice().convert(ctx)
     }
 }
 
@@ -2276,12 +2219,9 @@ mod tests {
     use super::*;
     use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN};
 
-    use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
-    use crate::expr::{EvalConfig, Flag};
     use std::cmp::Ordering;
     use std::f64::EPSILON;
     use std::iter::repeat;
-    use std::sync::Arc;
 
     #[test]
     fn test_from_i64() {
@@ -3453,50 +3393,5 @@ mod tests {
             let got = dec.floor().unwrap();
             assert_eq!(got, exp);
         }
-    }
-
-    #[test]
-    fn test_bytes_to_decimal() {
-        let cases: Vec<(&[u8], Decimal)> = vec![
-            (
-                b"123456.1",
-                ConvertTo::<Decimal>::convert(&123456.1, &mut EvalContext::default()).unwrap(),
-            ),
-            (
-                b"-123456.1",
-                ConvertTo::<Decimal>::convert(&-123456.1, &mut EvalContext::default()).unwrap(),
-            ),
-            (b"123456", Decimal::from(123456)),
-            (b"-123456", Decimal::from(-123456)),
-        ];
-        let mut ctx = EvalContext::default();
-        for (s, expect) in cases {
-            let got: Decimal = s.convert(&mut ctx).unwrap();
-            assert_eq!(got, expect, "from {:?}, expect: {} got: {}", s, expect, got);
-        }
-
-        // OVERFLOWING
-        let big = (0..85).map(|_| '9').collect::<String>();
-        let val: Result<Decimal> = big.as_bytes().convert(&mut ctx);
-        assert!(
-            val.is_err(),
-            "expected error, but got {:?}",
-            val.unwrap().to_string()
-        );
-        assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
-
-        // OVERFLOW_AS_WARNING
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-        let val: Decimal = big.as_bytes().convert(&mut ctx).unwrap();
-        let max = max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0);
-        assert_eq!(
-            val,
-            max,
-            "expect: {}, got: {}",
-            val.to_string(),
-            max.to_string()
-        );
-        assert_eq!(ctx.warnings.warning_cnt, 1);
-        assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
     }
 }

@@ -341,12 +341,6 @@ mod tests {
         assert_eq!(v, Datum::F64(res));
     }
 
-    fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
-        use crate::codec::convert::ConvertTo;
-        let val = f.convert(ctx)?;
-        Ok(val)
-    }
-
     #[test]
     fn test_bit_and() {
         let mut aggr = AggBitAnd {
@@ -362,9 +356,9 @@ mod tests {
             Datum::U64(1),
             Datum::I64(3),
             Datum::I64(2),
-            Datum::Dec(f64_to_decimal(&mut ctx, 1.234).unwrap()),
-            Datum::Dec(f64_to_decimal(&mut ctx, 3.012).unwrap()),
-            Datum::Dec(f64_to_decimal(&mut ctx, 2.12345678).unwrap()),
+            Datum::Dec(Decimal::from_f64(1.234).unwrap()),
+            Datum::Dec(Decimal::from_f64(3.012).unwrap()),
+            Datum::Dec(Decimal::from_f64(2.12345678).unwrap()),
         ];
 
         for v in data {
@@ -384,10 +378,10 @@ mod tests {
             Datum::U64(1),
             Datum::I64(3),
             Datum::I64(2),
-            Datum::Dec(f64_to_decimal(&mut ctx, 12.34).unwrap()),
-            Datum::Dec(f64_to_decimal(&mut ctx, 1.012).unwrap()),
-            Datum::Dec(f64_to_decimal(&mut ctx, 15.12345678).unwrap()),
-            Datum::Dec(f64_to_decimal(&mut ctx, 16.000).unwrap()),
+            Datum::Dec(Decimal::from_f64(12.34).unwrap()),
+            Datum::Dec(Decimal::from_f64(1.012).unwrap()),
+            Datum::Dec(Decimal::from_f64(15.12345678).unwrap()),
+            Datum::Dec(Decimal::from_f64(16.000).unwrap()),
         ];
 
         for v in data {
@@ -408,9 +402,9 @@ mod tests {
             Datum::U64(1),
             Datum::I64(3),
             Datum::I64(2),
-            Datum::Dec(f64_to_decimal(&mut ctx, 1.234).unwrap()),
-            Datum::Dec(f64_to_decimal(&mut ctx, 1.012).unwrap()),
-            Datum::Dec(f64_to_decimal(&mut ctx, 2.12345678).unwrap()),
+            Datum::Dec(Decimal::from_f64(1.234).unwrap()),
+            Datum::Dec(Decimal::from_f64(1.012).unwrap()),
+            Datum::Dec(Decimal::from_f64(2.12345678).unwrap()),
         ];
 
         for v in data {

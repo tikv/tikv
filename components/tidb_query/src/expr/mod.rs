@@ -305,7 +305,7 @@ where
     let left = left.into_arith(ctx)?;
     let right = right.into_arith(ctx)?;
 
-    let (left, right) = Datum::coerce(ctx, left, right)?;
+    let (left, right) = Datum::coerce(left, right)?;
     if left == Datum::Null || right == Datum::Null {
         return Ok(Datum::Null);
     }

@@ -107,8 +107,8 @@ impl ConvertTo<Decimal> for Json {
     /// Converts a `Json` to a `Decimal`
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let f: f64 = self.convert(ctx)?;
-        f.convert(ctx)
+        let f = self.convert(ctx)?;
+        Decimal::from_f64(f)
     }
 }
 
