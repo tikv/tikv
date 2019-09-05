@@ -17,14 +17,13 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 pub struct BatchStreamAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, BatchStreamAggregationImpl>,
 );
 
 impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
-    type StorageStats = Src::StorageStats;
-
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -41,12 +40,31 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         self.0.collect_storage_stats(dest);
     }
 }
 
-impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
+impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
+    #[cfg(test)]
+    pub fn new_for_test(
+        src: Src,
+        group_by_exps: Vec<RpnExpression>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(
+            Arc::new(EvalConfig::default()),
+            src,
+            group_by_exps,
+            aggr_defs,
+            aggr_def_parser,
+        )
+        .unwrap()
+    }
+}
+
+impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -91,23 +109,6 @@ pub struct BatchStreamAggregationImpl {
 }
 
 impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
-    #[cfg(test)]
-    pub fn new_for_test(
-        src: Src,
-        group_by_exps: Vec<RpnExpression>,
-        aggr_defs: Vec<Expr>,
-        aggr_def_parser: impl AggrDefinitionParser,
-    ) -> Self {
-        Self::new_impl(
-            Arc::new(EvalConfig::default()),
-            src,
-            group_by_exps,
-            aggr_defs,
-            aggr_def_parser,
-        )
-        .unwrap()
-    }
-
     pub fn new(
         config: Arc<EvalConfig>,
         src: Src,

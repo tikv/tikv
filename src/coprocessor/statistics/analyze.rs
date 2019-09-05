@@ -20,13 +20,12 @@ use crate::coprocessor::*;
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
-use crate::coprocessor::dag::storage_impl::TiKVStorage;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    storage: Option<TiKVStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
+    store: Option<SnapshotStore<S>>,
     storage_stats: Statistics,
 }
 
@@ -45,8 +44,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
         );
         Ok(Self {
             req,
-            storage: Some(store.into()),
             ranges,
+            store: Some(store),
             storage_stats: Statistics::default(),
         })
     }
@@ -74,7 +73,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut IndexScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+        scanner: &mut IndexScanExecutor<SnapshotStore<S>>,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         let mut cms = CMSketch::new(
@@ -109,7 +108,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let mut scanner = ScanExecutor::index_scan_with_cols_len(
                     i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
-                    self.storage.take().unwrap(),
+                    self.store.take().unwrap(),
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
                 scanner.collect_storage_stats(&mut self.storage_stats);
@@ -118,9 +117,9 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
-                let storage = self.storage.take().unwrap();
+                let store = self.store.take().unwrap();
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
-                let mut builder = SampleBuilder::new(col_req, storage, ranges)?;
+                let mut builder = SampleBuilder::new(col_req, store, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
@@ -148,7 +147,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: TableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    data: TableScanExecutor<SnapshotStore<S>>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
@@ -165,7 +164,7 @@ struct SampleBuilder<S: Snapshot> {
 impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        storage: TiKVStorage<SnapshotStore<S>>,
+        store: SnapshotStore<S>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let cols_info = req.take_columns_info();
@@ -180,7 +179,7 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::default();
         meta.set_columns(cols_info);
-        let table_scanner = ScanExecutor::table_scan(meta, ranges, storage, false)?;
+        let table_scanner = ScanExecutor::table_scan(meta, ranges, store, false)?;
         Ok(Self {
             data: table_scanner,
             col_len,

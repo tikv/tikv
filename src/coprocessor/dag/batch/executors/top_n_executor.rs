@@ -18,6 +18,7 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
@@ -62,7 +63,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
 /// pointers, BatchTopNExecutor still remains `Send`.
 unsafe impl<Src: BatchExecutor> Send for BatchTopNExecutor<Src> {}
 
-impl BatchTopNExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
+impl BatchTopNExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TopN) -> Result<()> {
@@ -98,7 +99,9 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             is_ended: false,
         }
     }
+}
 
+impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     pub fn new(
         config: std::sync::Arc<EvalConfig>,
         src: Src,
@@ -259,8 +262,6 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 }
 
 impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
-    type StorageStats = Src::StorageStats;
-
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.src.schema()
@@ -318,7 +319,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         self.src.collect_storage_stats(dest);
     }
 }

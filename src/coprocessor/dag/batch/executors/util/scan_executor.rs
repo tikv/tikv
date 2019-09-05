@@ -8,8 +8,10 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
-use crate::coprocessor::dag::storage::{Range, Storage};
+use crate::coprocessor::dag::storage::Range;
+use crate::coprocessor::dag::storage_impl::TiKVStorage;
 use crate::coprocessor::Result;
+use crate::storage::{Statistics, Store};
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -35,12 +37,12 @@ pub trait ScanExecutorImpl: Send {
 
 /// A shared executor implementation for both table scan and index scan. Implementation differences
 /// between table scan and index scan are further given via `ScanExecutorImpl`.
-pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl> {
+pub struct ScanExecutor<S: Store, I: ScanExecutorImpl> {
     /// The internal scanning implementation.
     imp: I,
 
     /// The scanner that scans over ranges.
-    scanner: RangesScanner<S>,
+    scanner: RangesScanner<TiKVStorage<S>>,
 
     /// A flag indicating whether this executor is ended. When table is drained or there was an
     /// error scanning the table, this flag will be set to `true` and `next_batch` should be never
@@ -50,18 +52,18 @@ pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl> {
 
 pub struct ScanExecutorOptions<S, I> {
     pub imp: I,
-    pub storage: S,
+    pub store: S,
     pub key_ranges: Vec<KeyRange>,
     pub is_backward: bool,
     pub is_key_only: bool,
     pub accept_point_range: bool,
 }
 
-impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
+impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
     pub fn new(
         ScanExecutorOptions {
             imp,
-            storage,
+            store,
             mut key_ranges,
             is_backward,
             is_key_only,
@@ -75,7 +77,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
         Ok(Self {
             imp,
             scanner: RangesScanner::new(RangesScannerOptions {
-                storage,
+                storage: TiKVStorage::from(store),
                 ranges: key_ranges
                     .into_iter()
                     .map(|r| Range::from_pb_range(r, accept_point_range))
@@ -151,9 +153,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     Ok(())
 }
 
-impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
-    type StorageStats = S::Statistics;
-
+impl<S: Store, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
@@ -196,7 +196,7 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         self.scanner.collect_storage_stats(dest);
     }
 }

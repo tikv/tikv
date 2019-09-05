@@ -17,6 +17,7 @@ use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {
@@ -34,8 +35,6 @@ pub struct BatchFastHashAggregationExecutor<Src: BatchExecutor>(
 );
 
 impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src> {
-    type StorageStats = Src::StorageStats;
-
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -52,12 +51,31 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         self.0.collect_storage_stats(dest);
     }
 }
 
-impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
+impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
+    #[cfg(test)]
+    pub fn new_for_test(
+        src: Src,
+        group_by_exp: RpnExpression,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(
+            Arc::new(EvalConfig::default()),
+            src,
+            group_by_exp,
+            aggr_defs,
+            aggr_def_parser,
+        )
+        .unwrap()
+    }
+}
+
+impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -90,23 +108,6 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
 }
 
 impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
-    #[cfg(test)]
-    pub fn new_for_test(
-        src: Src,
-        group_by_exp: RpnExpression,
-        aggr_defs: Vec<Expr>,
-        aggr_def_parser: impl AggrDefinitionParser,
-    ) -> Self {
-        Self::new_impl(
-            Arc::new(EvalConfig::default()),
-            src,
-            group_by_exp,
-            aggr_defs,
-            aggr_def_parser,
-        )
-        .unwrap()
-    }
-
     pub fn new(
         config: Arc<EvalConfig>,
         src: Src,
@@ -400,7 +401,7 @@ mod tests {
                 group_by_exp.clone(),
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
-            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+            )) as Box<dyn BatchExecutor>
         };
 
         let exec_slow = |src_exec| {
@@ -409,7 +410,7 @@ mod tests {
                 vec![group_by_exp.clone()],
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
-            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+            )) as Box<dyn BatchExecutor>
         };
 
         let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
@@ -520,7 +521,7 @@ mod tests {
                 RpnExpressionBuilder::new().push_column_ref(0).build(),
                 vec![Expr::default()],
                 MyParser,
-            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+            )) as Box<dyn BatchExecutor>
         };
 
         let exec_slow = |src_exec| {
@@ -529,7 +530,7 @@ mod tests {
                 vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
                 vec![Expr::default()],
                 MyParser,
-            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+            )) as Box<dyn BatchExecutor>
         };
 
         let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
@@ -580,7 +581,7 @@ mod tests {
                 group_by_exp.clone(),
                 vec![],
                 AllAggrDefinitionParser,
-            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+            )) as Box<dyn BatchExecutor>
         };
 
         let exec_slow = |src_exec| {
@@ -589,7 +590,7 @@ mod tests {
                 vec![group_by_exp.clone()],
                 vec![],
                 AllAggrDefinitionParser,
-            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+            )) as Box<dyn BatchExecutor>
         };
 
         let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =

@@ -12,6 +12,7 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
@@ -20,7 +21,7 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     conditions: Vec<RpnExpression>,
 }
 
-impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
+impl BatchSelectionExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Selection) -> Result<()> {
@@ -156,8 +157,6 @@ fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
 }
 
 impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
-    type StorageStats = Src::StorageStats;
-
     #[inline]
     fn schema(&self) -> &[FieldType] {
         // The selection executor's schema comes from its child.
@@ -187,7 +186,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         self.src.collect_storage_stats(dest);
     }
 }

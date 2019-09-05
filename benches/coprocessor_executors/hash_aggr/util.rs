@@ -12,7 +12,6 @@ use tikv::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
 use tikv::coprocessor::dag::batch::interface::*;
 use tikv::coprocessor::dag::executor::{Executor, HashAggExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
-use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::hash_aggregate;
@@ -64,7 +63,7 @@ impl HashAggrBencher for NormalBencher {
                 black_box(Box::new(src)),
             )
             .unwrap();
-            Box::new(ex) as Box<dyn Executor<StorageStats = Statistics>>
+            Box::new(ex) as Box<dyn Executor>
         })
         .bench(b);
     }
@@ -103,7 +102,7 @@ impl HashAggrBencher for BatchBencher {
                     black_box(aggr_expr.to_vec()),
                 )
                 .unwrap();
-                Box::new(ex) as Box<dyn BatchExecutor<StorageStats = Statistics>>
+                Box::new(ex) as Box<dyn BatchExecutor>
             } else {
                 let ex = BatchSlowHashAggregationExecutor::new(
                     black_box(Arc::new(EvalConfig::default())),
@@ -112,7 +111,7 @@ impl HashAggrBencher for BatchBencher {
                     black_box(aggr_expr.to_vec()),
                 )
                 .unwrap();
-                Box::new(ex) as Box<dyn BatchExecutor<StorageStats = Statistics>>
+                Box::new(ex) as Box<dyn BatchExecutor>
             }
         })
         .bench(b);

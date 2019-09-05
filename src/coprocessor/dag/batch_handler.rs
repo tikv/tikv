@@ -8,9 +8,11 @@ use kvproto::coprocessor::Response;
 use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse};
 
-use super::batch::interface::{BatchExecutor, ExecuteStats};
+use super::batch::interface::BatchExecutor;
+use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::*;
+use crate::storage::Statistics;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -23,13 +25,14 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
-pub struct BatchDAGHandler<SS> {
+/// Must be built from DAGRequestHandler.
+pub struct BatchDAGHandler {
     /// The deadline of this handler. For each check point (e.g. each iteration) we need to check
     /// whether or not the deadline is exceeded and break the process if so.
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
 
-    out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
+    out_most_executor: Box<dyn BatchExecutor>,
 
     /// The offset of the columns need to be outputted. For example, TiDB may only needs a subset
     /// of the columns in the result so that unrelated columns don't need to be encoded and
@@ -44,10 +47,10 @@ pub struct BatchDAGHandler<SS> {
     exec_stats: ExecuteStats,
 }
 
-impl<SS> BatchDAGHandler<SS> {
+impl BatchDAGHandler {
     pub fn new(
         deadline: Deadline,
-        out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
+        out_most_executor: Box<dyn BatchExecutor>,
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
         collect_exec_summary: bool,
@@ -62,8 +65,10 @@ impl<SS> BatchDAGHandler<SS> {
             exec_stats,
         }
     }
+}
 
-    pub fn handle_request(&mut self) -> Result<Response> {
+impl RequestHandler for BatchDAGHandler {
+    fn handle_request(&mut self) -> Result<Response> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
@@ -174,20 +179,7 @@ impl<SS> BatchDAGHandler<SS> {
         }
     }
 
-    pub fn collect_storage_stats(&mut self, dest: &mut SS) {
-        self.out_most_executor.collect_storage_stats(dest);
-    }
-}
-
-// TODO: This should stay in Coprocessor instead of DAG
-use crate::storage::Statistics;
-
-impl RequestHandler for BatchDAGHandler<Statistics> {
-    fn handle_request(&mut self) -> Result<Response> {
-        BatchDAGHandler::handle_request(self)
-    }
-
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
-        BatchDAGHandler::collect_storage_stats(self, dest);
+        self.out_most_executor.collect_storage_stats(dest);
     }
 }

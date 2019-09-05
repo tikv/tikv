@@ -62,7 +62,7 @@ pub trait RequestHandler: Send {
         panic!("streaming request is not supported for this handler");
     }
 
-    /// Collects scan statistics generated in this request handler so far.
+    /// Collects metrics generated in this request handler so far.
     fn collect_scan_statistics(&mut self, _dest: &mut Statistics) {
         // Do nothing by default
     }

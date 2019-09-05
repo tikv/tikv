@@ -10,7 +10,6 @@ use tikv::coprocessor::dag::batch::executors::BatchSimpleAggregationExecutor;
 use tikv::coprocessor::dag::batch::interface::BatchExecutor;
 use tikv::coprocessor::dag::executor::{Executor, StreamAggExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
-use tikv::storage::Statistics;
 
 use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::simple_aggregate;
@@ -51,7 +50,7 @@ impl SimpleAggrBencher for NormalBencher {
                     black_box(meta),
                 )
                 .unwrap(),
-            ) as Box<dyn Executor<StorageStats = Statistics>>
+            ) as Box<dyn Executor>
         })
         .bench(b);
     }
@@ -80,7 +79,7 @@ impl SimpleAggrBencher for BatchBencher {
                     black_box(aggr_expr.to_vec()),
                 )
                 .unwrap(),
-            ) as Box<dyn BatchExecutor<StorageStats = Statistics>>
+            ) as Box<dyn BatchExecutor>
         })
         .bench(b);
     }

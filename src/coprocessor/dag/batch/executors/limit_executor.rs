@@ -4,6 +4,7 @@ use tipb::expression::FieldType;
 
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::Result;
+use crate::storage::Statistics;
 
 /// Executor that retrieves rows from the source executor
 /// and only produces part of the rows.
@@ -22,8 +23,6 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
 }
 
 impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
-    type StorageStats = Src::StorageStats;
-
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.src.schema()
@@ -50,7 +49,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         self.src.collect_storage_stats(dest);
     }
 }

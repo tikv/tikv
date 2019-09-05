@@ -14,9 +14,8 @@ use tikv::coprocessor::dag::batch::executors::BatchIndexScanExecutor;
 use tikv::coprocessor::dag::batch::interface::*;
 use tikv::coprocessor::dag::executor::{Executor, IndexScanExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
-use tikv::coprocessor::dag::storage_impl::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
-use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
+use tikv::storage::{RocksEngine, Store as TxnStore};
 
 use crate::util::executor_descriptor::index_scan;
 use crate::util::scan_bencher;
@@ -31,7 +30,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
     for NormalIndexScanExecutorBuilder<T>
 {
     type T = T;
-    type E = Box<dyn Executor<StorageStats = Statistics>>;
+    type E = Box<dyn Executor>;
     type P = IndexScanParam;
 
     fn build(
@@ -46,9 +45,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         let mut executor = IndexScanExecutor::index_scan(
             black_box(req),
             black_box(ranges.to_vec()),
-            // TODO: Change to use `FixtureStorage` directly instead of
-            // `TiKVStorage<FixtureStore<..>>`
-            black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
+            black_box(ToTxnStore::<Self::T>::to_store(store)),
             black_box(unique),
             black_box(false),
         )
@@ -56,7 +53,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
         executor.next().unwrap().unwrap();
-        Box::new(executor) as Box<dyn Executor<StorageStats = Statistics>>
+        Box::new(executor) as Box<dyn Executor>
     }
 }
 
@@ -66,7 +63,7 @@ pub struct BatchIndexScanExecutorBuilder<T: TxnStore + 'static> {
 
 impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScanExecutorBuilder<T> {
     type T = T;
-    type E = Box<dyn BatchExecutor<StorageStats = Statistics>>;
+    type E = Box<dyn BatchExecutor>;
     type P = IndexScanParam;
 
     fn build(
@@ -76,7 +73,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         unique: bool,
     ) -> Self::E {
         let mut executor = BatchIndexScanExecutor::new(
-            black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
+            black_box(ToTxnStore::<Self::T>::to_store(store)),
             black_box(Arc::new(EvalConfig::default())),
             black_box(columns.to_vec()),
             black_box(ranges.to_vec()),
@@ -87,7 +84,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
         executor.next_batch(1);
-        Box::new(executor) as Box<dyn BatchExecutor<StorageStats = Statistics>>
+        Box::new(executor) as Box<dyn BatchExecutor>
     }
 }
 

@@ -11,12 +11,11 @@ use tipb::expression::FieldType;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::Error;
+use crate::storage::Statistics;
 
 /// The interface for pull-based executors. It is similar to the Volcano Iterator model, but
 /// pulls data in batch and stores data by column.
 pub trait BatchExecutor: Send {
-    type StorageStats;
-
     /// Gets the schema of the output.
     ///
     /// Provides an `Arc` instead of a pure reference to make it possible to share this schema in
@@ -47,7 +46,7 @@ pub trait BatchExecutor: Send {
     ///
     /// Similar to `collect_exec_stats()`, the implementation must invoke this function for each
     /// children executor and this function may be invoked several times during execution.
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats);
+    fn collect_storage_stats(&mut self, dest: &mut Statistics);
 
     fn with_summary_collector<C: ExecSummaryCollector + Send>(
         self,
@@ -64,8 +63,6 @@ pub trait BatchExecutor: Send {
 }
 
 impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
-    type StorageStats = T::StorageStats;
-
     fn schema(&self) -> &[FieldType] {
         (**self).schema()
     }
@@ -78,7 +75,7 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).collect_exec_stats(dest);
     }
 
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         (**self).collect_storage_stats(dest);
     }
 }
@@ -86,8 +83,6 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
 impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
     for WithSummaryCollector<C, T>
 {
-    type StorageStats = T::StorageStats;
-
     fn schema(&self) -> &[FieldType] {
         self.inner.schema()
     }
@@ -106,7 +101,7 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
         self.inner.collect_exec_stats(dest);
     }
 
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         self.inner.collect_storage_stats(dest);
     }
 }

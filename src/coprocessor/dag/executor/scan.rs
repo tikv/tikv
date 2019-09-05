@@ -10,8 +10,10 @@ use crate::coprocessor::codec::table;
 use crate::coprocessor::dag::execute_stats::ExecuteStats;
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
-use crate::coprocessor::dag::storage::{IntervalRange, Range, Storage};
+use crate::coprocessor::dag::storage::{IntervalRange, Range};
+use crate::coprocessor::dag::storage_impl::TiKVStorage;
 use crate::coprocessor::Result;
+use crate::storage::{Statistics, Store};
 
 // an InnerExecutor is used in ScanExecutor,
 // hold the different logics between table scan and index scan
@@ -25,9 +27,9 @@ pub trait InnerExecutor: Send {
 }
 
 // Executor for table scan and index scan
-pub struct ScanExecutor<S: Storage, T: InnerExecutor> {
+pub struct ScanExecutor<S: Store, T: InnerExecutor> {
     inner: T,
-    scanner: RangesScanner<S>,
+    scanner: RangesScanner<TiKVStorage<S>>,
     columns: Arc<Vec<ColumnInfo>>,
 }
 
@@ -35,20 +37,20 @@ pub struct ScanExecutorOptions<S, T> {
     pub inner: T,
     pub columns: Vec<ColumnInfo>,
     pub key_ranges: Vec<KeyRange>,
-    pub storage: S,
+    pub store: S,
     pub is_backward: bool,
     pub is_key_only: bool,
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
 }
 
-impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
+impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
     pub fn new(
         ScanExecutorOptions {
             inner,
             columns,
             mut key_ranges,
-            storage,
+            store,
             is_backward,
             is_key_only,
             accept_point_range,
@@ -61,7 +63,7 @@ impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
         }
 
         let scanner = RangesScanner::new(RangesScannerOptions {
-            storage,
+            storage: TiKVStorage::from(store),
             ranges: key_ranges
                 .into_iter()
                 .map(|r| Range::from_pb_range(r, accept_point_range))
@@ -79,9 +81,7 @@ impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
     }
 }
 
-impl<S: Storage, T: InnerExecutor> Executor for ScanExecutor<S, T> {
-    type StorageStats = S::Statistics;
-
+impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
     fn next(&mut self) -> Result<Option<Row>> {
         let some_row = self.scanner.next()?;
         if let Some((key, value)) = some_row {
@@ -98,7 +98,7 @@ impl<S: Storage, T: InnerExecutor> Executor for ScanExecutor<S, T> {
     }
 
     #[inline]
-    fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
+    fn collect_storage_stats(&mut self, dest: &mut Statistics) {
         self.scanner.collect_storage_stats(dest);
     }
 
