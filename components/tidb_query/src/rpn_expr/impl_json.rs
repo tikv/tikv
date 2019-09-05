@@ -14,19 +14,6 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
         .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
-#[rpn_fn(varg)]
-#[inline]
-fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
-    Ok(Some(Json::Array(
-        args.iter()
-            .map(|json| match json {
-                None => Json::None,
-                Some(json) => json.to_owned(),
-            })
-            .collect(),
-    )))
-}
-
 #[rpn_fn]
 #[inline]
 fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
@@ -37,15 +24,16 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use super::*;
 
     use tipb::ScalarFuncSig;
 
-    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_json_type() {
+        use std::str::FromStr;
+
         let cases = vec![
             (None, None),
             (Some(r#"true"#), Some("BOOLEAN")),
@@ -66,39 +54,6 @@ mod tests {
                 .evaluate(ScalarFuncSig::JsonTypeSig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
-        }
-    }
-
-    #[test]
-    fn test_json_array() {
-        let cases = vec![
-            (vec![], Some(r#"[]"#)),
-            (vec![Some(r#"1"#), None], Some(r#"[1, null]"#)),
-            (
-                vec![
-                    Some(r#"1"#),
-                    None,
-                    Some(r#"2"#),
-                    Some(r#""sdf""#),
-                    Some(r#""k1""#),
-                    Some(r#""v1""#),
-                ],
-                Some(r#"[1, null, 2, "sdf", "k1", "v1"]"#),
-            ),
-        ];
-
-        for (vargs, expected) in cases {
-            let vargs = vargs
-                .into_iter()
-                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
-                .collect::<Vec<_>>();
-            let expected = expected.map(|s| Json::from_str(s).unwrap());
-
-            let output = RpnFnScalarEvaluator::new()
-                .push_params(vargs.clone())
-                .evaluate(ScalarFuncSig::JsonArraySig)
-                .unwrap();
-            assert_eq!(output, expected, "{:?}", vargs);
         }
     }
 
