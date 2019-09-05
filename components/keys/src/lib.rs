@@ -109,7 +109,7 @@ pub fn raft_log_index(key: &[u8]) -> Result<u64> {
         + mem::size_of::<u8>()
         + mem::size_of::<u64>();
     if key.len() != expect_key_len {
-        return Err(Error::InvalidLogKey(key.to_owned()));
+        return Err(Error::InvalidRaftLogKey(key.to_owned()));
     }
     Ok(BigEndian::read_u64(
         &key[expect_key_len - mem::size_of::<u64>()..],
@@ -124,7 +124,7 @@ pub fn decode_raft_log_key(key: &[u8]) -> Result<(u64, u64)> {
         || !key.starts_with(REGION_RAFT_PREFIX_KEY)
         || key[suffix_idx] != RAFT_LOG_SUFFIX
     {
-        return Err(Error::InvalidLogKey(key.to_owned()));
+        return Err(Error::InvalidRaftLogKey(key.to_owned()));
     }
     let region_id = BigEndian::read_u64(&key[REGION_RAFT_PREFIX_KEY.len()..suffix_idx]);
     let index = BigEndian::read_u64(&key[suffix_idx + mem::size_of::<u8>()..]);
@@ -234,7 +234,7 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
 #[derive(Debug, Display, Fail)]
 pub enum Error {
     #[display(fmt = "{} is not a valid raft log key", "hex::encode_upper(_0)")]
-    InvalidLogKey(Vec<u8>),
+    InvalidRaftLogKey(Vec<u8>),
     #[display(
         fmt = "invalid region {} key length for key {}",
         "_0",
