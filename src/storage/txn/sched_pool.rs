@@ -11,10 +11,10 @@ use tikv_util::future_pool::FuturePool;
 
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::metrics::*;
-use crate::storage::{Engine, Statistics};
+use crate::storage::{Engine, Statistics, StatisticsSummary};
 
 pub struct SchedLocalMetrics {
-    local_scan_details: HashMap<&'static str, Statistics>,
+    stats: HashMap<&'static str, StatisticsSummary>,
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
     command_keyread_histogram_vec: LocalHistogramVec,
@@ -23,7 +23,7 @@ pub struct SchedLocalMetrics {
 thread_local! {
      static TLS_SCHED_METRICS: RefCell<SchedLocalMetrics> = RefCell::new(
         SchedLocalMetrics {
-            local_scan_details: HashMap::default(),
+            stats: HashMap::default(),
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
             command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
@@ -53,31 +53,31 @@ impl SchedPool {
     }
 }
 
-pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
+pub fn tls_add_statistics(cmd: &'static str, stat: &Statistics) {
     TLS_SCHED_METRICS.with(|m| {
         m.borrow_mut()
-            .local_scan_details
+            .stats
             .entry(cmd)
             .or_insert_with(Default::default)
-            .add(stats);
+            .add_statistics(stat);
     });
 }
 
 pub fn tls_flush() {
     TLS_SCHED_METRICS.with(|m| {
-        let mut m = m.borrow_mut();
-        for (cmd, stat) in m.local_scan_details.drain() {
-            for (cf, cf_details) in stat.details().iter() {
-                for (tag, count) in cf_details.iter() {
+        let mut sched_metrics = m.borrow_mut();
+        for (cmd, stat) in sched_metrics.stats.drain() {
+            for (cf, details) in stat.stat.details() {
+                for (tag, count) in details {
                     KV_COMMAND_SCAN_DETAILS
-                        .with_label_values(&[cmd, *cf, *tag])
-                        .inc_by(*count as i64);
+                        .with_label_values(&[cmd, cf, tag])
+                        .inc_by(count as i64);
                 }
             }
         }
-        m.processing_read_duration.flush();
-        m.processing_write_duration.flush();
-        m.command_keyread_histogram_vec.flush();
+        sched_metrics.processing_read_duration.flush();
+        sched_metrics.processing_write_duration.flush();
+        sched_metrics.command_keyread_histogram_vec.flush();
     });
 }
 
