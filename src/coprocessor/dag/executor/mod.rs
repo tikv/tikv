@@ -14,7 +14,7 @@ pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
 pub use self::index_scan::IndexScanExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
-pub use self::scan::{ScanExecutor, ScanExecutorOptions};
+pub use self::scan::ScanExecutor;
 pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;
@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
+use kvproto::coprocessor::KeyRange;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
@@ -33,7 +34,6 @@ use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
 use crate::coprocessor::codec::table::{self, RowColsDict};
 use crate::coprocessor::dag::execute_stats::*;
 use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
-use crate::coprocessor::dag::storage::IntervalRange;
 use crate::coprocessor::util;
 use crate::coprocessor::*;
 use crate::storage::Statistics;
@@ -245,7 +245,15 @@ pub trait Executor: Send {
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings>;
 
-    fn take_scanned_range(&mut self) -> IntervalRange;
+    /// Only `TableScan` and `IndexScan` need to implement `start_scan`.
+    fn start_scan(&mut self) {}
+
+    /// Only `TableScan` and `IndexScan` need to implement `stop_scan`.
+    ///
+    /// It returns a `KeyRange` the executor has scaned.
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        None
+    }
 
     fn with_summary_collector<C: ExecSummaryCollector>(
         self,
@@ -294,8 +302,13 @@ impl<C: ExecSummaryCollector, T: Executor> Executor for WithSummaryCollector<C, 
     }
 
     #[inline]
-    fn take_scanned_range(&mut self) -> IntervalRange {
-        self.inner.take_scanned_range()
+    fn start_scan(&mut self) {
+        self.inner.start_scan();
+    }
+
+    #[inline]
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        self.inner.stop_scan()
     }
 }
 
@@ -326,15 +339,20 @@ impl<T: Executor + ?Sized> Executor for Box<T> {
     }
 
     #[inline]
-    fn take_scanned_range(&mut self) -> IntervalRange {
-        (**self).take_scanned_range()
+    fn start_scan(&mut self) {
+        (**self).start_scan()
+    }
+
+    #[inline]
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        (**self).stop_scan()
     }
 }
 
 #[cfg(test)]
 pub mod tests {
     use super::{Executor, TableScanExecutor};
-    use crate::coprocessor::codec::{datum, table, Datum};
+    use crate::coprocessor::codec::{table, Datum};
     use crate::storage::kv::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
@@ -345,7 +363,6 @@ pub mod tests {
         kvrpcpb::{Context, IsolationLevel},
     };
     use tikv_util::codec::number::NumberEncoder;
-    use tikv_util::collections::HashMap;
     use tipb::{
         executor::TableScan,
         expression::{Expr, ExprType},
@@ -456,20 +473,11 @@ pub mod tests {
         }
     }
 
+    #[inline]
     pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
         let mut key_range = KeyRange::default();
         key_range.set_start(table::encode_row_key(table_id, start));
         key_range.set_end(table::encode_row_key(table_id, end));
-        key_range
-    }
-
-    pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
-        let start_key = table::encode_row_key(table_id, handle);
-        let mut end = start_key.clone();
-        crate::coprocessor::util::convert_to_prefix_next(&mut end);
-        let mut key_range = KeyRange::default();
-        key_range.set_start(start_key);
-        key_range.set_end(end);
         key_range
     }
 
@@ -490,67 +498,6 @@ pub mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, store, false).unwrap())
-    }
-
-    pub struct TableData {
-        pub kv_data: Vec<(Vec<u8>, Vec<u8>)>,
-        // expect_rows[row_id][column_id]=>value
-        pub expect_rows: Vec<HashMap<i64, Vec<u8>>>,
-        pub cols: Vec<ColumnInfo>,
-    }
-
-    impl TableData {
-        pub fn get_prev_2_cols(&self) -> Vec<ColumnInfo> {
-            let col1 = self.cols[0].clone();
-            let col2 = self.cols[1].clone();
-            vec![col1, col2]
-        }
-
-        pub fn get_col_pk(&self) -> ColumnInfo {
-            let mut pk_col = new_col_info(0, FieldTypeTp::Long);
-            pk_col.set_pk_handle(true);
-            pk_col
-        }
-    }
-
-    pub fn prepare_table_data(key_number: usize, table_id: i64) -> TableData {
-        let cols = vec![
-            new_col_info(1, FieldTypeTp::LongLong),
-            new_col_info(2, FieldTypeTp::VarChar),
-            new_col_info(3, FieldTypeTp::NewDecimal),
-        ];
-
-        let mut kv_data = Vec::new();
-        let mut expect_rows = Vec::new();
-
-        for handle in 0..key_number {
-            let row = map![
-                1 => Datum::I64(handle as i64),
-                2 => Datum::Bytes(b"abc".to_vec()),
-                3 => Datum::Dec(10.into())
-            ];
-            let mut expect_row = HashMap::default();
-            let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
-            let col_values: Vec<_> = row
-                .iter()
-                .map(|(cid, v)| {
-                    let f = table::flatten(v.clone()).unwrap();
-                    let value = datum::encode_value(&[f]).unwrap();
-                    expect_row.insert(*cid, value);
-                    v.clone()
-                })
-                .collect();
-
-            let value = table::encode_row(col_values, &col_ids).unwrap();
-            let key = table::encode_row_key(table_id, handle as i64);
-            expect_rows.push(expect_row);
-            kv_data.push((key, value));
-        }
-        TableData {
-            kv_data,
-            expect_rows,
-            cols,
-        }
+        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, store).unwrap())
     }
 }

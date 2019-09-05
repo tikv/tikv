@@ -1,13 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::coprocessor::Response;
+use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse, StreamResponse};
 
 use super::executor::Executor;
 use crate::coprocessor::dag::execute_stats::ExecuteStats;
-use crate::coprocessor::dag::storage::IntervalRange;
 use crate::coprocessor::*;
 use crate::storage::Statistics;
 
@@ -40,7 +39,7 @@ impl DAGRequestHandler {
         }
     }
 
-    fn make_stream_response(&mut self, chunk: Chunk, range: IntervalRange) -> Result<Response> {
+    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
         self.executor.collect_exec_stats(&mut self.exec_stats);
 
         let mut s_resp = StreamResponse::default();
@@ -60,8 +59,9 @@ impl DAGRequestHandler {
 
         let mut resp = Response::default();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
-        resp.mut_range().set_start(range.lower_inclusive);
-        resp.mut_range().set_end(range.upper_exclusive);
+        if let Some(range) = range {
+            resp.set_range(range);
+        }
 
         self.exec_stats.clear();
 
@@ -146,6 +146,7 @@ impl RequestHandler for DAGRequestHandler {
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::default();
+        self.executor.start_scan();
         while record_cnt < self.batch_row_limit {
             match self.executor.next() {
                 Ok(Some(row)) => {
@@ -170,7 +171,7 @@ impl RequestHandler for DAGRequestHandler {
             }
         }
         if record_cnt > 0 {
-            let range = self.executor.take_scanned_range();
+            let range = self.executor.stop_scan();
             return self
                 .make_stream_response(chunk, range)
                 .map(|r| (Some(r), finished));

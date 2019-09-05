@@ -20,7 +20,6 @@ use tikv::coprocessor::codec::table::RowColsDict;
 use tikv::coprocessor::dag::batch::interface::*;
 use tikv::coprocessor::dag::executor::{Executor, Row};
 use tikv::coprocessor::dag::expr::EvalWarnings;
-use tikv::coprocessor::dag::storage::IntervalRange;
 use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;
@@ -384,14 +383,8 @@ impl Executor for NormalFixtureExecutor {
         self.columns
     }
 
-    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         None
-    }
-
-    #[inline]
-    fn take_scanned_range(&mut self) -> IntervalRange {
-        unreachable!()
     }
 }
 

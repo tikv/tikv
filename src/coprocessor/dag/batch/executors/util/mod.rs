@@ -4,6 +4,7 @@ pub mod aggr_executor;
 pub mod hash_aggr_helper;
 #[cfg(test)]
 pub mod mock_executor;
+pub mod ranges_iter;
 pub mod scan_executor;
 
 use tikv_util::{erase_lifetime, erase_lifetime_mut};

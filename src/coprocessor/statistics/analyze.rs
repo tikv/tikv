@@ -24,9 +24,9 @@ use super::histogram::Histogram;
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
+    snap: Option<SnapshotStore<S>>,
     ranges: Vec<KeyRange>,
-    store: Option<SnapshotStore<S>>,
-    storage_stats: Statistics,
+    metrics: Statistics,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
@@ -36,7 +36,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
-        let store = SnapshotStore::new(
+        let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
@@ -44,9 +44,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
         );
         Ok(Self {
             req,
+            snap: Some(snap),
             ranges,
-            store: Some(store),
-            storage_stats: Statistics::default(),
+            metrics: Default::default(),
         })
     }
 
@@ -108,20 +108,20 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let mut scanner = ScanExecutor::index_scan_with_cols_len(
                     i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
-                    self.store.take().unwrap(),
+                    self.snap.take().unwrap(),
                 )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_storage_stats(&mut self.storage_stats);
+                scanner.collect_storage_stats(&mut self.metrics);
                 res
             }
 
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
-                let store = self.store.take().unwrap();
+                let snap = self.snap.take().unwrap();
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
-                let mut builder = SampleBuilder::new(col_req, store, ranges)?;
+                let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_storage_stats(&mut self.storage_stats);
+                builder.data.collect_storage_stats(&mut self.metrics);
                 res
             }
         };
@@ -141,8 +141,8 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
-        dest.add(&self.storage_stats);
-        self.storage_stats = Statistics::default();
+        dest.add(&self.metrics);
+        self.metrics = Default::default();
     }
 }
 
@@ -164,7 +164,7 @@ struct SampleBuilder<S: Snapshot> {
 impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        store: SnapshotStore<S>,
+        snap: SnapshotStore<S>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let cols_info = req.take_columns_info();
@@ -179,7 +179,7 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::default();
         meta.set_columns(cols_info);
-        let table_scanner = ScanExecutor::table_scan(meta, ranges, store, false)?;
+        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap)?;
         Ok(Self {
             data: table_scanner,
             col_len,

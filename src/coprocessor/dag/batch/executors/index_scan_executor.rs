@@ -10,19 +10,25 @@ use tipb::schema::ColumnInfo;
 
 use crate::storage::{FixtureStore, Statistics, Store};
 
-use super::util::scan_executor::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<S: Store>(ScanExecutor<S, IndexScanExecutorImpl>);
+pub struct BatchIndexScanExecutor<S: Store>(
+    super::util::scan_executor::ScanExecutor<
+        S,
+        IndexScanExecutorImpl,
+        super::util::ranges_iter::PointRangeConditional,
+    >,
+);
 
 impl BatchIndexScanExecutor<FixtureStore> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
-        check_columns_info_supported(descriptor.get_columns())
+        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
     }
 }
 
@@ -32,7 +38,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
-        is_backward: bool,
+        desc: bool,
         unique: bool,
     ) -> Result<Self> {
         // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
@@ -51,7 +57,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         let decode_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
         let schema: Vec<_> = columns_info
             .iter()
-            .map(|ci| field_type_from_column_info(&ci))
+            .map(|ci| super::util::scan_executor::field_type_from_column_info(&ci))
             .collect();
         let columns_len_without_handle = if decode_handle {
             schema.len() - 1
@@ -65,14 +71,13 @@ impl<S: Store> BatchIndexScanExecutor<S> {
             columns_len_without_handle,
             decode_handle,
         };
-        let wrapper = ScanExecutor::new(ScanExecutorOptions {
+        let wrapper = super::util::scan_executor::ScanExecutor::new(
             imp,
             store,
+            desc,
             key_ranges,
-            is_backward,
-            is_key_only: false,
-            accept_point_range: unique,
-        })?;
+            super::util::ranges_iter::PointRangeConditional::new(unique),
+        )?;
         Ok(Self(wrapper))
     }
 }
@@ -113,7 +118,7 @@ struct IndexScanExecutorImpl {
     decode_handle: bool,
 }
 
-impl ScanExecutorImpl for IndexScanExecutorImpl {
+impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -122,6 +127,16 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
+    }
+
+    #[inline]
+    fn build_scanner<S: Store>(
+        &self,
+        store: &S,
+        desc: bool,
+        range: KeyRange,
+    ) -> Result<Scanner<S>> {
+        Scanner::new(store, desc, false, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.

@@ -4,14 +4,13 @@ use kvproto::coprocessor::KeyRange;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
+use super::ranges_iter::{PointRangePolicy, RangesIterator};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::storage::scanner::{RangesScanner, RangesScannerOptions};
-use crate::coprocessor::dag::storage::Range;
-use crate::coprocessor::dag::storage_impl::TiKVStorage;
+use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
-use crate::storage::{Statistics, Store};
+use crate::storage::{Key, Statistics, Store};
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -20,6 +19,9 @@ pub trait ScanExecutorImpl: Send {
 
     /// Gets a mutable reference of the executor context.
     fn mut_context(&mut self) -> &mut EvalContext;
+
+    fn build_scanner<S: Store>(&self, store: &S, desc: bool, range: KeyRange)
+        -> Result<Scanner<S>>;
 
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec;
 
@@ -37,12 +39,25 @@ pub trait ScanExecutorImpl: Send {
 
 /// A shared executor implementation for both table scan and index scan. Implementation differences
 /// between table scan and index scan are further given via `ScanExecutorImpl`.
-pub struct ScanExecutor<S: Store, I: ScanExecutorImpl> {
+pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
     /// The internal scanning implementation.
     imp: I,
 
-    /// The scanner that scans over ranges.
-    scanner: RangesScanner<TiKVStorage<S>>,
+    store: S,
+    desc: bool,
+
+    /// Number of rows scanned from each range. Notice that this vector does not contain ranges
+    /// that have not been scanned.
+    scanned_rows_per_range: Vec<usize>,
+
+    /// Iterates ranges.
+    ranges: RangesIterator<P>,
+
+    /// Row scanner.
+    ///
+    /// It is optional because sometimes it is not needed, e.g. when point range is given.
+    /// Also, the value may be re-constructed several times if there are multiple key ranges.
+    scanner: Option<Scanner<S>>,
 
     /// A flag indicating whether this executor is ended. When table is drained or there was an
     /// error scanning the table, this flag will be set to `true` and `next_batch` should be never
@@ -50,44 +65,56 @@ pub struct ScanExecutor<S: Store, I: ScanExecutorImpl> {
     is_ended: bool,
 }
 
-pub struct ScanExecutorOptions<S, I> {
-    pub imp: I,
-    pub store: S,
-    pub key_ranges: Vec<KeyRange>,
-    pub is_backward: bool,
-    pub is_key_only: bool,
-    pub accept_point_range: bool,
-}
-
-impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
+impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
     pub fn new(
-        ScanExecutorOptions {
-            imp,
-            store,
-            mut key_ranges,
-            is_backward,
-            is_key_only,
-            accept_point_range,
-        }: ScanExecutorOptions<S, I>,
+        imp: I,
+        store: S,
+        desc: bool,
+        mut key_ranges: Vec<KeyRange>,
+        point_range_policy: P,
     ) -> Result<Self> {
         crate::coprocessor::codec::table::check_table_ranges(&key_ranges)?;
-        if is_backward {
+        if desc {
             key_ranges.reverse();
         }
         Ok(Self {
             imp,
-            scanner: RangesScanner::new(RangesScannerOptions {
-                storage: TiKVStorage::from(store),
-                ranges: key_ranges
-                    .into_iter()
-                    .map(|r| Range::from_pb_range(r, accept_point_range))
-                    .collect(),
-                scan_backward_in_range: is_backward,
-                is_key_only,
-                is_scanned_range_aware: false,
-            }),
+            store,
+            desc,
+            scanned_rows_per_range: Vec::with_capacity(key_ranges.len()),
+            ranges: RangesIterator::new(key_ranges, point_range_policy),
+            scanner: None,
             is_ended: false,
         })
+    }
+
+    /// Creates or resets the range of inner scanner.
+    #[inline]
+    fn reset_range(&mut self, range: KeyRange) -> Result<()> {
+        self.scanner = Some(self.imp.build_scanner(&self.store, self.desc, range)?);
+        Ok(())
+    }
+
+    /// Scans next row from the scanner.
+    #[inline]
+    fn scan_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        // TODO: Key and value doesn't have to be owned
+        if let Some(scanner) = self.scanner.as_mut() {
+            Ok(scanner.next_row()?)
+        } else {
+            // `self.scanner` should never be `None` when this function is being called.
+            unreachable!()
+        }
+    }
+
+    /// Get one row from the store.
+    #[inline]
+    fn point_get(&mut self, mut range: KeyRange) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let mut statistics = crate::storage::Statistics::default();
+        // TODO: Key and value doesn't have to be owned
+        let key = range.take_start();
+        let value = self.store.get(&Key::from_raw(&key), &mut statistics)?;
+        Ok(value.map(move |v| (key, v)))
     }
 
     /// Fills a column vector and returns whether or not all ranges are drained.
@@ -100,10 +127,28 @@ impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
     ) -> Result<bool> {
         assert!(scan_rows > 0);
 
-        for _ in 0..scan_rows {
-            let some_row = self.scanner.next()?;
+        loop {
+            let range = self.ranges.next();
+            let some_row = match range {
+                super::ranges_iter::IterStatus::NewPointRange(r) => {
+                    self.scanned_rows_per_range.push(0);
+                    self.point_get(r)?
+                }
+                super::ranges_iter::IterStatus::NewNonPointRange(r) => {
+                    self.scanned_rows_per_range.push(0);
+                    self.reset_range(r)?;
+                    self.scan_next()?
+                }
+                super::ranges_iter::IterStatus::Continue => self.scan_next()?,
+                super::ranges_iter::IterStatus::Drained => {
+                    return Ok(true); // drained
+                }
+            };
             if let Some((key, value)) = some_row {
                 // Retrieved one row from point range or non-point range.
+                self.scanned_rows_per_range
+                    .last_mut()
+                    .map_or((), |val| *val += 1);
 
                 if let Err(e) = self.imp.process_kv_pair(&key, &value, columns) {
                     // When there are errors in `process_kv_pair`, columns' length may not be
@@ -115,14 +160,15 @@ impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
                     columns.truncate_into_equal_length();
                     return Err(e);
                 }
+
+                if columns.rows_len() >= scan_rows {
+                    return Ok(false); // not drained
+                }
             } else {
-                // Drained
-                return Ok(true);
+                // No more row in the range.
+                self.ranges.notify_drained();
             }
         }
-
-        // Not drained
-        Ok(false)
     }
 }
 
@@ -153,7 +199,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     Ok(())
 }
 
-impl<S: Store, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
+impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanExecutor<S, I, P> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
@@ -191,12 +237,15 @@ impl<S: Store, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
 
     #[inline]
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
-        self.scanner
-            .collect_scanned_rows_per_range(&mut dest.scanned_rows_per_range);
+        dest.scanned_rows_per_range
+            .append(&mut self.scanned_rows_per_range);
+        self.scanned_rows_per_range.push(0);
     }
 
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Statistics) {
-        self.scanner.collect_storage_stats(dest);
+        if let Some(scanner) = &mut self.scanner {
+            scanner.collect_statistics_into(dest);
+        }
     }
 }
