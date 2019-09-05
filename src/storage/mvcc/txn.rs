@@ -86,6 +86,12 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
+    fn put_lock(&mut self, key: Key, lock: &Lock) {
+        let lock = lock.to_bytes();
+        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
+        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+    }
+
     fn lock_key(
         &mut self,
         key: Key,
@@ -102,10 +108,8 @@ impl<S: Snapshot> MvccTxn<S> {
             short_value,
             options.for_update_ts,
             options.txn_size,
-        )
-        .to_bytes();
-        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
-        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+        );
+        self.put_lock(key, &lock);
     }
 
     fn unlock_key(&mut self, key: Key) {
@@ -549,6 +553,27 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
         Ok(())
+    }
+
+    /// Update a primary key's TTL if `advise_ttl > lock.ttl`.
+    ///
+    /// Returns the new TTL.
+    pub fn txn_heart_beat(&mut self, primary_key: Key, advise_ttl: u64) -> Result<u64> {
+        if let Some(mut lock) = self.reader.load_lock(&primary_key)? {
+            if lock.ts == self.start_ts {
+                if lock.ttl < advise_ttl {
+                    lock.ttl = advise_ttl;
+                    self.put_lock(primary_key, &lock);
+                }
+                return Ok(lock.ttl);
+            }
+        }
+
+        Err(Error::TxnLockNotFound {
+            start_ts: self.start_ts,
+            commit_ts: 0,
+            key: primary_key.into_raw()?,
+        })
     }
 
     pub fn gc(&mut self, key: Key, safe_point: u64) -> Result<GcInfo> {

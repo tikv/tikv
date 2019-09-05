@@ -114,6 +114,7 @@ pub enum StorageCb {
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
+    TxnStatus(Callback<(u64, u64)>),
 }
 
 /// Store Transaction scheduler commands.
@@ -194,6 +195,12 @@ pub enum Command {
         /// The transaction timestamp.
         start_ts: u64,
         for_update_ts: u64,
+    },
+    TxnHeartBeat {
+        ctx: Context,
+        primary_key: Key,
+        start_ts: u64,
+        advise_ttl: u64,
     },
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock {
@@ -344,6 +351,16 @@ impl Display for Command {
                 for_update_ts,
                 ctx
             ),
+            Command::TxnHeartBeat {
+                ref ctx,
+                ref primary_key,
+                start_ts,
+                advise_ttl,
+            } => write!(
+                f,
+                "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
+                primary_key, start_ts, advise_ttl, ctx
+            ),
             Command::ScanLock {
                 ref ctx,
                 max_ts,
@@ -449,6 +466,7 @@ impl Command {
             Command::Cleanup { .. } => CommandKind::cleanup,
             Command::Rollback { .. } => CommandKind::rollback,
             Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
+            Command::TxnHeartBeat { .. } => CommandKind::txn_heart_beat,
             Command::ScanLock { .. } => CommandKind::scan_lock,
             Command::ResolveLock { .. } => CommandKind::resolve_lock,
             Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
@@ -466,7 +484,8 @@ impl Command {
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
             | Command::PessimisticRollback { start_ts, .. }
-            | Command::MvccByStartTs { start_ts, .. } => start_ts,
+            | Command::MvccByStartTs { start_ts, .. }
+            | Command::TxnHeartBeat { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::ResolveLockLite { start_ts, .. } => start_ts,
@@ -485,6 +504,7 @@ impl Command {
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
             | Command::PessimisticRollback { ref ctx, .. }
+            | Command::TxnHeartBeat { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::ResolveLockLite { ref ctx, .. }
@@ -503,6 +523,7 @@ impl Command {
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
             | Command::PessimisticRollback { ref mut ctx, .. }
+            | Command::TxnHeartBeat { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::ResolveLockLite { ref mut ctx, .. }
@@ -557,6 +578,11 @@ impl Command {
             }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
+            }
+            Command::TxnHeartBeat {
+                ref primary_key, ..
+            } => {
+                bytes += primary_key.as_encoded().len();
             }
             _ => {}
         }
@@ -1243,6 +1269,28 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
+        Ok(())
+    }
+
+    /// Check the specified primary key and enlarge it's TTL if necessary. Returns the new TTL.
+    ///
+    /// Schedules a [`Command::TxnHeartBeat`]
+    pub fn async_txn_heart_beat(
+        &self,
+        ctx: Context,
+        primary_key: Key,
+        start_ts: u64,
+        advise_ttl: u64,
+        callback: Callback<(u64, u64)>,
+    ) -> Result<()> {
+        let cmd = Command::TxnHeartBeat {
+            ctx,
+            primary_key,
+            start_ts,
+            advise_ttl,
+        };
+        self.schedule(cmd, StorageCb::TxnStatus(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
         Ok(())
     }
 
