@@ -229,17 +229,11 @@ fn collect_ranges_need_compact(
         if compact_start.is_some() {
             assert!(compact_end.is_some());
         }
-        match (compact_start, compact_end) {
-            (Some(cs), Some(ce)) => {
-                ranges_need_compact.push_back((cs, ce));
-                compact_start = None;
-                compact_end = None;
-            }
-            (cs, ce) => {
-                compact_start = cs;
-                compact_end = ce;
-            }
+        if let (Some(cs), Some(ce)) = (compact_start, compact_end) {
+            ranges_need_compact.push_back((cs, ce));
         }
+        compact_start = None;
+        compact_end = None;
     }
 
     // Save the last range that needs to be compacted.
