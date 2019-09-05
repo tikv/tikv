@@ -13,7 +13,6 @@ use kvproto::pdpb;
 
 use pd_client::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use test_util;
-use tikv::raftstore::store;
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
@@ -119,12 +118,7 @@ fn test_rpc_client() {
     });
     poller.spawn(f).forget();
     poller
-        .spawn(client.region_heartbeat(
-            store::RAFT_INIT_LOG_TERM,
-            region.clone(),
-            peer.clone(),
-            RegionStat::default(),
-        ))
+        .spawn(client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()))
         .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
@@ -418,12 +412,7 @@ fn test_region_heartbeat_on_leader_change() {
     let peer = metapb::Peer::default();
     let stat = RegionStat::default();
     poller
-        .spawn(client.region_heartbeat(
-            store::RAFT_INIT_LOG_TERM,
-            region.clone(),
-            peer.clone(),
-            stat.clone(),
-        ))
+        .spawn(client.region_heartbeat(region.clone(), peer.clone(), stat.clone()))
         .forget();
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
@@ -443,12 +432,7 @@ fn test_region_heartbeat_on_leader_change() {
             }
         }
         poller
-            .spawn(client.region_heartbeat(
-                store::RAFT_INIT_LOG_TERM,
-                region.clone(),
-                peer.clone(),
-                stat.clone(),
-            ))
+            .spawn(client.region_heartbeat(region.clone(), peer.clone(), stat.clone()))
             .forget();
         rx.recv_timeout(LeaderChange::get_leader_interval())
             .unwrap();
