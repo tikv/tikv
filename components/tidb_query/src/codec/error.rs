@@ -44,7 +44,7 @@ quick_error! {
             description("Unknown signature")
             display("Unknown signature: {:?}", sig)
         }
-        Eval(s: String, code:i32) {
+        Eval(s: String,code:i32) {
             description("evaluation failed")
             display("{}", s)
         }
