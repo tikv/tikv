@@ -1639,7 +1639,7 @@ fn main() {
                         .short("k")
                         .required(true)
                         .takes_value(true)
-                        .help("The key to split it, in unencoded escaped format")
+                        .help("The key to split it, in unecoded escaped format")
                 ),
         )
         .subcommand(
