@@ -98,12 +98,14 @@ fn ymd_hms_nanos<T: TimeZone>(
         })
 }
 
+// Safety: caller must ensure `bs` is valid utf8.
 #[inline]
-fn from_bytes(bs: &[u8]) -> &str {
-    unsafe { str::from_utf8_unchecked(bs) }
+unsafe fn from_bytes(bs: &[u8]) -> &str {
+    str::from_utf8_unchecked(bs)
 }
 
-fn split_ymd_hms_with_frac_as_s(
+// Safety: caller must ensure `s` and `frac` are valid ascii.
+unsafe fn split_ymd_hms_with_frac_as_s(
     mut s: &[u8],
     frac: &[u8],
 ) -> Result<(i32, u32, u32, u32, u32, u32)> {
@@ -136,7 +138,8 @@ fn split_ymd_hms_with_frac_as_s(
     Ok((year, month, day, hour, minute, secs))
 }
 
-fn split_ymd_with_frac_as_hms(
+// Safety: caller must ensure `s` and `frac` are valid ascii.
+unsafe fn split_ymd_with_frac_as_hms(
     mut s: &[u8],
     frac: &[u8],
     is_float: bool,
@@ -357,12 +360,14 @@ impl Time {
                 need_adjust = s1.len() != 14 && s1.len() != 8;
                 has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
                 match s1.len() {
-                    14 | 12 | 11 | 10 | 9 => {
+                    // Safety: `s1` and `frac_str` must be ascii strings.
+                    14 | 12 | 11 | 10 | 9 => unsafe {
                         split_ymd_hms_with_frac_as_s(s1.as_bytes(), frac_str.as_bytes())?
-                    }
-                    8 | 6 | 5 => {
+                    },
+                    // Safety: `s1` and `frac_str` must be ascii strings.
+                    8 | 6 | 5 => unsafe {
                         split_ymd_with_frac_as_hms(s1.as_bytes(), frac_str.as_bytes(), is_float)?
-                    }
+                    },
                     _ => {
                         return Err(box_err!(
                             "invalid datetime: {}, s1: {}, len: {}",

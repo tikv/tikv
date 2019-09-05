@@ -232,7 +232,9 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-            .and_then(move |_| {
+            // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
+            // exists.
+            .and_then(move |_| unsafe {
                 with_tls_engine(|engine| {
                     Self::async_snapshot(engine, &tracker.req_ctx.context)
                         .map(|snapshot| (tracker, snapshot))
@@ -327,10 +329,14 @@ impl<E: Engine> Endpoint<E> {
         let tracker_and_handler_future =
             future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
                 .and_then(move |_| {
-                    with_tls_engine(|engine| {
-                        Self::async_snapshot(engine, &tracker.req_ctx.context)
-                            .map(|snapshot| (tracker, snapshot))
-                    })
+                    // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
+                    // exists.
+                    unsafe {
+                        with_tls_engine(|engine| {
+                            Self::async_snapshot(engine, &tracker.req_ctx.context)
+                                .map(|snapshot| (tracker, snapshot))
+                        })
+                    }
                 })
                 .and_then(move |(tracker, snapshot)| {
                     // When snapshot is retrieved, deadline may exceed.
