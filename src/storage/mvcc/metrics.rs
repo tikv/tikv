@@ -58,4 +58,9 @@ lazy_static! {
         )
         .unwrap()
     };
+    pub static ref MVCC_TXN_HEART_BEAT_UPDATE_TTL: IntCounter = register_int_counter!(
+        "tikv_storage_mvcc_txn_heart_beat_update_ttl",
+        "Counter of txn_heart_beat requests that updates lock's TTL"
+    )
+    .unwrap();
 }

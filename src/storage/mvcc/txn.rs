@@ -564,6 +564,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 if lock.ttl < advise_ttl {
                     lock.ttl = advise_ttl;
                     self.put_lock(primary_key, &lock);
+                    MVCC_TXN_HEART_BEAT_UPDATE_TTL.inc();
                 }
                 return Ok(lock.ttl);
             }
