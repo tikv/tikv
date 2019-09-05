@@ -88,6 +88,29 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
+    fn lock_key_with_ts(
+        &mut self,
+        key: Key,
+        start_ts: u64,
+        lock_type: LockType,
+        primary: Vec<u8>,
+        short_value: Option<Value>,
+        options: &Options,
+    ) {
+        let lock = Lock::new(
+            lock_type,
+            primary,
+            start_ts,
+            options.lock_ttl,
+            short_value,
+            options.for_update_ts,
+            options.txn_size,
+        )
+        .to_bytes();
+        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
+        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+    }
+
     fn lock_key(
         &mut self,
         key: Key,
@@ -141,6 +164,23 @@ impl<S: Snapshot> MvccTxn<S> {
 
     fn key_exist(&mut self, key: &Key, ts: u64) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
+    }
+
+    fn prewrite_key_value_with_ts(
+        &mut self,
+        key: Key,
+        start_ts: u64,
+        lock_type: LockType,
+        primary: Vec<u8>,
+        value: Option<Value>,
+        options: &Options,
+    ) {
+        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
+            self.lock_key_with_ts(key, start_ts, lock_type, primary, value, options);
+        } else {
+            self.put_value(key.clone(), start_ts, value.unwrap());
+            self.lock_key_with_ts(key, start_ts, lock_type, primary, None, options);
+        }
     }
 
     fn prewrite_key_value(
@@ -589,12 +629,12 @@ impl<S: Snapshot> MvccTxn<S> {
 
         for i in 0..len {
             if ids[i] < u64::max_value() {
-                if let Command::Prewrite{ mutations, primary, options, .. } = &commands[i] {
+                if let Command::Prewrite{ mutations, primary, options, start_ts, .. } = &commands[i] {
                     rows += mutations.len();
                     for m in mutations {
                         let lock_type = LockType::from_mutation(&m);
                         let (key, value) = m.clone().into_key_value();
-                        self.prewrite_key_value(key, lock_type, primary.to_vec(), value, &options);
+                        self.prewrite_key_value_with_ts(key, *start_ts, lock_type, primary.to_vec(), value, &options);
                     }
                 }    
             }
