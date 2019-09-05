@@ -211,10 +211,10 @@ fn run_afl(target: &str) -> Result<(), Error> {
         .context(format!("Failed to complete building {}", fuzzer))?;
 
     if !fuzzer_build.success() {
-        return Err(format_err!(
+        Err(format_err!(
             "error building afl instrumented binary, exit code {:?}",
             fuzzer_build.code()
-        ));
+        ))?;
     }
 
     // 2. cargo afl fuzz -i {seed_dir} -o {corpus_dir} target/debug/{instrumented_binary}
@@ -233,11 +233,11 @@ fn run_afl(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        return Err(format_err!(
+        Err(format_err!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()
-        ));
+        ))?;
     }
 
     Ok(())
@@ -274,11 +274,11 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        return Err(format_err!(
+        Err(format_err!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()
-        ));
+        ))?;
     }
 
     Ok(())
@@ -336,11 +336,11 @@ fn run_libfuzzer(target: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        return Err(format_err!(
+        Err(format_err!(
             "{} exited with code {:?}",
             fuzzer,
             fuzzer_bin.code()
-        ));
+        ))?;
     }
 
     Ok(())

@@ -279,13 +279,13 @@ impl parse::Parse for RpnFnSignatureReturnType {
                     eval_type: et.eval_type,
                 })
             } else {
-                Err(Error::new_spanned(
+                return Err(Error::new_spanned(
                     tp,
                     "expect angle bracketed path arguments",
-                ))
+                ));
             }
         } else {
-            Err(Error::new_spanned(tp, "expect path"))
+            return Err(Error::new_spanned(tp, "expect path"));
         }
     }
 }

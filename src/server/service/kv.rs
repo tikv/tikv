@@ -1028,7 +1028,7 @@ where
         let n = Arc::new(self.clone());
         let mut s = self.0.lock().unwrap();
         match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
-            Some(Ok(Async::NotReady)) | None => {}
+            Some(Ok(Async::NotReady)) | None => return,
             _ => *s = None,
         };
     }

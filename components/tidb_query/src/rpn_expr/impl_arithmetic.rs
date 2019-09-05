@@ -116,7 +116,7 @@ impl ArithmeticOp for RealPlus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs + *rhs;
         if res.is_infinite() {
-            return Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)).into());
+            Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)))?;
         }
         Ok(Some(res))
     }
@@ -160,7 +160,7 @@ impl ArithmeticOp for IntUintMinus {
                 .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
                 .map(|v| Some(v as i64))
         } else {
-            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)))?
         }
     }
 }
@@ -207,7 +207,7 @@ impl ArithmeticOp for RealMinus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs - *rhs;
         if res.is_infinite() {
-            return Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)).into());
+            Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)))?;
         }
         Ok(Some(res))
     }
@@ -313,9 +313,9 @@ impl ArithmeticOp for DecimalMod {
         match lhs % rhs {
             Some(v) => match v {
                 Res::Ok(v) => Ok(Some(v)),
-                Res::Truncated(_) => Err(Error::truncated().into()),
+                Res::Truncated(_) => Err(Error::truncated())?,
                 Res::Overflow(_) => {
-                    Err(Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs)).into())
+                    Err(Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs)))?
                 }
             },
             None => Ok(None),
@@ -480,13 +480,11 @@ fn int_divide_decimal(
                 Res::Ok(v_i64) => Ok(Some(v_i64)),
                 Res::Truncated(v_i64) => Ok(Some(v_i64)),
                 Res::Overflow(_) => {
-                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)).into())
+                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
                 }
             },
-            Res::Truncated(_) => Err(Error::truncated().into()),
-            Res::Overflow(_) => {
-                Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)).into())
-            }
+            Res::Truncated(_) => Err(Error::truncated())?,
+            Res::Overflow(_) => Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))?,
         },
         None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
     }
