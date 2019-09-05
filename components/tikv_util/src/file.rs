@@ -74,13 +74,6 @@ pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
     }
 }
 
-/// Calculates the given content's CRC32 checksum.
-pub fn calc_crc32_bytes(contents: &[u8]) -> u32 {
-    let mut digest = Digest::new(crc32::IEEE);
-    digest.write(contents);
-    digest.sum32()
-}
-
 #[cfg(test)]
 mod tests {
     use rand::distributions::Alphanumeric;
@@ -176,7 +169,9 @@ mod tests {
             .take(size)
             .collect();
         fs::write(path, s.as_bytes()).unwrap();
-        calc_crc32_bytes(s.as_bytes())
+        let mut digest = Digest::new(crc32::IEEE);
+        digest.write(s.as_bytes());
+        digest.sum32()
     }
 
     #[test]
