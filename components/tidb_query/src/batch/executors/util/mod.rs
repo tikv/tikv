@@ -6,7 +6,6 @@ pub mod hash_aggr_helper;
 pub mod mock_executor;
 pub mod scan_executor;
 
-use tikv_util::erase_lifetime;
 use tipb::FieldType;
 
 use crate::codec::batch::LazyBatchColumnVec;
@@ -40,6 +39,10 @@ pub unsafe fn eval_exprs_decoded_no_lifetime<'a>(
     input_logical_rows: &[usize],
     output: &mut Vec<RpnStackNode<'a>>,
 ) -> Result<()> {
+    unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
+        &*(v as *const T)
+    }
+
     for expr in exprs {
         output.push(erase_lifetime(expr).eval_decoded(
             ctx,
