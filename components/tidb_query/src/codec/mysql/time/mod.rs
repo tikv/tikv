@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod datetime;
 pub mod extension;
 mod tz;
 pub mod weekmode;
