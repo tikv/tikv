@@ -72,7 +72,10 @@ impl<S: Snapshot> SnapshotStore<S> {
         unsafe {
             for (original_order, key) in order_and_keys {
                 let value = point_getter.get(key).map_err(Error::from);
-                mem::forget(mem::replace(values.get_unchecked_mut(original_order), value));
+                mem::forget(mem::replace(
+                    values.get_unchecked_mut(original_order),
+                    value,
+                ));
             }
             values.set_len(keys.len());
         }
