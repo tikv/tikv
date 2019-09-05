@@ -407,7 +407,7 @@ mod tests {
 
         let write_cf = db.cf_handle(CF_WRITE).unwrap();
         let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
-        // 4194304 will insert a new point in range properties 
+        // size >= 4194304 will insert a new point in range properties
         // 3 points will be inserted into range properties
         let cases = [("a", 4194304), ("b", 4194304), ("c", 4194304)];
         for &(key, vlen) in &cases {
