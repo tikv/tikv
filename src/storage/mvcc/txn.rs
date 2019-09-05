@@ -594,6 +594,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     } else {
                         self.rollback_lock(primary_key, lock)?;
                     }
+                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((0, 0, is_pessimistic_txn));
                 }
 
@@ -608,12 +609,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     }
 
                     self.put_lock(primary_key, lock.take());
+                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                 }
 
                 Ok((lock_ttl, 0, is_pessimistic_txn))
             }
             _ => {
-                // TODO: Add metrics
+                MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
                 match self
                     .reader
                     .get_txn_commit_info(&primary_key, self.start_ts)?
