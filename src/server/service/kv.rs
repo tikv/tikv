@@ -1905,30 +1905,42 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 
 fn extract_key_error(err: &storage::Error) -> KeyError {
     let mut key_error = KeyError::default();
-    match err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
-            key_error.set_locked(info.clone());
+    match *err {
+        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
+            ref key,
+            ref primary,
+            ts,
+            ttl,
+            txn_size,
+        })) => {
+            let mut lock_info = LockInfo::default();
+            lock_info.set_key(key.to_owned());
+            lock_info.set_primary_lock(primary.to_owned());
+            lock_info.set_lock_version(ts);
+            lock_info.set_lock_ttl(ttl);
+            lock_info.set_txn_size(txn_size);
+            key_error.set_locked(lock_info);
         }
         // failed in prewrite or pessimistic lock
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
             start_ts,
             conflict_start_ts,
             conflict_commit_ts,
-            key,
-            primary,
+            ref key,
+            ref primary,
             ..
         })) => {
             let mut write_conflict = WriteConflict::default();
-            write_conflict.set_start_ts(*start_ts);
-            write_conflict.set_conflict_ts(*conflict_start_ts);
-            write_conflict.set_conflict_commit_ts(*conflict_commit_ts);
+            write_conflict.set_start_ts(start_ts);
+            write_conflict.set_conflict_ts(conflict_start_ts);
+            write_conflict.set_conflict_commit_ts(conflict_commit_ts);
             write_conflict.set_key(key.to_owned());
             write_conflict.set_primary(primary.to_owned());
             key_error.set_conflict(write_conflict);
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { key })) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { ref key })) => {
             let mut exist = AlreadyExist::default();
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
@@ -1940,15 +1952,15 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         }
         storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
             lock_ts,
-            lock_key,
+            ref lock_key,
             deadlock_key_hash,
             ..
         })) => {
             warn!("txn deadlocks"; "err" => ?err);
             let mut deadlock = Deadlock::default();
-            deadlock.set_lock_ts(*lock_ts);
+            deadlock.set_lock_ts(lock_ts);
             deadlock.set_lock_key(lock_key.to_owned());
-            deadlock.set_deadlock_key_hash(*deadlock_key_hash);
+            deadlock.set_deadlock_key_hash(deadlock_key_hash);
             key_error.set_deadlock(deadlock);
         }
         _ => {

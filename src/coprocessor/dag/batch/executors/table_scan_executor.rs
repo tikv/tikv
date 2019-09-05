@@ -824,7 +824,14 @@ mod tests {
                 Box<dyn Send + Sync + Fn() -> crate::coprocessor::Error>,
             > = Err(Box::new(|| {
                 crate::coprocessor::Error::from(crate::storage::txn::Error::Mvcc(
-                    crate::storage::mvcc::Error::KeyIsLocked(kvproto::kvrpcpb::LockInfo::default()),
+                    crate::storage::mvcc::Error::KeyIsLocked {
+                        // We won't check error detail in tests, so we can just fill fields casually.
+                        key: vec![],
+                        primary: vec![],
+                        ts: 1,
+                        ttl: 2,
+                        txn_size: 0,
+                    },
                 ))
             }));
             kv.push((key, value));
