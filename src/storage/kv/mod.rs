@@ -6,14 +6,12 @@ use std::time::Duration;
 use std::{error, ptr, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
-use crate::raftstore::store::PdTask;
 use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::CRITICAL_ERROR;
-use tikv_util::worker::FutureScheduler;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 use kvproto::errorpb::Error as ErrorHeader;
@@ -205,14 +203,6 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     // saves the flow statistics of different region.
     // TODO: maybe we need to return a Result later?
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
-}
-
-impl FlowStatsReporter for FutureScheduler<PdTask> {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
-        if let Err(e) = self.schedule(PdTask::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
-        }
-    }
 }
 
 impl FlowStatistics {
