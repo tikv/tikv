@@ -844,13 +844,14 @@ pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
     scheduler.on_msg(msg);
 }
 
-type LockWritesVals = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
+// Make clippy happy.
+type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
 
 fn find_mvcc_infos_by_key<S: Snapshot>(
     reader: &mut MvccReader<S>,
     key: &Key,
     mut ts: u64,
-) -> Result<LockWritesVals> {
+) -> Result<MultipleReturnValue> {
     let mut writes = vec![];
     let mut values = vec![];
     let lock = reader.load_lock(key)?;
