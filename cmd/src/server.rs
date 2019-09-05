@@ -8,9 +8,6 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
-use kvproto::deadlock_grpc::create_deadlock;
-use kvproto::debugpb_grpc::create_debug;
-use kvproto::import_sstpb_grpc::create_import_sst;
 use pd_client::{PdClient, RpcClient};
 use std::fs::File;
 use std::path::Path;
@@ -25,7 +22,6 @@ use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use tikv::raftstore::store::{fsm, LocalReader};
 use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
 use tikv::server::resolve;
-use tikv::server::service::DebugService;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
@@ -235,16 +231,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             Some(router.clone()),
         );
 
-    let server_cfg = Arc::new(cfg.server.clone());
-
-    // Create coprocessor endpoint.
-    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-        &cfg.readpool.coprocessor.build_config(),
-        pd_sender.clone(),
-        engine.clone(),
-    );
-    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
-
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
     let import_service = ImportSSTService::new(
         cfg.import.clone(),
@@ -253,10 +239,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::clone(&importer),
     );
 
-    // Create Debug service.
-    let debug_service = DebugService::new(engines.clone(), raft_router.clone());
-
+    let server_cfg = Arc::new(cfg.server.clone());
     // Create server
+    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
+        &cfg.readpool.coprocessor.build_config(),
+        pd_sender.clone(),
+        engine.clone(),
+    );
+    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
@@ -265,16 +255,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router,
         resolver.clone(),
         snap_mgr.clone(),
+        Some(engines.clone()),
+        Some(import_service),
+        deadlock_service,
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
-
-    // Register services.
-    server.register_service(create_import_sst(import_service));
-    server.register_service(create_debug(debug_service));
-    if let Some(deadlock_service) = deadlock_service {
-        server.register_service(create_deadlock(deadlock_service));
-    }
-
     let trans = server.transport();
 
     // Create node.
@@ -349,9 +334,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     // Run server.
-    server
-        .build_and_bind()
-        .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
