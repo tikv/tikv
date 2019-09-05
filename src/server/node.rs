@@ -8,11 +8,10 @@ use super::transport::RaftStoreRouter;
 use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
-use crate::pd::{Error as PdError, PdClient, INVALID_ID};
+use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
 use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
 };

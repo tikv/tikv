@@ -7,10 +7,12 @@ use std::time::Duration;
 
 use prometheus::local::*;
 
+use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, Config, ReadPool};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::{FlowStatistics, FlowStatsReporter};
+use crate::storage::FlowStatistics;
 use tikv_util::collections::HashMap;
+use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;
 use super::Engine;
@@ -39,21 +41,21 @@ thread_local! {
     );
 }
 
-pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
+pub fn build_read_pool<E: Engine>(
     config: &readpool::Config,
-    flow_reporter: R,
+    pd_sender: FutureScheduler<PdTask>,
     engine: E,
 ) -> ReadPool {
-    let flow_reporter2 = flow_reporter.clone();
+    let pd_sender2 = pd_sender.clone();
     let engine = Arc::new(Mutex::new(engine));
 
     Builder::from_config(config)
         .name_prefix("store-read")
-        .on_tick(move || tls_flush(&flow_reporter))
+        .on_tick(move || tls_flush(&pd_sender))
         .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
         .before_stop(move || {
             destroy_tls_engine::<E>();
-            tls_flush(&flow_reporter2)
+            tls_flush(&pd_sender2)
         })
         .build()
 }
@@ -68,7 +70,7 @@ pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
 }
 
 #[inline]
-fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
+fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut storage_metrics = m.borrow_mut();
         // Flush Prometheus metrics
@@ -92,7 +94,10 @@ fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         let mut read_stats = HashMap::default();
         mem::swap(&mut read_stats, &mut storage_metrics.local_read_flow_stats);
 
-        reporter.report_read_stats(read_stats);
+        let result = pd_sender.schedule(PdTask::ReadStats { read_stats });
+        if let Err(e) = result {
+            error!("Failed to send read pool read flow statistics"; "err" => ?e);
+        }
     });
 }
 

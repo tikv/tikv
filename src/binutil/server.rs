@@ -10,7 +10,6 @@ use crate::import::{ImportSSTService, SSTImporter};
 use crate::pd::{PdClient, RpcClient};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use crate::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{fsm, LocalReader};
 use crate::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
 use crate::server::resolve;
@@ -22,7 +21,6 @@ use crate::storage::lock_manager::{
     Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
 };
 use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use crate::storage::{FlowStatistics, FlowStatsReporter};
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
@@ -34,10 +32,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tikv_util::check_environment_variables;
-use tikv_util::collections::HashMap;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
-use tikv_util::worker::{FutureScheduler, FutureWorker};
+use tikv_util::worker::FutureWorker;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -88,14 +85,6 @@ pub fn run_tikv(mut config: TiKvConfig) {
 
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);
-}
-
-impl FlowStatsReporter for FutureScheduler<PdTask> {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
-        if let Err(e) = self.schedule(PdTask::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
-        }
-    }
 }
 
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {

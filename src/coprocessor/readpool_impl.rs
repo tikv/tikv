@@ -4,10 +4,12 @@ use std::cell::RefCell;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
+use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, Config, ReadPool};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::{Engine, FlowStatistics, FlowStatsReporter, Statistics};
+use crate::storage::{Engine, FlowStatistics, Statistics};
 use tikv_util::collections::HashMap;
+use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;
 use prometheus::local::*;
@@ -46,21 +48,21 @@ thread_local! {
     );
 }
 
-pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
+pub fn build_read_pool<E: Engine>(
     config: &readpool::Config,
-    reporter: R,
+    pd_sender: FutureScheduler<PdTask>,
     engine: E,
 ) -> ReadPool {
-    let reporter2 = reporter.clone();
+    let pd_sender2 = pd_sender.clone();
     let engine = Arc::new(Mutex::new(engine));
 
     Builder::from_config(config)
         .name_prefix("cop")
-        .on_tick(move || tls_flush(&reporter))
+        .on_tick(move || tls_flush(&pd_sender))
         .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
         .before_stop(move || {
             destroy_tls_engine::<E>();
-            tls_flush(&reporter2)
+            tls_flush(&pd_sender2)
         })
         .build()
 }
@@ -75,7 +77,7 @@ pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
 }
 
 #[inline]
-fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
+fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut cop_metrics = m.borrow_mut();
@@ -95,7 +97,10 @@ fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         let mut read_stats = HashMap::default();
         mem::swap(&mut read_stats, &mut cop_metrics.local_cop_flow_stats);
 
-        reporter.report_read_stats(read_stats);
+        let result = pd_sender.schedule(PdTask::ReadStats { read_stats });
+        if let Err(e) = result {
+            error!("Failed to send cop pool read flow statistics"; "err" => ?e);
+        }
     });
 }
 

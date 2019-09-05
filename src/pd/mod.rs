@@ -1,14 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod client;
-pub mod metrics;
+mod metrics;
 mod util;
 
 mod config;
 pub mod errors;
+pub mod pd;
 pub use self::client::RpcClient;
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
+pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 

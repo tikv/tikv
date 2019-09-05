@@ -22,7 +22,7 @@ use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
 use crate::import::SSTImporter;
-use crate::pd::PdClient;
+use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::config::Config;
@@ -45,10 +45,9 @@ use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
-    ConsistencyCheckTask, PdRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner,
-    RegionTask, SplitCheckRunner, SplitCheckTask,
+    ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
+    SplitCheckRunner, SplitCheckTask,
 };
-use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
     SnapshotDeleter, StoreMsg, StoreTick,
