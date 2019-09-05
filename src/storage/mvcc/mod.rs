@@ -9,6 +9,7 @@ mod txn;
 mod write;
 
 pub use self::lock::{Lock, LockType};
+pub use self::reader::EntryScanner;
 pub use self::reader::MvccReader;
 pub use self::reader::{Scanner, ScannerBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
@@ -193,7 +194,6 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
     }
 }
 
-#[cfg(test)]
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
