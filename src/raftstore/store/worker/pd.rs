@@ -35,7 +35,7 @@ use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::time_now_sec;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
-type RecordPairs = protobuf::RepeatedField<pdpb::RecordPair>;
+type RecordPairVec = Vec<pdpb::RecordPair>;
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
@@ -85,9 +85,9 @@ pub enum Task {
         region_id: u64,
     },
     StoreInfos {
-        cpu_usages: RecordPairs,
-        read_io_rates: RecordPairs,
-        write_io_rates: RecordPairs,
+        cpu_usages: RecordPairVec,
+        read_io_rates: RecordPairVec,
+        write_io_rates: RecordPairVec,
     },
 }
 
@@ -103,9 +103,9 @@ pub struct StoreStat {
     pub region_bytes_written: LocalHistogram,
     pub region_keys_written: LocalHistogram,
 
-    pub store_cpu_usages: RecordPairs,
-    pub store_read_io_rates: RecordPairs,
-    pub store_write_io_rates: RecordPairs,
+    pub store_cpu_usages: RecordPairVec,
+    pub store_read_io_rates: RecordPairVec,
+    pub store_write_io_rates: RecordPairVec,
 }
 
 impl Default for StoreStat {
@@ -122,9 +122,9 @@ impl Default for StoreStat {
             engine_last_total_bytes_read: 0,
             engine_last_total_keys_read: 0,
 
-            store_cpu_usages: RecordPairs::default(),
-            store_read_io_rates: RecordPairs::default(),
-            store_write_io_rates: RecordPairs::default(),
+            store_cpu_usages: RecordPairVec::default(),
+            store_read_io_rates: RecordPairVec::default(),
+            store_write_io_rates: RecordPairVec::default(),
         }
     }
 }
@@ -206,7 +206,7 @@ impl Display for Task {
 }
 
 #[inline]
-fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairs {
+fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
     m.into_iter()
         .map(|(k, v)| {
             let mut pair = pdpb::RecordPair::new();
@@ -225,12 +225,12 @@ struct StatsMonitor {
 }
 
 impl StatsMonitor {
-    pub fn new(interval: u64, scheduler: Scheduler<Task>) -> Self {
+    pub fn new(interval: Duration, scheduler: Scheduler<Task>) -> Self {
         StatsMonitor {
             scheduler,
             handle: None,
             sender: None,
-            interval: Duration::from_secs(interval),
+            interval,
         }
     }
 
@@ -240,7 +240,7 @@ impl StatsMonitor {
         let scheduler = self.scheduler.clone();
         self.sender = Some(tx);
         let h = Builder::new()
-            .name(thd_name!("pd-stats-collector"))
+            .name(thd_name!("stats-monitor"))
             .spawn(move || {
                 let mut thread_stats = ThreadInfoStatistics::new();
 
@@ -309,11 +309,8 @@ impl<T: PdClient> Runner<T> {
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
     ) -> Runner<T> {
-        let mut monitor_interval = store_heartbeat_interval / 2;
-        if monitor_interval == 0 {
-            monitor_interval = 1;
-        }
-        let mut stats_monitor = StatsMonitor::new(monitor_interval, scheduler.clone());
+        let interval = Duration::from_secs(store_heartbeat_interval).div_f64(2.0);
+        let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start() {
             error!("failed to start stats collector, error = {:?}", e);
         }
@@ -536,9 +533,15 @@ impl<T: PdClient> Runner<T> {
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
 
-        stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone());
-        stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone());
-        stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone());
+        stats.set_cpu_usages(protobuf::RepeatedField::from_vec(
+            self.store_stat.store_cpu_usages.clone(),
+        ));
+        stats.set_read_io_rates(protobuf::RepeatedField::from_vec(
+            self.store_stat.store_read_io_rates.clone(),
+        ));
+        stats.set_write_io_rates(protobuf::RepeatedField::from_vec(
+            self.store_stat.store_write_io_rates.clone(),
+        ));
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts);
@@ -753,9 +756,9 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_store_infos(
         &mut self,
-        cpu_usages: RecordPairs,
-        read_io_rates: RecordPairs,
-        write_io_rates: RecordPairs,
+        cpu_usages: RecordPairVec,
+        read_io_rates: RecordPairVec,
+        write_io_rates: RecordPairVec,
     ) {
         self.store_stat.store_cpu_usages = cpu_usages;
         self.store_stat.store_read_io_rates = read_io_rates;
@@ -1025,7 +1028,8 @@ mod tests {
             scheduler: Scheduler<Task>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
-            let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
+            let mut stats_monitor =
+                StatsMonitor::new(Duration::from_secs(interval), scheduler.clone());
             if let Err(e) = stats_monitor.start() {
                 error!("failed to start stats collector, error = {:?}", e);
             }
@@ -1038,9 +1042,9 @@ mod tests {
 
         fn handle_store_infos(
             &mut self,
-            cpu_usages: RecordPairs,
-            read_io_rates: RecordPairs,
-            write_io_rates: RecordPairs,
+            cpu_usages: RecordPairVec,
+            read_io_rates: RecordPairVec,
+            write_io_rates: RecordPairVec,
         ) {
             let mut store_stat = self.store_stat.lock().unwrap();
             store_stat.store_cpu_usages = cpu_usages;
@@ -1066,9 +1070,9 @@ mod tests {
         }
     }
 
-    fn sum_record_pairs(pairs: &RecordPairs) -> u64 {
+    fn sum_record_pairs(pairs: &[pdpb::RecordPair]) -> u64 {
         let mut sum = 0;
-        for record in pairs.into_iter() {
+        for record in pairs.iter() {
             sum += record.get_value();
         }
         sum
