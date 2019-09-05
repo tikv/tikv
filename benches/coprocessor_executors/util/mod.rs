@@ -34,9 +34,9 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     store: &Store<RocksEngine>,
     enable_batch: bool,
 ) -> Box<dyn RequestHandler> {
-    use tipb::DagRequest;
+    use tipb::DAGRequest;
 
-    let mut dag = DagRequest::default();
+    let mut dag = DAGRequest::default();
     dag.set_executors(executors.to_vec().into());
 
     tikv::coprocessor::dag::build_handler(

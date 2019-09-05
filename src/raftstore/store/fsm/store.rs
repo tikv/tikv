@@ -6,7 +6,7 @@ use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
-use kvproto::import_sstpb::SstMeta;
+use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
@@ -1758,7 +1758,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
-    fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
+    fn on_validate_sst_result(&mut self, ssts: Vec<SSTMeta>) {
         if ssts.is_empty() {
             return;
         }

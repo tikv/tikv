@@ -311,7 +311,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
+    fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GCRequest, sink: UnarySink<GCResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
         let future = future_gc(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1134,10 +1134,10 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(batch_commands_request::request::Cmd::Gc(req)) => {
+        Some(batch_commands_request::request::Cmd::GC(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
             let resp = future_gc(&storage, req)
-                .map(oneof!(batch_commands_response::response::Cmd::Gc))
+                .map(oneof!(batch_commands_response::response::Cmd::GC))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
@@ -1597,13 +1597,13 @@ fn future_resolve_lock<E: Engine>(
 
 fn future_gc<E: Engine>(
     storage: &Storage<E>,
-    mut req: GcRequest,
-) -> impl Future<Item = GcResponse, Error = Error> {
+    mut req: GCRequest,
+) -> impl Future<Item = GCResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_gc(req.take_context(), req.get_safe_point(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = GcResponse::default();
+        let mut resp = GCResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1983,7 +1983,7 @@ fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
             LockType::Lock => Op::Lock,
             LockType::Pessimistic => Op::PessimisticLock,
         };
-        lock_info.set_type(op);
+        lock_info.set_field_type(op);
         lock_info.set_start_ts(lock.ts);
         lock_info.set_primary(lock.primary);
         lock_info.set_short_value(lock.short_value.unwrap_or_default());
@@ -2017,7 +2017,7 @@ fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
                 WriteType::Lock => Op::Lock,
                 WriteType::Rollback => Op::Rollback,
             };
-            write_info.set_type(op);
+            write_info.set_field_type(op);
             write_info.set_start_ts(write.start_ts);
             write_info.set_commit_ts(commit_ts);
             write_info.set_short_value(write.short_value.unwrap_or_default());
@@ -2040,7 +2040,7 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
 }
 
 mod batch_commands_response {
-    pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
+    pub type Response = kvproto::tikvpb::BatchCommandsResponse_Response;
 
     pub mod response {
         pub type Cmd = kvproto::tikvpb::BatchCommandsResponse_Response_oneof_cmd;
@@ -2048,7 +2048,7 @@ mod batch_commands_response {
 }
 
 mod batch_commands_request {
-    pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
+    pub type Request = kvproto::tikvpb::BatchCommandsRequest_Request;
 
     pub mod request {
         pub type Cmd = kvproto::tikvpb::BatchCommandsRequest_Request_oneof_cmd;

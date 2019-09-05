@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::Context;
 use tipb::ColumnInfo;
 use tipb::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
 use tipb::{ByItem, Expr, ExprType};
-use tipb::{Chunk, DagRequest};
+use tipb::{Chunk, DAGRequest};
 
 use tidb_query::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
@@ -132,15 +132,15 @@ impl DAGSelect {
     }
 
     pub fn bit_and(self, col: &Column) -> DAGSelect {
-        self.aggr_col(col, ExprType::AggBitAnd)
+        self.aggr_col(col, ExprType::Agg_BitAnd)
     }
 
     pub fn bit_or(self, col: &Column) -> DAGSelect {
-        self.aggr_col(col, ExprType::AggBitOr)
+        self.aggr_col(col, ExprType::Agg_BitOr)
     }
 
     pub fn bit_xor(self, col: &Column) -> DAGSelect {
-        self.aggr_col(col, ExprType::AggBitXor)
+        self.aggr_col(col, ExprType::Agg_BitXor)
     }
 
     pub fn group_by(mut self, cols: &[&Column]) -> DAGSelect {
@@ -197,7 +197,7 @@ impl DAGSelect {
             if let Some(limit) = self.limit.take() {
                 topn.set_limit(limit);
             }
-            exec.set_top_n(topn);
+            exec.set_topN(topn);
             self.execs.push(exec);
         }
 
@@ -210,7 +210,7 @@ impl DAGSelect {
             self.execs.push(exec);
         }
 
-        let mut dag = DagRequest::default();
+        let mut dag = DAGRequest::default();
         dag.set_executors(self.execs.into());
         dag.set_start_ts(next_id() as u64);
         dag.set_flags(flags.iter().fold(0, |acc, f| acc | *f));

@@ -190,8 +190,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn alloc_id(
         &mut self,
         ctx: RpcContext<'_>,
-        req: AllocIdRequest,
-        sink: UnarySink<AllocIdResponse>,
+        req: AllocIDRequest,
+        sink: UnarySink<AllocIDResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.alloc_id(&req))
     }
@@ -275,7 +275,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn get_region_by_id(
         &mut self,
         ctx: RpcContext<'_>,
-        req: GetRegionByIdRequest,
+        req: GetRegionByIDRequest,
         sink: UnarySink<GetRegionResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.get_region_by_id(&req))
@@ -351,8 +351,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn get_gc_safe_point(
         &mut self,
         ctx: RpcContext<'_>,
-        req: GetGcSafePointRequest,
-        sink: UnarySink<GetGcSafePointResponse>,
+        req: GetGCSafePointRequest,
+        sink: UnarySink<GetGCSafePointResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.get_gc_safe_point(&req))
     }
@@ -360,8 +360,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn update_gc_safe_point(
         &mut self,
         ctx: RpcContext<'_>,
-        req: UpdateGcSafePointRequest,
-        sink: UnarySink<UpdateGcSafePointResponse>,
+        req: UpdateGCSafePointRequest,
+        sink: UnarySink<UpdateGCSafePointResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.update_gc_safe_point(&req))
     }

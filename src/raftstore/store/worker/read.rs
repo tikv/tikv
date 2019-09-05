@@ -369,7 +369,7 @@ impl<C: ProposalRouter> LocalReader<C> {
                     | CmdType::Put
                     | CmdType::DeleteRange
                     | CmdType::Prewrite
-                    | CmdType::IngestSst
+                    | CmdType::IngestSST
                     | CmdType::ReadIndex
                     | CmdType::Invalid => return false,
                 }

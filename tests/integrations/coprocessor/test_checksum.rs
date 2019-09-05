@@ -18,12 +18,12 @@ use tikv::storage::{Engine, SnapshotStore};
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::default();
-    ctx.set_isolation_level(IsolationLevel::Si);
+    ctx.set_isolation_level(IsolationLevel::SI);
 
     let mut checksum = ChecksumRequest::default();
     checksum.set_start_ts(u64::MAX);
     checksum.set_scan_on(scan_on);
-    checksum.set_algorithm(ChecksumAlgorithm::Crc64Xor);
+    checksum.set_algorithm(ChecksumAlgorithm::Crc64_Xor);
 
     let mut req = Request::default();
     req.set_context(ctx);
@@ -70,7 +70,7 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
     let store = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),
         u64::MAX,
-        IsolationLevel::Si,
+        IsolationLevel::SI,
         true,
     );
     let mut scanner = RangesScanner::new(RangesScannerOptions {

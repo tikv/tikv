@@ -47,11 +47,11 @@ impl Host {
 
     pub fn policy(&self) -> CheckPolicy {
         for checker in &self.checkers {
-            if checker.policy() == CheckPolicy::Approximate {
-                return CheckPolicy::Approximate;
+            if checker.policy() == CheckPolicy::APPROXIMATE {
+                return CheckPolicy::APPROXIMATE;
             }
         }
-        CheckPolicy::Scan
+        CheckPolicy::SCAN
     }
 
     /// Hook to call for every check during split.

@@ -481,9 +481,9 @@ fn consistency_check<T: RaftStoreRouter>(
 }
 
 mod region_size_response {
-    pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
+    pub type Entry = kvproto::debugpb::RegionSizeResponse_Entry;
 }
 
 mod list_fail_points_response {
-    pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
+    pub type Entry = kvproto::debugpb::ListFailPointsResponse_Entry;
 }

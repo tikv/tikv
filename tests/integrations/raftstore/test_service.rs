@@ -414,7 +414,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     // GC `k` at the latest ts.
     ts += 1;
     let gc_safe_ponit = ts;
-    let mut gc_req = GcRequest::default();
+    let mut gc_req = GCRequest::default();
     gc_req.set_context(ctx.clone());
     gc_req.safe_point = gc_safe_ponit;
     let gc_resp = client.kv_gc(&gc_req).unwrap();
@@ -549,7 +549,7 @@ fn test_debug_get() {
     // Debug get
     let mut req = debugpb::GetRequest::default();
     req.set_cf(CF_DEFAULT.to_owned());
-    req.set_db(debugpb::Db::Kv);
+    req.set_db(debugpb::DB::KV);
     req.set_key(key);
     let mut resp = debug_client.get(&req.clone()).unwrap();
     assert_eq!(resp.take_value(), v);

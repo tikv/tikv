@@ -134,7 +134,7 @@ impl<S: Snapshot> BackwardScanner<S> {
 
             if has_lock {
                 match self.cfg.isolation_level {
-                    IsolationLevel::Si => {
+                    IsolationLevel::SI => {
                         let lock = {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
@@ -145,7 +145,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                             CheckLockResult::Ignored(ts) => get_ts = ts,
                         }
                     }
-                    IsolationLevel::Rc => {}
+                    IsolationLevel::RC => {}
                 }
                 self.lock_cursor.prev(&mut self.statistics.lock);
             }
