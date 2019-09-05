@@ -6,17 +6,15 @@ label: "T: Bug"
 
 ## Bug Report
 
-<!-- Thanks for your bug report! Don't worry if you can't fill out all the sections. -->
-
-### What version of TiKV are you using?
+**What version of TiKV are you using?**
 <!-- You can run `tikv-server --version` -->
 
-### What operating system and CPU are you using?
-<!-- If you're using Linux, you can run `cat /proc/cpuinfo` -->
+**What operating system and CPU are you using?**
+<!-- You can run `cat /proc/cpuinfo` -->
 
-### Steps to reproduce
+**What did you do?**
 <!-- If possible, provide a recipe for reproducing the error. A complete runnable program is good. -->
 
-### What did you expect?
+**What did you expect to see?**
 
-### What did happened?
+**What did you see instead?**
