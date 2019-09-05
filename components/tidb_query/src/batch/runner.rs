@@ -51,7 +51,8 @@ pub struct BatchExecutorsRunner<SS> {
     /// Minimum rows to return in batch stream mode.
     stream_min_rows_each_iter: usize,
 
-    /// `batch_size` in strReam mode, this variable will be initialized as `BATCH_INITIAL_SIZE`.
+    /// `batch_size` in stream mode. When calling `next_batch(batch_size)`,
+    /// Scanner will fetch `batch_size` physical rows. This variable will be initialized as `BATCH_INITIAL_SIZE`.
     stream_batch_size: usize,
 }
 
