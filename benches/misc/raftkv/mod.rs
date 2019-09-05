@@ -19,11 +19,11 @@ use tikv::raftstore::store::{
     SignificantMsg, WriteResponse,
 };
 use tikv::raftstore::Result;
-use tikv::server::raftkv::{CmdRes, RaftKv};
 use tikv::server::transport::RaftStoreRouter;
+use tikv::storage::kv::raftkv::CmdRes;
 use tikv::storage::kv::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
 use tikv::storage::types::Key;
-use tikv::storage::Engine;
+use tikv::storage::{Engine, RaftKv};
 
 #[derive(Clone)]
 struct SyncBenchRouter {

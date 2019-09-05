@@ -16,11 +16,11 @@ use crate::server::resolve;
 use crate::server::status_server::StatusServer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
-use crate::server::{create_raft_storage, Node, RaftKv, Server};
+use crate::server::{create_raft_storage, Node, Server};
 use crate::storage::lock_manager::{
     Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
 };
-use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::storage::{self, AutoGCConfig, RaftKv, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
