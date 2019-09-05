@@ -9,7 +9,7 @@ pub mod waiter_manager;
 
 pub use self::config::Config;
 pub use self::deadlock::{
-    register_detector_role_change_observer, Detector, Scheduler as DetectorScheduler, Service,
+    DetectType, Detector, Scheduler as DetectorScheduler, Service, Task as DetectTask,
 };
 pub use self::util::{extract_lock_from_result, gen_key_hash, gen_key_hashes};
 pub use self::waiter_manager::{
@@ -24,7 +24,7 @@ use std::result;
 
 type DeadlockFuture<T> = Box<dyn Future<Item = T, Error = Error>>;
 
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Clone, PartialEq, Debug, Default)]
 pub struct Lock {
     pub ts: u64,
     pub hash: u64,
@@ -39,9 +39,9 @@ quick_error! {
             display("{:?}", err)
             description(err.description())
         }
-        NoLeader {
-            display("no leader")
-            description("no leader")
+        Deadlock {
+            display("deadlock")
+            description("deadlock")
         }
         Canceled(err: Canceled) {
             from()

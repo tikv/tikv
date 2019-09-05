@@ -9,6 +9,7 @@ make_static_metric! {
             wait_for,
             wake_up,
             dump,
+            deadlock,
             detect,
             clean_up_wait_for,
             clean_up,
@@ -20,8 +21,8 @@ make_static_metric! {
             dropped,
             not_leader,
             reconnect_leader,
+            monitor_membership_change,
             leader_not_found,
-            deadlock,
         },
     }
 
