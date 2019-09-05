@@ -296,15 +296,13 @@ impl Inner {
         store_id: u64,
         waiter_mgr_scheduler: WaiterMgrScheduler,
         security_mgr: Arc<SecurityManager>,
-        ttl: u64,
     ) -> Self {
         Self {
             store_id,
             leader_info: None,
             leader_client: None,
-            detect_table: Rc::new(RefCell::new(DetectTable::new(time::Duration::from_millis(
-                ttl,
-            )))),
+            // TODO: make it configurable.
+            detect_table: Rc::new(RefCell::new(DetectTable::new(time::Duration::from_secs(3)))),
             waiter_mgr_scheduler,
             security_mgr,
         }
@@ -394,7 +392,6 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
         pd_client: Arc<RpcClient>,
         resolver: S,
         monitor_membership_interval: u64,
-        ttl: u64,
     ) -> Self {
         assert!(store_id != INVALID_ID);
         Self {
@@ -404,7 +401,6 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                 store_id,
                 waiter_mgr_scheduler,
                 security_mgr,
-                ttl,
             ))),
             monitor_membership_interval,
             is_initialized: false,
