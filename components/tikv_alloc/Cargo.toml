@@ -6,7 +6,6 @@ authors = ["Brian Anderson <andersrb@gmail.com>"]
 publish = false
 
 [features]
-default = ["jemalloc"]
 jemalloc = ["jemallocator", "jemalloc-sys", "jemalloc-ctl"]
 
 # Build jemalloc's profiling features. Without this
