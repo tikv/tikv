@@ -8,7 +8,7 @@ use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
 use crate::raftstore::store::keys;
-use engine::rocks::{SstWriterBuilder, DB};
+use engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);
@@ -24,9 +24,11 @@ pub fn check_db_range(db: &DB, range: (u8, u8)) {
 }
 
 pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u8>) {
-    let mut w = SstWriterBuilder::new()
-        .build(path.as_ref().to_str().unwrap())
-        .unwrap();
+    let env_opt = EnvOptions::new();
+    let cf_opt = ColumnFamilyOptions::new();
+    let mut w = SstFileWriter::new(env_opt, cf_opt);
+
+    w.open(path.as_ref().to_str().unwrap()).unwrap();
     for i in range.0..range.1 {
         let k = keys::data_key(&[i]);
         w.put(&k, &[i]).unwrap();
