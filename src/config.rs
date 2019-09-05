@@ -31,10 +31,10 @@ use crate::raftstore::coprocessor::properties::{
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
-use crate::storage::lock_manager::Config as PessimisticTxnConfig;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
