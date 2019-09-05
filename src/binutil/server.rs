@@ -7,6 +7,7 @@ use crate::config::{check_and_persist_critical_config, TiKvConfig};
 use crate::coprocessor;
 use crate::fatal;
 use crate::import::{ImportSSTService, SSTImporter};
+use crate::pd::{PdClient, RpcClient};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use crate::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use crate::raftstore::store::PdTask;
@@ -27,7 +28,6 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
-use pd_client::{PdClient, RpcClient};
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};

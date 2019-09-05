@@ -5,6 +5,7 @@ use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
+use crate::pd::{RpcClient, INVALID_ID};
 use crate::server::resolve::StoreAddrResolver;
 use futures::{Future, Sink, Stream};
 use grpcio::{
@@ -12,7 +13,6 @@ use grpcio::{
 };
 use kvproto::deadlock::*;
 use kvproto::deadlock_grpc;
-use pd_client::{RpcClient, INVALID_ID};
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;

@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::{thread, time};
 
-use pd_client::PdClient;
 use test_raftstore::*;
+use tikv::pd::PdClient;
 use tikv_util::config::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {

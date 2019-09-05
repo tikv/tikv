@@ -8,8 +8,8 @@ use std::result;
 use crossbeam::TrySendError;
 use protobuf::ProtobufError;
 
+use crate::pd;
 use kvproto::{errorpb, metapb};
-use pd_client;
 use raft;
 use tikv_util::codec;
 
@@ -97,7 +97,7 @@ quick_error! {
             description(err.description())
             display("AddrParse {}", err)
         }
-        Pd(err: pd_client::Error) {
+        Pd(err: pd::Error) {
             from()
             cause(err)
             description(err.description())

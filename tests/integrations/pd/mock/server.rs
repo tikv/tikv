@@ -9,7 +9,7 @@ use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode::*,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
-use pd_client::Error as PdError;
+use tikv::pd::Error as PdError;
 use tikv_util::security::*;
 
 use kvproto::pdpb::*;
