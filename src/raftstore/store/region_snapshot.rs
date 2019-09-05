@@ -818,7 +818,6 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         let cache = cfg.storage.block_cache.build_shared_cache();
         cfg.rocksdb.titan.enabled = true;
-        cfg.rocksdb.titan.disable_gc = true;
         cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
         cfg.rocksdb.defaultcf.disable_auto_compactions = true;
         // Disable dynamic_level_bytes, otherwise SST files would be ingested to L0.
