@@ -77,8 +77,10 @@ OPTIMIZE?=normal
 
 # Note that the RocksDB CMakefile and Rust crate build with -march=native by
 # default and contain custom config options for "portable" builds. We're going
-# to ignore that and set -march, etc directly through CXXFLAGS. As such, this
-# file generally sets ROCKSDB_SYS_PORTABLE=0.
+# to configure the rocks optimizations ourselves by setting -march, etc directly
+# through CXXFLAGS. To do that though we have to turn on the "portable" build,
+# which causes the rocks build to not pass any -march flags (the gcc default is
+# -march=x86_64).
 
 # FIXME: gcc distinguishes between the instruction set used for codegen and the
 # machine architecture codegen is tuned for. So you can use instructions for
@@ -115,10 +117,9 @@ CXXFLAGS:=-march=corei7 $(CXXFLAGS)
 CXXFLAGS:=-mtune=generic $(CXXFLAGS)
 CFLAGS:=-march=corei7 $(CFLAGS)
 CFLAGS:=-mtune=generic $(CFLAGS)
-# Turning _on_ the portable RocksDB build makes it not pass any -march
-# flags, letting us override -march. Turn on RocksDB SSE explicitly is
-# _probably_ not necessary here since SSE will be enabled by our
-# CXXFLAGS, but setting it to 1 just in case.
+# Turning _on_ the portable RocksDB build makes it not pass any -march flags,
+# letting us override -march. Turning on SSE explicitly is required for the key
+# hand-rolled Fast_CRC32 optimization.
 ROCKSDB_SYS_PORTABLE?=1
 ROCKSDB_SYS_SSE?=1
 
