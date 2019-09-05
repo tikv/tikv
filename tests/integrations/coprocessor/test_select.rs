@@ -5,6 +5,7 @@ use std::thread;
 
 use kvproto::coprocessor::Response;
 use kvproto::kvrpcpb::Context;
+use protobuf::Message;
 use tipb::{Chunk, Expr, ExprType, ScalarFuncSig};
 
 use test_coprocessor::*;
@@ -85,7 +86,9 @@ fn test_batch_row_limit() {
 #[test]
 fn test_stream_batch_row_limit() {
     let mut data = vec![];
-    for i in 0..8192 {
+    const RECORD_LEN_EXPECTED: i64 = 8192;
+
+    for i in 0..RECORD_LEN_EXPECTED {
         data.push((i, Some(format!("name:{}", i)), i));
     }
 
@@ -105,15 +108,37 @@ fn test_stream_batch_row_limit() {
 
     let resps = handle_streaming_select(&endpoint, req, check_range);
     let length = resps.len();
+
+    let mut record_len = 0;
     for (i, resp) in resps.into_iter().enumerate() {
-        if i == length - 1 {
-            break;
-        }
         let cnt = resp.get_output_counts();
-        assert!(
-            [stream_row_limit as i64].as_ref() <= cnt
-                && [(stream_row_limit + BATCH_MAX_SIZE) as i64].as_ref() >= cnt
-        );
+        let current_length = cnt[0];
+        record_len += current_length;
+        if i != length - 1 {
+            assert!(
+                [stream_row_limit as i64].as_ref() <= cnt
+                    && [(stream_row_limit + BATCH_MAX_SIZE) as i64].as_ref() >= cnt
+            );
+        } else {
+            assert_eq!(record_len, RECORD_LEN_EXPECTED);
+        }
+
+        let mut chunk = Chunk::default();
+        chunk.merge_from_bytes(resp.get_data()).unwrap();
+
+        let chunks = vec![chunk];
+        let chunk_data_limit = stream_row_limit * 3; // we have 3 fields.
+        check_chunk_datum_count(&chunks, chunk_data_limit);
+
+        let spliter = DAGChunkSpliter::new(chunks, 3);;
+        let cur_data = &data[(record_len - current_length) as usize..record_len as usize];
+        for (ref row, &(id, ref name, cnt)) in spliter.zip(cur_data) {
+            let name_datum = name.as_ref().map(|s| s.as_bytes()).into();
+            let expected_encoded =
+                datum::encode_value(&[Datum::I64(id), name_datum, (cnt).into()]).unwrap();
+            let result_encoded = datum::encode_value(&row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+        }
     }
 }
 

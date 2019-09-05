@@ -438,21 +438,21 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
 
         // if the data read finished, is_drained means "finished"
-        let (mut record_cnt, mut is_drained) = (0, false);
+        let (mut record_len, mut is_drained) = (0, false);
         let mut chunk = Chunk::default();
 
         // record count less than batch size and is not drained
-        while record_cnt < self.stream_min_rows_each_iter && !is_drained {
+        while record_len < self.stream_min_rows_each_iter && !is_drained {
             let (drained, cnt) =
                 self.internal_handle_request(self.stream_batch_size, &mut chunk, &mut warnings)?;
-            record_cnt += cnt;
+            record_len += cnt;
             is_drained = drained;
 
             // Grow batch size
             grow_batch_size(&mut self.stream_batch_size)
         }
 
-        if !is_drained || record_cnt > 0 {
+        if !is_drained || record_len > 0 {
             let range = self.out_most_executor.take_scanned_range();
             return self
                 .make_stream_response(chunk, warnings)
@@ -461,7 +461,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         Ok((None, true))
     }
 
-    // TODO: check if this method can be share or put in utils
     fn make_stream_response(
         &mut self,
         chunk: Chunk,
