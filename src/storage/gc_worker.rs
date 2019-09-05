@@ -704,9 +704,6 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// Starts working in another thread. This function moves the `GCManager` and returns a handler
     /// of it.
     fn start(mut self) -> Result<GCManagerHandle> {
-        set_status_metrics(GCManagerState::Init);
-        self.initialize();
-
         let (tx, rx) = mpsc::channel();
         self.gc_manager_ctx.set_stop_signal_receiver(rx);
         let res: Result<_> = ThreadBuilder::new()
@@ -731,6 +728,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     }
 
     fn run_impl(&mut self) -> GCManagerResult<()> {
+        set_status_metrics(GCManagerState::Init);
+        self.initialize()?;
+
         loop {
             AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
                 .with_label_values(&[PROCESS_TYPE_GC])
@@ -755,11 +755,12 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// The only task of initializing is to simply get the current safe point as the initial value
     /// of `safe_point`. TiKV won't do any GC automatically until the first time `safe_point` was
     /// updated to a greater value than initial value.
-    fn initialize(&mut self) {
+    fn initialize(&mut self) -> GCManagerResult<()> {
         debug!("gc-manager is initializing");
         self.safe_point = 0;
         self.try_update_safe_point();
         debug!("gc-manager started"; "safe_point" => self.safe_point);
+        Ok(())
     }
 
     /// Waits until the safe_point updates. Returns the new safe point.
@@ -1293,7 +1294,7 @@ mod tests {
         for safe_point in &safe_points {
             test_util.add_next_safe_point(*safe_point);
         }
-        test_util.gc_manager.as_mut().unwrap().initialize();
+        test_util.gc_manager.as_mut().unwrap().initialize().unwrap();
 
         test_util.gc_manager.as_mut().unwrap().gc_a_round().unwrap();
         test_util.stop();
@@ -1369,7 +1370,7 @@ mod tests {
         assert_eq!(gc_manager.safe_point, 0);
         test_util.add_next_safe_point(0);
         test_util.add_next_safe_point(5);
-        gc_manager.initialize();
+        gc_manager.initialize().unwrap();
         assert_eq!(gc_manager.safe_point, 0);
         assert!(gc_manager.try_update_safe_point());
         assert_eq!(gc_manager.safe_point, 5);
