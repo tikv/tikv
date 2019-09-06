@@ -1068,7 +1068,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#15a966a7e3f2d26251f427c7edc9efcd5585460f"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#738ab4f95b5b2bb9868b63fa2fdfb386134d1165"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1085,7 +1085,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#15a966a7e3f2d26251f427c7edc9efcd5585460f"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#738ab4f95b5b2bb9868b63fa2fdfb386134d1165"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1845,7 +1845,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#15a966a7e3f2d26251f427c7edc9efcd5585460f"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#738ab4f95b5b2bb9868b63fa2fdfb386134d1165"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",

@@ -792,7 +792,7 @@ impl ApplyDelegate {
 
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) || self.kv_wb > 6 {
+            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) || apply_ctx.kv_wb > 8 {
                 apply_ctx.commit(self);
             }
             apply_ctx.check_switch_write_batch();
