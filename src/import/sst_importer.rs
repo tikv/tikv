@@ -164,9 +164,7 @@ impl ImportDir {
             let path = e.path();
             match path_to_sst_meta(&path) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => {
-                    error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e)
-                }
+                Err(e) => error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e),
             }
         }
         Ok(ssts)
