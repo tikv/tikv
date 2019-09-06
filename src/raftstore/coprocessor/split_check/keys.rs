@@ -178,30 +178,28 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     }
 }
 
-/// Get approximate number of keys in the range. Return result of CF_WRITE derectly if it's not empty.
+/// Get approximate number of keys in the range.
+/// For Txn, Return result of CF_WRITE derectly if it's not empty.
 /// For RawKV, return result of CF_DEFAULT.
 pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<(CfName, u64)> {
-    // try to get from RangeProperties first.
     let cfs = vec![CF_WRITE, CF_DEFAULT];
     for cf in cfs {
-        let mut num_keys_cf = match get_region_approximate_keys_cf(db, cf, region) {
+        // try to get from RangeProperties first.
+        let num_keys_cf = match get_region_approximate_keys_cf(db, cf, region) {
             Ok(v) => v,
             Err(e) => {
                 debug!(
                     "failed to get keys from RangeProperties";
                     "err" => ?e,
                 );
-                0
+                let start = keys::enc_start_key(region);
+                let end = keys::enc_end_key(region);
+                let cf_handle = box_try!(rocks::util::get_cf_handle(db, cf));
+                get_range_entries_and_versions(db, cf_handle, &start, &end)
+                    .unwrap_or_default()
+                    .1
             }
         };
-        if num_keys_cf == 0 {
-            let start = keys::enc_start_key(region);
-            let end = keys::enc_end_key(region);
-            let cf_handle = box_try!(rocks::util::get_cf_handle(db, cf));
-            num_keys_cf = get_range_entries_and_versions(db, cf_handle, &start, &end)
-                .unwrap_or_default()
-                .1;
-        }
         if num_keys_cf > 0 {
             return Ok((cf, num_keys_cf));
         }
@@ -454,13 +452,13 @@ mod tests {
         region.set_start_key(b"b1".to_vec());
         region.set_end_key(b"b2".to_vec());
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let (_, range_keys) = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, 0);
 
         // range properties get 1, mvcc properties get 3
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"c".to_vec());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let (_, range_keys) = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, 1);
     }
 }
