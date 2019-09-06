@@ -52,7 +52,7 @@ use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHan
 
 use super::super::RegionTask;
 
-const WRITE_BATCH_MAX_KEYS: usize = 64;
+const WRITE_BATCH_MAX_KEYS: usize = 32;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
@@ -804,7 +804,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) {
+            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) || apply_ctx.kv_wb > 12 {
                 apply_ctx.commit(self);
             }
             apply_ctx.check_switch_write_batch();
@@ -2623,8 +2623,9 @@ impl ApplyFsm {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(SlowTimer::new());
             }
-            if apply_ctx.kv_wb.is_none() {
-                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            if apply_ctx.kv_wbs.is_empty() {
+                apply_ctx.kv_wbs.push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+				apply_ctx.kv_wb = 0;
             }
             self.delegate
                 .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
