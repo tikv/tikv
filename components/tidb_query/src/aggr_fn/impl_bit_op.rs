@@ -11,7 +11,6 @@ use crate::codec::mysql::Tz;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::Result;
-use tikv_util::box_try;
 
 /// A trait for all bit operations
 pub trait BitOp: Clone + std::fmt::Debug + Send + Sync + 'static {

@@ -16,6 +16,8 @@
 extern crate slog;
 #[macro_use(error, debug, warn)]
 extern crate slog_global;
+#[macro_use(box_err, box_try, try_opt)]
+extern crate tikv_util;
 
 #[cfg(test)]
 extern crate test;

@@ -10,7 +10,6 @@ use crate::expr::EvalContext;
 use crate::storage::scanner::{RangesScanner, RangesScannerOptions};
 use crate::storage::{IntervalRange, Range, Storage};
 use crate::Result;
-use tikv_util::box_try;
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {

@@ -12,7 +12,6 @@ use crate::codec::mysql::time::weekmode::WeekMode;
 use crate::codec::mysql::{Duration as MyDuration, Time, TimeType};
 use crate::codec::Datum;
 use crate::expr::SqlMode;
-use tikv_util::try_opt;
 
 impl ScalarFunc {
     #[inline]

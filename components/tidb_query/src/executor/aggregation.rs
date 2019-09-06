@@ -16,7 +16,6 @@ use crate::execute_stats::ExecuteStats;
 use crate::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::storage::IntervalRange;
 use crate::Result;
-use tikv_util::box_try;
 
 const SINGLE_GROUP: &[u8] = b"SingleGroup";
 

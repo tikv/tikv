@@ -16,7 +16,6 @@ use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
 use crate::Result;
-use tikv_util::box_try;
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
 

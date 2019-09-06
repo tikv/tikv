@@ -6,7 +6,6 @@ use std::i64;
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::Decimal;
 use crate::codec::Datum;
-use tikv_util::try_opt;
 
 impl ScalarFunc {
     pub fn logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {

@@ -11,11 +11,11 @@ use hex::{self, FromHex};
 
 use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
+use tikv_util::try_opt_or;
 
 use super::{EvalContext, Result, ScalarFunc};
 use crate::codec::{datum, Datum};
 use safemem;
-use tikv_util::{box_err, try_opt, try_opt_or};
 
 const SPACE: u8 = 0o40u8;
 

@@ -13,7 +13,6 @@ use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
-use tikv_util::box_try;
 
 fn get_cast_fn_rpn_meta(
     from_field_type: &FieldType,

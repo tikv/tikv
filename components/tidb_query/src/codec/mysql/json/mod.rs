@@ -20,7 +20,7 @@ pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
 use std::collections::BTreeMap;
-use tikv_util::{box_err, is_even};
+use tikv_util::is_even;
 
 use super::super::datum::Datum;
 use super::super::{Error, Result};

@@ -5,7 +5,6 @@ use std::borrow::Cow;
 use super::{Constant, Result};
 use crate::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::codec::Datum;
-use tikv_util::box_err;
 
 impl Datum {
     #[inline]

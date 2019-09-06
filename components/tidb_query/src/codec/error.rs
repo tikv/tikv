@@ -11,7 +11,6 @@ use std::{error, str};
 use quick_error::quick_error;
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
-use tikv_util::box_err;
 use tipb::{self, ScalarFuncSig};
 
 pub const ERR_M_BIGGER_THAN_D: i32 = 1427;

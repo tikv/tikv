@@ -4,7 +4,6 @@ use std::{char, str, u32};
 
 use super::super::Result;
 use super::Json;
-use tikv_util::{box_err, box_try};
 
 const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
 

@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tikv_util::box_try;
 use tikv_util::collections::HashSet;
 use tipb::ColumnInfo;
 use tipb::TableScan;

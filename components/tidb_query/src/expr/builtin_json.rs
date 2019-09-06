@@ -6,7 +6,6 @@ use crate::codec::mysql::Json;
 use crate::codec::Datum;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use tikv_util::try_opt;
 
 impl ScalarFunc {
     #[inline]

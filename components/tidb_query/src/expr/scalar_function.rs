@@ -11,7 +11,6 @@ use super::builtin_compare::CmpOp;
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::codec::Datum;
-use tikv_util::box_err;
 
 impl ScalarFunc {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {

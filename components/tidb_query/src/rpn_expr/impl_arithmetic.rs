@@ -7,7 +7,6 @@ use super::super::expr::EvalContext;
 use crate::codec::data_type::*;
 use crate::codec::{self, div_i64, div_i64_with_u64, div_u64_with_i64, Error};
 use crate::Result;
-use tikv_util::try_opt;
 
 #[rpn_fn]
 #[inline]

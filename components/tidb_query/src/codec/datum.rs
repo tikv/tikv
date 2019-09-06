@@ -10,7 +10,7 @@ use std::{i64, str};
 use tidb_query_datatype::FieldTypeTp;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::{number, BytesSlice};
-use tikv_util::{box_err, box_try, escape};
+use tikv_util::escape;
 
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Json,

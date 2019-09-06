@@ -5,7 +5,6 @@ use std::mem;
 use super::super::Result;
 use super::path_expr::{PathExpression, PathLeg};
 use super::Json;
-use tikv_util::box_err;
 
 /// `ModifyType` is for modify a JSON.
 #[derive(Clone, Copy, Debug, PartialEq)]

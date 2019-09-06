@@ -10,7 +10,6 @@ use tipb::ByItem;
 use crate::codec::datum::Datum;
 use crate::executor::OriginCols;
 use crate::expr::{EvalContext, Result};
-use tikv_util::box_err;
 
 const HEAP_MAX_CAPACITY: usize = 1024;
 

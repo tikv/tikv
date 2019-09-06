@@ -9,7 +9,6 @@ use tipb::{Expr, FieldType};
 use crate::rpn_expr::impl_cast::get_cast_fn_rpn_node;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::Result;
-use tikv_util::box_try;
 
 /// Checks whether or not there is only one child and the child expression is supported.
 pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {

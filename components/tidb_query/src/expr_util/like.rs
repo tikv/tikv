@@ -13,7 +13,6 @@
 use std::slice::Iter;
 
 use crate::expr::Result;
-use tikv_util::box_err;
 
 const MAX_RECURSE_LEVEL: usize = 1024;
 

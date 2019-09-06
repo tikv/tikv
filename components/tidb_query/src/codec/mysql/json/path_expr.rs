@@ -27,7 +27,6 @@ use super::json_unquote::unquote_string;
 use crate::codec::Result;
 use regex::Regex;
 use std::ops::Index;
-use tikv_util::{box_err, box_try};
 
 pub const PATH_EXPR_ASTERISK: &str = "*";
 

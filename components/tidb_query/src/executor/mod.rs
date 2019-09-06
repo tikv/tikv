@@ -36,7 +36,6 @@ use crate::expr::{EvalContext, EvalWarnings};
 use crate::storage::IntervalRange;
 use crate::util;
 use crate::Result;
-use tikv_util::box_try;
 
 /// An expression tree visitor that extracts all column offsets in the tree.
 pub struct ExprColumnRefVisitor {

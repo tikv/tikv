@@ -15,7 +15,6 @@ use crate::codec::mysql::charset;
 use crate::codec::mysql::decimal::max_or_min_dec;
 use crate::expr::EvalContext;
 use crate::expr::Flag;
-use tikv_util::{box_err, box_try};
 
 /// A trait for converting a value to an `Int`.
 pub trait ToInt {
