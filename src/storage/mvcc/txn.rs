@@ -564,12 +564,25 @@ impl<S: Snapshot> MvccTxn<S> {
                 if lock.ttl < advise_ttl {
                     lock.ttl = advise_ttl;
                     self.put_lock(primary_key, &lock);
-                    MVCC_TXN_HEART_BEAT_UPDATE_TTL.inc();
+                } else {
+                    debug!(
+                        "txn_heart_beat with advise_ttl not large than current ttl";
+                        "primary_key" => %primary_key,
+                        "start_ts" => self.start_ts,
+                        "advise_ttl" => advise_ttl,
+                        "current_ttl" => lock.ttl,
+                    );
                 }
                 return Ok(lock.ttl);
             }
         }
 
+        debug!(
+            "txn_heart_beat invoked but lock is absent";
+            "primary_key" => %primary_key,
+            "start_ts" => self.start_ts,
+            "advise_ttl" => advise_ttl,
+        );
         Err(Error::TxnLockNotFound {
             start_ts: self.start_ts,
             commit_ts: 0,
