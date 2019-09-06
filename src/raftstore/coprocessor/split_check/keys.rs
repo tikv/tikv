@@ -176,9 +176,7 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
     // try to get from RangeProperties first.
     match get_region_approximate_keys_cf(db, CF_WRITE, region) {
         Ok(v) => {
-            if v > 0 {
-                return Ok(v);
-            }
+            return Ok(v);
         }
         Err(e) => debug!(
             "failed to get keys from RangeProperties";
@@ -359,8 +357,8 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
@@ -385,5 +383,58 @@ mod tests {
         region.mut_peers().push(Peer::default());
         let range_keys = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
+    }
+
+    #[test]
+    fn test_region_approximate_keys_sub_region() {
+        let path = Builder::new()
+            .prefix("_test_region_approximate_keys_sub_region")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(MvccPropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let write_cf = db.cf_handle(CF_WRITE).unwrap();
+        let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
+        // size >= 4194304 will insert a new point in range properties
+        // 3 points will be inserted into range properties
+        let cases = [("a", 4194304), ("b", 4194304), ("c", 4194304)];
+        for &(key, vlen) in &cases {
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
+            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+            db.put_cf(write_cf, &key, &write_v).unwrap();
+
+            let default_v = vec![0; vlen as usize];
+            db.put_cf(default_cf, &key, &default_v).unwrap();
+        }
+        // only flush once, so that mvcc properties will insert one point only
+        db.flush_cf(write_cf, true).unwrap();
+        db.flush_cf(default_cf, true).unwrap();
+
+        // range properties get 0, mvcc properties get 3
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(b"b1".to_vec());
+        region.set_end_key(b"b2".to_vec());
+        region.mut_peers().push(Peer::default());
+        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        assert_eq!(range_keys, 0);
+
+        // range properties get 1, mvcc properties get 3
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"c".to_vec());
+        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        assert_eq!(range_keys, 1);
     }
 }
