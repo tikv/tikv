@@ -504,7 +504,15 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         | Command::PessimisticRollback { ref keys, .. } => latches.gen_lock(keys),
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
-        _ => Lock::new(vec![]),
+        Command::TxnHeartBeat {
+            ref primary_key, ..
+        } => latches.gen_lock(&[primary_key]),
+
+        // Avoid using wildcard _ here to avoid forgetting add new commands here.
+        Command::ScanLock { .. }
+        | Command::DeleteRange { .. }
+        | Command::MvccByKey { .. }
+        | Command::MvccByStartTs { .. } => Lock::new(vec![]),
     }
 }
 
@@ -594,6 +602,12 @@ mod tests {
                 start_ts: 10,
                 commit_ts: 0,
                 resolve_keys: vec![Key::from_raw(b"k")],
+            },
+            Command::TxnHeartBeat {
+                ctx: Context::default(),
+                primary_key: Key::from_raw(b"k"),
+                start_ts: 10,
+                advise_ttl: 100,
             },
         ];
 
