@@ -1160,7 +1160,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#749a5586617726989e7e084a8cc0a2ec0d1db812"
+source = "git+https://github.com/pingcap/kvproto.git#9a1bd6a31da241b7a6b9de6513aa64b0d89ad800"
 dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.5.0-alpha.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1599,16 +1599,10 @@ dependencies = [
 [[package]]
 name = "openssl-src"
 version = "111.3.0+1.1.1c"
-source = "git+https://github.com/BusyJay/libressl-src.git#1e3a34ae102b06d701dcc2530f806b143a8fd65f"
-dependencies = [
- "cmake 0.1.40 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "openssl-src"
-version = "111.3.0+1.1.1c"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-replace = "openssl-src 111.3.0+1.1.1c (git+https://github.com/BusyJay/libressl-src.git)"
+dependencies = [
+ "cc 1.0.38 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "openssl-sys"
@@ -1816,9 +1810,10 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#41b1542f4c8215d952834ffd0728f465c6d01a9e"
+source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#4df576feca3b10c01d55b0e7c634bfab30982087"
 dependencies = [
  "heck 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3618,7 +3613,6 @@ dependencies = [
 "checksum num-traits 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)" = "51eab148f171aefad295f8cece636fc488b9b392ef544da31ea4b8ef6b9e9c39"
 "checksum num-traits 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)" = "630de1ef5cc79d0cdd78b7e33b81f083cbfe90de0f4b2b2f07f905867c70e9fe"
 "checksum num_cpus 1.8.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c51a3322e4bca9d212ad9a158a02abc6934d005490c054a2778df73a70aa0a30"
-"checksum openssl-src 111.3.0+1.1.1c (git+https://github.com/BusyJay/libressl-src.git)" = "<none>"
 "checksum openssl-src 111.3.0+1.1.1c (registry+https://github.com/rust-lang/crates.io-index)" = "53ed5f31d294bdf5f7a4ba0a206c2754b0f60e9a63b7e3076babc5317873c797"
 "checksum openssl-sys 0.9.48 (registry+https://github.com/rust-lang/crates.io-index)" = "b5ba300217253bcc5dc68bed23d782affa45000193866e025329aa8a7a9f05b8"
 "checksum ordered-float 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "18869315e81473c951eb56ad5558bbc56978562d3ecfb87abb7a1e944cea4518"

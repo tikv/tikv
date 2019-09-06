@@ -208,7 +208,9 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
             let t = Time::from_packed_u64(datum.u64(), tp.try_into()?, fsp, &ctx.cfg.tz)?;
             Ok(Datum::Time(t))
         }
-        FieldTypeTp::Duration => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
+        FieldTypeTp::Duration => {
+            Duration::from_nanos(datum.i64(), field_type.decimal() as i8).map(Datum::Dur)
+        }
         FieldTypeTp::Enum | FieldTypeTp::Set | FieldTypeTp::Bit => Err(box_err!(
             "unflatten field type {} is not supported yet.",
             tp
@@ -428,22 +430,29 @@ mod tests {
 
     #[test]
     fn test_index_key_codec() {
-        let tests = vec![Datum::U64(1), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)];
+        let tests = vec![
+            Datum::U64(1),
+            Datum::Bytes(b"123".to_vec()),
+            Datum::I64(-1),
+            Datum::Dur(Duration::parse(b"12:34:56.666", 2).unwrap()),
+        ];
+
+        let mut duration_col = ColumnInfo::default();
+        duration_col
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::Duration)
+            .set_decimal(2);
+
         let types = vec![
-            new_col_info(FieldTypeTp::LongLong),
-            new_col_info(FieldTypeTp::VarChar),
-            new_col_info(FieldTypeTp::LongLong),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::VarChar.into(),
+            FieldTypeTp::LongLong.into(),
+            duration_col,
         ];
         let buf = datum::encode_key(&tests).unwrap();
         let encoded = encode_index_seek_key(1, 2, &buf);
         let ctx = EvalContext::default();
         assert_eq!(tests, decode_index_key(&ctx, &encoded, &types).unwrap());
-    }
-
-    fn new_col_info(tp: FieldTypeTp) -> ColumnInfo {
-        let mut col_info = ColumnInfo::default();
-        col_info.as_mut_accessor().set_tp(tp);
-        col_info
     }
 
     fn to_hash_map(row: &RowColsDict) -> HashMap<i64, Vec<u8>> {
@@ -472,18 +481,26 @@ mod tests {
 
     #[test]
     fn test_row_codec() {
+        let mut duration_col = ColumnInfo::default();
+        duration_col
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::Duration)
+            .set_decimal(2);
+
         let mut cols = map![
-            1 => new_col_info(FieldTypeTp::LongLong),
-            2 => new_col_info(FieldTypeTp::VarChar),
-            3 => new_col_info(FieldTypeTp::NewDecimal),
-            5 => new_col_info(FieldTypeTp::JSON)
+            1 => FieldTypeTp::LongLong.into(),
+            2 => FieldTypeTp::VarChar.into(),
+            3 => FieldTypeTp::NewDecimal.into(),
+            5 => FieldTypeTp::JSON.into(),
+            6 => duration_col
         ];
 
         let mut row = map![
             1 => Datum::I64(100),
             2 => Datum::Bytes(b"abc".to_vec()),
             3 => Datum::Dec(10.into()),
-            5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap())
+            5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
+            6 => Datum::Dur(Duration::parse(b"23:23:23.666",2 ).unwrap())
         ];
 
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
@@ -507,7 +524,7 @@ mod tests {
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert_eq!(col_encoded, datums);
 
-        cols.insert(4, new_col_info(FieldTypeTp::Float));
+        cols.insert(4, FieldTypeTp::Float.into());
         let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
@@ -538,17 +555,28 @@ mod tests {
 
     #[test]
     fn test_idx_codec() {
-        let mut col_ids = vec![1, 2, 3];
+        let mut col_ids = vec![1, 2, 3, 4];
+
+        let mut duration_col = ColumnInfo::default();
+        duration_col
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::Duration)
+            .set_decimal(2);
+
         let col_types = vec![
-            new_col_info(FieldTypeTp::LongLong),
-            new_col_info(FieldTypeTp::VarChar),
-            new_col_info(FieldTypeTp::NewDecimal),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::VarChar.into(),
+            FieldTypeTp::NewDecimal.into(),
+            duration_col,
         ];
+
         let col_values = vec![
             Datum::I64(100),
             Datum::Bytes(b"abc".to_vec()),
             Datum::Dec(10.into()),
+            Datum::Dur(Duration::parse(b"23:23:23.666", 2).unwrap()),
         ];
+
         let ctx = EvalContext::default();
         let mut col_encoded: HashMap<_, _> = col_ids
             .iter()
@@ -572,7 +600,7 @@ mod tests {
         assert_eq!(col_encoded, res.0);
         assert!(res.1.is_none());
 
-        let handle_data = col_encoded.remove(&3).unwrap();
+        let handle_data = col_encoded.remove(&4).unwrap();
         let handle = if handle_data.is_empty() {
             None
         } else {
@@ -582,7 +610,7 @@ mod tests {
                     .i64(),
             )
         };
-        col_ids.remove(2);
+        col_ids.remove(3);
         res = cut_idx_key_as_owned(&bs, &col_ids);
         assert_eq!(col_encoded, res.0);
         assert_eq!(res.1, handle);
