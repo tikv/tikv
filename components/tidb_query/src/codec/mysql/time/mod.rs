@@ -104,7 +104,9 @@ unsafe fn from_bytes(bs: &[u8]) -> &str {
     str::from_utf8_unchecked(bs)
 }
 
-// Safety: caller must ensure `s` and `frac` are valid ascii.
+// Safety: caller must ensure each byte of `s` and `frac` is a valid unicode
+// character (i.e., `s` and `frac` may be sliced at any index and should give
+// a valid unicode string).
 unsafe fn split_ymd_hms_with_frac_as_s(
     mut s: &[u8],
     frac: &[u8],

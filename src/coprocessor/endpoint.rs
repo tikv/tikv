@@ -759,7 +759,8 @@ mod tests {
             Builder::from_config(config)
                 .name_prefix("coprocessor_endpoint_test_full")
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                .before_stop(|| destroy_tls_engine::<RocksEngine>())
+                // Safety: we call `set_` and `destroy_` with the same engine type.
+                .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
                 .build()
         })
         .collect();
