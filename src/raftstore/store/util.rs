@@ -405,7 +405,7 @@ pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u
     match get_region_approximate_keys_cf(db, CF_WRITE, region) {
         Ok(v) => {
             return Ok(v);
-        },
+        }
         Err(e) => debug!(
             "old_version:get keys from RangeProperties failed with err:{:?}",
             e
