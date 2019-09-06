@@ -704,6 +704,7 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub enable_unordered_write: bool,
+    pub enable_multithread_write: bool,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
@@ -741,6 +742,7 @@ impl Default for DbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             enable_unordered_write: false,
+            enable_multithread_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -770,6 +772,7 @@ impl DbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
+
         if !self.info_log_dir.is_empty() {
             opts.create_info_log(&self.info_log_dir)
                 .unwrap_or_else(|e| {
@@ -795,8 +798,9 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_pipelined_write(self.enable_pipelined_write || self.enable_multithread_write);
         opts.enable_unordered_write(self.enable_unordered_write);
+        opts.enable_multithread_write(self.enable_multithread_write);
         opts.add_event_listener(EventListener::new("kv"));
 
         if self.titan.enabled {
@@ -942,6 +946,7 @@ pub struct RaftDbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub enable_unordered_write: bool,
+    pub enable_multithread_write: bool,
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
@@ -974,6 +979,7 @@ impl Default for RaftDbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             enable_unordered_write: false,
+            enable_multithread_write: false,
             allow_concurrent_memtable_write: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
@@ -1017,8 +1023,9 @@ impl RaftDbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_pipelined_write(self.enable_pipelined_write || self.enable_multithread_write);
         opts.enable_unordered_write(self.enable_unordered_write);
+        opts.enable_multithread_write(self.enable_multithread_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
         opts.add_event_listener(EventListener::new("raft"));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
