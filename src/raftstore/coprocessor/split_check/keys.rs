@@ -384,10 +384,7 @@ mod tests {
 
     #[test]
     fn test_region_approximate_keys_sub_region() {
-        let path = Builder::new()
-            .prefix("_test_region_approximate_keys_sub_region")
-            .tempdir()
-            .unwrap();
+        let path = TempDir::new("_test_region_approximate_keys_sub_region").expect("");
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
