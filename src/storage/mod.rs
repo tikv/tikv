@@ -4264,8 +4264,8 @@ mod tests {
             .async_txn_heart_beat(
                 Context::default(),
                 k.clone(),
-                /*start_ts*/ 10,
-                /*advise_ttl*/ 100,
+                10,
+                100,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
                     e => panic!("unexpected error chain: {:?}", e),
@@ -4288,37 +4288,38 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        // Less TTL, not updated.
+        // `advise_ttl` = 90, which is less than current ttl 100. The lock's ttl will remains 100.
         storage
             .async_txn_heart_beat(
                 Context::default(),
                 k.clone(),
-                /*start_ts*/ 10,
-                /*advise_ttl*/ 90,
-                expect_value_callback(tx.clone(), 0, (/*expect_ttl*/ 100, 0)),
+                10,
+                90,
+                expect_value_callback(tx.clone(), 0, (100, 0)),
             )
             .unwrap();
         rx.recv().unwrap();
 
-        // Update TTL to the greater one.
+        // `advise_ttl` = 110, which is greater than current ttl. The lock's ttl will be updated to
+        // 110.
         storage
             .async_txn_heart_beat(
                 Context::default(),
                 k.clone(),
-                /*start_ts*/ 10,
-                /*advise_ttl*/ 110,
-                expect_value_callback(tx.clone(), 0, (/*expect_ttl*/ 110, 0)),
+                10,
+                110,
+                expect_value_callback(tx.clone(), 0, (110, 0)),
             )
             .unwrap();
         rx.recv().unwrap();
 
-        // Lock not match
+        // Lock not match. Nothing happens except throwing an error.
         storage
             .async_txn_heart_beat(
                 Context::default(),
                 k.clone(),
-                /*start_ts*/ 11,
-                /*advise_ttl*/ 150,
+                11,
+                150,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
                     e => panic!("unexpected error chain: {:?}", e),
