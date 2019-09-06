@@ -86,7 +86,7 @@ mod tests {
     use super::*;
     use crate::endpoint::tests::*;
     use tikv::storage::mvcc::tests::*;
-    use tikv_util::mpsc::Receiver;
+    use tikv_util::mpsc::channel::Receiver;
 
     fn new_rpc_suite() -> (Server, BackupClient, Receiver<Option<Task>>) {
         let env = Arc::new(EnvBuilder::new().build());

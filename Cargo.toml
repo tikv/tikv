@@ -104,7 +104,6 @@ derive_more = "0.11.0"
 hex = "0.3"
 more-asserts = "0.1"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
-chocolates = { git = "https://github.com/busyjay/chocolates.git", branch = "dev" }
 tokio-threadpool = "0.1"
 tokio-fs = "0.1.6"
 tokio-io = "0.1.12"

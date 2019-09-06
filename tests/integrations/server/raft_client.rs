@@ -4,8 +4,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{thread, time};
 
-use chocolates::thread_pool::future::{FutureThreadPool, RunnerFactory as FutureRunnerFactory};
-use chocolates::thread_pool::Config as ThreadPoolConfig;
 use futures::{Future, Stream};
 use grpcio::{
     ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
@@ -18,24 +16,18 @@ use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::{mock_kv_service, MockKv, MockKvService};
 
-pub fn new_raft_client() -> (RaftClient<RaftStoreBlackHole>, FutureThreadPool) {
-    let pool = ThreadPoolConfig::new(thd_name!("raft-client-stat"))
-        .max_thread_count(1)
-        .spawn(FutureRunnerFactory::default());
+pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftStoreBlackHole> {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(1000));
-    (
-        RaftClient::new(
-            env,
-            cfg,
-            security_mgr,
-            RaftStoreBlackHole,
-            grpc_thread_load,
-            pool.sender(),
-        ),
-        pool,
+    RaftClient::new(
+        env,
+        cfg,
+        security_mgr,
+        RaftStoreBlackHole,
+        grpc_thread_load,
+        pool.sender().clone(),
     )
 }
 
@@ -73,7 +65,8 @@ fn test_batch_raft_fallback() {
         }
     }
 
-    let (mut raft_client, pool) = new_raft_client();
+    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let mut raft_client = get_raft_client(&pool);
     let counter = Arc::new(AtomicUsize::new(0));
 
     let service = MockKvForRaft(Arc::clone(&counter));
@@ -87,7 +80,7 @@ fn test_batch_raft_fallback() {
     });
 
     assert!(counter.load(Ordering::SeqCst) > 0);
-    pool.shutdown();
+    pool.shutdown().wait().unwrap();
     drop(mock_server)
 }
 
@@ -117,7 +110,8 @@ fn test_raft_client_reconnect() {
         }
     }
 
-    let (mut raft_client, pool) = new_raft_client();
+    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let mut raft_client = get_raft_client(&pool);
     let counter = Arc::new(AtomicUsize::new(0));
 
     let service = MockKvForRaft(Arc::clone(&counter));
@@ -149,7 +143,7 @@ fn test_raft_client_reconnect() {
     assert_eq!(counter.load(Ordering::SeqCst), 100);
 
     drop(mock_server);
-    pool.shutdown();
+    pool.shutdown().wait().unwrap();
 }
 
 // Try to create a mock server with `service`. The server will be binded wiht a random

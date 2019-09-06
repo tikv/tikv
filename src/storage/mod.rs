@@ -814,7 +814,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
         gc_worker.start()?;
 
-        // TODO: use a strong type instead of relying on contract.
         let read_pool_high = read_pool.remove(2);
         let read_pool_normal = read_pool.remove(1);
         let read_pool_low = read_pool.remove(0);

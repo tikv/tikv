@@ -10,7 +10,6 @@ use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
 use crate::server::transport::RaftStoreRouter;
-use chocolates::thread_pool::future::Sender as ThreadPoolSender;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
@@ -153,7 +152,7 @@ pub struct RaftClient<T: 'static> {
     grpc_thread_load: Arc<ThreadLoad>,
     // When message senders want to delay the notification to the gRPC client,
     // it can put a tokio_timer::Delay to the runtime.
-    stats_pool: ThreadPoolSender,
+    stats_pool: tokio_threadpool::Sender,
     timer: Handle,
 }
 
@@ -164,7 +163,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
         security_mgr: Arc<SecurityManager>,
         router: T,
         grpc_thread_load: Arc<ThreadLoad>,
-        stats_pool: ThreadPoolSender,
+        stats_pool: tokio_threadpool::Sender,
     ) -> RaftClient<T> {
         RaftClient {
             env,
@@ -227,7 +226,7 @@ impl<T: RaftStoreRouter> RaftClient<T> {
                     continue;
                 }
                 let wait = self.cfg.heavy_load_wait_duration.0;
-                self.stats_pool.spawn(
+                let _ = self.stats_pool.spawn(
                     self.timer
                         .delay(Instant::now() + wait)
                         .map_err(|_| warn!("RaftClient delay flush error"))
