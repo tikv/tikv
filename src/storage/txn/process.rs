@@ -418,6 +418,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
             statistics.add(&txn.take_statistics());
             // check conflict
             let rows = txn.batch_prewrite(cid, &commands, &mut ids, &scheduler)?;
+            info!("process_batch_prewrite"; "applies_mutation" => rows);
             let tag = commands[0].tag();
             let modifies = txn.into_modifies();
             // send all modifies to raftstore

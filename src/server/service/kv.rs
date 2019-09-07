@@ -2,6 +2,7 @@
 
 use std::iter::{self, FromIterator};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::store::{Callback, CasualMessage};
@@ -31,12 +32,15 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
+use tokio_timer::Interval;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
+const MINIBATCH_TIMEOUT_MILLIS: u64 = 13;
+const MINIBATCH_CROSS_COMMAND_ENABLED: bool = true;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -84,6 +88,11 @@ impl MiniBatchMeta {
 struct MiniBatcher {
     commands: Vec<Command>,
     router: HashMap<RegionVerId, MiniBatchMeta>,
+    input: u64,
+    batched: u64,
+    key_conflict: u64,
+    total: u64,
+    last_submit: Instant,
 }
 
 impl MiniBatcher {
@@ -91,6 +100,11 @@ impl MiniBatcher {
         MiniBatcher {
             commands: vec![],
             router: HashMap::default(),
+            input: 0,
+            batched: 0,
+            key_conflict: 0,
+            total: 0,
+            last_submit: Instant::now(),
         }
     }
 
@@ -99,6 +113,8 @@ impl MiniBatcher {
         request_id: u64,
         request: &mut batch_commands_request::Request,
     ) -> bool {
+        self.total += 1;
+        self.input += 1;
         match &mut request.cmd {
             Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
                 let ver = RegionVerId {
@@ -136,6 +152,7 @@ impl MiniBatcher {
                     Some(meta) => {
                         for m in &mutations {
                             if meta.key_set.contains(m.key().clone().as_encoded()) {
+                                self.key_conflict += 1;
                                 return false;
                             }
                         }
@@ -163,14 +180,73 @@ impl MiniBatcher {
                         });
                     }
                 }
+                self.batched += 1;
                 true
             }
             _ => { false }
         }
     }
 
-    pub fn take_commands(self) -> Vec<Command> {
-        self.commands
+    fn report(&self) {
+        info!("MiniBatcher report";
+            "batch_commands" => self.input,
+            "batched" => self.batched,
+            "key_conflicted" => self.key_conflict,
+            "batch_prewrite" => self.commands.len());
+    }
+
+    pub fn ready(&self) -> bool {
+        !MINIBATCH_CROSS_COMMAND_ENABLED || self.total < 50 || self.input > 30 || self.batched as f32 / self.commands.len() as f32 >= 1.5
+    }
+
+    pub fn submit<E: Engine>(
+        &mut self,
+        storage: &Storage<E>,
+        tx: Sender<(u64, batch_commands_response::Response)>,
+    ) {
+        self.report();
+        let commands = self.take_commands();
+        for cmd in commands {
+            let tx_copy = tx.clone();
+            storage.batch_prewrite(
+                cmd,
+                Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
+                    // let v = v.map_err(Error::from);
+                    let mut resp = PrewriteResponse::default();
+                    if let Some(err) = extract_region_error(&v) {
+                        resp.set_region_error(err);
+                    } else {
+                        resp.set_errors(extract_key_errors(v).into());
+                    }
+                    let mut res = batch_commands_response::Response::default();
+                    res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
+                    tx_copy.send_and_notify((id, res));
+                    // if !tx.send_and_notify((id, res)).is_err() {
+                        // timer.observe_duration();
+                    // }
+                }),
+            );
+        }
+    }
+
+    fn take_commands(&mut self) -> Vec<Command> {
+        self.router.clear();
+        self.input = 0;
+        self.batched = 0;
+        self.key_conflict = 0;
+        self.last_submit = Instant::now();
+        std::mem::replace(&mut self.commands, vec![])
+    }
+
+    pub fn maybe_submit<E: Engine>(
+        &mut self,
+        storage: &Storage<E>,
+        tx: Sender<(u64, batch_commands_response::Response)>,
+    ) {
+        info!("check maybe submit");
+        if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
+            self.submit(storage, tx);
+        }
     }
 }
 
@@ -1086,19 +1162,32 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-
+        let minibatcher = MiniBatcher::new();
+        let minibatcher = Arc::new(Mutex::new(minibatcher));
+        if MINIBATCH_CROSS_COMMAND_ENABLED {
+            let storage = storage.clone();
+            let tx = tx.clone();
+            let minibatcher = minibatcher.clone();
+            let start = Instant::now() + Duration::from_millis(100);
+            ctx.spawn(Interval::new(start, Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS))
+                .into_future()
+                .and_then(move |_| {
+                    minibatcher.lock().unwrap().maybe_submit(&storage, tx);
+                    Ok(())
+                })
+                .map_err(|e| info!("wake-up timer interval errored"; "err" => ?e)));
+        }
         let request_handler = stream.for_each(move |mut req| {
-            let mut minibatcher = MiniBatcher::new();
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, mut req) in request_ids.into_iter().zip(requests) {
-                if !minibatcher.filter(id, &mut req) {
+                if !minibatcher.lock().unwrap().filter(id, &mut req) {
                     handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
                 }
             }
-            for command in minibatcher.take_commands() {
-                handle_minibatch_command(&storage, &cop, peer.clone(), command, tx.clone());
+            if minibatcher.lock().unwrap().ready() {
+                minibatcher.lock().unwrap().submit(&storage, tx.clone());
             }
             future::ok::<_, _>(())
         });
