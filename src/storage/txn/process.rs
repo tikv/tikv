@@ -32,6 +32,7 @@ pub enum ProcessResult {
     MvccKey { mvcc: MvccInfo },
     MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
     Locks { locks: Vec<LockInfo> },
+    TxnStatus { lock_ttl: u64, commit_ts: u64 },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
 }
@@ -61,6 +62,14 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
         },
         StorageCb::Locks(cb) => match pr {
             ProcessResult::Locks { locks } => cb(Ok(locks)),
+            ProcessResult::Failed { err } => cb(Err(err)),
+            _ => panic!("process result mismatch"),
+        },
+        StorageCb::TxnStatus(cb) => match pr {
+            ProcessResult::TxnStatus {
+                lock_ttl,
+                commit_ts,
+            } => cb(Ok((lock_ttl, commit_ts))),
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
@@ -794,6 +803,23 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             );
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
+        }
+        Command::TxnHeartBeat {
+            ctx,
+            primary_key,
+            start_ts,
+            advise_ttl,
+        } => {
+            // TxnHeartBeat never remove locks. No need to wake up waiters.
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
+
+            statistics.add(&txn.take_statistics());
+            let pr = ProcessResult::TxnStatus {
+                lock_ttl,
+                commit_ts: 0,
+            };
+            (pr, txn.into_modifies(), 1, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
