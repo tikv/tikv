@@ -7,7 +7,7 @@ use tidb_query_datatype::EvalType;
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::json::*;
-use crate::{Error, Result};
+use crate::Result;
 
 #[rpn_fn]
 #[inline]
@@ -101,7 +101,7 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 fn json_with_bytes_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
-    // min_args = 2
+    assert!(children.len() >= 2);
     // args should be like `&Option<Json> , &[&Option<Bytes>]`.
     super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
     for i in 1..children.len() {
@@ -114,27 +114,17 @@ fn json_with_bytes_validator(expr: &tipb::Expr) -> Result<()> {
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_bytes_validator)]
 #[inline]
 fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
-    // args should be at least 2
+    assert!(args.len() >= 2);
     let j: &Option<Json> = args[0].as_ref();
     let j = match j.as_ref() {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
 
-    let mut path_expr_list = vec![];
-    for i in 1..args.len() {
-        let json_path: &Option<Bytes> = args[i].as_ref();
-
-        let json_path = match json_path.as_ref() {
-            None => return Ok(None),
-            Some(p) => p.to_owned(),
-        };
-        let json_path = eval_string_and_decode(json_path)?;
-
-        let path_expr = parse_json_path_expr(&json_path)?;
-
-        path_expr_list.push(path_expr);
-    }
+    let path_expr_list = match path_list(&args[1..])? {
+        Some(p) => p,
+        None => return Ok(None),
+    };
 
     Ok(j.extract(&path_expr_list))
 }
@@ -143,36 +133,38 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_bytes_validator)]
 #[inline]
 fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    assert!(args.len() >= 2);
     let j: &Option<Json> = args[0].as_ref();
     let mut j = match j.as_ref() {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
 
-    let mut path_expr_list = vec![];
-    for i in 1..args.len() {
-        let json_path: &Option<Bytes> = args[i].as_ref();
-
-        let json_path = match json_path.as_ref() {
-            None => return Ok(None),
-            Some(p) => p.to_owned(),
-        };
-        let json_path = eval_string_and_decode(json_path)?;
-
-        let path_expr = parse_json_path_expr(&json_path)?;
-
-        path_expr_list.push(path_expr);
-    }
+    let path_expr_list = match path_list(&args[1..])? {
+        Some(p) => p,
+        None => return Ok(None),
+    };
 
     j.remove(&path_expr_list)?;
     Ok(Some(j))
 }
 
-#[inline]
-fn eval_string_and_decode(b: Bytes) -> Result<String> {
-    String::from_utf8(b)
-        .map_err(crate::codec::Error::from)
-        .map_err(Error::from)
+fn path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpression>>> {
+    let mut path_expr_list = Vec::with_capacity(args.len());
+    for arg in args {
+        let json_path: &Option<Bytes> = arg.as_ref();
+
+        let json_path = match json_path.as_ref() {
+            None => return Ok(None),
+            Some(p) => String::from_utf8(p.to_vec()),
+        }
+        .map_err(crate::codec::Error::from)?;
+
+        let path_expr = parse_json_path_expr(&json_path)?;
+
+        path_expr_list.push(path_expr);
+    }
+    Ok(Some(path_expr_list))
 }
 
 #[cfg(test)]
