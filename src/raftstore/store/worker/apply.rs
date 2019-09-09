@@ -919,7 +919,7 @@ impl ApplyDelegate {
         request: &AdminRequest,
     ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let cmd_type = request.get_cmd_type();
-        if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
+        if cmd_type != AdminCmdType::CompactLog {
             info!(
                 "{} execute admin command {:?} at [term: {}, index: {}]",
                 self.tag,
