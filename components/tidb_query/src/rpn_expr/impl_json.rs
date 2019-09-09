@@ -156,7 +156,7 @@ fn path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpression>>> {
 
         let json_path = match json_path.as_ref() {
             None => return Ok(None),
-            Some(p) => String::from_utf8(p.to_vec()),
+            Some(p) => std::str::from_utf8(&p),
         }
         .map_err(crate::codec::Error::from)?;
 
