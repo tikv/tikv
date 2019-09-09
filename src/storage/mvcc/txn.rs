@@ -608,6 +608,12 @@ impl<S: Snapshot> MvccTxn<S> {
     /// This operation checks whether a transaction has expired it's Lock's TTL, rollback the
     /// transaction if expired, and update the transaction's min_commit_ts according to the metadata
     /// in the primary lock.
+    ///
+    /// When transaction T1 meets T2's lock, it may invoke this on T2's primary key. In this
+    /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
+    /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
+    /// accurate.
+    ///
     /// Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
     /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
     /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
