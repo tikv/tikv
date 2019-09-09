@@ -80,7 +80,6 @@ where
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
         Ok(self.to_string().into_bytes())
     }
 }
@@ -274,6 +273,7 @@ impl ToInt for f64 {
     /// # Notes
     ///
     /// It handles overflows using `ctx` so that the caller would not handle it anymore.
+    #[allow(clippy::float_cmp)]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = (*self).round();
         if val < 0f64 {
@@ -288,9 +288,14 @@ impl ToInt for f64 {
         let upper_bound = integer_unsigned_upper_bound(tp);
         if val > upper_bound as f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
-            return Ok(upper_bound);
+            Ok(upper_bound)
+        } else if val == upper_bound as f64 {
+            // because in rustc, `let a = upper_bound as f64; a as u64` seems has bug,
+            // it don't return upper_bound
+            Ok(upper_bound)
+        } else {
+            Ok(val as u64)
         }
-        Ok(val as u64)
     }
 }
 
@@ -335,6 +340,12 @@ impl ToInt for &[u8] {
         let s = get_valid_utf8_prefix(ctx, self)?;
         let s = s.trim();
         let s = get_valid_int_prefix(ctx, s)?;
+        // in TiDB, it use strconv.ParseUint here,
+        // strconv.ParseUint will return 0 and a err if the str is neg
+        if s.starts_with('-') {
+            ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &s))?;
+            return Ok(0);
+        }
         let val = s.parse::<u64>();
         match val {
             Ok(val) => val.to_uint(ctx, tp),
@@ -401,6 +412,9 @@ impl ToInt for Decimal {
 }
 
 impl ToInt for DateTime {
+    // FiXME
+    //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap().round_frac(DEFAULT_FSP)
+    //  will get 2000-01-01T12:13:14, this is a bug
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // TODO: avoid this clone after refactor the `Time`
@@ -712,8 +726,7 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
         return;
     }
     let flen = flen as usize;
-    if ft.as_accessor().tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen
-    {
+    if ft.tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
         // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
         s.resize(flen, 0);
     }
@@ -820,7 +833,9 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
             valid_len = i + 1;
         }
     }
-    ctx.handle_truncate(valid_len == 0 || valid_len < s.len())?;
+    if valid_len == 0 || valid_len < s.len() {
+        ctx.handle_truncate_err(Error::truncated_wrong_val("INTEGER", s))?;
+    }
     if valid_len == 0 {
         Ok("0")
     } else {
@@ -1308,7 +1323,7 @@ mod tests {
         let bs = b"123bb".to_vec();
         let val = bs.to_int(&mut ctx, FieldTypeTp::LongLong);
         assert!(val.is_err());
-        assert_eq!(val.unwrap_err().code(), WARN_DATA_TRUNCATED);
+        assert_eq!(val.unwrap_err().code(), ERR_TRUNCATE_WRONG_VALUE);
 
         // Invalid UTF8 chars
         let mut ctx = EvalContext::default();
@@ -1678,7 +1693,7 @@ mod tests {
         match val {
             Err(e) => assert_eq!(
                 e.code(),
-                WARN_DATA_TRUNCATED,
+                ERR_TRUNCATE_WRONG_VALUE,
                 "expect data truncated, but got {:?}",
                 e
             ),
