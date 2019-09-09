@@ -147,7 +147,6 @@ pub struct SnapshotStore<S: Snapshot> {
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
-    #[inline]
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
@@ -159,7 +158,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         Ok(v)
     }
 
-    #[inline]
     fn batch_get(
         &self,
         keys: &[Key],
