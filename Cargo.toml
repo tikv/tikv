@@ -99,7 +99,7 @@ uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
 raft = "0.6.0-alpha"
 crossbeam = "0.5"
-derive_more = "0.11.0"
+derive_more = "0.15.0"
 hex = "0.3"
 more-asserts = "0.1"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
@@ -119,6 +119,7 @@ log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
+keys = { path = "components/keys" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -187,6 +188,7 @@ members = [
   "components/pd_client",
   "components/external_storage",
   "components/backup",
+  "components/keys",
   "cmd",
 ]
 
