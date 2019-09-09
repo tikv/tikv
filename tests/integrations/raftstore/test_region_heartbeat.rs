@@ -167,6 +167,8 @@ fn test_region_heartbeat_timestamp() {
 
     sleep(Duration::from_millis(1000));
     cluster.must_transfer_leader(1, new_peer(1, 1));
+    sleep(Duration::from_millis(1000));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
     let reported_ts_now = cluster.pd_client.get_region_last_report_ts(1).unwrap();
     assert!(reported_ts_now > reported_ts);
 }
