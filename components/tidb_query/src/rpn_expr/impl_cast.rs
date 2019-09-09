@@ -22,7 +22,7 @@ fn get_cast_fn_rpn_meta(
     let from = box_try!(EvalType::try_from(from_field_type.as_accessor().tp()));
     let to = box_try!(EvalType::try_from(to_field_type.as_accessor().tp()));
     let func_meta = match (from, to) {
-        // any as int/uint
+        // any as int
         (EvalType::Int, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
                 cast_int_as_int_fn_meta()
@@ -547,8 +547,8 @@ cast_as_duration!(
 mod tests {
     use super::Result;
     use crate::codec::data_type::{Decimal, Int, Real, ScalarValue};
-    use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
-    use crate::codec::mysql::{Duration, Json, Time};
+    use crate::codec::error::*;
+    use crate::codec::mysql::{Duration, Json, Time, DEFAULT_FSP};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
@@ -675,46 +675,46 @@ mod tests {
         }
     }
 
-    fn check_overflow(ctx: &EvalContext, overflow: bool) {
+    fn make_log<P: Display, R: Display + Debug>(
+        input: &P,
+        expect: &R,
+        result: &Result<Option<R>>,
+    ) -> String {
+        format!(
+            "input: {}, expect: {:?}, output: {:?}",
+            input, expect, result
+        )
+    }
+
+    fn check_overflow(ctx: &EvalContext, overflow: bool, log: &str) {
         if overflow {
-            assert_eq!(ctx.warnings.warning_cnt, 1);
-            assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+            assert_eq!(ctx.warnings.warning_cnt, 1, "{}", log);
+            assert_eq!(
+                ctx.warnings.warnings[0].get_code(),
+                ERR_DATA_OUT_OF_RANGE,
+                "{}",
+                log
+            );
         } else {
-            assert_eq!(ctx.warnings.warning_cnt, 0);
+            assert_eq!(ctx.warnings.warning_cnt, 0, "{}", log);
         }
     }
 
-    fn check_result<P: ToString, R: Debug + PartialEq>(
-        input: &P,
-        expect: Option<&R>,
-        res: &Result<Option<R>>,
-    ) {
-        assert!(
-            res.is_ok(),
-            "input: {}, expect: {:?}, output: {:?}",
-            input.to_string(),
-            expect,
-            res
-        );
+    fn check_warning(ctx: &EvalContext, err_code: Option<i32>, log: &str) {
+        if let Some(x) = err_code {
+            assert_eq!(ctx.warnings.warning_cnt, 1, "{}", log);
+            assert_eq!(ctx.warnings.warnings[0].get_code(), x, "{}", log);
+        }
+    }
+
+    fn check_result<R: Debug + PartialEq>(expect: Option<&R>, res: &Result<Option<R>>, log: &str) {
+        assert!(res.is_ok(), "{}", log);
         let res = res.as_ref().unwrap();
         if res.is_none() {
-            assert!(
-                expect.is_none(),
-                "input: {}, expect: {:?}, output: {:?}",
-                input.to_string(),
-                expect,
-                res
-            );
+            assert!(expect.is_none(), "{}", log);
         } else {
             let res = res.as_ref().unwrap();
-            assert_eq!(
-                res,
-                expect.unwrap(),
-                "input: {}, expect: {:?}, output: {:?}",
-                input.to_string(),
-                expect,
-                res
-            );
+            assert_eq!(res, expect.unwrap(), "{}", log);
         }
     }
 
@@ -741,7 +741,8 @@ mod tests {
         ];
         for (input, expect) in cs {
             let r = cast_int_as_int(&Some(input));
-            check_result(&input, Some(&expect), &r);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
     }
 
@@ -766,7 +767,8 @@ mod tests {
             let extra = make_extra(&rtf, &ia);
             let r = cast_int_as_uint(&extra, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
-            check_result(&input, Some(&expect), &r);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
     }
 
@@ -790,8 +792,9 @@ mod tests {
         for (input, result, overflow) in cs {
             let mut ctx = make_ctx(true, false, false);
             let r = cast_any_as_any::<Real, Int>(&mut ctx, &Real::new(input).ok());
-            check_result(&input, Some(&result), &r);
-            check_overflow(&ctx, overflow);
+            let log = make_log(&input, &result, &r);
+            check_result(Some(&result), &r, log.as_str());
+            check_overflow(&ctx, overflow, log.as_str());
         }
     }
 
@@ -801,26 +804,27 @@ mod tests {
 
         // in_union
         let cs = vec![
-            // (input, result)
+            // (input, expect)
             (-10.0, 0u64),
             (i64::MIN as f64, 0),
             (10.0, 10u64),
             (i64::MAX as f64, (1u64 << 63)),
         ];
 
-        for (input, result) in cs {
+        for (input, expect) in cs {
             let mut ctx = make_ctx(false, false, false);
             let rtf = make_ret_field_type(true);
             let ia = make_implicit_args(true);
             let extra = make_extra(&rtf, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
             let r = r.map(|x| x.map(|x| x as u64));
-            check_result(&input, Some(&result), &r);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
 
         // no clip to zero
         let cs = vec![
-            // (origin, result, overflow)
+            // (origin, expect, overflow)
             (10.5, 11u64, false),
             (10.4, 10u64, false),
             (
@@ -833,33 +837,35 @@ mod tests {
             (-1f64, -1f64 as i64 as u64, true),
         ];
 
-        for (input, result, overflow) in cs {
+        for (input, expect, overflow) in cs {
             let mut ctx = make_ctx(true, false, false);
             let ia = make_implicit_args(false);
             let rtf = make_ret_field_type(true);
             let extra = make_extra(&rtf, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
             let r = r.map(|x| x.map(|x| x as u64));
-            check_result(&input, Some(&result), &r);
-            check_overflow(&ctx, overflow)
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_overflow(&ctx, overflow, log.as_str())
         }
 
         // should clip to zero
         let cs: Vec<(f64, u64, bool)> = vec![
-            // (origin, result, overflow)
+            // (origin, expect, overflow)
             (-1f64, 0, true),
             (i64::MIN as f64, 0, true),
         ];
 
-        for (input, result, overflow) in cs {
+        for (input, expect, overflow) in cs {
             let mut ctx = make_ctx(true, false, true);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type(true);
             let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
             let r = r.map(|x| x.map(|x| x as u64));
-            check_result(&input, Some(&result), &r);
-            check_overflow(&ctx, overflow)
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_overflow(&ctx, overflow, log.as_str())
         }
     }
 
@@ -868,7 +874,7 @@ mod tests {
         test_none_with_ctx_and_extra(cast_string_as_int_or_uint);
 
         let cs = vec![
-            // (origin, result, overflow)
+            // (origin, expect, overflow)
             ("-10", -10i64, false),
             ("-10", -10i64, false),
             ("9223372036854775807", 9223372036854775807i64, false),
@@ -877,15 +883,16 @@ mod tests {
             ("-9223372036854775809", -9223372036854775808i64, true),
         ];
 
-        for (input, result, overflow) in cs {
+        for (input, expect, overflow) in cs {
             let mut ctx = make_ctx(true, false, false);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type(false);
             let extra = make_extra(&rft, &ia);
-            let r =
-                cast_string_as_int_or_uint(&mut ctx, &extra, &Some(Vec::from(input.as_bytes())));
-            check_result(&input, Some(&result), &r);
-            check_overflow(&ctx, overflow)
+            let val = Some(Vec::from(input.as_bytes()));
+            let r = cast_string_as_int_or_uint(&mut ctx, &extra, &val);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_overflow(&ctx, overflow, log.as_str())
         }
     }
 
@@ -894,85 +901,89 @@ mod tests {
         test_none_with_ctx_and_extra(cast_string_as_int_or_uint);
 
         let cs: Vec<(String, u64, bool)> = vec![
-            // (origin, result, overflow)
+            // (origin, expect, overflow)
             (i64::MAX.to_string(), i64::MAX as u64, false),
             (u64::MAX.to_string(), u64::MAX, false),
             (String::from("99999999999999999999999"), 0, true),
         ];
 
-        for (input, result, overflow) in cs {
+        for (input, expect, overflow) in cs {
             let mut ctx = make_ctx(true, false, false);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type(false);
             let extra = make_extra(&rft, &ia);
 
-            let r =
-                cast_string_as_int_or_uint(&mut ctx, &extra, &Some(Vec::from(input.as_bytes())));
-            assert!(r.is_ok());
-            assert_eq!(r.unwrap().unwrap() as u64, result);
-            check_overflow(&ctx, overflow);
+            let val = Some(Vec::from(input.as_bytes()));
+            let r = cast_string_as_int_or_uint(&mut ctx, &extra, &val);
+            let r = r.map(|x| x.map(|x| x as u64));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_overflow(&ctx, overflow, log.as_str())
         }
 
-        let cs: Vec<(&str, i64, i64, bool)> = vec![
-            // (origin, result, warning_cnt, in_union)
-            ("-10", -10, 1, false),
-            ("-10", 0, 0, true),
+        let cs: Vec<(&str, i64, Option<i32>, bool)> = vec![
+            // (origin, expect, err_code, in_union)
+            ("-10", -10, Some(ERR_UNKNOWN), false),
+            ("-10", 0, None, true),
         ];
 
         // TODO, warning_cnt
-        for (input, result, _warning_cnt, in_union) in cs {
+        for (input, expect, err_code, in_union) in cs {
             let mut ctx = make_ctx(true, false, false);
             let ia = make_implicit_args(in_union);
             let rft = make_ret_field_type(false);
             let extra = make_extra(&rft, &ia);
 
-            let r =
-                cast_string_as_int_or_uint(&mut ctx, &extra, &Some(Vec::from(input.as_bytes())));
-            check_result(&input, Some(&result), &r);
+            let val = Some(Vec::from(input.as_bytes()));
+            let r = cast_string_as_int_or_uint(&mut ctx, &extra, &val);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_warning(&ctx, err_code, log.as_str());
         }
     }
 
     #[test]
     fn test_decimal_as_int() {
         test_none_with_ctx(cast_any_as_any::<Decimal, Int>);
-        let cs: Vec<(Decimal, i64, bool)> = vec![
-            // (origin, result, overflow)
+
+        let cs: Vec<(Decimal, i64, Option<i32>)> = vec![
+            // (origin, expect, overflow)
             (
                 Decimal::from_bytes(b"9223372036854775807")
                     .unwrap()
                     .unwrap(),
                 9223372036854775807,
-                false,
+                None,
             ),
             (
                 Decimal::from_bytes(b"-9223372036854775808")
                     .unwrap()
                     .unwrap(),
                 -9223372036854775808,
-                false,
+                None,
             ),
             (
                 Decimal::from_bytes(b"9223372036854775808")
                     .unwrap()
                     .unwrap(),
                 9223372036854775807,
-                true,
+                Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
             (
                 Decimal::from_bytes(b"-9223372036854775809")
                     .unwrap()
                     .unwrap(),
                 -9223372036854775808,
-                true,
+                Some(ERR_TRUNCATE_WRONG_VALUE),
             ),
         ];
 
-        for (input, result, overflow) in cs {
+        for (input, expect, err_code) in cs {
             let mut ctx = make_ctx(true, false, false);
-            let input_copy = input.clone();
-            let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input));
-            check_result(&input_copy, Some(&result), &r);
-            check_overflow(&ctx, overflow);
+            let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input.clone()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_warning(&ctx, err_code, log.as_str());
         }
     }
 
@@ -1007,20 +1018,20 @@ mod tests {
             ),
         ];
 
-        for (input, result) in cs {
+        for (input, expect) in cs {
             let mut ctx = make_ctx(false, false, false);
             let ia = make_implicit_args(true);
             let rft = make_ret_field_type(true);
             let extra = make_extra(&rft, &ia);
 
-            let input_copy = input.clone();
-            let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input));
+            let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
-            check_result(&input_copy, Some(&result), &r);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
 
         let cs: Vec<(Decimal, u64, bool)> = vec![
-            // (input, result, overflow)
+            // (input, expect, overflow)
             (Decimal::from_bytes(b"10").unwrap().unwrap(), 10, false),
             (
                 Decimal::from_bytes(b"1844674407370955161")
@@ -1039,17 +1050,17 @@ mod tests {
             ),
         ];
 
-        for (input, result, overflow) in cs {
+        for (input, expect, overflow) in cs {
             let mut ctx = make_ctx(true, false, false);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type(true);
             let extra = make_extra(&rft, &ia);
 
-            let input_copy = input.clone();
-            let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input));
+            let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
-            check_result(&input_copy, Some(&result), &r);
-            check_overflow(&ctx, overflow);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_overflow(&ctx, overflow, log.as_str());
         }
     }
 
@@ -1058,18 +1069,28 @@ mod tests {
         // TODO, add more test case
         // TODO, add test that make cast_any_as_any::<Time, Int> returning truncated error
         let cs: Vec<(Time, i64)> = vec![
-            (Time::parse_utc_datetime("11:11:11", 0).unwrap(), 111111),
             (
-                Time::parse_utc_datetime("11:11:11.6666", 4).unwrap(),
-                111112,
+                Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
+                20000101121314,
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                20000101121315,
+            ),
+            (
+                // FiXME
+                //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap().round_frac(DEFAULT_FSP)
+                //  will get 2000-01-01T12:13:14, I don't know whether this is a bug
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap(),
+                20000101121315,
             ),
         ];
 
-        for (input, result) in cs {
+        for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let input_copy = input.clone();
-            let r = cast_any_as_any::<Time, Int>(&mut ctx, &Some(input));
-            check_result(&input_copy, Some(&result), &r);
+            let r = cast_any_as_any::<Time, Int>(&mut ctx, &Some(input.clone()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
     }
 
@@ -1079,14 +1100,15 @@ mod tests {
         let cs: Vec<(Duration, i64)> = vec![
             (Duration::parse(b"17:51:04.78", 2).unwrap(), 175105),
             (Duration::parse(b"-17:51:04.78", 2).unwrap(), -175105),
-            (Duration::parse(b"17:51:04.78", 0).unwrap(), 175104),
-            (Duration::parse(b"-17:51:04.78", 0).unwrap(), -175104),
+            (Duration::parse(b"17:51:04.78", 0).unwrap(), 175105),
+            (Duration::parse(b"-17:51:04.78", 0).unwrap(), -175105),
         ];
 
-        for (input, result) in cs {
+        for (input, expect) in cs {
             let mut ctx = make_ctx(true, false, false);
             let r = cast_any_as_any::<Duration, Int>(&mut ctx, &Some(input));
-            check_result(&input, Some(&result), &r);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
     }
 
@@ -1096,7 +1118,7 @@ mod tests {
 
         // no overflow
         let cs = vec![
-            // (origin, result, overflow)
+            // (origin, expect, overflow)
             (Json::Object(BTreeMap::default()), 0, false),
             (Json::Array(vec![]), 0, false),
             (Json::I64(10), 10i64, false),
@@ -1128,62 +1150,78 @@ mod tests {
             ),
         ];
 
-        for (input, result, overflow) in cs {
+        for (input, expect, overflow) in cs {
             let mut ctx = make_ctx(true, false, false);
-            let input_copy = input.clone();
-            let r = cast_any_as_any::<Json, Int>(&mut ctx, &Some(input));
-            check_result(&input_copy, Some(&result), &r);
-            check_overflow(&ctx, overflow);
+            let r = cast_any_as_any::<Json, Int>(&mut ctx, &Some(input.clone()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_overflow(&ctx, overflow, log.as_str());
         }
     }
 
     #[test]
     fn test_json_as_uint() {
         // no clip to zero
-        let cs = vec![
-            // (origin, result, overflow)
-            (Json::Double(-1.0), -1.0f64 as i64 as u64, false),
-            (Json::String(String::from("10")), 10, false),
-            (Json::String(String::from("+10abc")), 10, false),
+        let cs: Vec<(Json, u64, Option<i32>)> = vec![
+            // (origin, expect, error_code)
+            (Json::Double(-1.0), -1.0f64 as i64 as u64, None),
+            (Json::String(String::from("10")), 10, None),
+            (
+                Json::String(String::from("+10abc")),
+                10,
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+            ),
             (
                 Json::String(String::from("9999999999999999999999999")),
                 u64::MAX,
-                true,
+                Some(ERR_DATA_OUT_OF_RANGE),
             ),
-            (Json::Double(2f64 * (u64::MAX as f64)), u64::MAX, true),
+            (
+                Json::Double(2f64 * (u64::MAX as f64)),
+                u64::MAX,
+                Some(ERR_DATA_OUT_OF_RANGE),
+            ),
         ];
 
-        for (input, result, overflow) in cs {
-            let mut ctx = make_ctx(true, false, false);
-            let input_copy = input.clone();
-            let r = cast_json_as_uint(&mut ctx, &Some(input));
+        for (input, expect, error_code) in cs {
+            let mut ctx = make_ctx(true, true, false);
+            let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
-            check_result(&input_copy, Some(&result), &r);
-            check_overflow(&ctx, overflow);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_warning(&ctx, error_code, log.as_str());
         }
 
         // should clip to zero
-        let cs = vec![
-            // (origin, result, overflow)
-            (Json::Double(-1.0), 0, false),
-            (Json::String(String::from("-10")), 0, false),
-            (Json::String(String::from("10")), 10, false),
-            (Json::String(String::from("+10abc")), 10, false),
+        let cs: Vec<(Json, u64, Option<i32>)> = vec![
+            // (origin, expect, err_code)
+            (Json::Double(-1.0), 0, None),
+            (Json::String(String::from("-10")), 0, None),
+            (Json::String(String::from("10")), 10, None),
+            (
+                Json::String(String::from("+10abc")),
+                10,
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+            ),
             (
                 Json::String(String::from("9999999999999999999999999")),
                 u64::MAX,
-                true,
+                Some(ERR_DATA_OUT_OF_RANGE),
             ),
-            (Json::Double(2f64 * (u64::MAX as f64)), u64::MAX, true),
+            (
+                Json::Double(2f64 * (u64::MAX as f64)),
+                u64::MAX,
+                Some(ERR_DATA_OUT_OF_RANGE),
+            ),
         ];
 
-        for (input, result, overflow) in cs {
+        for (input, expect, err_code) in cs {
             let mut ctx = make_ctx(true, false, true);
-            let input_copy = input.clone();
-            let r = cast_json_as_uint(&mut ctx, &Some(input));
+            let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
-            check_result(&input_copy, Some(&result), &r);
-            check_overflow(&ctx, overflow);
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_warning(&ctx, err_code, log.as_str());
         }
     }
 }
