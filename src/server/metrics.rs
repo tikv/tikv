@@ -19,6 +19,8 @@ make_static_metric! {
         kv_cleanup,
         kv_batch_get,
         kv_batch_rollback,
+        kv_txn_heart_beat,
+        kv_check_txn_status,
         kv_scan_lock,
         kv_resolve_lock,
         kv_gc,
