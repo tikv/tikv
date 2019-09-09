@@ -105,10 +105,6 @@ dev: format clippy
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}" -p cmd
 
-run:
-	cargo run --no-default-features --features  "${ENABLE_FEATURES}" -p cmd --bin tikv-server -- --pd-endpoints 127.0.0.1:2379
-
-
 ## Release builds (optimized dev builds)
 ## ----------------------------
 
