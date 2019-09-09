@@ -1303,7 +1303,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Check the specified primary key and enlarge it's TTL if necessary. Returns the new TTL.
     ///
-    /// Schedules a [`Command::TxnHeartBeat`]
+    /// Schedules a [`Command::TxnHeartBeat`].
     pub fn async_txn_heart_beat(
         &self,
         ctx: Context,
@@ -1331,6 +1331,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
     /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
     /// no information about the transaction, results will be both 0.
+    ///
+    /// Schedules a [`Command::CheckTxnStatus`].
     pub fn async_check_txn_status(
         &self,
         ctx: Context,
