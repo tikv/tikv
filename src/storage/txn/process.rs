@@ -32,6 +32,7 @@ pub enum ProcessResult {
     MvccKey { mvcc: MvccInfo },
     MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
     Locks { locks: Vec<LockInfo> },
+    TxnStatus { lock_ttl: u64, commit_ts: u64 },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
 }
@@ -61,6 +62,14 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
         },
         StorageCb::Locks(cb) => match pr {
             ProcessResult::Locks { locks } => cb(Ok(locks)),
+            ProcessResult::Failed { err } => cb(Err(err)),
+            _ => panic!("process result mismatch"),
+        },
+        StorageCb::TxnStatus(cb) => match pr {
+            ProcessResult::TxnStatus {
+                lock_ttl,
+                commit_ts,
+            } => cb(Ok((lock_ttl, commit_ts))),
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
@@ -795,6 +804,23 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
+        Command::TxnHeartBeat {
+            ctx,
+            primary_key,
+            start_ts,
+            advise_ttl,
+        } => {
+            // TxnHeartBeat never remove locks. No need to wake up waiters.
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
+
+            statistics.add(&txn.take_statistics());
+            let pr = ProcessResult::TxnStatus {
+                lock_ttl,
+                commit_ts: 0,
+            };
+            (pr, txn.into_modifies(), 1, ctx, None)
+        }
         Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
             (ProcessResult::Res, vec![], 0, ctx, None)
@@ -948,15 +974,6 @@ mod tests {
         }
     }
 
-    // TODO:
-    // 1. 正常流程的测试，acq pre com 巴拉巴拉的。 done
-    // 2. 纯乐观事务场景不会计算hash done
-    // 3. commit、rollback、resolve lock、resolve lock lite 等消息的正确性与否 done
-    //
-    // 再在 server lock manager 测试 lockmanager 的正确性，可以用单机的死锁检测，mock pd client，手
-    // 动 coprocessor 这种就够了。还要测试几个特殊场景，比如单语句 rollback 这种，死锁等。
-    //
-    // 再在 integration tests 测试，包括 service，死锁检测切换等等。
     #[test]
     fn test_no_key_hash_when_no_waiter() {
         let (msg_tx, msg_rx) = channel();

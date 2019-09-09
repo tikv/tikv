@@ -21,7 +21,7 @@ fn test_storage_gcworker_busy() {
     let _guard = crate::setup();
     let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let storage = TestStorageBuilder::from_engine(engine.clone())
+    let storage = TestStorageBuilder::<_, DummyLockMgr>::from_engine(engine.clone())
         .build()
         .unwrap();
     fail::cfg(snapshot_fp, "pause").unwrap();
@@ -88,7 +88,7 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::from_engine(engine0.clone())
+    let storage0 = TestStorageBuilder::<_, DummyLockMgr>::from_engine(engine0.clone())
         .build()
         .unwrap();
 

@@ -794,6 +794,8 @@ pub fn decode_datum(data: &mut BytesSlice<'_>) -> Result<Datum> {
             FLOAT_FLAG => number::decode_f64(data).map(Datum::F64)?,
             DURATION_FLAG => {
                 let nanos = number::decode_i64(data)?;
+                // Decode the i64 into `Duration` with `MAX_FSP`, then unflatten it with concrete
+                // `FieldType` information
                 let dur = Duration::from_nanos(nanos, MAX_FSP)?;
                 Datum::Dur(dur)
             }

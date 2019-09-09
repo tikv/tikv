@@ -65,8 +65,8 @@ fn decode_json(v: &mut &[u8]) -> Result<Json> {
 }
 
 #[inline]
-fn decode_duration_from_i64(v: i64) -> Result<Duration> {
-    Duration::from_nanos(v, 0)
+fn decode_duration_from_i64(v: i64, field_type: &FieldType) -> Result<Duration> {
+    Duration::from_nanos(v, field_type.as_accessor().decimal() as i8)
         .map_err(|_| Error::InvalidDataType("Failed to decode i64 as duration".to_owned()))
 }
 
@@ -199,7 +199,10 @@ pub fn decode_date_time_datum(
     }
 }
 
-pub fn decode_duration_datum(mut raw_datum: &[u8]) -> Result<Option<Duration>> {
+pub fn decode_duration_datum(
+    mut raw_datum: &[u8],
+    field_type: &FieldType,
+) -> Result<Option<Duration>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
             "Failed to decode datum flag".to_owned(),
@@ -212,13 +215,13 @@ pub fn decode_duration_datum(mut raw_datum: &[u8]) -> Result<Option<Duration>> {
         // In index, it's flag is `DURATION`. See TiDB's `encode()`.
         datum::DURATION_FLAG => {
             let v = decode_int(&mut raw_datum)?;
-            let v = decode_duration_from_i64(v)?;
+            let v = decode_duration_from_i64(v, field_type)?;
             Ok(Some(v))
         }
         // In record, it's flag is `VAR_INT`. See TiDB's `flatten()` and `encode()`.
         datum::VAR_INT_FLAG => {
             let v = decode_var_int(&mut raw_datum)?;
-            let v = decode_duration_from_i64(v)?;
+            let v = decode_duration_from_i64(v, field_type)?;
             Ok(Some(v))
         }
         _ => Err(Error::InvalidDataType(format!(
@@ -282,8 +285,8 @@ impl<'a> RawDatumDecoder<DateTime> for &'a [u8] {
 }
 
 impl<'a> RawDatumDecoder<Duration> for &'a [u8] {
-    fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Duration>> {
-        decode_duration_datum(self)
+    fn decode(self, field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Duration>> {
+        decode_duration_datum(self, field_type)
     }
 }
 
