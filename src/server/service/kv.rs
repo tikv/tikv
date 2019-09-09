@@ -31,15 +31,16 @@ use prometheus::HistogramTimer;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
-use tokio_timer::Interval;
+use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
-const MINIBATCH_TIMEOUT_MILLIS: u64 = 13;
+const MINIBATCH_TIMEOUT_MILLIS: u64 = 1;
 const MINIBATCH_CROSS_COMMAND_ENABLED: bool = true;
 
 /// Service handles the RPC messages for the `Tikv` service.
@@ -55,6 +56,8 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     snap_scheduler: Scheduler<SnapTask>,
 
     thread_load: Arc<ThreadLoad>,
+
+    timer_pool: Arc<Mutex<ThreadPool>>,
 }
 
 #[derive(Eq, Hash)]
@@ -204,8 +207,10 @@ impl MiniBatcher {
         storage: &Storage<E>,
         tx: Sender<(u64, batch_commands_response::Response)>,
     ) {
-        self.report();
         let commands = self.take_commands();
+        if commands.len() > 0 {
+            self.report();
+        }
         for cmd in commands {
             let tx_copy = tx.clone();
             storage.batch_prewrite(
@@ -243,7 +248,6 @@ impl MiniBatcher {
         storage: &Storage<E>,
         tx: Sender<(u64, batch_commands_response::Response)>,
     ) {
-        info!("check maybe submit");
         if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
             self.submit(storage, tx);
         }
@@ -265,6 +269,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
             ch,
             snap_scheduler,
             thread_load,
+            timer_pool: Arc::new(Mutex::new(ThreadPoolBuilder::new()
+                .pool_size(4)
+                .name_prefix("minibatch_timer_pool")
+                .build())),
         }
     }
 
@@ -1165,17 +1173,20 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let minibatcher = MiniBatcher::new();
         let minibatcher = Arc::new(Mutex::new(minibatcher));
         if MINIBATCH_CROSS_COMMAND_ENABLED {
+            info!("batch_commands spawn interval timer");
             let storage = storage.clone();
             let tx = tx.clone();
             let minibatcher = minibatcher.clone();
             let start = Instant::now() + Duration::from_millis(100);
-            ctx.spawn(Interval::new(start, Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS))
-                .into_future()
-                .and_then(move |_| {
-                    minibatcher.lock().unwrap().maybe_submit(&storage, tx);
-                    Ok(())
-                })
-                .map_err(|e| info!("wake-up timer interval errored"; "err" => ?e)));
+            let timer = GLOBAL_TIMER_HANDLE.clone();
+            self.timer_pool.lock().unwrap().spawn(
+                timer.interval(start, Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS))
+                    .for_each(move |_| {
+                        minibatcher.lock().unwrap().maybe_submit(&storage, tx.clone());
+                        Ok(())
+                    })
+                    .map_err(|e| error!("batch_commands timer errored"; "err" => ?e))
+            )
         }
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids();
@@ -1186,13 +1197,14 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                     handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
                 }
             }
-            if minibatcher.lock().unwrap().ready() {
-                minibatcher.lock().unwrap().submit(&storage, tx.clone());
+            let mut mb = minibatcher.lock().unwrap();
+            if mb.ready() {
+                mb.submit(&storage, tx.clone());
             }
             future::ok::<_, _>(())
         });
 
-        ctx.spawn(request_handler.map_err(|e| error!("batch commands error"; "err" => %e)));
+        ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
 
         let thread_load = Arc::clone(&self.thread_load);
         let response_retriever = BatchReceiver::new(
@@ -1269,35 +1281,6 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
     let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
     let notify = BatchCommandsNotify(spawn);
     notify.notify(0);
-}
-
-fn handle_minibatch_command<E: Engine> (
-    storage: &Storage<E>,
-    _cop: &Endpoint<E>,
-    _peer: String,
-    cmd: Command,
-    tx: Sender<(u64, batch_commands_response::Response)>,
-) {
-    // let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
-    // assert(cmd.commands[0] is prewrite)
-    storage.batch_prewrite(
-        cmd,
-        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
-            // let v = v.map_err(Error::from);
-            let mut resp = PrewriteResponse::default();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                resp.set_errors(extract_key_errors(v).into());
-            }
-            let mut res = batch_commands_response::Response::default();
-            res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
-            tx.send_and_notify((id, res));
-            // if !tx.send_and_notify((id, res)).is_err() {
-                // timer.observe_duration();
-            // }
-        })
-    );
 }
 
 fn handle_batch_commands_request<E: Engine>(
