@@ -10,6 +10,7 @@ use tipb::FieldType;
 
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::expr::EvalWarnings;
+use crate::storage::IntervalRange;
 use crate::Result;
 
 /// The interface for pull-based executors. It is similar to the Volcano Iterator model, but
@@ -49,6 +50,8 @@ pub trait BatchExecutor: Send {
     /// children executor and this function may be invoked several times during execution.
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats);
 
+    fn take_scanned_range(&mut self) -> IntervalRange;
+
     fn with_summary_collector<C: ExecSummaryCollector + Send>(
         self,
         summary_collector: C,
@@ -81,6 +84,10 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         (**self).collect_storage_stats(dest);
     }
+
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        (**self).take_scanned_range()
+    }
 }
 
 impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
@@ -108,6 +115,10 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
 
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.inner.collect_storage_stats(dest);
+    }
+
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.inner.take_scanned_range()
     }
 }
 
