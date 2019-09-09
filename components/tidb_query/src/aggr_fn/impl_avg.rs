@@ -34,14 +34,8 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
 
         assert_eq!(aggr_def.get_tp(), ExprType::Avg);
 
-        // AVG outputs two columns.
-        out_schema.push(
-            FieldTypeBuilder::new()
-                .tp(FieldTypeTp::LongLong)
-                .flag(FieldTypeFlag::UNSIGNED)
-                .build(),
-        );
-        out_schema.push(aggr_def.take_field_type());
+        let out_column_2 = aggr_def.take_field_type();
+        let out_column_2_et = box_try!(EvalType::try_from(out_column_2.as_accessor().tp()));
 
         // Rewrite expression to insert CAST() if needed.
         let child = aggr_def.take_children().into_iter().next().unwrap();
@@ -51,6 +45,21 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
 
         let rewritten_eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
+        if out_column_2_et != rewritten_eval_type {
+            return Err(other_err!(
+                "Unexpected return field type {}",
+                out_column_2.as_accessor().tp()
+            ));
+        }
+
+        // AVG outputs two columns.
+        out_schema.push(
+            FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build(),
+        );
+        out_schema.push(out_column_2);
         out_exp.push(exp);
 
         Ok(match rewritten_eval_type {

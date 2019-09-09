@@ -60,12 +60,21 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
         assert_eq!(aggr_def.get_tp(), T::TP);
-
-        // `MAX/MIN` outputs one column which has the same type with its child
-        out_schema.push(aggr_def.take_field_type());
-
         let child = aggr_def.take_children().into_iter().next().unwrap();
         let eval_type = EvalType::try_from(child.get_field_type().as_accessor().tp()).unwrap();
+
+        let out_column = aggr_def.take_field_type();
+        let out_column_et = box_try!(EvalType::try_from(out_column.as_accessor().tp()));
+
+        if out_column_et != eval_type {
+            return Err(other_err!(
+                "Unexpected return field type {}",
+                out_column.as_accessor().tp()
+            ));
+        }
+
+        // `MAX/MIN` outputs one column which has the same type with its child
+        out_schema.push(out_column);
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,

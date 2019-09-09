@@ -33,8 +33,8 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
 
         assert_eq!(aggr_def.get_tp(), ExprType::Sum);
 
-        // SUM outputs one column.
-        out_schema.push(aggr_def.take_field_type());
+        let out_column = aggr_def.take_field_type();
+        let out_column_et = box_try!(EvalType::try_from(out_column.as_accessor().tp()));
 
         // Rewrite expression, inserting CAST if necessary. See `typeInfer4Sum` in TiDB.
         let child = aggr_def.take_children().into_iter().next().unwrap();
@@ -45,6 +45,15 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
 
         let rewritten_eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
+        if out_column_et != rewritten_eval_type {
+            return Err(other_err!(
+                "Unexpected return field type {}",
+                out_column.as_accessor().tp()
+            ));
+        }
+
+        // SUM outputs one column.
+        out_schema.push(out_column);
         out_exp.push(exp);
 
         // Choose a type-aware SUM implementation based on the eval type after rewriting exp.
