@@ -361,6 +361,9 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
             self.handle_backup_task(task);
         } else {
             // TODO: support incremental backup
+            BACKUP_RANGE_ERROR_VEC
+                .with_label_values(&["incremental"])
+                .inc();
             error!("incremental backup is not supported yet");
         }
     }
