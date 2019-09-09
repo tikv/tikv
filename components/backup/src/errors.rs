@@ -4,7 +4,7 @@ use std::io::Error as IoError;
 use std::{error, result};
 
 use kvproto::backup::Error as ErrorPb;
-use kvproto::errorpb::Error as RegionError;
+use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::KeyError;
 use tikv::storage::kv::Error as EngineError;
 use tikv::storage::mvcc::Error as MvccError;
@@ -28,6 +28,15 @@ impl Into<ErrorPb> for Error {
                 let mut e = KeyError::new();
                 e.set_locked(info);
                 err.set_kv_error(e);
+            }
+            timeout @ Error::Engine(EngineError::Timeout(_)) => {
+                let mut busy = ServerIsBusy::default();
+                let reason = format!("{}", timeout);
+                busy.set_reason(reason.clone());
+                let mut e = RegionError::default();
+                e.set_message(reason);
+                e.set_server_is_busy(busy);
+                err.set_region_error(e);
             }
             other => {
                 err.set_msg(format!("{:?}", other));
