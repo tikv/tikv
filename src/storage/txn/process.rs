@@ -269,8 +269,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if lock_info.is_some() {
-                    let (lock, is_first_lock) = lock_info.unwrap();
+                if let Some(lock_info) = lock_info {
+                    let (lock, is_first_lock) = lock_info;
                     Msg::WaitForLock {
                         cid,
                         start_ts: ts,
