@@ -216,6 +216,7 @@ soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+enable-doubly-skiplist = true
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
