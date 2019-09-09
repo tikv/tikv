@@ -43,9 +43,7 @@ pub trait LockMgr: Clone + Send + 'static {
     /// Returns true if there are waiters in the `LockMgr`.
     ///
     /// This function is used to avoid useless calculation and wake-up.
-    fn has_waiter(&self) -> bool {
-        true
-    }
+    fn has_waiter(&self) -> bool;
 }
 
 // For test
@@ -70,5 +68,9 @@ impl LockMgr for DummyLockMgr {
         _commit_ts: u64,
         _is_pessimistic_txn: bool,
     ) {
+    }
+
+    fn has_waiter(&self) -> bool {
+        false
     }
 }

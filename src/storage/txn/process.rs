@@ -840,3 +840,483 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
     }
     Ok((lock, writes, values))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::lock_manager::{gen_key_hash, gen_key_hashes, Lock};
+    use crate::storage::txn::ProcessResult;
+    use crate::storage::*;
+    use kvproto::kvrpcpb::Context;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::*,
+        Arc,
+    };
+    use std::time::Duration;
+
+    pub enum Msg {
+        WaitFor {
+            start_ts: u64,
+            cb: StorageCb,
+            pr: ProcessResult,
+            lock: Lock,
+            is_first_lock: bool,
+        },
+
+        WakeUp {
+            lock_ts: u64,
+            hashes: Option<Vec<u64>>,
+            commit_ts: u64,
+            is_pessimistic_txn: bool,
+        },
+    }
+
+    /// `ProxyLockMgr` sends all msgs it received to `Sender`.
+    /// It's used to check the correctness of msgs.
+    #[derive(Clone)]
+    pub struct ProxyLockMgr {
+        tx: Sender<Msg>,
+        has_waiter: Arc<AtomicBool>,
+    }
+
+    impl ProxyLockMgr {
+        pub fn new(tx: Sender<Msg>) -> Self {
+            Self {
+                tx,
+                has_waiter: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        pub fn set_has_waiter(&mut self, has_waiter: bool) {
+            self.has_waiter.store(has_waiter, Ordering::Relaxed);
+        }
+    }
+
+    impl LockMgr for ProxyLockMgr {
+        fn wait_for(
+            &self,
+            start_ts: u64,
+            cb: StorageCb,
+            pr: ProcessResult,
+            lock: Lock,
+            is_first_lock: bool,
+        ) {
+            self.tx
+                .send(Msg::WaitFor {
+                    start_ts,
+                    cb,
+                    pr,
+                    lock,
+                    is_first_lock,
+                })
+                .unwrap();
+        }
+
+        fn wake_up(
+            &self,
+            lock_ts: u64,
+            hashes: Option<Vec<u64>>,
+            commit_ts: u64,
+            is_pessimistic_txn: bool,
+        ) {
+            self.tx
+                .send(Msg::WakeUp {
+                    lock_ts,
+                    hashes,
+                    commit_ts,
+                    is_pessimistic_txn,
+                })
+                .unwrap();
+        }
+
+        fn has_waiter(&self) -> bool {
+            self.has_waiter.load(Ordering::Relaxed)
+        }
+    }
+
+    fn expect_ok_callback<T>(done: Sender<()>) -> Callback<T> {
+        Box::new(move |x: Result<T>| {
+            x.unwrap();
+            done.send(()).unwrap();
+        })
+    }
+
+    fn expect_no_key_hashes(msg: Msg) {
+        match msg {
+            Msg::WakeUp { hashes, .. } => assert_eq!(hashes, None),
+            _ => panic!("unexpected msg"),
+        }
+    }
+
+    // TODO:
+    // 1. 正常流程的测试，acq pre com 巴拉巴拉的。 done
+    // 2. 纯乐观事务场景不会计算hash done
+    // 3. commit、rollback、resolve lock、resolve lock lite 等消息的正确性与否 done
+    //
+    // 再在 server lock manager 测试 lockmanager 的正确性，可以用单机的死锁检测，mock pd client，手
+    // 动 coprocessor 这种就够了。还要测试几个特殊场景，比如单语句 rollback 这种，死锁等。
+    //
+    // 再在 integration tests 测试，包括 service，死锁检测切换等等。
+    #[test]
+    fn test_no_key_hash_when_no_waiter() {
+        let (msg_tx, msg_rx) = channel();
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .lock_mgr(ProxyLockMgr::new(msg_tx))
+            .build()
+            .unwrap();
+
+        let key = Key::from_raw(b"a");
+        let (tx, rx) = channel();
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                10,
+                Options::default(),
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_commit(
+                Context::default(),
+                vec![key.clone()],
+                10,
+                20,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                key.clone(),
+                20,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        storage
+            .async_rollback(
+                Context::default(),
+                vec![key.clone()],
+                30,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        storage
+            .async_pessimistic_rollback(
+                Context::default(),
+                vec![key.clone()],
+                40,
+                40,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                ],
+                b"a".to_vec(),
+                50,
+                Options::default(),
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_resolve_lock_lite(
+                Context::default(),
+                50,
+                0,
+                vec![Key::from_raw(b"b")],
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+        let mut txn_status = HashMap::default();
+        txn_status.insert(50, 0);
+        storage
+            .async_resolve_lock(
+                Context::default(),
+                txn_status,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+    }
+
+    #[test]
+    fn test_wait_for_validation() {
+        let (msg_tx, msg_rx) = channel();
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .lock_mgr(ProxyLockMgr::new(msg_tx))
+            .build()
+            .unwrap();
+
+        let key = Key::from_raw(b"a");
+        let (tx, rx) = channel();
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), false)],
+                key.to_raw().unwrap(),
+                10,
+                Options::default(),
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // No wait for msg
+        assert!(msg_rx.try_recv().is_err());
+
+        let mut options = Options::default();
+        options.is_first_lock = true;
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), false)],
+                key.to_raw().unwrap(),
+                20,
+                options,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        // The transaction should be waiting for lock released so cb won't be called.
+        rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+        let msg = msg_rx.try_recv().unwrap();
+        // Check msg validation.
+        match msg {
+            Msg::WaitFor {
+                start_ts,
+                pr,
+                lock,
+                is_first_lock,
+                ..
+            } => {
+                assert_eq!(start_ts, 20);
+                assert_eq!(
+                    lock,
+                    Lock {
+                        ts: 10,
+                        hash: gen_key_hash(&key)
+                    }
+                );
+                assert_eq!(is_first_lock, true);
+                match pr {
+                    ProcessResult::MultiRes { results } => {
+                        assert_eq!(results.len(), 1);
+                        match results[0] {
+                            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(_)))) => (),
+                            _ => panic!("unexpected error"),
+                        }
+                    }
+                    _ => panic!("unexpected process result"),
+                };
+            }
+
+            _ => panic!("unexpected msg"),
+        }
+    }
+
+    fn expected_wake_up_msg(
+        msg: Msg,
+        expected_lock_ts: u64,
+        expected_hashes: Option<Vec<u64>>,
+        expected_commit_ts: u64,
+        expected_is_pessimistic_txn: bool,
+    ) {
+        match msg {
+            Msg::WakeUp {
+                lock_ts,
+                hashes,
+                commit_ts,
+                is_pessimistic_txn,
+            } => {
+                assert_eq!(lock_ts, expected_lock_ts);
+                assert_eq!(hashes, expected_hashes);
+                assert_eq!(commit_ts, expected_commit_ts);
+                assert_eq!(is_pessimistic_txn, expected_is_pessimistic_txn);
+            }
+            _ => panic!("unexpected msg"),
+        }
+    }
+
+    #[test]
+    fn test_wake_up_validation() {
+        let (msg_tx, msg_rx) = channel();
+        let mut lock_mgr = ProxyLockMgr::new(msg_tx);
+        lock_mgr.set_has_waiter(true);
+
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .lock_mgr(lock_mgr.clone())
+            .build()
+            .unwrap();
+
+        let keys = vec![
+            Key::from_raw(b"a"),
+            Key::from_raw(b"b"),
+            Key::from_raw(b"c"),
+        ];
+        let key_hashes = Some(gen_key_hashes(&keys));
+
+        let (tx, rx) = channel();
+        storage
+            .async_prewrite(
+                Context::default(),
+                keys.iter()
+                    .map(|key| Mutation::Put((key.clone(), b"v".to_vec())))
+                    .collect(),
+                keys[0].to_raw().unwrap(),
+                10,
+                Options::default(),
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_commit(
+                Context::default(),
+                keys.clone(),
+                10,
+                20,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let msg = msg_rx.try_recv().unwrap();
+        expected_wake_up_msg(msg, 10, key_hashes.clone(), 20, false);
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                keys[0].clone(),
+                30,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let msg = msg_rx.try_recv().unwrap();
+        expected_wake_up_msg(msg, 30, Some(vec![gen_key_hash(&keys[0])]), 0, false);
+
+        storage
+            .async_rollback(
+                Context::default(),
+                keys.clone(),
+                40,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let msg = msg_rx.try_recv().unwrap();
+        expected_wake_up_msg(msg, 40, key_hashes.clone(), 0, false);
+
+        storage
+            .async_pessimistic_rollback(
+                Context::default(),
+                keys.clone(),
+                50,
+                50,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let msg = msg_rx.try_recv().unwrap();
+        expected_wake_up_msg(msg, 50, key_hashes.clone(), 0, true);
+
+        storage
+            .async_resolve_lock_lite(
+                Context::default(),
+                60,
+                0,
+                keys.clone(),
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let msg = msg_rx.try_recv().unwrap();
+        expected_wake_up_msg(msg, 60, Some(gen_key_hashes(&keys)), 0, false);
+
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((keys[0].clone(), b"v".to_vec()))],
+                keys[0].to_raw().unwrap(),
+                70,
+                Options::default(),
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut options = Options::default();
+        options.for_update_ts = 80;
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(keys[1].clone(), false)],
+                keys[1].to_raw().unwrap(),
+                80,
+                options,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Commit txn-70 and rollback txn-80
+        let mut txn_status = HashMap::default();
+        txn_status.insert(70, 71);
+        txn_status.insert(80, 0);
+        storage
+            .async_resolve_lock(
+                Context::default(),
+                txn_status,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut msg1 = msg_rx.try_recv().unwrap();
+        let mut msg2 = msg_rx.try_recv().unwrap();
+        // Make sure msgs1 has lock_ts-70.
+        match &msg1 {
+            Msg::WakeUp { lock_ts, .. } => {
+                if *lock_ts != 70 {
+                    assert_eq!(*lock_ts, 80);
+                    std::mem::swap(&mut msg1, &mut msg2);
+                }
+            }
+            _ => panic!("unexpected msg"),
+        }
+        expected_wake_up_msg(msg1, 70, Some(vec![gen_key_hash(&keys[0])]), 0, false);
+        expected_wake_up_msg(msg2, 80, Some(vec![gen_key_hash(&keys[1])]), 0, true);
+
+        // After setting has_waiter to false, no key hashes.
+        lock_mgr.set_has_waiter(false);
+        storage
+            .async_cleanup(
+                Context::default(),
+                keys[0].clone(),
+                30,
+                expect_ok_callback(tx.clone()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let msg = msg_rx.try_recv().unwrap();
+        expect_no_key_hashes(msg);
+    }
+}

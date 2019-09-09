@@ -601,11 +601,12 @@ impl Options {
 ///
 /// Only used for test purpose.
 #[must_use]
-pub struct TestStorageBuilder<E: Engine> {
+pub struct TestStorageBuilder<E: Engine, L: LockMgr = DummyLockMgr> {
     engine: E,
     config: Config,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
+    lock_mgr: Option<L>,
 }
 
 impl TestStorageBuilder<RocksEngine> {
@@ -616,17 +617,19 @@ impl TestStorageBuilder<RocksEngine> {
             config: Config::default(),
             local_storage: None,
             raft_store_router: None,
+            lock_mgr: None,
         }
     }
 }
 
-impl<E: Engine> TestStorageBuilder<E> {
+impl<E: Engine, L: LockMgr> TestStorageBuilder<E, L> {
     pub fn from_engine(engine: E) -> Self {
         Self {
             engine,
             config: Config::default(),
             local_storage: None,
             raft_store_router: None,
+            lock_mgr: None,
         }
     }
 
@@ -654,8 +657,16 @@ impl<E: Engine> TestStorageBuilder<E> {
         self
     }
 
+    /// Set lock manager.
+    ///
+    /// By default, `None` will be used.
+    pub fn lock_mgr(mut self, lock_mgr: L) -> Self {
+        self.lock_mgr = Some(lock_mgr);
+        self
+    }
+
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, DummyLockMgr>> {
+    pub fn build(self) -> Result<Storage<E, L>> {
         let read_pool = self::readpool_impl::build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -666,7 +677,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
-            None,
+            self.lock_mgr,
         )
     }
 }
@@ -1071,6 +1082,12 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
+        // It's a pessimistic prewrite.
+        if options.for_update_ts != 0 && !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
         for m in &mutations {
             let key_size = m.key().as_encoded().len();
             if key_size > self.max_key_size {
@@ -2028,10 +2045,10 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::lock_manager::DummyLockMgr;
     use super::*;
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
+    use std::time::Duration;
     use tikv_util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
@@ -2154,7 +2171,9 @@ mod tests {
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockMgr>::from_engine(engine)
+            .build()
+            .unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -4198,6 +4217,304 @@ mod tests {
                 vec![],
                 0,
                 expect_value_callback(tx.clone(), 0, vec![lock_a]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_pessimistic_txn_not_enabled() {
+        // Calling pessimistic transaction related functions with a Storage without LockMgr should
+        // fail.
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+        let expect_pessimistic_txn_not_enabled_cb = || {
+            expect_fail_callback(tx.clone(), 0, |e| match e {
+                Error::PessimisticTxnNotEnabled => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            })
+        };
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![],
+                b"x".to_vec(),
+                1,
+                Options::default(),
+                expect_pessimistic_txn_not_enabled_cb(),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut options = Options::default();
+        options.for_update_ts = 2;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![],
+                b"x".to_vec(),
+                1,
+                options,
+                expect_pessimistic_txn_not_enabled_cb(),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_pessimistic_rollback(
+                Context::default(),
+                vec![],
+                1,
+                2,
+                expect_pessimistic_txn_not_enabled_cb(),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    // The logic of pessimistic transaction is tested in storage/mvcc/txn.rs.
+    // It tests whether Storage uses functions properly.
+    #[test]
+    fn test_pessimistic_txn() {
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .lock_mgr(DummyLockMgr)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+
+        // Normal
+        let key = Key::from_raw(b"a");
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), true)],
+                key.to_raw().unwrap(),
+                10,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        let mut options = Options::default();
+        options.for_update_ts = 10;
+        options.is_pessimistic_lock = vec![true];
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                10,
+                options,
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        storage
+            .async_commit(
+                Context::default(),
+                vec![key.clone()],
+                10,
+                20,
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            b"v".to_vec(),
+            storage
+                .async_get(Context::default(), key.clone(), 21)
+                .wait(),
+        );
+
+        // Should release latches if meets a lock when acquiring pessimistic locks.
+        let key = Key::from_raw(b"b");
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                20,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), true)],
+                key.to_raw().unwrap(),
+                21,
+                Options::default(),
+                expect_fail_callback(tx.clone(), 1, |_| ()),
+            )
+            .unwrap();
+        // The transaction should be waiting for lock released so cb won't be called.
+        rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+        storage
+            .async_commit(
+                Context::default(),
+                vec![key.clone()],
+                20,
+                30,
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        // acquire_pessimistic_lock should release latches so commit will succeed.
+        rx.recv().unwrap();
+
+        // Should set for_update_ts of acquire_pessimistic_lock properly.
+        let mut options = Options::default();
+        options.for_update_ts = 25;
+        // acquire_pessimistic_lock with a small for_update_ts should return WriteConflict.
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), false)],
+                key.to_raw().unwrap(),
+                25,
+                options.clone(),
+                expect_fail_callback(tx.clone(), 3, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
+                        conflict_start_ts,
+                        conflict_commit_ts,
+                        ..
+                    })) => {
+                        assert_eq!(conflict_start_ts, 20);
+                        assert_eq!(conflict_commit_ts, 30);
+                    }
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        options.for_update_ts = 30;
+        // acquire_pessimistic_lock with a greater for_update_ts should succeed.
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), false)],
+                key.to_raw().unwrap(),
+                25,
+                options,
+                expect_ok_callback(tx.clone(), 4),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Should set for_update_ts of prewrite properly.
+        let key = Key::from_raw(b"c");
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), true)],
+                key.to_raw().unwrap(),
+                30,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Prewrite request with zero for_update_ts is optimistic. It should fail due to LockTypeNotMatch.
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                30,
+                Options::default(),
+                expect_fail_callback(tx.clone(), 1, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::LockTypeNotMatch { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Should set is_pessimistic_lock of perwrite properly.
+        let key = Key::from_raw(b"d");
+        let mut options = Options::default();
+        options.for_update_ts = 40;
+        options.is_pessimistic_lock = vec![true];
+        // Prewriting a non-exist pessimistic lock should fail.
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                40,
+                options.clone(),
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::PessimisticLockNotFound {
+                        ..
+                    })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Prewriting a non-pessimistic lock should return KeyIsLocked if there is a lock.
+        options.for_update_ts = 0;
+        options.is_pessimistic_lock = vec![];
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                40,
+                options.clone(),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let (tx, rx) = channel();
+        options.for_update_ts = 41;
+        options.is_pessimistic_lock = vec![false];
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                41,
+                options,
+                Box::new(move |x| {
+                    tx.send(x).unwrap();
+                }),
+            )
+            .unwrap();
+        let mut res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.len(), 1);
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info))) => {
+                    assert_eq!(info.get_lock_ttl(), 0);
+                }
+                e => panic!("unexpected error chain: {:?}", e),
+            },
+            res.remove(0),
+        );
+
+        // Rollback pessimistic lock
+        let key = Key::from_raw(b"e");
+        let (tx, rx) = channel();
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), true)],
+                key.to_raw().unwrap(),
+                50,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_pessimistic_rollback(
+                Context::default(),
+                vec![key.clone()],
+                40,
+                50,
+                expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
         rx.recv().unwrap();

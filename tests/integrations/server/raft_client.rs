@@ -146,7 +146,7 @@ fn test_raft_client_reconnect() {
     pool.shutdown().wait().unwrap();
 }
 
-// Try to create a mock server with `service`. The server will be binded wiht a random
+// Try to create a mock server with `service`. The server will be binded with a random
 // port chosen between [`min_port`, `max_port`]. Return `None` if no port is available.
 fn create_mock_server<T>(service: T, min_port: u16, max_port: u16) -> Option<(Server, u16)>
 where
