@@ -181,7 +181,7 @@ test:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
