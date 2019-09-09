@@ -53,7 +53,7 @@ use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHan
 
 use super::super::RegionTask;
 
-const WRITE_BATCH_MAX_KEYS: usize = 64;
+const WRITE_BATCH_MAX_KEYS: usize = 48;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
