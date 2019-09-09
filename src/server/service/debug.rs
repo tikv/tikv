@@ -24,9 +24,9 @@ use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
-        Error::NotFound(msg) => (RpcStatusCode::NotFound, Some(msg)),
-        Error::InvalidArgument(msg) => (RpcStatusCode::InvalidArgument, Some(msg)),
-        Error::Other(e) => (RpcStatusCode::Unknown, Some(format!("{:?}", e))),
+        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, Some(msg)),
+        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, Some(msg)),
+        Error::Other(e) => (RpcStatusCode::UNKNOWN, Some(format!("{:?}", e))),
     };
     RpcStatus::new(code, msg)
 }

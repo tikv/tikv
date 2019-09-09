@@ -123,7 +123,7 @@ fn hijack_unary<F, R, C: PdMocker>(
                 .map_err(move |err| error!("failed to reply: {:?}", err)),
         ),
         Some(Err(err)) => {
-            let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)));
+            let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
             ctx.spawn(
                 sink.fail(status)
                     .map_err(move |err| error!("failed to reply: {:?}", err)),

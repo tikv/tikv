@@ -472,7 +472,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     ) {
         if !self.inner.borrow().is_leader() {
             let status = RpcStatus::new(
-                RpcStatusCode::FailedPrecondition,
+                RpcStatusCode::FAILED_PRECONDITION,
                 Some("i'm not the leader of deadlock detector".to_string()),
             );
             handle.spawn(sink.fail(status).map_err(|_| ()));
@@ -579,7 +579,7 @@ impl deadlock_grpc::Deadlock for Service {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
             let status = RpcStatus::new(
-                RpcStatusCode::ResourceExhausted,
+                RpcStatusCode::RESOURCE_EXHAUSTED,
                 Some("waiter manager has stopped".to_owned()),
             );
             ctx.spawn(sink.fail(status).map_err(|_| ()))
@@ -609,7 +609,7 @@ impl deadlock_grpc::Deadlock for Service {
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {
             let status = RpcStatus::new(
-                RpcStatusCode::ResourceExhausted,
+                RpcStatusCode::RESOURCE_EXHAUSTED,
                 Some("deadlock detector has stopped".to_owned()),
             );
             ctx.spawn(sink.fail(status).map_err(|_| ()));

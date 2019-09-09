@@ -86,7 +86,7 @@ impl Conn {
                             as Box<dyn Future<Item = (), Error = GrpcError> + Send>
                     }
                     Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
-                        if status == RpcStatusCode::Unimplemented =>
+                        if status == RpcStatusCode::UNIMPLEMENTED =>
                     {
                         // Fallback to raft RPC.
                         warn!("batch_raft fail, fallback to raft");
