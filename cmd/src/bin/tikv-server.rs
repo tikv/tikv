@@ -102,6 +102,7 @@ fn main() {
                 .use_delimiter(true)
                 .require_delimiter(true)
                 .value_delimiter(",")
+                .default_value("127.0.0.1:2379")
                 .help("Sets PD endpoints")
                 .long_help("Set the PD endpoints to use. Use `,` to separate multiple PDs"),
         )
