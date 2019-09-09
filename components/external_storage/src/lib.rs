@@ -73,8 +73,6 @@ mod tests {
     #[test]
     fn test_create_storage() {
         create_storage("local:///tmp/a").unwrap();
-        assert!(create_storage("invalid").is_err());
-
         create_storage("noop:///foo").unwrap();
         assert!(create_storage("invalid").is_err());
     }
