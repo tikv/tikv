@@ -3,7 +3,7 @@
 use super::setup::*;
 use super::signal_handler;
 use crate::binutil::setup::initial_logger;
-use crate::config::{check_and_persist_critical_config, TiKvConfig};
+use crate::config::TiKvConfig;
 use crate::coprocessor;
 use crate::fatal;
 use crate::import::{ImportSSTService, SSTImporter};
@@ -18,7 +18,8 @@ use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
 use crate::server::{create_raft_storage, Node, Server};
 use crate::storage::lock_manager::{
-    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
+    register_detector_role_change_observer, Detector, DetectorScheduler,
+    Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
 };
 use crate::storage::{self, AutoGCConfig, RaftKv, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks;
@@ -39,10 +40,6 @@ use tikv_util::worker::FutureWorker;
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 pub fn run_tikv(mut config: TiKvConfig) {
-    if let Err(e) = check_and_persist_critical_config(&config) {
-        fatal!("critical config check failed: {}", e);
-    }
-
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -51,11 +48,6 @@ pub fn run_tikv(mut config: TiKvConfig) {
 
     // Print version information.
     super::log_tikv_info();
-
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
-    }
     info!(
         "using config";
         "config" => serde_json::to_string(&config).unwrap(),
@@ -273,6 +265,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
     region_info_accessor.start();
 
+    // Register the role change observer of the deadlock detector.
+    if cfg.pessimistic_txn.enabled {
+        register_detector_role_change_observer(
+            &mut coprocessor_host,
+            detector_worker.as_ref().unwrap(),
+        );
+    }
+
     node.start(
         engines.clone(),
         trans,
@@ -312,16 +312,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if cfg.pessimistic_txn.enabled {
         let waiter_mgr_runner = WaiterManager::new(
             DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
-            cfg.pessimistic_txn.wait_for_lock_timeout,
-            cfg.pessimistic_txn.wake_up_delay_duration,
+            &cfg.pessimistic_txn,
         );
         let detector_runner = Detector::new(
             node.id(),
-            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
-            Arc::clone(&security_mgr),
             pd_client,
             resolver,
-            cfg.pessimistic_txn.monitor_membership_interval,
+            Arc::clone(&security_mgr),
+            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
+            &cfg.pessimistic_txn,
         );
         waiter_mgr_worker
             .as_mut()

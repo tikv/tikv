@@ -160,6 +160,7 @@ macro_rules! cf_config {
             pub hard_pending_compaction_bytes_limit: ReadableSize,
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
+            pub enable_doubly_skiplist: bool,
             pub titan: TitanCfConfig,
         }
 
@@ -265,6 +266,10 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "hard_pending_compaction_bytes_limit"])
             .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
         $metrics
+            .with_label_values(&[$tag, "enable_doubly_skiplist"])
+            .set(($cf.enable_doubly_skiplist as i32).into());
+
+        $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.0 as f64);
         $metrics
@@ -334,7 +339,9 @@ macro_rules! build_cf_opt {
         cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
         cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
         cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
-
+        if $opt.enable_doubly_skiplist {
+            cf_opts.set_doubly_skiplist();
+        }
         cf_opts
     }};
 }
@@ -383,6 +390,7 @@ impl Default for DefaultCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan: TitanCfConfig::default(),
         }
     }
@@ -448,6 +456,7 @@ impl Default for WriteCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan,
         }
     }
@@ -515,6 +524,7 @@ impl Default for LockCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan,
         }
     }
@@ -572,6 +582,7 @@ impl Default for RaftCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan,
         }
     }
@@ -839,6 +850,7 @@ impl Default for RaftDefaultCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: false,
             titan: TitanCfConfig::default(),
         }
     }
@@ -1478,15 +1490,24 @@ impl TiKvConfig {
 /// Loads the previously-loaded configuration from `last_tikv.toml`,
 /// compares key configuration items and fails if they are not
 /// identical.
-pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
     let store_path = Path::new(&config.storage.data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+
     if last_cfg_path.exists() {
         let last_cfg = TiKvConfig::from_file(&last_cfg_path);
         config.check_critical_cfg_with(&last_cfg)?;
     }
+
+    Ok(())
+}
+
+/// Persists critical config to `last_tikv.toml`
+pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+    let store_path = Path::new(&config.storage.data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
@@ -1580,7 +1601,7 @@ mod tests {
 
         let mut tikv_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = path.as_path().to_str().unwrap().to_owned();
-        assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
+        assert!(persist_critical_config(&tikv_cfg).is_ok());
     }
 
     #[test]

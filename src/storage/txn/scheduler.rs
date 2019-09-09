@@ -381,7 +381,7 @@ impl<E: Engine> Scheduler<E> {
                     .with_label_values(&[tag, "async_snapshot_err"])
                     .inc();
 
-                error!("engine async_snapshot failed"; "err" => ?e);
+                info!("engine async_snapshot failed"; "err" => ?e);
                 self.finish_with_err(cid, e.into());
             } else {
                 SCHED_STAGE_COUNTER_VEC
@@ -482,7 +482,7 @@ impl<E: Engine> Scheduler<E> {
             start_ts,
             tctx.cb,
             pr,
-            lock.clone(),
+            lock,
             is_first_lock,
         );
         // Set `WAIT_TABLE_IS_EMPTY` here to prevent there is an on-the-fly WaitFor msg

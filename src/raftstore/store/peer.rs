@@ -3,18 +3,19 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, slice, u64};
+use std::{cmp, mem, u64};
 
 use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
 use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse,
-    Request, Response, TransferLeaderRequest, TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest,
+    RaftCmdResponse, ReadIndexResponse, Request, Response, TransferLeaderRequest,
+    TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
@@ -26,6 +27,7 @@ use raft::{
     NO_LIMIT,
 };
 use time::Timespec;
+use uuid::Uuid;
 
 use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -53,7 +55,7 @@ use super::DestroyPeerJob;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
-    id: u64,
+    id: Uuid,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
@@ -62,10 +64,7 @@ struct ReadIndexRequest {
 impl ReadIndexRequest {
     // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     fn binary_id(&self) -> &[u8] {
-        unsafe {
-            let id = &self.id as *const u64 as *const u8;
-            slice::from_raw_parts(id, 8)
-        }
+        self.id.as_bytes()
     }
 
     fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
@@ -74,7 +73,7 @@ impl ReadIndexRequest {
     }
 
     fn with_command(
-        id: u64,
+        id: Uuid,
         req: RaftCmdRequest,
         cb: Callback,
         renew_lease_time: Timespec,
@@ -102,17 +101,11 @@ impl Drop for ReadIndexRequest {
 
 #[derive(Default)]
 struct ReadIndexQueue {
-    id_allocator: u64,
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
 }
 
 impl ReadIndexQueue {
-    fn next_id(&mut self) -> u64 {
-        self.id_allocator += 1;
-        self.id_allocator
-    }
-
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
@@ -336,6 +329,8 @@ pub struct Peer {
     pub pending_merge_state: Option<MergeState>,
     /// The state to wait for `PrepareMerge` apply result.
     pub pending_merge_apply_result: Option<WaitApplyResultState>,
+    /// source region is catching up logs for merge
+    pub catch_up_logs: Option<Arc<AtomicU64>>,
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
@@ -415,6 +410,7 @@ impl Peer {
             pending_messages: vec![],
             pending_merge_apply_result: None,
             peer_stat: PeerStat::default(),
+            catch_up_logs: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -441,6 +437,41 @@ impl Peer {
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
+    }
+
+    #[inline]
+    pub fn get_index_term(&self, idx: u64) -> u64 {
+        match self.raft_group.raft.raft_log.term(idx) {
+            Ok(t) => t,
+            Err(e) => panic!("{} fail to load term for {}: {:?}", self.tag, idx, e),
+        }
+    }
+
+    #[inline]
+    pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
+        let mut entries = merge.get_entries();
+        if entries.is_empty() {
+            return None;
+        }
+        let first = entries.first().unwrap();
+        // make sure message should be with index not smaller than committed
+        let mut log_idx = first.get_index() - 1;
+        if log_idx < self.raft_group.raft.raft_log.committed {
+            // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
+            // so the commit index may exceed the last index of the entires from CommitMergeRequest.
+            // If that, no need to append
+            if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
+                return None;
+            }
+            entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
+            log_idx = self.raft_group.raft.raft_log.committed;
+        }
+        let log_term = self.get_index_term(log_idx);
+
+        self.raft_group
+            .raft
+            .raft_log
+            .maybe_append(log_idx, log_term, merge.get_commit(), entries)
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
@@ -1238,7 +1269,7 @@ impl Peer {
                 if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
                     let ctx = ProposalContext::from_bytes(&entry.context);
                     if split_to_be_updated && ctx.contains(ProposalContext::SPLIT) {
-                        // We dont need to suspect its lease because peers of new region that
+                        // We don't need to suspect its lease because peers of new region that
                         // in other store do not start election before theirs election timeout
                         // which is longer than the max leader lease.
                         // It's safe to read local within its current lease, however, it's not
@@ -1329,6 +1360,11 @@ impl Peer {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+                debug!("handle reads with a read index";
+                    "request_id" => ?read.binary_id(),
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
                 for (req, cb) in read.cmds.drain(..) {
                     cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
                 }
@@ -1367,7 +1403,6 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         apply_state: RaftApplyState,
         applied_index_term: u64,
-        merged: bool,
         apply_metrics: &ApplyMetrics,
     ) -> bool {
         let mut has_ready = false;
@@ -1376,10 +1411,8 @@ impl Peer {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        if !merged {
-            self.raft_group
-                .advance_apply(apply_state.get_applied_index());
-        }
+        self.raft_group
+            .advance_apply(apply_state.get_applied_index());
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
@@ -1400,6 +1433,11 @@ impl Peer {
             if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
                 for _ in 0..self.pending_reads.ready_cnt {
                     let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    debug!("handle reads with a read index";
+                        "request_id" => ?read.binary_id(),
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
                     RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
@@ -1805,8 +1843,6 @@ impl Peer {
             return false;
         }
 
-        poll_ctx.raft_metrics.propose.read_index += 1;
-
         let renew_lease_time = monotonic_raw_now();
         if self.is_leader() {
             match self.inspect_lease() {
@@ -1831,13 +1867,32 @@ impl Peer {
             }
         }
 
+        // When a replica cannot detect any leader, `MsgReadIndex` will be dropped, which would
+        // cause a long time waiting for a read response. Then we should return an error directly
+        // in this situation.
+        if !self.is_leader() && self.leader_id() == INVALID_ID {
+            cmd_resp::bind_error(
+                &mut err_resp,
+                box_err!("can not read index due to no leader"),
+            );
+            poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
+            cb.invoke_with_response(err_resp);
+            return false;
+        }
+
         // Should we call pre_propose here?
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        let id = self.pending_reads.next_id();
-        let ctx = id.to_ne_bytes();
-        self.raft_group.read_index(ctx.to_vec());
+        poll_ctx.raft_metrics.propose.read_index += 1;
+
+        let id = Uuid::new_v4();
+        self.raft_group.read_index(id.as_bytes().to_vec());
+        debug!("request to get a read index";
+            "request_id" => ?id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();

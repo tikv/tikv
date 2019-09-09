@@ -207,6 +207,7 @@ struct Cluster {
     region_id_keys: HashMap<u64, Key>,
     region_approximate_size: HashMap<u64, u64>,
     region_approximate_keys: HashMap<u64, u64>,
+    region_last_report_ts: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
@@ -238,6 +239,7 @@ impl Cluster {
             region_id_keys: HashMap::default(),
             region_approximate_size: HashMap::default(),
             region_approximate_keys: HashMap::default(),
+            region_last_report_ts: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
             split_count: 0,
@@ -314,6 +316,10 @@ impl Cluster {
 
     fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
         self.region_approximate_keys.get(&region_id).cloned()
+    }
+
+    fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+        self.region_last_report_ts.get(&region_id).cloned()
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -576,6 +582,8 @@ impl Cluster {
             .insert(region.get_id(), region_stat.approximate_size);
         self.region_approximate_keys
             .insert(region.get_id(), region_stat.approximate_keys);
+        self.region_last_report_ts
+            .insert(region.get_id(), region_stat.last_report_ts);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -835,7 +843,7 @@ impl TestPdClient {
         self.must_none_peer(region_id, peer);
     }
 
-    pub fn must_merge(&self, from: u64, target: u64) {
+    pub fn merge_region(&self, from: u64, target: u64) {
         let op = Operator::MergeRegion {
             source_region_id: from,
             target_region_id: target,
@@ -843,6 +851,10 @@ impl TestPdClient {
         };
         self.schedule_operator(from, op.clone());
         self.schedule_operator(target, op);
+    }
+
+    pub fn must_merge(&self, from: u64, target: u64) {
+        self.merge_region(from, target);
 
         for _ in 1..500 {
             sleep_ms(10);
@@ -857,6 +869,10 @@ impl TestPdClient {
             return;
         }
         panic!("region {:?} is still not merged.", region.unwrap());
+    }
+
+    pub fn check_merged(&self, from: u64) -> bool {
+        self.get_region_by_id(from).wait().unwrap().is_none()
     }
 
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
@@ -925,6 +941,10 @@ impl TestPdClient {
 
     pub fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_approximate_keys(region_id)
+    }
+
+    pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_last_report_ts(region_id)
     }
 
     pub fn set_gc_safe_point(&self, safe_point: u64) {
