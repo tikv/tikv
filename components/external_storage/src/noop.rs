@@ -39,8 +39,8 @@ mod tests {
         let noop = NoopStorage::new();
 
         // Test save_file
-        let magic_contents = "5678".as_bytes();
-        noop.write("a.log", &mut magic_contents.clone()).unwrap();
+        let mut magic_contents: &[u8] = b"5678";
+        noop.write("a.log", &mut magic_contents).unwrap();
         let mut reader = noop.read("a.log").unwrap();
         let mut buf = vec![];
         reader.read_to_end(&mut buf).unwrap();
