@@ -41,7 +41,7 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 const MINIBATCH_TIMEOUT_MILLIS: u64 = 1;
-const MINIBATCH_CROSS_COMMAND_ENABLED: bool = true;
+const MINIBATCH_CROSS_COMMAND_ENABLED: bool = false;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -96,10 +96,11 @@ struct MiniBatcher {
     key_conflict: u64,
     total: u64,
     last_submit: Instant,
+    tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
 impl MiniBatcher {
-    pub fn new() -> Self {
+    pub fn new(tx: Sender<(u64, batch_commands_response::Response)>) -> Self {
         MiniBatcher {
             commands: vec![],
             router: HashMap::default(),
@@ -108,6 +109,7 @@ impl MiniBatcher {
             key_conflict: 0,
             total: 0,
             last_submit: Instant::now(),
+            tx,
         }
     }
 
@@ -205,14 +207,13 @@ impl MiniBatcher {
     pub fn submit<E: Engine>(
         &mut self,
         storage: &Storage<E>,
-        tx: Sender<(u64, batch_commands_response::Response)>,
     ) {
         let commands = self.take_commands();
         if commands.len() > 0 {
             self.report();
         }
         for cmd in commands {
-            let tx_copy = tx.clone();
+            let tx_copy = self.tx.clone();
             storage.batch_prewrite(
                 cmd,
                 Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
@@ -246,10 +247,9 @@ impl MiniBatcher {
     pub fn maybe_submit<E: Engine>(
         &mut self,
         storage: &Storage<E>,
-        tx: Sender<(u64, batch_commands_response::Response)>,
     ) {
         if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
-            self.submit(storage, tx);
+            self.submit(storage);
         }
     }
 }
@@ -263,16 +263,17 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         snap_scheduler: Scheduler<SnapTask>,
         thread_load: Arc<ThreadLoad>,
     ) -> Self {
+        let timer_pool = Arc::new(Mutex::new(ThreadPoolBuilder::new()
+            .pool_size(4)
+            .name_prefix("minibatch_timer_pool")
+            .build()));
         Service {
             storage,
             cop,
             ch,
             snap_scheduler,
             thread_load,
-            timer_pool: Arc::new(Mutex::new(ThreadPoolBuilder::new()
-                .pool_size(4)
-                .name_prefix("minibatch_timer_pool")
-                .build())),
+            timer_pool,
         }
     }
 
@@ -1170,19 +1171,18 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-        let minibatcher = MiniBatcher::new();
+        let minibatcher = MiniBatcher::new(tx.clone());
         let minibatcher = Arc::new(Mutex::new(minibatcher));
         if MINIBATCH_CROSS_COMMAND_ENABLED {
             info!("batch_commands spawn interval timer");
             let storage = storage.clone();
-            let tx = tx.clone();
             let minibatcher = minibatcher.clone();
             let start = Instant::now() + Duration::from_millis(100);
             let timer = GLOBAL_TIMER_HANDLE.clone();
             self.timer_pool.lock().unwrap().spawn(
                 timer.interval(start, Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS))
                     .for_each(move |_| {
-                        minibatcher.lock().unwrap().maybe_submit(&storage, tx.clone());
+                        minibatcher.lock().unwrap().maybe_submit(&storage);
                         Ok(())
                     })
                     .map_err(|e| error!("batch_commands timer errored"; "err" => ?e))
@@ -1199,7 +1199,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
             }
             let mut mb = minibatcher.lock().unwrap();
             if mb.ready() {
-                mb.submit(&storage, tx.clone());
+                mb.submit(&storage);
             }
             future::ok::<_, _>(())
         });
