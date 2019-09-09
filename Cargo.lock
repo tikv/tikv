@@ -2532,9 +2532,14 @@ name = "storage_types"
 version = "0.1.0"
 dependencies = [
  "byteorder",
+ "engine",
  "hex",
  "keys",
  "quick-error",
+ "rand",
+ "slog",
+ "slog-global",
+ "tempfile",
  "tikv_util",
 ]
 

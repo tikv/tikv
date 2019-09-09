@@ -1,7 +1,14 @@
+#![feature(test)]
+
 #[macro_use]
 extern crate quick_error;
+#[macro_use]
+extern crate slog_global;
+#[cfg(test)]
+extern crate test;
 
 pub mod mvcc;
+pub mod properties;
 
 use keys::{Key, Value};
 

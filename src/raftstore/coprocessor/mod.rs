@@ -10,7 +10,7 @@ pub mod config;
 pub mod dispatcher;
 mod error;
 mod metrics;
-pub mod properties;
+pub use storage_types::properties;
 pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
