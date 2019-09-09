@@ -1670,5 +1670,6 @@ mod tests {
             let string = format!("v = \"{}\"\n", case);
             toml::from_str::<LevelHolder>(&string).unwrap_err();
         }
+
     }
 }
