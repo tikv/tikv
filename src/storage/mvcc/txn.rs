@@ -86,6 +86,12 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
+    fn put_lock(&mut self, key: Key, lock: &Lock) {
+        let lock = lock.to_bytes();
+        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
+        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+    }
+
     fn lock_key(
         &mut self,
         key: Key,
@@ -102,10 +108,8 @@ impl<S: Snapshot> MvccTxn<S> {
             short_value,
             options.for_update_ts,
             options.txn_size,
-        )
-        .to_bytes();
-        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
-        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+        );
+        self.put_lock(key, &lock);
     }
 
     fn unlock_key(&mut self, key: Key) {
@@ -549,6 +553,41 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
         Ok(())
+    }
+
+    /// Update a primary key's TTL if `advise_ttl > lock.ttl`.
+    ///
+    /// Returns the new TTL.
+    pub fn txn_heart_beat(&mut self, primary_key: Key, advise_ttl: u64) -> Result<u64> {
+        if let Some(mut lock) = self.reader.load_lock(&primary_key)? {
+            if lock.ts == self.start_ts {
+                if lock.ttl < advise_ttl {
+                    lock.ttl = advise_ttl;
+                    self.put_lock(primary_key, &lock);
+                } else {
+                    debug!(
+                        "txn_heart_beat with advise_ttl not large than current ttl";
+                        "primary_key" => %primary_key,
+                        "start_ts" => self.start_ts,
+                        "advise_ttl" => advise_ttl,
+                        "current_ttl" => lock.ttl,
+                    );
+                }
+                return Ok(lock.ttl);
+            }
+        }
+
+        debug!(
+            "txn_heart_beat invoked but lock is absent";
+            "primary_key" => %primary_key,
+            "start_ts" => self.start_ts,
+            "advise_ttl" => advise_ttl,
+        );
+        Err(Error::TxnLockNotFound {
+            start_ts: self.start_ts,
+            commit_ts: 0,
+            key: primary_key.into_raw()?,
+        })
     }
 
     pub fn gc(&mut self, key: Key, safe_point: u64) -> Result<GcInfo> {
@@ -1564,6 +1603,54 @@ mod tests {
         must_pessimistic_locked(&engine, k, 1, 2);
         must_acquire_pessimistic_lock(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
+    #[test]
+    fn test_txn_heart_beat() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (k, v) = (b"k1", b"v1");
+
+        let test = |ts| {
+            // Do nothing if advise_ttl is less smaller than current TTL.
+            must_txn_heart_beat(&engine, k, ts, 90, 100);
+            // Return the new TTL if the TTL when the TTL is updated.
+            must_txn_heart_beat(&engine, k, ts, 110, 110);
+            // The lock's TTL is updated and persisted into the db.
+            must_txn_heart_beat(&engine, k, ts, 90, 110);
+            // Heart beat another transaction's lock will lead to an error.
+            must_txn_heart_beat_err(&engine, k, ts - 1, 150);
+            must_txn_heart_beat_err(&engine, k, ts + 1, 150);
+            // The existing lock is not changed.
+            must_txn_heart_beat(&engine, k, ts, 90, 110);
+        };
+
+        // No lock.
+        must_txn_heart_beat_err(&engine, k, 5, 100);
+
+        // Create a lock with TTL=100.
+        // The initial TTL will be set to 0 after calling must_prewrite_put. Update it first.
+        must_prewrite_put(&engine, k, v, k, 5);
+        must_locked(&engine, k, 5);
+        must_txn_heart_beat(&engine, k, 5, 100, 100);
+
+        test(5);
+
+        must_locked(&engine, k, 5);
+        must_commit(&engine, k, 5, 10);
+        must_unlocked(&engine, k);
+
+        // No lock.
+        must_txn_heart_beat_err(&engine, k, 5, 100);
+        must_txn_heart_beat_err(&engine, k, 10, 100);
+
+        must_acquire_pessimistic_lock(&engine, k, k, 8, 15);
+        must_pessimistic_locked(&engine, k, 8, 15);
+        must_txn_heart_beat(&engine, k, 8, 100, 100);
+
+        test(8);
+
+        must_pessimistic_locked(&engine, k, 8, 15);
     }
 
     #[test]

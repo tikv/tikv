@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["tikv_alloc/default"]
+default = ["jemalloc"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -99,7 +99,7 @@ uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
 raft = "0.6.0-alpha"
 crossbeam = "0.5"
-derive_more = "0.11.0"
+derive_more = "0.15.0"
 hex = "0.3"
 more-asserts = "0.1"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
@@ -119,6 +119,7 @@ log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
+keys = { path = "components/keys" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -133,8 +134,6 @@ version = "0.1.4"
 default-features = false
 
 [replace]
-# Replace openssl with libressl
-"openssl-src:111.3.0" = { git = "https://github.com/BusyJay/libressl-src.git" }
 # TODO: remove this when slog is compatible with the log 0.4
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
@@ -189,6 +188,7 @@ members = [
   "components/pd_client",
   "components/external_storage",
   "components/backup",
+  "components/keys",
   "cmd",
 ]
 
