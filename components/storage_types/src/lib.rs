@@ -7,6 +7,7 @@ extern crate slog_global;
 #[cfg(test)]
 extern crate test;
 
+pub mod compacted_event;
 pub mod mvcc;
 pub mod properties;
 
