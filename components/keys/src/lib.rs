@@ -1,10 +1,20 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! TiKV key building
+
+#[macro_use]
+extern crate derive_more;
+#[macro_use]
+extern crate failure;
+
 use byteorder::{BigEndian, ByteOrder};
 
-use crate::raftstore::Result;
 use kvproto::metapb::Region;
 use std::mem;
+
+mod types;
+
+pub use types::{Key, KvPair, Value};
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];
@@ -99,10 +109,7 @@ pub fn raft_log_index(key: &[u8]) -> Result<u64> {
         + mem::size_of::<u8>()
         + mem::size_of::<u64>();
     if key.len() != expect_key_len {
-        return Err(box_err!(
-            "key {} is not a valid raft log key",
-            hex::encode_upper(key)
-        ));
+        return Err(Error::InvalidRaftLogKey(key.to_owned()));
     }
     Ok(BigEndian::read_u64(
         &key[expect_key_len - mem::size_of::<u64>()..],
@@ -117,10 +124,7 @@ pub fn decode_raft_log_key(key: &[u8]) -> Result<(u64, u64)> {
         || !key.starts_with(REGION_RAFT_PREFIX_KEY)
         || key[suffix_idx] != RAFT_LOG_SUFFIX
     {
-        return Err(box_err!(
-            "key {} is not a valid raft log key",
-            hex::encode_upper(key)
-        ));
+        return Err(Error::InvalidRaftLogKey(key.to_owned()));
     }
     let region_id = BigEndian::read_u64(&key[REGION_RAFT_PREFIX_KEY.len()..suffix_idx]);
     let index = BigEndian::read_u64(&key[suffix_idx + mem::size_of::<u8>()..]);
@@ -148,18 +152,16 @@ fn make_region_meta_key(region_id: u64, suffix: u8) -> [u8; 11] {
 /// Decode region key, return the region id and meta suffix type.
 fn decode_region_key(prefix: &[u8], key: &[u8], category: &str) -> Result<(u64, u8)> {
     if prefix.len() + mem::size_of::<u64>() + mem::size_of::<u8>() != key.len() {
-        return Err(box_err!(
-            "invalid region {} key length for key {}",
-            category,
-            hex::encode_upper(key)
+        return Err(Error::InvalidRegionKeyLength(
+            category.to_owned(),
+            key.to_owned(),
         ));
     }
 
     if !key.starts_with(prefix) {
-        return Err(box_err!(
-            "invalid region {} prefix for key {}",
-            category,
-            hex::encode_upper(key)
+        return Err(Error::InvalidRegionPrefix(
+            category.to_owned(),
+            key.to_owned(),
         ));
     }
 
@@ -228,6 +230,26 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
         data_key(region_end_key)
     }
 }
+
+#[derive(Debug, Display, Fail)]
+pub enum Error {
+    #[display(fmt = "{} is not a valid raft log key", "hex::encode_upper(_0)")]
+    InvalidRaftLogKey(Vec<u8>),
+    #[display(
+        fmt = "invalid region {} key length for key {}",
+        "_0",
+        "hex::encode_upper(_1)"
+    )]
+    InvalidRegionKeyLength(String, Vec<u8>),
+    #[display(
+        fmt = "invalid region {} prefix for key {}",
+        "_0",
+        "hex::encode_upper(_1)"
+    )]
+    InvalidRegionPrefix(String, Vec<u8>),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {

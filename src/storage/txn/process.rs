@@ -808,6 +808,23 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
+        Command::TxnHeartBeat {
+            ctx,
+            primary_key,
+            start_ts,
+            advise_ttl,
+        } => {
+            // TxnHeartBeat never remove locks. No need to wake up waiters.
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
+
+            statistics.add(&txn.take_statistics());
+            let pr = ProcessResult::TxnStatus {
+                lock_ttl,
+                commit_ts: 0,
+            };
+            (pr, txn.into_modifies(), 1, ctx, None)
+        }
         Command::CheckTxnStatus {
             ctx,
             primary_key,

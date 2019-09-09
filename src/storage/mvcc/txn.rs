@@ -93,7 +93,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
-    fn put_lock(&mut self, key: Key, lock: Lock) {
+    fn put_lock(&mut self, key: Key, lock: &Lock) {
         let lock = lock.to_bytes();
         self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
@@ -117,7 +117,7 @@ impl<S: Snapshot> MvccTxn<S> {
             options.txn_size,
             options.min_commit_ts,
         );
-        self.put_lock(key, lock);
+        self.put_lock(key, &lock);
     }
 
     fn unlock_key(&mut self, key: Key) {
@@ -568,6 +568,41 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
+    /// Update a primary key's TTL if `advise_ttl > lock.ttl`.
+    ///
+    /// Returns the new TTL.
+    pub fn txn_heart_beat(&mut self, primary_key: Key, advise_ttl: u64) -> Result<u64> {
+        if let Some(mut lock) = self.reader.load_lock(&primary_key)? {
+            if lock.ts == self.start_ts {
+                if lock.ttl < advise_ttl {
+                    lock.ttl = advise_ttl;
+                    self.put_lock(primary_key, &lock);
+                } else {
+                    debug!(
+                        "txn_heart_beat with advise_ttl not large than current ttl";
+                        "primary_key" => %primary_key,
+                        "start_ts" => self.start_ts,
+                        "advise_ttl" => advise_ttl,
+                        "current_ttl" => lock.ttl,
+                    );
+                }
+                return Ok(lock.ttl);
+            }
+        }
+
+        debug!(
+            "txn_heart_beat invoked but lock is absent";
+            "primary_key" => %primary_key,
+            "start_ts" => self.start_ts,
+            "advise_ttl" => advise_ttl,
+        );
+        Err(Error::TxnLockNotFound {
+            start_ts: self.start_ts,
+            commit_ts: 0,
+            key: primary_key.into_raw()?,
+        })
+    }
+
     /// Check the status of a transaction.
     ///
     /// This operation checks whether a transaction has expired it's Lock's TTL, rollback the
@@ -608,7 +643,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         lock.min_commit_ts = current_ts;
                     }
 
-                    self.put_lock(primary_key, lock.take());
+                    self.put_lock(primary_key, lock);
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                 }
 
@@ -710,34 +745,73 @@ mod tests {
         Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
     };
 
-    fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
+    use std::u64;
+
+    fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        must_get_none(&engine, k, 1);
+        must_get_none(&engine, k1, 1);
 
-        must_prewrite_put(&engine, k, v, k, 5);
-        must_get_none(&engine, k, 3);
-        must_get_err(&engine, k, 7);
+        must_prewrite_put(&engine, k1, v, k1, 2);
+        must_rollback(&engine, k1, 2);
+        // should ignore rollback
+        must_get_none(&engine, k1, 3);
 
-        must_commit(&engine, k, 5, 10);
-        must_get_none(&engine, k, 3);
-        must_get_none(&engine, k, 7);
-        must_get(&engine, k, 13, v);
-        must_prewrite_delete(&engine, k, k, 15);
-        must_commit(&engine, k, 15, 20);
-        must_get_none(&engine, k, 3);
-        must_get_none(&engine, k, 7);
-        must_get(&engine, k, 13, v);
-        must_get(&engine, k, 17, v);
-        must_get_none(&engine, k, 23);
+        must_prewrite_lock(&engine, k1, k1, 3);
+        must_commit(&engine, k1, 3, 4);
+        // should ignore read lock
+        must_get_none(&engine, k1, 5);
+
+        must_prewrite_put(&engine, k1, v, k1, 5);
+        must_prewrite_put(&engine, k2, v, k1, 5);
+        // should not be affected by later locks
+        must_get_none(&engine, k1, 4);
+        // should read pending locks
+        must_get_err(&engine, k1, 7);
+        // should ignore the primary lock and get none when reading the latest record
+        must_get_none(&engine, k1, u64::MAX);
+        // should read secondary locks even when reading the latest record
+        must_get_err(&engine, k2, u64::MAX);
+
+        must_commit(&engine, k1, 5, 10);
+        must_commit(&engine, k2, 5, 10);
+        must_get_none(&engine, k1, 3);
+        // should not read with ts < commit_ts
+        must_get_none(&engine, k1, 7);
+        // should read with ts > commit_ts
+        must_get(&engine, k1, 13, v);
+        // should read the latest record if `ts == u64::MAX`
+        must_get(&engine, k1, u64::MAX, v);
+
+        must_prewrite_delete(&engine, k1, k1, 15);
+        // should ignore the lock and get previous record when reading the latest record
+        must_get(&engine, k1, u64::MAX, v);
+        must_commit(&engine, k1, 15, 20);
+        must_get_none(&engine, k1, 3);
+        must_get_none(&engine, k1, 7);
+        must_get(&engine, k1, 13, v);
+        must_get(&engine, k1, 17, v);
+        must_get_none(&engine, k1, 23);
+
+        // intersecting timestamps with pessimistic txn
+        // T1: start_ts = 25, commit_ts = 27
+        // T2: start_ts = 23, commit_ts = 31
+        must_prewrite_put(&engine, k1, v, k1, 25);
+        must_commit(&engine, k1, 25, 27);
+        must_acquire_pessimistic_lock(&engine, k1, k1, 23, 29);
+        must_get(&engine, k1, 30, v);
+        must_pessimistic_prewrite_delete(&engine, k1, k1, 23, 29, true);
+        must_commit(&engine, k1, 23, 31);
+        must_get(&engine, k1, 30, v);
+        must_get_none(&engine, k1, 32);
     }
 
     #[test]
     fn test_mvcc_txn_read() {
-        test_mvcc_txn_read_imp(b"k1", b"v1");
+        test_mvcc_txn_read_imp(b"k1", b"k2", b"v1");
 
         let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_mvcc_txn_read_imp(b"k2", &long_value);
+        test_mvcc_txn_read_imp(b"k1", b"k2", &long_value);
     }
 
     fn test_mvcc_txn_prewrite_imp(k: &[u8], v: &[u8]) {
@@ -1604,6 +1678,54 @@ mod tests {
         must_pessimistic_locked(&engine, k, 1, 2);
         must_acquire_pessimistic_lock(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
+    #[test]
+    fn test_txn_heart_beat() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (k, v) = (b"k1", b"v1");
+
+        let test = |ts| {
+            // Do nothing if advise_ttl is less smaller than current TTL.
+            must_txn_heart_beat(&engine, k, ts, 90, 100);
+            // Return the new TTL if the TTL when the TTL is updated.
+            must_txn_heart_beat(&engine, k, ts, 110, 110);
+            // The lock's TTL is updated and persisted into the db.
+            must_txn_heart_beat(&engine, k, ts, 90, 110);
+            // Heart beat another transaction's lock will lead to an error.
+            must_txn_heart_beat_err(&engine, k, ts - 1, 150);
+            must_txn_heart_beat_err(&engine, k, ts + 1, 150);
+            // The existing lock is not changed.
+            must_txn_heart_beat(&engine, k, ts, 90, 110);
+        };
+
+        // No lock.
+        must_txn_heart_beat_err(&engine, k, 5, 100);
+
+        // Create a lock with TTL=100.
+        // The initial TTL will be set to 0 after calling must_prewrite_put. Update it first.
+        must_prewrite_put(&engine, k, v, k, 5);
+        must_locked(&engine, k, 5);
+        must_txn_heart_beat(&engine, k, 5, 100, 100);
+
+        test(5);
+
+        must_locked(&engine, k, 5);
+        must_commit(&engine, k, 5, 10);
+        must_unlocked(&engine, k);
+
+        // No lock.
+        must_txn_heart_beat_err(&engine, k, 5, 100);
+        must_txn_heart_beat_err(&engine, k, 10, 100);
+
+        must_acquire_pessimistic_lock(&engine, k, k, 8, 15);
+        must_pessimistic_locked(&engine, k, 8, 15);
+        must_txn_heart_beat(&engine, k, 8, 100, 100);
+
+        test(8);
+
+        must_pessimistic_locked(&engine, k, 8, 15);
     }
 
     #[test]

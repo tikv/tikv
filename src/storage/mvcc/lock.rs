@@ -10,8 +10,6 @@ use byteorder::ReadBytesExt;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
-use std::mem;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
     Put,
@@ -169,19 +167,6 @@ impl Lock {
             txn_size,
             min_commit_ts,
         ))
-    }
-
-    pub fn take(&mut self) -> Self {
-        Lock::new(
-            self.lock_type,
-            mem::replace(&mut self.primary, Default::default()),
-            self.ts,
-            self.ttl,
-            mem::replace(&mut self.short_value, Default::default()),
-            self.for_update_ts,
-            self.txn_size,
-            self.min_commit_ts,
-        )
     }
 }
 
