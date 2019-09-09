@@ -1547,6 +1547,16 @@ impl Decimal {
         Res::Ok(x)
     }
 
+    // TODO, add test
+    pub fn from_f64(val: f64) -> Result<Decimal> {
+        if val.is_infinite() {
+            Err(invalid_type!("{} can't be convert to decimal'", val))
+        } else {
+            let r = val.to_string();
+            Decimal::from_str(r.as_str())
+        }
+    }
+
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
@@ -1710,18 +1720,14 @@ enable_conv_for_int!(usize, u64);
 enable_conv_for_int!(isize, i64);
 
 impl ConvertTo<f64> for Decimal {
+    /// This function should not return err,
+    /// if it return err, then the err because of bug.
+    ///
+    /// Port from TiDB's MyDecimal::ToFloat64.
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         let val = self.to_string().parse()?;
         Ok(val)
-    }
-}
-
-impl ConvertTo<Json> for Decimal {
-    #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
-        let val: f64 = self.convert(ctx)?;
-        Ok(Json::Double(val))
     }
 }
 
@@ -1776,12 +1782,7 @@ impl ConvertTo<Decimal> for f64 {
     /// rather than the accurate value the float represent.
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        if !self.is_finite() {
-            return Err(invalid_type!("{} can't be convert to decimal'", self));
-        }
-
-        let s = format!("{}", self);
-        s.parse()
+        Decimal::from_f64(*self)
     }
 }
 
@@ -1793,20 +1794,13 @@ impl ConvertTo<Decimal> for Real {
 }
 
 impl ConvertTo<Decimal> for &[u8] {
+    // FIXME, the err handle is not exactly same as TiDB's,
+    //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let dec = match Decimal::from_bytes(self)? {
-            Res::Ok(d) => d,
-            Res::Overflow(d) => {
-                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))?;
-                d
-            }
-            Res::Truncated(d) => {
-                ctx.handle_truncate(true)?;
-                d
-            }
-        };
-        Ok(dec)
+        let r = Decimal::from_bytes(self)?;
+        let err = Error::overflow("DECIMAL", "");
+        r.into_result_with_overflow_err(ctx, err)
     }
 }
 
@@ -1821,6 +1815,32 @@ impl ConvertTo<Decimal> for Bytes {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         self.as_slice().convert(ctx)
+    }
+}
+
+impl ConvertTo<Decimal> for Json {
+    /// Port from TiDB's types.ConvertJSONToDecimal
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        match self {
+            Json::String(s) => {
+                match Decimal::from_str(s.as_str()) {
+                    Ok(d) => Ok(d),
+                    Err(e) => {
+                        ctx.handle_truncate_err(e)?;
+                        // FIXME, if TiDB's MyDecimal::FromString return err,
+                        //  it may has res. However, if TiKV's Decimal::from_str
+                        //  return err, it has no res, so I return zero here,
+                        //  but it may different from TiDB's MyDecimal::FromString
+                        Ok(Decimal::zero())
+                    }
+                }
+            }
+            _ => {
+                let r: f64 = self.convert(ctx)?;
+                Decimal::from_f64(r)
+            }
+        }
     }
 }
 
