@@ -8,6 +8,6 @@ publish = false
 slog = "2.3"
 slog-term = "2.4"
 hex = "0.3"
-#kvproto = {git="https://github.com/YangKeao/kvproto.git", branch="yangkeao/update_dependencies"}
-kvproto = {path = "../../../kvproto"}
+kvproto = {git="https://github.com/YangKeao/kvproto.git", branch="yangkeao/update_dependencies"}
+#kvproto = {path = "../../../kvproto"}
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
