@@ -2132,8 +2132,8 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
         cfg.key_path = key_path.unwrap().to_owned();
     }
 
-    if cipher_file.is_some() {
-        cfg.cipher_file = cipher_file.unwrap().to_owned();
+    if let Some(cipher_file) = cipher_file {
+        cfg.cipher_file = cipher_file.to_owned();
     }
 
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
