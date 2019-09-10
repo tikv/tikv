@@ -99,7 +99,8 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
     })
 }
 
-fn json_with_bytes_validator(expr: &tipb::Expr) -> Result<()> {
+// Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
+fn json_with_paths_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     assert!(children.len() >= 2);
     // args should be like `&Option<Json> , &[&Option<Bytes>]`.
@@ -110,8 +111,7 @@ fn json_with_bytes_validator(expr: &tipb::Expr) -> Result<()> {
     Ok(())
 }
 
-/// args should be like `&Option<Json> , &[&Option<Bytes>]`.
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_bytes_validator)]
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
 #[inline]
 fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
@@ -129,8 +129,7 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     Ok(j.extract(&path_expr_list))
 }
 
-/// args should be like `&Option<Json> , &[&Option<Bytes>]`.
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_bytes_validator)]
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
 #[inline]
 fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
