@@ -54,6 +54,8 @@ impl<S: Snapshot> BackwardScanner<S> {
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
+
+            key_buf: None,
         }
     }
 
