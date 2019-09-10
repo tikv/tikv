@@ -3095,7 +3095,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: Box<WriteResponse>| {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
@@ -3113,7 +3113,7 @@ mod tests {
                 true,
                 3,
                 0,
-                Callback::Write(Box::new(move |write: WriteResponse| {
+                Callback::Write(Box::new(move |write: Box<WriteResponse>| {
                     cc_tx.send(write.response).unwrap();
                 })),
             ),
@@ -3222,7 +3222,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: Box<WriteResponse>| {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
@@ -3266,7 +3266,7 @@ mod tests {
                 false,
                 self.entry.get_index(),
                 self.entry.get_term(),
-                Callback::Write(Box::new(move |resp: WriteResponse| {
+                Callback::Write(Box::new(move |resp: Box<WriteResponse>| {
                     tx.send(resp.response).unwrap();
                 })),
             );

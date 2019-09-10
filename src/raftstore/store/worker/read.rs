@@ -701,7 +701,7 @@ mod tests {
         let region = region1.clone();
         let task = RaftCommand::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: Box<ReadResponse>| {
                 let snap = resp.snapshot.unwrap();
                 assert_eq!(snap.get_region(), &region);
             })),
@@ -724,7 +724,7 @@ mod tests {
             .set_store_id(store_id + 1);
         let task = RaftCommand::new(
             cmd_store_id,
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: Box<ReadResponse>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_store_not_match());
                 assert!(resp.snapshot.is_none());
@@ -742,7 +742,7 @@ mod tests {
             .set_id(leader2.get_id() + 1);
         let task = RaftCommand::new(
             cmd_peer_id,
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: Box<ReadResponse>| {
                 assert!(
                     resp.response.get_header().has_error(),
                     "{:?}",
@@ -766,7 +766,7 @@ mod tests {
         cmd_term.mut_header().set_term(term6 - 2);
         let task = RaftCommand::new(
             cmd_term,
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: Box<ReadResponse>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_stale_command(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
@@ -800,7 +800,7 @@ mod tests {
         let task1 = RaftCommand::new(cmd.clone(), Callback::None);
         let task_full = RaftCommand::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: Box<ReadResponse>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_server_is_busy(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());

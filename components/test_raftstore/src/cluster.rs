@@ -856,7 +856,7 @@ impl<T: Simulator> Cluster<T> {
             if try_cnt % 50 == 0 {
                 self.reset_leader_of_region(region.get_id());
                 let key = split_key.to_vec();
-                let check = Box::new(move |write_resp: WriteResponse| {
+                let check = Box::new(move |write_resp: Box<WriteResponse>| {
                     let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();

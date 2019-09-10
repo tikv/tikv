@@ -31,8 +31,8 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-pub type ReadCallback = Box<dyn FnOnce(ReadResponse) + Send>;
-pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+pub type ReadCallback = Box<dyn FnOnce(Box<ReadResponse>) + Send>;
+pub type WriteCallback = Box<dyn FnOnce(Box<WriteResponse>) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -53,14 +53,14 @@ impl Callback {
         match self {
             Callback::None => (),
             Callback::Read(read) => {
-                let resp = ReadResponse {
+                let resp = Box::new(ReadResponse {
                     response: resp,
                     snapshot: None,
-                };
+                });
                 read(resp);
             }
             Callback::Write(write) => {
-                let resp = WriteResponse { response: resp };
+                let resp = Box::new(WriteResponse { response: resp });
                 write(resp);
             }
         }
@@ -68,7 +68,7 @@ impl Callback {
 
     pub fn invoke_read(self, args: ReadResponse) {
         match self {
-            Callback::Read(read) => read(args),
+            Callback::Read(read) => read(Box::new(args)),
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }

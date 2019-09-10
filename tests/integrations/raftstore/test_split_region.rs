@@ -118,7 +118,7 @@ fn test_server_split_region_twice() {
 
     let (tx, rx) = channel();
     let key = split_key.to_vec();
-    let c = Box::new(move |write_resp: WriteResponse| {
+    let c = Box::new(move |write_resp: Box<WriteResponse>| {
         let mut resp = write_resp.response;
         let admin_resp = resp.mut_admin_response();
         let split_resp = admin_resp.mut_splits();
@@ -137,7 +137,7 @@ fn test_server_split_region_twice() {
     cluster.must_put(split_key, b"v2");
 
     let (tx1, rx1) = channel();
-    let c = Box::new(move |write_resp: WriteResponse| {
+    let c = Box::new(move |write_resp: Box<WriteResponse>| {
         assert!(write_resp.response.has_header());
         assert!(write_resp.response.get_header().has_error());
         assert!(!write_resp.response.has_admin_response());
