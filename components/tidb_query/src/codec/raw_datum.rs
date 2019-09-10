@@ -8,7 +8,7 @@ use tipb::FieldType;
 
 use super::data_type::*;
 use crate::codec::datum;
-use crate::codec::mysql::{DecimalDecoder, Tz};
+use crate::codec::mysql::{DecimalDecoder, JsonDecoder, Tz};
 use crate::codec::{Error, Result};
 
 #[inline]
@@ -61,7 +61,8 @@ fn decode_compact_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
 
 #[inline]
 fn decode_json(v: &mut &[u8]) -> Result<Json> {
-    Json::decode(v).map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
+    v.decode_json()
+        .map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
 }
 
 #[inline]
