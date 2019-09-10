@@ -1,28 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod client;
-mod config;
-pub mod deadlock;
-mod metrics;
 mod util;
-pub mod waiter_manager;
 
-pub use self::config::Config;
-pub use self::deadlock::{
-    register_detector_role_change_observer, Detector, Scheduler as DetectorScheduler, Service,
-};
-pub use self::util::{extract_lock_from_result, gen_key_hash, gen_key_hashes};
-pub use self::waiter_manager::{
-    store_wait_table_is_empty, wait_table_is_empty, Scheduler as WaiterMgrScheduler,
-    Task as WaiterTask, WaiterManager,
-};
-use futures::future::Future;
-use futures::Canceled;
-use pd_client::Error as PdError;
-use std::error;
-use std::result;
+pub use self::util::*;
 
-type DeadlockFuture<T> = Box<dyn Future<Item = T, Error = Error>>;
+use crate::storage::txn::ProcessResult;
+use crate::storage::StorageCb;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
@@ -30,38 +13,62 @@ pub struct Lock {
     pub hash: u64,
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Grpc(err: grpcio::Error) {
-            from()
-            cause(err)
-            display("{:?}", err)
-            description(err.description())
-        }
-        NoLeader {
-            display("no leader")
-            description("no leader")
-        }
-        Canceled(err: Canceled) {
-            from()
-            cause(err)
-            display("{:?}", err)
-            description(err.description())
-        }
-        Pd(err: PdError) {
-            from()
-            cause(err)
-            display("{:?}", err)
-            description(err.description())
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-            description(err.description())
-        }
+/// `LockMgr` manages transactions waiting for locks holden by other transactions.
+/// It has responsibility to handle deadlocks between transactions.
+pub trait LockMgr: Clone + Send + 'static {
+    /// Transaction with `start_ts` waits for `lock` released.
+    ///
+    /// If the lock is released or waiting times out or deadlock occurs, the transaction
+    /// should be waken up and call `cb` with `pr` to notify the caller.
+    ///
+    /// If the lock is the first lock the transaction waits for, it won't result in deadlock.
+    fn wait_for(
+        &self,
+        start_ts: u64,
+        cb: StorageCb,
+        pr: ProcessResult,
+        lock: Lock,
+        is_first_lock: bool,
+    );
+
+    /// The locks with `lock_ts` and `hashes` are released, trys to wake up transactions.
+    fn wake_up(
+        &self,
+        lock_ts: u64,
+        hashes: Option<Vec<u64>>,
+        commit_ts: u64,
+        is_pessimistic_txn: bool,
+    );
+
+    /// Returns true if there are waiters in the `LockMgr`.
+    ///
+    /// This function is used to avoid useless calculation and wake-up.
+    fn has_waiter(&self) -> bool {
+        true
     }
 }
 
-pub type Result<T> = result::Result<T, Error>;
+// For test
+#[derive(Clone)]
+pub struct DummyLockMgr;
+
+impl LockMgr for DummyLockMgr {
+    fn wait_for(
+        &self,
+        _start_ts: u64,
+        _cb: StorageCb,
+        _pr: ProcessResult,
+        _lock: Lock,
+        _is_first_lock: bool,
+    ) {
+    }
+
+    fn wake_up(
+        &self,
+        _lock_ts: u64,
+        _hashes: Option<Vec<u64>>,
+        _commit_ts: u64,
+        _is_pessimistic_txn: bool,
+    ) {
+    }
+}

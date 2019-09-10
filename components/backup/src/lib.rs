@@ -3,7 +3,6 @@
 #![recursion_limit = "200"]
 // TODO: remove it after all code been merged.
 #![allow(unused_imports)]
-#![feature(duration_float)]
 
 #[macro_use(
     kv,
@@ -28,6 +27,13 @@ extern crate failure;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+mod endpoint;
 mod errors;
+mod metrics;
+mod service;
+mod writer;
 
+pub use endpoint::{Endpoint, Task};
 pub use errors::{Error, Result};
+pub use service::Service;
+pub use writer::BackupWriter;
