@@ -111,3 +111,16 @@ where
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
+
+#[inline]
+pub fn key_to_key_buf<'a>(mut key_buf: &'a mut Option<Key>, key: &Key) -> &'a mut Key {
+    match &mut key_buf {
+        None => {
+            *key_buf = Some(key.clone());
+        }
+        Some(ref mut local_key) => {
+            local_key.copy_from_encoded_key(key);
+        }
+    };
+    key_buf.as_mut().unwrap()
+}

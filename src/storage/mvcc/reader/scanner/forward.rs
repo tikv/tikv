@@ -10,7 +10,7 @@ use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
-use super::util::CheckLockResult;
+use super::util::{key_to_key_buf, CheckLockResult};
 use super::ScannerConfig;
 /// This struct can be used to scan keys starting from the given user key (greater than or equal).
 ///
@@ -27,6 +27,8 @@ pub struct ForwardScanner<S: Snapshot> {
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
+
+    key_buf: Option<Key>,
 }
 
 impl<S: Snapshot> ForwardScanner<S> {
@@ -42,6 +44,8 @@ impl<S: Snapshot> ForwardScanner<S> {
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
+
+            key_buf: None,
         }
     }
 
@@ -243,8 +247,10 @@ impl<S: Snapshot> ForwardScanner<S> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
-            self.write_cursor
-                .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
+            self.write_cursor.seek(
+                key_to_key_buf(&mut self.key_buf, user_key).append_ts_ref(ts),
+                &mut self.statistics.write,
+            )?;
             if !self.write_cursor.valid()? {
                 // Key space ended.
                 return Ok(None);
@@ -345,7 +351,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         // `current_user_key` must have reserved space here, so its clone has reserved space too.
         // So no reallocation happens in `append_ts`.
         self.write_cursor.internal_seek(
-            &current_user_key.clone().append_ts(0),
+            key_to_key_buf(&mut self.key_buf, current_user_key).append_ts_ref(0),
             &mut self.statistics.write,
         )?;
 

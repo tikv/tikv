@@ -88,6 +88,13 @@ impl Key {
         Key(encoded)
     }
 
+    #[inline]
+    pub fn append_ts_ref(&mut self, ts: u64) -> &Key {
+        let encoded = &mut self.0;
+        encoded.encode_u64_desc(ts).unwrap();
+        self
+    }
+
     /// Gets the timestamp contained in this key.
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped
@@ -118,6 +125,12 @@ impl Key {
             self.0.truncate(len - number::U64_SIZE);
             Ok(self)
         }
+    }
+
+    #[inline]
+    pub fn copy_from_encoded_key(&mut self, key: &Key) {
+        self.0.clear();
+        self.0.extend_from_slice(&key.0);
     }
 
     /// Split a ts encoded key, return the user key and timestamp.

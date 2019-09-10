@@ -10,7 +10,7 @@ use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
-use super::util::CheckLockResult;
+use super::util::{key_to_key_buf, CheckLockResult};
 use super::ScannerConfig;
 
 // When there are many versions for the user key, after several tries,
@@ -37,6 +37,8 @@ pub struct BackwardScanner<S: Snapshot> {
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
+
+    key_buf: Option<Key>,
 }
 
 impl<S: Snapshot> BackwardScanner<S> {
@@ -234,11 +236,12 @@ impl<S: Snapshot> BackwardScanner<S> {
         // use seek to locate the latest version.
         // `user_key` must have reserved space here, so its clone has reserved space too. So no
         // reallocation happens in `append_ts`.
-        let seek_key = user_key.clone().append_ts(ts);
 
         // TODO: Replace by cast + seek().
-        self.write_cursor
-            .internal_seek(&seek_key, &mut self.statistics.write)?;
+        self.write_cursor.internal_seek(
+            key_to_key_buf(&mut self.key_buf, user_key).append_ts_ref(ts),
+            &mut self.statistics.write,
+        )?;
         assert!(self.write_cursor.valid()?);
 
         loop {
