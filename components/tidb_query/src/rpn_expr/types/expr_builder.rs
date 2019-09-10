@@ -9,8 +9,7 @@ use tipb::{Expr, ExprType, FieldType};
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::codec::data_type::*;
-use crate::codec::mysql::Tz;
-use crate::codec::mysql::MAX_FSP;
+use crate::codec::mysql::{JsonDecoder, Tz, MAX_FSP};
 use crate::codec::{datum, Datum};
 use crate::Result;
 
@@ -461,7 +460,9 @@ fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
 
 #[inline]
 fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = Json::decode(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .decode_json()
         .map_err(|_| other_err!("Unable to decode json from the request"))?;
     Ok(ScalarValue::Json(Some(value)))
 }
