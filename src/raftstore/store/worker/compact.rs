@@ -227,15 +227,21 @@ fn collect_ranges_need_compact(
 
         // Current range doesn't need compacting, save previous range that need compacting.
         if compact_start.is_some() {
-            ranges_need_compact.push_back((compact_start.unwrap(), compact_end.unwrap()));
-            compact_start = None;
-            compact_end = None;
+            assert!(compact_end.is_some());
         }
+        if let (Some(cs), Some(ce)) = (compact_start, compact_end) {
+            ranges_need_compact.push_back((cs, ce));
+        }
+        compact_start = None;
+        compact_end = None;
     }
 
     // Save the last range that needs to be compacted.
     if compact_start.is_some() {
-        ranges_need_compact.push_back((compact_start.unwrap(), compact_end.unwrap()));
+        assert!(compact_end.is_some());
+    }
+    if let (Some(cs), Some(ce)) = (compact_start, compact_end) {
+        ranges_need_compact.push_back((cs, ce));
     }
 
     Ok(ranges_need_compact)
