@@ -717,10 +717,10 @@ impl Debugger {
         let handle = box_try!(get_cf_handle(rocksdb, cf_name));
         let opt = rocksdb.get_options_cf(handle);
         let capacity = ReadableSize::from_str(config_value);
-        if capacity.is_err() {
+        if let Err(e) = capacity {
             return Err(Error::InvalidArgument(format!(
                 "bad block cache size: {:?}",
-                capacity.unwrap_err()
+                e
             )));
         }
         let cache_size = capacity.unwrap().0;

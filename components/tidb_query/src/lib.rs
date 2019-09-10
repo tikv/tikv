@@ -11,6 +11,12 @@
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(test)]
+// FIXME: rustc says there are redundant semicolons here but isn't
+// saying where as of nightly-2019-09-05
+// See https://github.com/rust-lang/rust/issues/63967
+#![allow(redundant_semicolon)]
+// FIXME: ditto. probably a result of the above
+#![allow(clippy::no_effect)]
 
 #[macro_use]
 extern crate lazy_static;
