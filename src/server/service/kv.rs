@@ -60,7 +60,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     timer_pool: Arc<Mutex<ThreadPool>>,
 }
 
-#[derive(Eq, Hash)]
+#[derive(Eq, Hash, Debug)]
 struct RegionVerId {
     region: u64,
     epoch: u64,
@@ -194,6 +194,7 @@ impl MiniBatcher {
 
     fn report(&self) {
         info!("MiniBatcher report";
+            "region_flatten" => format!("{:?}", self.router.keys()),
             "batch_commands" => self.input,
             "batched" => self.batched,
             "key_conflicted" => self.key_conflict,
@@ -208,10 +209,10 @@ impl MiniBatcher {
         &mut self,
         storage: &Storage<E>,
     ) {
-        let commands = self.take_commands();
-        if commands.len() > 0 {
+        if self.commands.len() > 0 {
             self.report();
         }
+        let commands = self.take_commands();
         for cmd in commands {
             let tx_copy = self.tx.clone();
             storage.batch_prewrite(
