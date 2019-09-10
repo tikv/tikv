@@ -263,8 +263,7 @@ impl Cluster {
         // assert_eq!(region.get_peers().len(), 1);
         let store_id = store.get_id();
         let mut s = Store::default();
-        s.store = store;;
-
+        s.store = store;
 
         s.region_ids.insert(region.get_id());
 
