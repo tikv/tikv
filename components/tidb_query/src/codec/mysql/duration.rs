@@ -807,7 +807,6 @@ mod tests {
 
     use super::*;
     use crate::codec::data_type::DateTime;
-    use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use crate::expr::{EvalConfig, EvalContext, Flag};
     use std::sync::Arc;
 
@@ -1250,7 +1249,9 @@ mod tests {
         for (input, fsp, expect, overflow) in cs {
             let cfg = Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING));
             let mut ctx = EvalContext::new(cfg);
+
             let r = Duration::from_i64(&mut ctx, input, fsp);
+
             let expect_str = if expect.is_ok() {
                 format!("{}", expect.as_ref().unwrap())
             } else {
@@ -1261,53 +1262,27 @@ mod tests {
             } else {
                 format!("{:?}", &r)
             };
-            assert_eq!(
-                r.is_ok(),
-                expect.is_ok(),
+            let log = format!(
                 "input: {}, fsp: {}, expect: {}, output: {}",
-                input,
-                fsp,
-                expect_str,
-                result_str
+                input, fsp, expect_str, result_str
             );
+
+            assert_eq!(r.is_ok(), expect.is_ok(), "{}", log.as_str());
             if r.is_ok() {
                 let r = r.unwrap();
-                assert_eq!(
-                    r,
-                    expect.unwrap(),
-                    "input: {}, fsp: {}, expect: {}, output: {}",
-                    input,
-                    fsp,
-                    expect_str,
-                    result_str
-                );
+                assert_eq!(r, expect.unwrap(), "{}", log.as_str());
             } else {
                 let e = r.err().unwrap();
                 let e2 = expect.err().unwrap();
-                assert_eq!(
-                    e.code(),
-                    e2.code(),
-                    "input: {}, fsp: {}, expect: {}, output: {}",
-                    input,
-                    fsp,
-                    expect_str,
-                    result_str
-                );
+                assert_eq!(e.code(), e2.code(), "{}", log.as_str());
             }
             if overflow {
-                assert_eq!(
-                    ctx.warnings.warning_cnt, 1,
-                    "input: {}, fsp: {}, expect: {}, output: {}",
-                    input, fsp, expect_str, result_str
-                );
+                assert_eq!(ctx.warnings.warning_cnt, 1, "{}", log.as_str());
                 assert_eq!(
                     ctx.warnings.warnings[0].get_code(),
-                    ERR_TRUNCATE_WRONG_VALUE,
-                    "input: {}, fsp: {}, expect: {}, output: {}",
-                    input,
-                    fsp,
-                    expect_str,
-                    result_str
+                    ERR_DATA_OUT_OF_RANGE,
+                    "{}",
+                    log.as_str()
                 );
             }
         }
