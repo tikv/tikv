@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{Result, Write};
+use std::io::{Read, Result, Write};
 use std::option::Option;
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ pub const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
 /// The I/O rate limiter for RocksDB.
 ///
-/// Throttles the maximum bytes per second written to disk.
+/// Throttles the maximum bytes per second written or read.
 pub struct IOLimiter {
     inner: RateLimiter,
 }
@@ -105,6 +105,46 @@ impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
     }
 }
 
+/// A limited reader.
+///
+/// The read limits the bytes per second read from an underlying reader.
+pub struct LimitReader<'a, T: Read> {
+    limiter: Option<Arc<IOLimiter>>,
+    reader: &'a mut T,
+}
+
+impl<'a, T: Read + 'a> LimitReader<'a, T> {
+    /// Create a new `LimitReader`.
+    pub fn new(limiter: Option<Arc<IOLimiter>>, reader: &'a mut T) -> LimitReader<'a, T> {
+        LimitReader { limiter, reader }
+    }
+}
+
+impl<'a, T: Read + 'a> Read for LimitReader<'a, T> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        if let Some(ref limiter) = self.limiter {
+            let total = buf.len();
+            let single = limiter.get_max_bytes_per_time() as usize;
+            let mut count = 0;
+            let mut curr = 0;
+            let mut end;
+            while curr < total {
+                if curr + single >= total {
+                    end = total;
+                } else {
+                    end = curr + single;
+                }
+                limiter.request((end - curr) as i64);
+                count += self.reader.read(&mut buf[curr..end])?;
+                curr = end;
+            }
+            Ok(count)
+        } else {
+            self.reader.read(buf)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
@@ -112,7 +152,7 @@ mod tests {
     use std::sync::Arc;
     use tempfile::Builder;
 
-    use super::{IOLimiter, LimitWriter, SNAP_MAX_BYTES_PER_TIME};
+    use super::*;
 
     #[test]
     fn test_io_limiter() {
@@ -149,5 +189,20 @@ mod tests {
 
         let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, s);
+    }
+
+    #[test]
+    fn test_limit_reader() {
+        let mut buf = Vec::with_capacity(512);
+        let bytes_per_sec = 10 * 1024 * 1024; // 10MB/s
+        for c in 0..1024usize {
+            let mut source = std::io::repeat(b'7').take(c as _);
+            let mut limit_reader =
+                LimitReader::new(Some(Arc::new(IOLimiter::new(bytes_per_sec))), &mut source);
+            let count = limit_reader.read_to_end(&mut buf).unwrap();
+            assert_eq!(count, c);
+            assert_eq!(count, buf.len());
+            buf.clear();
+        }
     }
 }
