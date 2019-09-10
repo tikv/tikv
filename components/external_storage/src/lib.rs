@@ -29,6 +29,8 @@ use url::Url;
 
 mod local;
 pub use local::LocalStorage;
+mod noop;
+pub use noop::NoopStorage;
 
 /// Create a new storage from the given url.
 pub fn create_storage(url: &str) -> io::Result<Arc<dyn ExternalStorage>> {
@@ -44,6 +46,7 @@ pub fn create_storage(url: &str) -> io::Result<Arc<dyn ExternalStorage>> {
             let p = Path::new(url.path());
             LocalStorage::new(p).map(|s| Arc::new(s) as _)
         }
+        NoopStorage::SCHEME => Ok(Arc::new(NoopStorage::new()) as _),
         other => {
             error!("unknown storage"; "scheme" => other);
             Err(io::Error::new(
@@ -79,6 +82,7 @@ mod tests {
     #[test]
     fn test_create_storage() {
         create_storage("local:///tmp/a").unwrap();
+        create_storage("noop:///foo").unwrap();
         assert!(create_storage("invalid").is_err());
     }
 }
