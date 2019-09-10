@@ -7,7 +7,7 @@ use tidb_query_datatype::EvalType;
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::json::*;
-use crate::{Error, Result};
+use crate::Result;
 
 #[rpn_fn]
 #[inline]
@@ -52,12 +52,11 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
         let path: &Option<Bytes> = chunk[0].as_ref();
         let value: &Option<Json> = chunk[1].as_ref();
 
-        let path = match path.as_ref() {
+        let json_path = match path.as_ref() {
             None => return Ok(None),
-            Some(p) => p.to_owned(),
-        };
+            Some(p) => std::str::from_utf8(&p).map_err(crate::codec::Error::from),
+        }?;
 
-        let json_path = eval_string_and_decode(path)?;
         let path_expr = parse_json_path_expr(&json_path)?;
 
         path_expr_list.push(path_expr);
@@ -85,13 +84,6 @@ fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
         super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
     }
     Ok(())
-}
-
-#[inline]
-fn eval_string_and_decode(b: Bytes) -> Result<String> {
-    String::from_utf8(b)
-        .map_err(crate::codec::Error::from)
-        .map_err(Error::from)
 }
 
 #[rpn_fn(varg)]
