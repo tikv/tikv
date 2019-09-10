@@ -49,6 +49,18 @@ make_static_metric! {
 }
 
 lazy_static! {
+    pub static ref MINIBATCH_RATE_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_minibatch_rate",
+        "Batch rate of mini batch",
+        exponential_buckets(1f64, 5f64, 10).unwrap()
+    )
+    .unwrap();
+    pub static ref MINIBATCH_SIZE_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_minibatch_size",
+        "Batch input size of mini batch",
+        exponential_buckets(1f64, 50f64, 10).unwrap()
+    )
+    .unwrap();
     pub static ref SEND_SNAP_HISTOGRAM: Histogram = register_histogram!(
         "tikv_server_send_snapshot_duration_seconds",
         "Bucketed histogram of server send snapshots duration",

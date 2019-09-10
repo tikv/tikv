@@ -12,6 +12,7 @@ use crate::server::snap::Task as SnapTask;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
 use crate::storage::kv::Error as EngineError;
+use crate::storage::CommandKind;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{self, Command, Engine, Key, Mutation, Options, Storage, Value};
@@ -41,7 +42,7 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 const MINIBATCH_TIMEOUT_MILLIS: u64 = 1;
-const MINIBATCH_CROSS_COMMAND_ENABLED: bool = false;
+const MINIBATCH_CROSS_COMMAND_ENABLED: bool = true;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -165,7 +166,7 @@ impl MiniBatcher {
                             meta.key_set.insert(m.key().clone().into_encoded());
                         }
                         let cmd = create_cmd(mutations);
-                        if let Command::MiniBatch{ref mut commands, ref mut ids} = self.commands[meta.idx] {
+                        if let Command::MiniBatch{ ref mut commands, ref mut ids, .. } = self.commands[meta.idx] {
                             commands.push(cmd);
                             ids.push(request_id);
                         }
@@ -179,7 +180,58 @@ impl MiniBatcher {
                         meta.size = 1;
                         self.router.insert(ver, meta);
                         let cmd = create_cmd(mutations);
-                        self.commands.push(Command::MiniBatch{
+                        self.commands.push(Command::MiniBatch {
+                            tag: CommandKind::prewrite,
+                            commands: vec![cmd],
+                            ids: vec![request_id],
+                        });
+                    }
+                }
+                self.batched += 1;
+                true
+            }
+            Some(batch_commands_request::request::Cmd::Commit(req)) => {
+                let ver = RegionVerId {
+                    region: req.get_context().get_region_id(),
+                    epoch: req.get_context().get_region_epoch().get_version(),
+                };
+                let keys: Vec<Key> = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+                let mut create_cmd = |keys| {
+                    Command::Commit {
+                        ctx: req.take_context(),
+                        keys,
+                        lock_ts: req.get_start_version(),
+                        commit_ts: req.get_commit_version(),
+                    }
+                };
+                match self.router.get_mut(&ver) {
+                    Some(meta) => {
+                        for key in &keys {
+                            if meta.key_set.contains(key.clone().as_encoded()) {
+                                self.key_conflict += 1;
+                                return false;
+                            }
+                        }
+                        for key in &keys {
+                            meta.key_set.insert(key.clone().into_encoded());
+                        }
+                        let cmd = create_cmd(keys);
+                        if let Command::MiniBatch{ ref mut commands, ref mut ids, .. } = self.commands[meta.idx] {
+                            commands.push(cmd);
+                            ids.push(request_id);
+                        }
+                    }
+                    None => {
+                        let mut meta = MiniBatchMeta::new();
+                        meta.idx = self.commands.len();
+                        for key in &keys {
+                            meta.key_set.insert(key.clone().into_encoded());
+                        }
+                        meta.size = 1;
+                        self.router.insert(ver, meta);
+                        let cmd = create_cmd(keys);
+                        self.commands.push(Command::MiniBatch {
+                            tag: CommandKind::commit,
                             commands: vec![cmd],
                             ids: vec![request_id],
                         });
@@ -193,6 +245,8 @@ impl MiniBatcher {
     }
 
     fn report(&self) {
+        MINIBATCH_RATE_HISTOGRAM.observe(self.commands.len() as f64 / self.batched as f64);
+        MINIBATCH_SIZE_HISTOGRAM.observe(self.input as f64);
         info!("MiniBatcher report";
             "region_flatten" => format!("{:?}", self.router.keys()),
             "batch_commands" => self.input,
@@ -202,7 +256,9 @@ impl MiniBatcher {
     }
 
     pub fn ready(&self) -> bool {
-        !MINIBATCH_CROSS_COMMAND_ENABLED || self.total < 50 || self.input > 30 || self.batched as f32 / self.commands.len() as f32 >= 1.5
+        !MINIBATCH_CROSS_COMMAND_ENABLED ||
+        self.total < 50 || // bootstrap
+        self.batched as f32 / self.commands.len() as f32 > 2.0
     }
 
     pub fn submit<E: Engine>(
@@ -214,25 +270,52 @@ impl MiniBatcher {
         }
         let commands = self.take_commands();
         for cmd in commands {
-            let tx_copy = self.tx.clone();
-            storage.batch_prewrite(
-                cmd,
-                Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
-                    // let v = v.map_err(Error::from);
-                    let mut resp = PrewriteResponse::default();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        resp.set_errors(extract_key_errors(v).into());
-                    }
-                    let mut res = batch_commands_response::Response::default();
-                    res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
-                    tx_copy.send_and_notify((id, res));
-                    // if !tx.send_and_notify((id, res)).is_err() {
-                        // timer.observe_duration();
-                    // }
-                }),
-            );
+            let tx = self.tx.clone();
+            let tag = cmd.tag();
+            match tag {
+                CommandKind::prewrite => {
+                    storage.batch_prewrite(
+                        cmd,
+                        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
+                            // let v = v.map_err(Error::from);
+                            let mut resp = PrewriteResponse::default();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else {
+                                resp.set_errors(extract_key_errors(v).into());
+                            }
+                            let mut res = batch_commands_response::Response::default();
+                            res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
+                            tx.send_and_notify((id, res));
+                            // if !tx.send_and_notify((id, res)).is_err() {
+                                // timer.observe_duration();
+                            // }
+                        }),
+                    );
+                }
+                CommandKind::commit => {
+                    storage.batch_commit(
+                        cmd,
+                        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
+                            // let v = v.map_err(Error::from);
+                            let mut resp = PrewriteResponse::default();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else {
+                                resp.set_errors(extract_key_errors(v).into());
+                            }
+                            let mut res = batch_commands_response::Response::default();
+                            res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
+                            tx.send_and_notify((id, res));
+                            // if !tx.send_and_notify((id, res)).is_err() {
+                                // timer.observe_duration();
+                            // }
+                        }),
+                    );
+                }
+                _ => {}
+            }
+
         }
     }
 

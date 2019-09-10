@@ -34,6 +34,7 @@ use tikv_util::collections::HashMap;
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
+pub use self::metrics::CommandKind;
 use self::mvcc::Lock;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
@@ -271,6 +272,7 @@ pub enum Command {
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
     MvccByStartTs { ctx: Context, start_ts: u64 },
     MiniBatch {
+        tag: CommandKind,
         commands: Vec<Command>,
         ids: Vec<u64>,
     },
@@ -425,6 +427,7 @@ impl Command {
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
+            Command::MiniBatch { ref commands, .. } => commands[0].readonly(),
             _ => false,
         }
     }
@@ -438,6 +441,7 @@ impl Command {
             Command::ScanLock { .. }
             | Command::ResolveLock { .. }
             | Command::ResolveLockLite { .. } => true,
+            Command::MiniBatch { ref commands, .. } => commands[0].is_sys_cmd(),
             _ => false,
         }
     }
@@ -469,7 +473,7 @@ impl Command {
             Command::Pause { .. } => CommandKind::pause,
             Command::MvccByKey { .. } => CommandKind::key_mvcc,
             Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
-            Command::MiniBatch { .. } => CommandKind::batch_command,
+            Command::MiniBatch { tag, .. } => tag,
         }
     }
 
@@ -574,6 +578,11 @@ impl Command {
             }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
+            }
+            Command::MiniBatch { ref commands, .. } => {
+                for cmd in commands {
+                    bytes += cmd.write_bytes();
+                }
             }
             _ => {}
         }
@@ -1103,7 +1112,7 @@ impl<E: Engine> Storage<E> {
         callback: BatchCallback<Vec<Result<()>>>,
     ) -> Result<()> {
         if let Command::MiniBatch {
-            ref commands, ref mut ids
+            ref commands, ref mut ids, ..
         } = command {
             let len = commands.len();
             for i in 0..len {
@@ -1177,6 +1186,16 @@ impl<E: Engine> Storage<E> {
             commit_ts,
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
+        Ok(())
+    }
+
+    pub fn batch_commit(
+        &self,
+        command: Command,
+        callback: BatchCallback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        self.schedule(command, StorageCb::BatchBooleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
     }

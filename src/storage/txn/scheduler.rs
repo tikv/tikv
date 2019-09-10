@@ -617,13 +617,15 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
         Command::MiniBatch { ref commands, .. } => {
-            let mut keys: Vec<&Key> = vec![];
+            let mut k: Vec<&Key> = vec![];
             for cmd in commands {
                 if let Command::Prewrite { ref mutations, .. } = cmd {
-                    keys.append(&mut mutations.iter().map(|x| x.key()).collect());
+                    k.append(&mut mutations.iter().map(|x| x.key()).collect());
+                } else if let Command::Commit { ref keys, .. } = cmd {
+                    k.append(&mut keys.iter().collect());
                 }
             }
-            latches.gen_lock(&keys)
+            latches.gen_lock(&k)
         },
         _ => Lock::new(vec![]),
     }

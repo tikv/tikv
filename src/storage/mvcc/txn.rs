@@ -704,6 +704,41 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(is_pessimistic_txn)
     }
 
+    pub fn batch_commit<Sched: MsgScheduler>(
+        &mut self,
+        cid: u64,
+        commands: &Vec<Command>,
+        ids: &mut Vec<u64>,
+        scheduler: &Sched,
+    ) -> Result<u64> {
+        info!("batch_commit"; "len" => commands.len());
+        let tag = commands[0].tag();
+        let mut rows = 0;
+        let len = commands.len();
+        for i in 0..len {
+            if let Command::Commit{ keys, commit_ts, lock_ts, .. } = &commands[i] {
+                if commit_ts <= lock_ts {
+                    scheduler.on_batch_msg(ids[i], Msg::FinishedWithErr {
+                        cid,
+                        err: txn::Error::InvalidTxnTso {
+                            start_ts: *lock_ts,
+                            commit_ts: *commit_ts,
+                        },
+                        tag,
+                    });
+                    ids[i] = u64::max_value();
+                } else {
+                    self.start_ts = *lock_ts;
+                    rows += keys.len();
+                    for k in keys {
+                        self.commit(k.clone(), *commit_ts);
+                    }
+                }
+            }
+        }
+        Ok(rows as u64)
+    }
+
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
         let is_pessimistic_txn = match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {

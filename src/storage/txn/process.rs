@@ -408,18 +408,33 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
     _detector_scheduler: Option<DetectorScheduler>,
     statistics: &mut Statistics,
 ) -> Result<()> {
-    if let Command::MiniBatch{ commands, mut ids } = cmd {
-        let retrieve = if let Command::Prewrite{ ref ctx, start_ts, .. } = commands[0] {
-            Some((MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?, ctx))
-        } else {
-            None
+    if !cmd.batched() { return Ok(()); }
+    if let Command::MiniBatch{ commands, mut ids, tag } = cmd {
+        let retrieve = match commands[0] {
+            Command::Prewrite{ ref ctx, start_ts, .. } => {
+                Some((MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?, ctx))
+            }
+            Command::Commit{ ref ctx, lock_ts, .. } => {
+                Some((MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?, ctx))
+            }
+            _ => {
+                None
+            }
         };
         if let Some((mut txn, ctx)) = retrieve {
-            statistics.add(&txn.take_statistics());
             // check conflict
-            let rows = txn.batch_prewrite(cid, &commands, &mut ids, &scheduler)?;
+            let rows = match tag {
+                CommandKind::prewrite => {
+                    txn.batch_prewrite(cid, &commands, &mut ids, &scheduler)?
+                }
+                CommandKind::commit => {
+                    // assume optimistic txn
+                    txn.batch_commit(cid, &commands, &mut ids, &scheduler)?
+                }
+                _ => 0
+            };
+            statistics.add(&txn.take_statistics());
             info!("process_batch_prewrite"; "applies_mutation" => rows);
-            let tag = commands[0].tag();
             let modifies = txn.into_modifies();
             // send all modifies to raftstore
             SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
