@@ -191,6 +191,7 @@ members = [
   "components/keys",
   "cmd",
 ]
+default-members = ["cmd"]
 
 [profile.dev]
 opt-level = 0
