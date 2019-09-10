@@ -121,6 +121,9 @@ pub struct PointGetter<S: Snapshot> {
     lock_cursor_valid: bool,
     default_cursor: Option<Cursor<S::Iter>>,
 
+    /// Indicating whether or not this structure can serve more requests. It is meaningful only
+    /// when `multi == false`, to protect from producing undefined values when trying to get
+    /// multiple values under `multi == false`.
     drained: bool,
 }
 

@@ -163,7 +163,8 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        use std::mem;
+        use std::mem::{self, MaybeUninit};
+        type Element = Result<Option<Value>>;
 
         let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
         order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
@@ -171,21 +172,23 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
+            .multi(true)
             .build()?;
 
-        let mut values = Vec::with_capacity(keys.len());
-        unsafe {
-            for (original_order, key) in order_and_keys {
-                let value = point_getter.get(key).map_err(Error::from);
-                mem::forget(mem::replace(
-                    values.get_unchecked_mut(original_order),
-                    value,
-                ));
+        let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
+        for _ in 0..keys.len() {
+            values.push(MaybeUninit::uninit());
+        }
+        for (original_order, key) in order_and_keys {
+            let value = point_getter.get(key).map_err(Error::from);
+            unsafe {
+                values[original_order].as_mut_ptr().write(value);
             }
-            values.set_len(keys.len());
         }
 
         statistics.add(&point_getter.take_statistics());
+
+        let values = unsafe { mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(values) };
         Ok(values)
     }
 
