@@ -264,7 +264,7 @@ pub trait JsonDecoder: NumberDecoder {
             let key_real_offset = key_entries_data.read_u32_le()?;
             let key_len = key_entries_data.read_u16_le()? as usize;
             let key_data = data.read_bytes(key_len)?;
-            let key = String::from(str::from_utf8(key_data).unwrap());
+            let key = str::from_utf8(key_data)?.to_owned();
             let value =
                 value_entries_data.decode_json_item(data, key_real_offset + key_len as u32)?;
             obj.insert(key, value);
@@ -299,7 +299,7 @@ pub trait JsonDecoder: NumberDecoder {
     fn decode_json_str(&mut self) -> Result<Json> {
         let length = self.read_var_u64()? as usize;
         let encode_value = self.read_bytes(length)?;
-        let value = String::from_utf8(encode_value.to_vec())?;
+        let value = str::from_utf8(encode_value)?.to_owned();
         Ok(Json::String(value))
     }
 
