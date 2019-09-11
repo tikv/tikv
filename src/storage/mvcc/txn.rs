@@ -8,11 +8,12 @@ use super::{Error, Result};
 use crate::storage::kv::{Cursor, Modify, ScanMode, Snapshot};
 use crate::storage::txn::{self, scheduler::Msg, MsgScheduler};
 use crate::storage::{
-    is_short_value, Command, CommandKind, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    is_short_value, Command, CommandKind, Key, Mutation, Options, Statistics, Value, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use kvproto::kvrpcpb::IsolationLevel;
-use std::fmt;
 use std::collections::BTreeMap;
+use std::fmt;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -481,7 +482,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }))
         } else {
             Ok(None)
-        }        
+        }
     }
 
     fn check_write(
@@ -511,7 +512,9 @@ impl<S: Snapshot> MvccTxn<S> {
                     }),
                     tag,
                 }))
-            } else if let Result::Err(e) = self.check_data_constraint(is_insert, &write, commit_ts, &key) {
+            } else if let Result::Err(e) =
+                self.check_data_constraint(is_insert, &write, commit_ts, &key)
+            {
                 Ok(Some(Msg::FinishedWithErr {
                     cid,
                     err: txn::Error::Mvcc(e),
@@ -538,7 +541,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut rows = 0;
         // initialize mutation to txn mapping
         for i in 0..len {
-            if let Command::Prewrite{ mutations, .. } = &commands[i] {
+            if let Command::Prewrite { mutations, .. } = &commands[i] {
                 let mutation_len = mutations.len();
                 for j in 0..mutation_len {
                     map.insert(mutations[j].key().clone().into_encoded(), (i, j));
@@ -550,38 +553,84 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut min_key = Key::from_encoded(lower.to_vec());
         let mut max_key = Key::from_encoded(upper.to_vec());
         let mut min_idx = lower_idx;
-        let mut min_ts = if let Command::Prewrite{ start_ts, .. } = commands[min_idx.0] { start_ts } else { 0 };
-        let mut write_iter = self.reader.new_write_cursor(&min_key, min_ts, &max_key, u64::max_value()).unwrap();
+        let mut min_ts = if let Command::Prewrite { start_ts, .. } = commands[min_idx.0] {
+            start_ts
+        } else {
+            0
+        };
+        let mut write_iter = self
+            .reader
+            .new_write_cursor(&min_key, min_ts, &max_key, u64::max_value())
+            .unwrap();
         let mut lock_iter = self.reader.new_lock_cursor(&min_key, &max_key).unwrap();
-        write_iter.seek(&min_key.clone().append_ts(min_ts), self.reader.mut_write_statistics())?;
+        write_iter.seek(
+            &min_key.clone().append_ts(min_ts),
+            self.reader.mut_write_statistics(),
+        )?;
         if write_iter.valid()? {
-            if let Some(msg) = self.check_write(cid, tag, min_key, min_ts,
-                if let Command::Prewrite{ mutations, .. } = &commands[min_idx.0] { mutations[min_idx.1].is_insert() } else { false },
-                if let Command::Prewrite{ primary, .. } = &commands[min_idx.0] { primary.clone() } else { vec![] },
-                &mut write_iter)? {
+            if let Some(msg) = self.check_write(
+                cid,
+                tag,
+                min_key,
+                min_ts,
+                if let Command::Prewrite { mutations, .. } = &commands[min_idx.0] {
+                    mutations[min_idx.1].is_insert()
+                } else {
+                    false
+                },
+                if let Command::Prewrite { primary, .. } = &commands[min_idx.0] {
+                    primary.clone()
+                } else {
+                    vec![]
+                },
+                &mut write_iter,
+            )? {
                 scheduler.on_batch_msg(ids[min_idx.0], msg);
                 ids[min_idx.0] = u64::max_value();
             }
             'out: loop {
-                let mut range = map.range::<Vec<u8>, _>(&write_iter.key(self.reader.mut_write_statistics()).to_vec()..=max_key.as_encoded());
+                let mut range = map.range::<Vec<u8>, _>(
+                    &write_iter.key(self.reader.mut_write_statistics()).to_vec()
+                        ..=max_key.as_encoded(),
+                );
                 loop {
                     if let Some(tuple) = range.next() {
                         min_key = Key::from_encoded(tuple.0.to_vec());
-                        min_idx = tuple.1;    
+                        min_idx = tuple.1;
                     } else {
                         break 'out;
                     }
                     if ids[min_idx.0] < u64::max_value() {
-                        min_ts = if let Command::Prewrite{ start_ts, .. } = commands[min_idx.0] { start_ts } else { 0 };
+                        min_ts = if let Command::Prewrite { start_ts, .. } = commands[min_idx.0] {
+                            start_ts
+                        } else {
+                            0
+                        };
                         break;
                     }
                 }
-                write_iter.seek(&min_key.clone().append_ts(min_ts), self.reader.mut_write_statistics())?;
+                write_iter.seek(
+                    &min_key.clone().append_ts(min_ts),
+                    self.reader.mut_write_statistics(),
+                )?;
                 if write_iter.valid()? {
-                    if let Some(msg) = self.check_write(cid, tag, min_key, min_ts,
-                        if let Command::Prewrite{ mutations, .. } = &commands[min_idx.0] { mutations[min_idx.1].is_insert() } else { false },
-                        if let Command::Prewrite{ primary, .. } = &commands[min_idx.0] { primary.clone() } else { vec![] },
-                        &mut write_iter)? {
+                    if let Some(msg) = self.check_write(
+                        cid,
+                        tag,
+                        min_key,
+                        min_ts,
+                        if let Command::Prewrite { mutations, .. } = &commands[min_idx.0] {
+                            mutations[min_idx.1].is_insert()
+                        } else {
+                            false
+                        },
+                        if let Command::Prewrite { primary, .. } = &commands[min_idx.0] {
+                            primary.clone()
+                        } else {
+                            vec![]
+                        },
+                        &mut write_iter,
+                    )? {
                         scheduler.on_batch_msg(ids[min_idx.0], msg);
                         ids[min_idx.0] = u64::max_value();
                     }
@@ -603,7 +652,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             'out2: loop {
-                let mut range = map.range::<Vec<u8>, _>(&lock_iter.key(self.reader.mut_lock_statistics()).to_vec() ..= max_key.as_encoded());
+                let mut range = map.range::<Vec<u8>, _>(
+                    &lock_iter.key(self.reader.mut_lock_statistics()).to_vec()
+                        ..=max_key.as_encoded(),
+                );
                 loop {
                     if let Some(tuple) = range.next() {
                         min_key = Key::from_encoded(tuple.0.to_vec());
@@ -629,16 +681,29 @@ impl<S: Snapshot> MvccTxn<S> {
 
         for i in 0..len {
             if ids[i] < u64::max_value() {
-                if let Command::Prewrite{ mutations, primary, options, start_ts, .. } = &commands[i] {
+                if let Command::Prewrite {
+                    mutations,
+                    primary,
+                    options,
+                    start_ts,
+                    ..
+                } = &commands[i]
+                {
                     rows += mutations.len();
                     for m in mutations {
                         let lock_type = LockType::from_mutation(&m);
                         let (key, value) = m.clone().into_key_value();
-                        self.prewrite_key_value_with_ts(key, *start_ts, lock_type, primary.to_vec(), value, &options);
+                        self.prewrite_key_value_with_ts(
+                            key,
+                            *start_ts,
+                            lock_type,
+                            primary.to_vec(),
+                            value,
+                            &options,
+                        );
                     }
-                }    
+                }
             }
-            
         }
         Ok(rows as u64)
     }
@@ -716,16 +781,25 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut rows = 0;
         let len = commands.len();
         for i in 0..len {
-            if let Command::Commit{ keys, commit_ts, lock_ts, .. } = &commands[i] {
+            if let Command::Commit {
+                keys,
+                commit_ts,
+                lock_ts,
+                ..
+            } = &commands[i]
+            {
                 if commit_ts <= lock_ts {
-                    scheduler.on_batch_msg(ids[i], Msg::FinishedWithErr {
-                        cid,
-                        err: txn::Error::InvalidTxnTso {
-                            start_ts: *lock_ts,
-                            commit_ts: *commit_ts,
+                    scheduler.on_batch_msg(
+                        ids[i],
+                        Msg::FinishedWithErr {
+                            cid,
+                            err: txn::Error::InvalidTxnTso {
+                                start_ts: *lock_ts,
+                                commit_ts: *commit_ts,
+                            },
+                            tag,
                         },
-                        tag,
-                    });
+                    );
                     ids[i] = u64::max_value();
                 } else {
                     self.start_ts = *lock_ts;

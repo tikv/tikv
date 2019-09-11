@@ -392,10 +392,9 @@ impl Display for Command {
                 ref ctx,
                 ref start_ts,
             } => write!(f, "kv::command::mvccbystartts {:?} | {:?}", start_ts, ctx),
-            Command::MiniBatch {
-                ref commands,
-                ..
-            } => write!(f, "kv::command::minibatch {:?}", commands),
+            Command::MiniBatch { ref commands, .. } => {
+                write!(f, "kv::command::minibatch {:?}", commands)
+            }
         }
     }
 }
@@ -492,7 +491,7 @@ impl Command {
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
             | Command::MvccByKey { .. } => 0,
-            Command::MiniBatch { ref commands, ..} => commands[0].ts(),
+            Command::MiniBatch { ref commands, .. } => commands[0].ts(),
         }
     }
 
@@ -530,7 +529,9 @@ impl Command {
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
             | Command::MvccByStartTs { ref mut ctx, .. } => ctx,
-            Command::MiniBatch{ ref mut commands, .. } => commands[0].mut_context(),
+            Command::MiniBatch {
+                ref mut commands, ..
+            } => commands[0].mut_context(),
         }
     }
 
@@ -1112,11 +1113,14 @@ impl<E: Engine> Storage<E> {
         callback: BatchCallback<Vec<Result<()>>>,
     ) -> Result<()> {
         if let Command::MiniBatch {
-            ref commands, ref mut ids, ..
-        } = command {
+            ref commands,
+            ref mut ids,
+            ..
+        } = command
+        {
             let len = commands.len();
             for i in 0..len {
-                if let Command::Prewrite { ref mutations, ..} = commands[i] {
+                if let Command::Prewrite { ref mutations, .. } = commands[i] {
                     for m in mutations {
                         let key_size = m.key().as_encoded().len();
                         if key_size > self.max_key_size {

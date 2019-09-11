@@ -80,14 +80,32 @@ impl<S: Snapshot> MvccReader<S> {
         self.key_only = key_only;
     }
 
-    pub fn new_write_cursor(&mut self, lo: &Key, lo_ts: u64, hi: &Key, hi_ts: u64) -> Option<Cursor<S::Iter>> {
+    pub fn new_write_cursor(
+        &mut self,
+        lo: &Key,
+        lo_ts: u64,
+        hi: &Key,
+        hi_ts: u64,
+    ) -> Option<Cursor<S::Iter>> {
         let iter_opt = IterOption::new(
-            Some(KeyBuilder::from_slice(lo.clone().append_ts(lo_ts).as_encoded().as_slice(), DATA_KEY_PREFIX_LEN, 0)),
-            Some(KeyBuilder::from_slice(hi.clone().append_ts(hi_ts).as_encoded().as_slice(), DATA_KEY_PREFIX_LEN, 0)),
-            self.fill_cache)
-            .use_prefix_seek()
-            .set_prefix_same_as_start(true);
-        if let Ok(iter) = self.snapshot.iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true)) {
+            Some(KeyBuilder::from_slice(
+                lo.clone().append_ts(lo_ts).as_encoded().as_slice(),
+                DATA_KEY_PREFIX_LEN,
+                0,
+            )),
+            Some(KeyBuilder::from_slice(
+                hi.clone().append_ts(hi_ts).as_encoded().as_slice(),
+                DATA_KEY_PREFIX_LEN,
+                0,
+            )),
+            self.fill_cache,
+        )
+        .use_prefix_seek()
+        .set_prefix_same_as_start(true);
+        if let Ok(iter) = self
+            .snapshot
+            .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))
+        {
             Some(iter)
         } else {
             None
@@ -96,12 +114,24 @@ impl<S: Snapshot> MvccReader<S> {
 
     pub fn new_lock_cursor(&mut self, lo: &Key, hi: &Key) -> Option<Cursor<S::Iter>> {
         let iter_opt = IterOption::new(
-            Some(KeyBuilder::from_slice(lo.clone().as_encoded().as_slice(), DATA_KEY_PREFIX_LEN, 0)),
-            Some(KeyBuilder::from_slice(hi.clone().as_encoded().as_slice(), DATA_KEY_PREFIX_LEN, 0)),
-            self.fill_cache)
-            .use_prefix_seek()
-            .set_prefix_same_as_start(true);
-        if let Ok(iter) = self.snapshot.iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true)) {
+            Some(KeyBuilder::from_slice(
+                lo.clone().as_encoded().as_slice(),
+                DATA_KEY_PREFIX_LEN,
+                0,
+            )),
+            Some(KeyBuilder::from_slice(
+                hi.clone().as_encoded().as_slice(),
+                DATA_KEY_PREFIX_LEN,
+                0,
+            )),
+            self.fill_cache,
+        )
+        .use_prefix_seek()
+        .set_prefix_same_as_start(true);
+        if let Ok(iter) = self
+            .snapshot
+            .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))
+        {
             Some(iter)
         } else {
             None

@@ -192,7 +192,11 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     .spawn(move || {
                         let sched = self.take_scheduler();
                         if task.cmd().batched() {
-                            let ids = if let Command::MiniBatch { ids, .. } = task.cmd() { Some(ids) } else { None };
+                            let ids = if let Command::MiniBatch { ids, .. } = task.cmd() {
+                                Some(ids)
+                            } else {
+                                None
+                            };
                             for id in ids.unwrap() {
                                 if *id < u64::max_value() {
                                     sched.on_batch_msg(
@@ -294,7 +298,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         let scheduler = self.take_scheduler();
         let waiter_mgr_scheduler = self.take_waiter_mgr_scheduler();
         let detector_scheduler = self.take_detector_scheduler();
-         match task.cmd {
+        match task.cmd {
             cmd @ Command::MiniBatch { .. } => {
                 process_batch_write_impl(
                     cid,
@@ -393,7 +397,6 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 statistics
             }
         }
-
     }
 }
 
@@ -408,18 +411,29 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
     _detector_scheduler: Option<DetectorScheduler>,
     statistics: &mut Statistics,
 ) -> Result<()> {
-    if !cmd.batched() { return Ok(()); }
-    if let Command::MiniBatch{ commands, mut ids, tag } = cmd {
+    if !cmd.batched() {
+        return Ok(());
+    }
+    if let Command::MiniBatch {
+        commands,
+        mut ids,
+        tag,
+    } = cmd
+    {
         let retrieve = match commands[0] {
-            Command::Prewrite{ ref ctx, start_ts, .. } => {
-                Some((MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?, ctx))
-            }
-            Command::Commit{ ref ctx, lock_ts, .. } => {
-                Some((MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?, ctx))
-            }
-            _ => {
-                None
-            }
+            Command::Prewrite {
+                ref ctx, start_ts, ..
+            } => Some((
+                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?,
+                ctx,
+            )),
+            Command::Commit {
+                ref ctx, lock_ts, ..
+            } => Some((
+                MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?,
+                ctx,
+            )),
+            _ => None,
         };
         if let Some((mut txn, ctx)) = retrieve {
             // check conflict
@@ -431,7 +445,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                     // assume optimistic txn
                     txn.batch_commit(cid, &commands, &mut ids, &scheduler)?
                 }
-                _ => 0
+                _ => 0,
             };
             statistics.add(&txn.take_statistics());
             info!("process_batch_prewrite"; "applies_mutation" => rows);
@@ -441,43 +455,52 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
             if modifies.is_empty() {
                 for i in ids {
                     if i < u64::max_value() {
-                        scheduler.on_batch_msg(i, Msg::WriteFinished{
-                            cid,
-                            pr: ProcessResult::MultiRes{ results: vec![]} ,
-                            result: Ok(()),
-                            tag,
-                        });
+                        scheduler.on_batch_msg(
+                            i,
+                            Msg::WriteFinished {
+                                cid,
+                                pr: ProcessResult::MultiRes { results: vec![] },
+                                result: Ok(()),
+                                tag,
+                            },
+                        );
                     }
                 }
                 scheduler.on_batch_finished(cid);
             } else {
                 let sched = scheduler.clone();
                 let id_copy = ids.clone();
-                let engine_cb = Box::new(move |(_, res): (kv::CbContext, std::result::Result<(), kv::Error>)| {
-                    sched_pool
-                        .pool
-                        .spawn(move || {
-                            for i in id_copy {
-                                if i < u64::max_value() {
-                                    sched.on_batch_msg(
-                                        i,
-                                        Msg::WriteFinished {
-                                            cid,
-                                            pr: ProcessResult::MultiRes{ results: vec![], },
-                                            result: if let kv::Result::Err(e) = &res { Err(e.maybe_clone().unwrap()) } else { Ok(()) },
-                                            tag,
-                                        },
-                                    );
+                let engine_cb = Box::new(
+                    move |(_, res): (kv::CbContext, std::result::Result<(), kv::Error>)| {
+                        sched_pool
+                            .pool
+                            .spawn(move || {
+                                for i in id_copy {
+                                    if i < u64::max_value() {
+                                        sched.on_batch_msg(
+                                            i,
+                                            Msg::WriteFinished {
+                                                cid,
+                                                pr: ProcessResult::MultiRes { results: vec![] },
+                                                result: if let kv::Result::Err(e) = &res {
+                                                    Err(e.maybe_clone().unwrap())
+                                                } else {
+                                                    Ok(())
+                                                },
+                                                tag,
+                                            },
+                                        );
+                                    }
                                 }
-                            }
-                            sched.on_batch_finished(cid);
-                            KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                .get(tag)
-                                .observe(rows as f64);
-                            future::ok::<_, ()>(())
-                        })
-                        .unwrap()
-                });
+                                sched.on_batch_finished(cid);
+                                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                    .get(tag)
+                                    .observe(rows as f64);
+                                future::ok::<_, ()>(())
+                            })
+                            .unwrap()
+                    },
+                );
                 if let Err(e) = engine.async_write(ctx, modifies, engine_cb) {
                     SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
@@ -486,7 +509,11 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                         if i < u64::max_value() {
                             scheduler.on_batch_msg(
                                 i,
-                                Msg::FinishedWithErr { cid, err: Error::Engine(e.maybe_clone().unwrap()), tag },
+                                Msg::FinishedWithErr {
+                                    cid,
+                                    err: Error::Engine(e.maybe_clone().unwrap()),
+                                    tag,
+                                },
                             );
                         }
                     }

@@ -35,7 +35,9 @@ use crate::storage::lock_manager::{
     self, store_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
 };
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::process::{execute_batch_callback, execute_callback, Executor, MsgScheduler, ProcessResult, Task};
+use crate::storage::txn::process::{
+    execute_batch_callback, execute_callback, Executor, MsgScheduler, ProcessResult, Task,
+};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
@@ -368,7 +370,11 @@ impl<E: Engine> Scheduler<E> {
         let tag = task.tag;
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
-        let ids = if let Command::MiniBatch { ids, .. } = task.cmd() { Some(ids.clone()) } else { None };
+        let ids = if let Command::MiniBatch { ids, .. } = task.cmd() {
+            Some(ids.clone())
+        } else {
+            None
+        };
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
@@ -382,7 +388,11 @@ impl<E: Engine> Scheduler<E> {
                 if ids.is_some() {
                     for id in ids.unwrap() {
                         if id < u64::max_value() {
-                            self.batch_finish_with_err(cid, id, Error::from(e.maybe_clone().unwrap()));
+                            self.batch_finish_with_err(
+                                cid,
+                                id,
+                                Error::from(e.maybe_clone().unwrap()),
+                            );
                         }
                     }
                     self.batch_all_finished(cid);
@@ -489,8 +499,8 @@ impl<E: Engine> Scheduler<E> {
         let mut tasks = self.inner.peek_task_mutex(cid).lock();
         let tctx = tasks.get_mut(&cid).unwrap();
         // if let ProcessResult::NextCommand { cmd } = pr {
-            // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            // self.schedule_command(cmd, tctx.cb);
+        // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+        // self.schedule_command(cmd, tctx.cb);
         // } else {
         execute_batch_callback(&mut tctx.cb, req, pr);
         // }
@@ -517,8 +527,8 @@ impl<E: Engine> Scheduler<E> {
             },
         };
         // if let ProcessResult::NextCommand { cmd } = pr {
-            // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            // self.schedule_command(cmd, tctx.cb);
+        // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+        // self.schedule_command(cmd, tctx.cb);
         // } else {
         execute_batch_callback(&mut tctx.cb, req, pr);
         // }
@@ -583,7 +593,12 @@ impl<E: Engine> MsgScheduler for Scheduler<E> {
     fn on_batch_msg(&self, req: u64, task: Msg) {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_batch_read_finished(cid, req, pr, tag),
-            Msg::WriteFinished { cid, tag, pr, result } => self.on_batch_write_finished(cid, req, pr, result, tag),
+            Msg::WriteFinished {
+                cid,
+                tag,
+                pr,
+                result,
+            } => self.on_batch_write_finished(cid, req, pr, result, tag),
             Msg::FinishedWithErr { cid, err, .. } => self.batch_finish_with_err(cid, req, err),
             _ => unreachable!(),
         }
@@ -626,7 +641,7 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
                 }
             }
             latches.gen_lock(&k)
-        },
+        }
         _ => Lock::new(vec![]),
     }
 }
