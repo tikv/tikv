@@ -153,14 +153,18 @@ impl<S: Snapshot> MvccTxn<S> {
         value: Option<Value>,
         options: &Options,
     ) {
-        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            // If the value is short, embed it in Lock.
-            self.lock_key(key, lock_type, primary, value, options);
-        } else {
-            // value is long
-            let ts = self.start_ts;
-            self.put_value(key.clone(), ts, value.unwrap());
+        if let Some(value) = value {
+            if is_short_value(&value) {
+                // If the value is short, embed it in Lock.
+                self.lock_key(key, lock_type, primary, Some(value), options);
+            } else {
+                // value is long
+                let ts = self.start_ts;
+                self.put_value(key.clone(), ts, value);
 
+                self.lock_key(key, lock_type, primary, None, options);
+            }
+        } else {
             self.lock_key(key, lock_type, primary, None, options);
         }
     }

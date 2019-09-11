@@ -193,6 +193,7 @@ members = [
   "components/sst_importer",
   "cmd",
 ]
+default-members = ["cmd"]
 
 [profile.dev]
 opt-level = 0
