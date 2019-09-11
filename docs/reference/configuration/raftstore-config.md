@@ -63,6 +63,6 @@ You can specify the following items in the TiKV configuration file to configure 
 
 Enables or disables Hibernate Region. Possible values are true and false. The default value is false.
 
-**`raftstore.peer_stale_state_check_interval`**
+**`raftstore.peer-stale-state-check-interval`**
 
 Modifies the state check interval for hibernated Regions. The default value is 5 minutes. This value also determines the heartbeat interval between the leader and followers of the hibernated Regions.
