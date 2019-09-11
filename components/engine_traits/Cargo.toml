@@ -4,11 +4,6 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[features]
-jemalloc = ["engine_rocksdb/jemalloc"]
-portable = ["engine_rocksdb/portable"]
-sse = ["engine_rocksdb/sse"]
-
 [dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 protobuf = "2"
@@ -31,10 +26,6 @@ tikv_util = { path = "../tikv_util" }
 version = "0.4.2"
 default-features = false
 features = ["nightly"]
-
-[dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
-package = "rocksdb"
 
 [dev-dependencies]
 tempfile = "3.0"

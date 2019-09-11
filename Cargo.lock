@@ -694,7 +694,6 @@ dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
- "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
  "serde 1.0.71 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.81 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
