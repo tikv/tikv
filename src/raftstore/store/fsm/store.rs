@@ -650,6 +650,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
+        self.poll_ctx.lease_time = None;
         if !self.poll_ctx.queued_snapshot.is_empty() {
             let mut meta = self.poll_ctx.store_meta.lock().unwrap();
             meta.pending_snapshot_regions
