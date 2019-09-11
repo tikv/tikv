@@ -17,19 +17,19 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
         .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
-#[rpn_fn(raw_varg, min_args=2, extra_validator = json_modify_validator)]
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
 #[inline]
 fn json_set(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Set)
 }
 
-#[rpn_fn(raw_varg, min_args=2, extra_validator = json_modify_validator)]
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
 #[inline]
 fn json_insert(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Insert)
 }
 
-#[rpn_fn(raw_varg, min_args=2, extra_validator = json_modify_validator)]
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
 #[inline]
 fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     json_modify(args, ModifyType::Replace)
@@ -37,16 +37,15 @@ fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
 #[inline]
 fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
-    // args >= 2
+    assert!(args.len() >= 2);
     // base Json argument
     let base: &Option<Json> = args[0].as_ref();
     let mut base = base.as_ref().map_or(Json::None, |json| json.to_owned());
 
-    // args.len() / 2
-    let sz = args.len() / 2;
+    let buf_size = args.len() / 2;
 
-    let mut path_expr_list = Vec::with_capacity(sz);
-    let mut values = Vec::with_capacity(sz);
+    let mut path_expr_list = Vec::with_capacity(buf_size);
+    let mut values = Vec::with_capacity(buf_size);
 
     for chunk in args[1..].chunks(2) {
         let path: &Option<Bytes> = chunk[0].as_ref();
@@ -72,16 +71,16 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 /// validate the arguments are `(&Option<Json>, &[(Option<Bytes>, Option<Json>)])`
 fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
+    assert!(children.len() >= 2);
     if children.len() % 2 != 1 {
         return Err(other_err!(
             "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
         ));
     }
-    // min_args will be validated before extra_validator, so expr.get_children() must be larger than 2
-    super::function::validate_expr_return_type(&children[0], Json::EVAL_TYPE)?;
+    super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
     for chunk in children[1..].chunks(2) {
-        super::function::validate_expr_return_type(&chunk[0], Bytes::EVAL_TYPE)?;
-        super::function::validate_expr_return_type(&chunk[1], Json::EVAL_TYPE)?;
+        super::function::validate_expr_return_type(&chunk[0], EvalType::Bytes)?;
+        super::function::validate_expr_return_type(&chunk[1], EvalType::Json)?;
     }
     Ok(())
 }
