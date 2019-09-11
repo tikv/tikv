@@ -17,8 +17,6 @@ extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-pub mod util;
-
 mod errors;
 pub use crate::errors::*;
 mod peekable;
