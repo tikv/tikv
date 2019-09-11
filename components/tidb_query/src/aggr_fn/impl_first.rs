@@ -198,8 +198,8 @@ mod tests {
     use super::super::AggrFunction;
     use super::*;
 
-    use tipb_helper::ExprDefBuilder;
     use tidb_query_datatype::FieldTypeTp;
+    use tipb_helper::ExprDefBuilder;
 
     use crate::aggr_fn::AggrDefinitionParser;
 
