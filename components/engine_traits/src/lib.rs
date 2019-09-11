@@ -2,18 +2,8 @@
 
 #![recursion_limit = "200"]
 
-//#[macro_use(slog_error, slog_warn)]
-//extern crate slog;
-//#[macro_use]
-//extern crate slog_global;
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
@@ -31,9 +21,6 @@ mod engine;
 pub use crate::engine::*;
 mod options;
 pub use crate::options::*;
-use engine_rocksdb::{WriteBatch, DB};
-
-use std::sync::Arc;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
 
@@ -47,8 +34,6 @@ pub struct KvEngines<E> {
     pub raft: E,
     pub shared_block_cache: bool,
 }
-
-pub type Engines = KvEngines<Arc<DB>>;
 
 impl<E: KvEngine> KvEngines<E> {
     pub fn new(kv_engine: E, raft_engine: E, shared_block_cache: bool) -> Self {
@@ -81,39 +66,5 @@ impl<E: KvEngine> KvEngines<E> {
 
     pub fn sync_raft(&self) -> Result<()> {
         self.raft.sync()
-    }
-}
-
-impl Engines {
-    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>, shared_block_cache: bool) -> Self {
-        KvEngines {
-            kv: kv_engine,
-            raft: raft_engine,
-            shared_block_cache,
-        }
-    }
-
-    pub fn write_kv(&self, wb: &WriteBatch) -> Result<()> {
-        self.kv.write(wb).map_err(Error::Engine)
-    }
-
-    pub fn write_kv_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.kv.write_opt(wb, &opts.into()).map_err(Error::Engine)
-    }
-
-    pub fn sync_kv(&self) -> Result<()> {
-        self.kv.sync_wal().map_err(Error::Engine)
-    }
-
-    pub fn write_raft(&self, wb: &WriteBatch) -> Result<()> {
-        self.raft.write(wb).map_err(Error::Engine)
-    }
-
-    pub fn write_raft_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
-        self.raft.write_opt(wb, &opts.into()).map_err(Error::Engine)
-    }
-
-    pub fn sync_raft(&self) -> Result<()> {
-        self.raft.sync_wal().map_err(Error::Engine)
     }
 }
