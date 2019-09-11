@@ -381,15 +381,16 @@ impl ApplyContext {
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(need_sync);
-            let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "raft");
-            perf_task.start_perf();
-            self.engines
-                .kv
-                .write_opt(self.kv_wb(), &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("failed to write to engine: {:?}", e);
-                });
-            drop(perf_task);
+            {
+                let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "raft");
+                perf_task.start_perf();
+                self.engines
+                    .kv
+                    .write_opt(self.kv_wb(), &write_opts)
+                    .unwrap_or_else(|e| {
+                        panic!("failed to write to engine: {:?}", e);
+                    });
+            }
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {

@@ -483,16 +483,17 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "kv");
-            perf_task.start_perf();
-            self.poll_ctx
-                .engines
-                .kv
-                .write_opt(&self.poll_ctx.kv_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save append state result: {:?}", self.tag, e);
-                });
-            drop(perf_task);
+            {
+                let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "kv");
+                perf_task.start_perf();
+                self.poll_ctx
+                    .engines
+                    .kv
+                    .write_opt(&self.poll_ctx.kv_wb, &write_opts)
+                    .unwrap_or_else(|e| {
+                        panic!("{} failed to save append state result: {:?}", self.tag, e);
+                    });
+            }
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
                 self.poll_ctx.kv_wb = WriteBatch::with_capacity(4 * 1024);
@@ -504,16 +505,17 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.raft_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
-            let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "kv");
-            perf_task.start_perf();
-            self.poll_ctx
-                .engines
-                .raft
-                .write_opt(&self.poll_ctx.raft_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
-                });
-            drop(perf_task);
+            {
+                let mut perf_task = PerfTask::new(APPLY_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, "kv");
+                perf_task.start_perf();
+                self.poll_ctx
+                    .engines
+                    .raft
+                    .write_opt(&self.poll_ctx.raft_wb, &write_opts)
+                    .unwrap_or_else(|e| {
+                        panic!("{} failed to save raft append result: {:?}", self.tag, e);
+                    });
+            }
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
                 self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);

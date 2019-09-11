@@ -248,13 +248,14 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
             CommandKind::start_ts_mvcc => "start_ts_mvcc",
             _ => " ",
         };
-        let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, label);
-        perf_task.start_perf();
-        let pr = match process_read_impl::<E>(task.cmd, snapshot, &mut statistics) {
-            Err(e) => ProcessResult::Failed { err: e.into() },
-            Ok(pr) => pr,
-        };
-        drop(perf_task);
+        {
+            let mut perf_task = PerfTask::new(SCHEDULER_ROCKSDB_PERF_CONTEXT_HISTOGRAM_VEC.local(), PerfLevel::EnableTime, label);
+            perf_task.start_perf();
+            let pr = match process_read_impl::<E>(task.cmd, snapshot, &mut statistics) {
+                Err(e) => ProcessResult::Failed { err: e.into() },
+                Ok(pr) => pr,
+            };
+        }
         notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
         statistics
     }
@@ -357,7 +358,6 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 Msg::FinishedWithErr { cid, err, tag }
             }
         };
-        drop(perf_task);
         notify_scheduler(scheduler, msg);
         statistics
     }
