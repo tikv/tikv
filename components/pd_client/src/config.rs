@@ -33,7 +33,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            endpoints: Default::default(),
+            endpoints: vec!["127.0.0.1:2379".to_string()],
             retry_interval: ReadableDuration::millis(300),
             retry_max_count: std::isize::MAX,
             retry_log_every: 10,
