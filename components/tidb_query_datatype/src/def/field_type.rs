@@ -15,7 +15,7 @@ use num_traits::FromPrimitive;
 /// information. However for historical reasons, fields in `FieldType` (for example, `tp`)
 /// are flattened into `ColumnInfo`. Semantically these fields are identical.
 ///
-/// Please refer to `mysql/type.go` in TiDB.
+/// Please refer to [mysql/type.go](https://github.com/pingcap/parser/blob/master/mysql/type.go).
 #[derive(Primitive, PartialEq, Debug, Clone, Copy)]
 pub enum FieldTypeTp {
     Unspecified = 0, // Default
@@ -54,10 +54,26 @@ impl fmt::Display for FieldTypeTp {
     }
 }
 
+impl From<FieldTypeTp> for FieldType {
+    fn from(fp: FieldTypeTp) -> FieldType {
+        let mut ft = FieldType::default();
+        ft.as_mut_accessor().set_tp(fp);
+        ft
+    }
+}
+
+impl From<FieldTypeTp> for ColumnInfo {
+    fn from(fp: FieldTypeTp) -> ColumnInfo {
+        let mut ft = ColumnInfo::default();
+        ft.as_mut_accessor().set_tp(fp);
+        ft
+    }
+}
+
 /// Valid values of `tipb::FieldType::collate` and
 /// `tipb::ColumnInfo::collation`.
 ///
-/// The default value if `UTF8Bin`.
+/// The default value is `UTF8Bin`.
 #[derive(Primitive, PartialEq, Debug, Clone, Copy)]
 pub enum Collation {
     Binary = 63,
@@ -111,7 +127,8 @@ pub trait FieldTypeAccessor {
 
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor;
 
-    /// Convert reference to `FieldTypeAccessor` interface.
+    /// Convert reference to `FieldTypeAccessor` interface. Useful when an implementer
+    /// provides inherent methods with the same name as the accessor trait methods.
     fn as_accessor(&self) -> &dyn FieldTypeAccessor
     where
         Self: Sized,
@@ -312,21 +329,5 @@ impl FieldTypeAccessor for ColumnInfo {
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_collation(self, collation as i32);
         self as &mut dyn FieldTypeAccessor
-    }
-}
-
-impl From<FieldTypeTp> for FieldType {
-    fn from(fp: FieldTypeTp) -> FieldType {
-        let mut ft = FieldType::default();
-        ft.as_mut_accessor().set_tp(fp);
-        ft
-    }
-}
-
-impl From<FieldTypeTp> for ColumnInfo {
-    fn from(fp: FieldTypeTp) -> ColumnInfo {
-        let mut ft = ColumnInfo::default();
-        ft.as_mut_accessor().set_tp(fp);
-        ft
     }
 }
