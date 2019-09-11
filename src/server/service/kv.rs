@@ -129,10 +129,10 @@ impl MiniBatcherInner {
         }
     }
 
-    pub fn maybe_submit<E: Engine>(
+    pub fn maybe_submit<E: Engine, L: LockMgr>(
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
-        storage: &Storage<E>,
+        storage: &Storage<E, L>,
     ) {
         if !MINIBATCH_CROSS_COMMAND_ENABLED
             || self.batchable as f32 / self.output as f32 > self.ratio
@@ -141,10 +141,10 @@ impl MiniBatcherInner {
         }
     }
 
-    pub fn should_submit<E: Engine>(
+    pub fn should_submit<E: Engine, L: LockMgr>(
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
-        storage: &Storage<E>,
+        storage: &Storage<E, L>,
     ) {
         if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
             if self.commands.len() > 0 && self.ratio > 1.1 {
@@ -157,10 +157,10 @@ impl MiniBatcherInner {
         }
     }
 
-    fn submit<E: Engine>(
+    fn submit<E: Engine, L: LockMgr>(
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
-        storage: &Storage<E>,
+        storage: &Storage<E, L>,
     ) {
         if self.commands.len() > 0 {
             self.report();
@@ -459,13 +459,13 @@ impl MiniBatcher {
     //     "key_conflicted" => self.key_conflict,
     //     "batch_prewrite" => self.commands.len());
 
-    pub fn maybe_submit<E: Engine>(&mut self, storage: &Storage<E>) {
+    pub fn maybe_submit<E: Engine, L: LockMgr>(&mut self, storage: &Storage<E, L>) {
         for (_, inner) in &mut self.inners {
             inner.maybe_submit(&self.tx, storage);
         }
     }
 
-    pub fn should_submit<E: Engine>(&mut self, storage: &Storage<E>) {
+    pub fn should_submit<E: Engine, L: LockMgr>(&mut self, storage: &Storage<E, L>) {
         for (_, inner) in &mut self.inners {
             inner.should_submit(&self.tx, storage);
         }
@@ -1450,7 +1450,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
                     handle_batch_commands_request(
                         &storage,
                         &cop,
-                        peer.clone(),
+                        &peer,
                         id,
                         req,
                         tx.clone(),

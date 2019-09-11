@@ -293,8 +293,6 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let lock_mgr = self.take_lock_mgr();
-        let waiter_mgr_scheduler = self.take_waiter_mgr_scheduler();
-        let detector_scheduler = self.take_detector_scheduler();
         match task.cmd {
             cmd @ Command::MiniBatch { .. } => {
                 process_batch_write_impl(
@@ -304,8 +302,6 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                     engine,
                     scheduler,
                     self.take_pool(),
-                    waiter_mgr_scheduler,
-                    detector_scheduler,
                     &mut statistics,
                 );
                 statistics
@@ -314,8 +310,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 let msg = match process_write_impl(
                     cmd,
                     snapshot,
-                    waiter_mgr_scheduler,
-                    detector_scheduler,
+                    lock_mgr,
                     &mut statistics,
                 ) {
                     // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
@@ -330,7 +325,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                         if let Some(lock_info) = lock_info {
-                            let (lock, is_first_lock) = lock_info.unwrap();
+                            let (lock, is_first_lock) = lock_info;
                             Msg::WaitForLock {
                                 cid,
                                 start_ts: ts,
@@ -404,8 +399,6 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
     engine: &En,
     scheduler: Sched,
     sched_pool: SchedPool,
-    _waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-    _detector_scheduler: Option<DetectorScheduler>,
     statistics: &mut Statistics,
 ) -> Result<()> {
     if !cmd.batched() {
