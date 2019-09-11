@@ -192,10 +192,7 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
         Some(j) => j.to_owned(),
     };
 
-    let path_expr_list = match path_list(&args[1..])? {
-        Some(p) => p,
-        None => return Ok(None),
-    };
+    let path_expr_list = try_opt!(path_list(&args[1..]));
 
     Ok(j.extract(&path_expr_list))
 }
@@ -210,10 +207,7 @@ fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
         Some(j) => j.to_owned(),
     };
 
-    let path_expr_list = match path_list(&args[1..])? {
-        Some(p) => p,
-        None => return Ok(None),
-    };
+    let path_expr_list = try_opt!(path_list(&args[1..]));
 
     j.remove(&path_expr_list)?;
     Ok(Some(j))
