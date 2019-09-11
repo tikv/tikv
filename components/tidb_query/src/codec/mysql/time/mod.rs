@@ -531,12 +531,12 @@ impl Time {
         let diff = i64::from(nanos) - i64::from(expect_nanos);
         let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));
 
-        if new_time.is_none() {
-            Err(box_err!("round_frac {} overflows", self.time))
-        } else {
-            self.time = new_time.unwrap();
+        if let Some(new_time) = new_time {
+            self.time = new_time;
             self.fsp = fsp;
             Ok(())
+        } else {
+            Err(box_err!("round_frac {} overflows", self.time))
         }
     }
 

@@ -87,7 +87,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker_low: 2500,
             stack_size: ReadableSize::mb(20),
         },
-        coprocessor: CoprocessorReadPoolConfig {
+        coprocessor: CoprReadPoolConfig {
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
@@ -239,6 +239,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -291,6 +292,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -343,6 +345,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -395,6 +398,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
         titan: TitanDBConfig {
             enabled: true,
@@ -469,6 +473,7 @@ fn test_serde_custom_tikv_config() {
             titan: TitanCfConfig::default(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
     };
     value.storage = StorageConfig {
@@ -554,38 +559,4 @@ fn test_block_cache_backward_compatible() {
             + cfg.rocksdb.lockcf.block_cache_size.0
             + cfg.raftdb.defaultcf.block_cache_size.0
     );
-}
-
-#[test]
-fn test_error_on_unrecognized_config() {
-    let contents = [
-        "unknown-field = 123\n",
-        "[unknown-dict]\ncontent = 123\n",
-        "[[unknown-array]]\ncontent = 123\n",
-        "[readpool]\nunknown-field = 123\n",
-        "[readpool.coprocessor]\nunknown-field = 123\n",
-        "[readpool.storage]\nunknown-field = 123\n",
-        "[server]\nunknown-field = 123\n",
-        "[storage]\nunknown-field = 123\n",
-        "[storage.block-cache]\nunknown-field = 123\n",
-        "[pd]\nunknown-field = 123\n",
-        "[metric]\nunknown-field = 123\n",
-        "[raftstore]\nunknown-field = 123\n",
-        "[coprocessor]\nunknown-field = 123\n",
-        "[rocksdb]\nunknown-field = 123\n",
-        "[rocksdb.titan]\nunknown-field = 123\n",
-        "[rocksdb.defaultcf]\nunknown-field = 123\n",
-        "[rocksdb.defaultcf.titan]\nunknown-field = 123\n",
-        "[rocksdb.writecf]\nunknown-field = 123\n",
-        "[rocksdb.lockcf]\nunknown-field = 123\n",
-        "[raftdb]\nunknown-field = 123\n",
-        "[raftdb.defaultcf]\nunknown-field = 123\n",
-        "[security]\nunknown-field = 123\n",
-        "[import]\nunknown-field = 123\n",
-    ];
-
-    for content in &contents {
-        let result = toml::from_str::<TiKvConfig>(content);
-        assert!(result.is_err());
-    }
 }
