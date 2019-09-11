@@ -390,7 +390,7 @@ impl Default for DefaultCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-            enable_doubly_skiplist: false,
+            enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
         }
     }
@@ -456,7 +456,7 @@ impl Default for WriteCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-            enable_doubly_skiplist: false,
+            enable_doubly_skiplist: true,
             titan,
         }
     }
@@ -524,7 +524,7 @@ impl Default for LockCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-            enable_doubly_skiplist: false,
+            enable_doubly_skiplist: true,
             titan,
         }
     }
@@ -582,7 +582,7 @@ impl Default for RaftCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-            enable_doubly_skiplist: false,
+            enable_doubly_skiplist: true,
             titan,
         }
     }
@@ -850,7 +850,7 @@ impl Default for RaftDefaultCfConfig {
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-            enable_doubly_skiplist: false,
+            enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
         }
     }
