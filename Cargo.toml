@@ -154,6 +154,7 @@ default-features = false
 criterion = { version = "0.2.11", features=['real_blackbox'] }
 arrow = "0.10.0"
 rand_xorshift = "0.1"
+callgrind = "1.1"
 
 profiler = { path = "components/profiler" }
 panic_hook = { path = "components/panic_hook" }

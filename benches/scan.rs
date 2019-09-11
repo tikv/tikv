@@ -22,6 +22,7 @@ extern crate tikv;
 
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
+use callgrind::CallgrindClientRequest;
 
 //use bench_util::*;
 use test_storage::*;
@@ -151,6 +152,7 @@ fn bench_forward_scan(b: &mut Bencher, input: &ScanConfig) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     b.iter(|| {
+        CallgrindClientRequest::StartInstrumentation.now();
         let kvs = store
             .scan(
                 Context::default(),
@@ -162,6 +164,7 @@ fn bench_forward_scan(b: &mut Bencher, input: &ScanConfig) {
             )
             .unwrap();
         assert_eq!(kvs.len(), input.number_of_keys);
+        CallgrindClientRequest::StopInstrumentation.now();
     });
 }
 
@@ -178,6 +181,7 @@ fn bench_naive_forward_scan_0(b: &mut Bencher, input: &ScanConfig) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     b.iter(|| {
+        CallgrindClientRequest::StartInstrumentation.now();
         let cf_write = db.cf_handle("write").unwrap();
         let snapshot = db.snapshot();
         let mut opt = ReadOptions::new();
@@ -194,6 +198,7 @@ fn bench_naive_forward_scan_0(b: &mut Bencher, input: &ScanConfig) {
             n += 1;
         }
         assert_eq!(n, input.number_of_keys - 1);
+        CallgrindClientRequest::StopInstrumentation.now();
     })
 }
 
@@ -210,6 +215,7 @@ fn bench_naive_forward_scan_1(b: &mut Bencher, input: &ScanConfig) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     b.iter(|| {
+        CallgrindClientRequest::StartInstrumentation.now();
         let cf_write = db.cf_handle("write").unwrap();
         let snapshot = db.snapshot();
         let mut opt = ReadOptions::new();
@@ -227,6 +233,7 @@ fn bench_naive_forward_scan_1(b: &mut Bencher, input: &ScanConfig) {
             n += 1;
         }
         assert_eq!(n, input.number_of_keys - 1);
+        CallgrindClientRequest::StopInstrumentation.now();
     })
 }
 
@@ -243,6 +250,7 @@ fn bench_naive_forward_scan_2(b: &mut Bencher, input: &ScanConfig) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     b.iter(|| {
+        CallgrindClientRequest::StartInstrumentation.now();
         let cf_write = db.cf_handle("write").unwrap();
         let snapshot = db.snapshot();
         let mut opt = ReadOptions::new();
@@ -261,6 +269,7 @@ fn bench_naive_forward_scan_2(b: &mut Bencher, input: &ScanConfig) {
         }
         black_box(&mut out);
         assert_eq!(n, input.number_of_keys - 1);
+        CallgrindClientRequest::StopInstrumentation.now();
     })
 }
 
@@ -275,6 +284,7 @@ fn bench_naive_forward_scan_3(b: &mut Bencher, input: &ScanConfig) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     b.iter(|| {
+        CallgrindClientRequest::StartInstrumentation.now();
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut cursor = CursorBuilder::new(&snapshot, "write")
             .fill_cache(true)
@@ -295,6 +305,7 @@ fn bench_naive_forward_scan_3(b: &mut Bencher, input: &ScanConfig) {
         }
         black_box(&mut out);
         assert_eq!(n, input.number_of_keys - 1);
+        CallgrindClientRequest::StopInstrumentation.now();
     })
 }
 
@@ -303,6 +314,7 @@ fn bench_backward_scan(b: &mut Bencher, input: &ScanConfig) {
     let max_ts = prepare_scan_data(&store, input);
     let start_key = Key::from_raw(&[0xFF].repeat(input.key_len + 1));
     b.iter(|| {
+        CallgrindClientRequest::StartInstrumentation.now();
         let kvs = store
             .reverse_scan(
                 Context::default(),
@@ -314,6 +326,7 @@ fn bench_backward_scan(b: &mut Bencher, input: &ScanConfig) {
             )
             .unwrap();
         assert_eq!(kvs.len(), input.number_of_keys);
+        CallgrindClientRequest::StopInstrumentation.now();
     });
 }
 
