@@ -35,6 +35,11 @@ name = "integrations"
 path = "tests/integrations/mod.rs"
 
 [[bench]]
+name = "scan"
+harness = false
+path = "benches/scan.rs"
+
+[[bench]]
 name = "raftstore"
 harness = false
 path = "benches/raftstore/mod.rs"

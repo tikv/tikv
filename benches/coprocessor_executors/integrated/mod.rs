@@ -552,7 +552,7 @@ impl std::fmt::Debug for Input {
 pub fn bench(c: &mut criterion::Criterion) {
     let mut inputs = vec![];
 
-    let mut rows_options = vec![5000];
+    let mut rows_options = vec![100000];
     if crate::util::bench_level() >= 1 {
         rows_options.push(5);
     }
