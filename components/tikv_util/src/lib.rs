@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
-use std::{env, slice, thread, u64};
+use std::{env, thread, u64};
 
 use protobuf::Message;
 use rand;
@@ -267,14 +267,6 @@ pub fn unescape(s: &str) -> Vec<u8> {
     }
     buf.shrink_to_fit();
     buf
-}
-
-/// Converts a borrow to a slice.
-pub fn as_slice<T>(t: &T) -> &[T] {
-    unsafe {
-        let ptr = t as *const T;
-        slice::from_raw_parts(ptr, 1)
-    }
 }
 
 /// A helper trait for `Entry` to accept a failable closure.
@@ -554,14 +546,6 @@ pub fn check_environment_variables() {
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
-}
-
-pub unsafe fn erase_lifetime_mut<'a, T: ?Sized>(v: &mut T) -> &'a mut T {
-    &mut *(v as *mut T)
-}
-
-pub unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
-    &*(v as *const T)
 }
 
 #[cfg(test)]

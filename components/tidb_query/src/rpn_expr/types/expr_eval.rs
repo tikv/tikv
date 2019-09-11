@@ -191,7 +191,7 @@ impl RpnExpression {
         Ok(())
     }
 
-    /// Evaluates the expression into a vector. The input columns must be already decoded.
+    /// Evaluates the expression into a stack node. The input columns must be already decoded.
     ///
     /// It differs from `eval` in that `eval_decoded` needn't receive a mutable reference
     /// to `LazyBatchColumnVec`. However, since `eval_decoded` doesn't decode columns,
@@ -222,10 +222,7 @@ impl RpnExpression {
         for node in self.as_ref() {
             match node {
                 RpnExpressionNode::Constant { value, field_type } => {
-                    stack.push(RpnStackNode::Scalar {
-                        value: &value,
-                        field_type,
-                    });
+                    stack.push(RpnStackNode::Scalar { value, field_type });
                 }
                 RpnExpressionNode::ColumnRef { offset } => {
                     let field_type = &schema[*offset];
