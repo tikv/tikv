@@ -31,13 +31,23 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
     ) -> Result<Box<dyn super::AggrFunction>> {
         use std::convert::TryFrom;
         use tidb_query_datatype::FieldTypeAccessor;
+
         assert_eq!(aggr_def.get_tp(), ExprType::First);
         let child = aggr_def.take_children().into_iter().next().unwrap();
         let eval_type = EvalType::try_from(child.get_field_type().as_accessor().tp()).unwrap();
 
-        // FIRST outputs one column with the same type as its child
-        out_schema.push(aggr_def.take_field_type());
+        let out_ft = aggr_def.take_field_type();
+        let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
 
+        if out_et != eval_type {
+            return Err(other_err!(
+                "Unexpected return field type {}",
+                out_ft.as_accessor().tp()
+            ));
+        }
+
+        // FIRST outputs one column with the same type as its child
+        out_schema.push(out_ft);
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
@@ -188,6 +198,11 @@ mod tests {
     use super::super::AggrFunction;
     use super::*;
 
+    use tidb_query_datatype::FieldTypeTp;
+    use tipb_helper::ExprDefBuilder;
+
+    use crate::aggr_fn::AggrDefinitionParser;
+
     #[test]
     fn test_update() {
         let mut ctx = EvalContext::default();
@@ -261,5 +276,20 @@ mod tests {
             .unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(2)]);
+    }
+
+    #[test]
+    fn test_illegal_request() {
+        let expr = ExprDefBuilder::aggr_func(ExprType::First, FieldTypeTp::Double) // Expect LongLong but give Double
+            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+            .build();
+        AggrFnDefinitionParserFirst.check_supported(&expr).unwrap();
+
+        let src_schema = [FieldTypeTp::LongLong.into()];
+        let mut schema = vec![];
+        let mut exp = vec![];
+        AggrFnDefinitionParserFirst
+            .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .unwrap_err();
     }
 }
