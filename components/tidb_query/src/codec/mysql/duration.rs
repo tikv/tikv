@@ -689,20 +689,20 @@ impl Duration {
             Some(e) => {
                 if e.is_overflow() {
                     ctx.handle_overflow_err(e)?;
-                    if dur.is_none() {
-                        Err(box_err!("Expect a not none result here, this is a bug"))
+                    if let Some(d) = dur {
+                        Ok(d)
                     } else {
-                        Ok(dur.unwrap())
+                        Err(box_err!("Expect a not none result here, this is a bug"))
                     }
                 } else {
                     Err(e)
                 }
             }
             None => {
-                if dur.is_none() {
-                    Err(box_err!("Expect a not none result here, this is a bug"))
+                if let Some(d) = dur {
+                    Ok(d)
                 } else {
-                    Ok(dur.unwrap())
+                    Err(box_err!("Expect a not none result here, this is a bug"))
                 }
             }
         }
@@ -1142,109 +1142,223 @@ mod tests {
             (
                 101010,
                 0,
-                Ok(Duration::parse("10:10:10".as_bytes(), 0).unwrap()),
+                Ok(Duration::parse(b"10:10:10", 0).unwrap()),
                 false,
             ),
             (
                 101010,
                 5,
-                Ok(Duration::parse("10:10:10".as_bytes(), 5).unwrap()),
+                Ok(Duration::parse(b"10:10:10", 5).unwrap()),
                 false,
             ),
             (
                 8385959,
                 0,
-                Ok(Duration::parse("838:59:59".as_bytes(), 0).unwrap()),
+                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
                 false,
             ),
             (
                 8385959,
                 6,
-                Ok(Duration::parse("838:59:59".as_bytes(), 6).unwrap()),
+                Ok(Duration::parse(b"838:59:59", 6).unwrap()),
                 false,
             ),
             (
                 -101010,
                 0,
-                Ok(Duration::parse("-10:10:10".as_bytes(), 0).unwrap()),
+                Ok(Duration::parse(b"-10:10:10", 0).unwrap()),
                 false,
             ),
             (
                 -101010,
                 5,
-                Ok(Duration::parse("-10:10:10".as_bytes(), 5).unwrap()),
+                Ok(Duration::parse(b"-10:10:10", 5).unwrap()),
                 false,
             ),
             (
                 -8385959,
                 0,
-                Ok(Duration::parse("-838:59:59".as_bytes(), 0).unwrap()),
+                Ok(Duration::parse(b"-838:59:59", 0).unwrap()),
                 false,
             ),
             (
                 -8385959,
                 6,
-                Ok(Duration::parse("-838:59:59".as_bytes(), 6).unwrap()),
+                Ok(Duration::parse(b"-838:59:59", 6).unwrap()),
                 false,
             ),
             // will overflow
             (
                 8385960,
                 0,
-                Ok(Duration::parse("838:59:59".as_bytes(), 0).unwrap()),
+                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
                 true,
             ),
             (
                 8385960,
                 1,
-                Ok(Duration::parse("838:59:59".as_bytes(), 1).unwrap()),
+                Ok(Duration::parse(b"838:59:59", 1).unwrap()),
                 true,
             ),
             (
                 8385960,
                 5,
-                Ok(Duration::parse("838:59:59".as_bytes(), 5).unwrap()),
+                Ok(Duration::parse(b"838:59:59", 5).unwrap()),
                 true,
             ),
             (
                 8385960,
                 6,
-                Ok(Duration::parse("838:59:59".as_bytes(), 6).unwrap()),
+                Ok(Duration::parse(b"838:59:59", 6).unwrap()),
                 true,
             ),
             (
                 -8385960,
                 0,
-                Ok(Duration::parse("-838:59:59".as_bytes(), 0).unwrap()),
+                Ok(Duration::parse(b"-838:59:59", 0).unwrap()),
                 true,
             ),
             (
                 -8385960,
                 1,
-                Ok(Duration::parse("-838:59:59".as_bytes(), 1).unwrap()),
+                Ok(Duration::parse(b"-838:59:59", 1).unwrap()),
                 true,
             ),
             (
                 -8385960,
                 5,
-                Ok(Duration::parse("-838:59:59".as_bytes(), 5).unwrap()),
+                Ok(Duration::parse(b"-838:59:59", 5).unwrap()),
                 true,
             ),
             (
                 -8385960,
                 6,
-                Ok(Duration::parse("-838:59:59".as_bytes(), 6).unwrap()),
+                Ok(Duration::parse(b"-838:59:59", 6).unwrap()),
                 true,
             ),
             // will truncated
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, add test for num>=10000000000
-            //  after Duration::from_f64 had impl logic for num>=10000000000
-            // (10000000000, 0, Ok(Duration::parse("0:0:0".as_bytes(), 0).unwrap())),
-            // (10000235959, 0, Ok(Duration::parse("23:59:59".as_bytes(), 0).unwrap())),
-            // (10000000000, 0, Ok(Duration::parse("0:0:0".as_bytes(), 0).unwrap())),
+            // TODO, fix these test case after Duration::from_f64
+            //  had impl logic for num>=10000000000
+            (
+                10000000000,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000000000,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000000000,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
         ];
         for (input, fsp, expect, overflow) in cs {
             let cfg = Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING));
@@ -1268,8 +1382,7 @@ mod tests {
             );
 
             assert_eq!(r.is_ok(), expect.is_ok(), "{}", log.as_str());
-            if r.is_ok() {
-                let r = r.unwrap();
+            if let Ok(r) = r {
                 assert_eq!(r, expect.unwrap(), "{}", log.as_str());
             } else {
                 let e = r.err().unwrap();

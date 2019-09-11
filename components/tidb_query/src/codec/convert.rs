@@ -12,8 +12,8 @@ use super::mysql::{RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
 use crate::codec::data_type::*;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
-use crate::codec::mysql::charset;
 use crate::codec::mysql::decimal::max_or_min_dec;
+use crate::codec::mysql::{charset, Res};
 use crate::expr::EvalContext;
 use crate::expr::Flag;
 
@@ -151,15 +151,16 @@ pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
 /// `truncate_f64` (`TruncateFloat` in TiDB) tries to truncate f.
 /// If the result exceeds the max/min float that flen/decimal
 /// allowed, returns the max/min float allowed.
-pub fn truncate_f64(ctx: &mut EvalContext, mut f: f64, flen: u8, decimal: u8) -> Result<f64> {
+///
+/// This function can only return `Res::Ok` or `Res::Overflow`, no `Res::Truncated` will be returned.
+pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
     if f.is_nan() {
-        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
-        return Ok(0f64);
+        return Res::Overflow(0f64);
     }
     let shift = 10f64.powi(i32::from(decimal));
     let max_f = 10f64.powi(i32::from(flen - decimal)) - 1.0 / shift;
 
-    if !f.is_infinite() {
+    if f.is_finite() {
         let tmp = f * shift;
         if tmp.is_finite() {
             f = tmp.round() / shift
@@ -167,15 +168,13 @@ pub fn truncate_f64(ctx: &mut EvalContext, mut f: f64, flen: u8, decimal: u8) ->
     }
 
     if f > max_f {
-        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
-        return Ok(max_f);
+        return Res::Overflow(max_f);
     }
 
     if f < -max_f {
-        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
-        return Ok(-max_f);
+        return Res::Overflow(-max_f);
     }
-    Ok(f)
+    Res::Ok(f)
 }
 
 /// Returns an overflowed error.
@@ -644,7 +643,8 @@ pub fn produce_float_with_specified_tp(
 
     let res = if flen != ul && decimal != ul {
         assert!(flen < std::u8::MAX as isize && decimal < std::u8::MAX as isize);
-        truncate_f64(ctx, num, flen as u8, decimal as u8)?
+        let r = truncate_f64(num, flen as u8, decimal as u8);
+        r.into_result_with_overflow_err(ctx, Error::overflow(num, "DOUBLE"))?
     } else {
         num
     };
@@ -1964,21 +1964,9 @@ mod tests {
             (1.36, 10, 2, Res::Ok(1.36)),
             (f64::NAN, 10, 1, Res::Overflow(0f64)),
         ];
-
         for (f, flen, decimal, exp) in cases {
-            let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
-            let mut ctx = EvalContext::new(Arc::new(cfg));
-            let res = truncate_f64(&mut ctx, f, flen, decimal);
-            match exp {
-                Res::Overflow(d) => {
-                    assert_eq!(ctx.warnings.warning_cnt, 1);
-                    assert_eq!(res.unwrap(), d);
-                }
-                Res::Ok(d) => {
-                    assert_eq!(res.unwrap(), d);
-                }
-                _ => panic!(),
-            }
+            let res = truncate_f64(f, flen, decimal);
+            assert_eq!(res, exp);
         }
     }
 
