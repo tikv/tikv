@@ -83,6 +83,10 @@ make_static_metric! {
     pub struct SchedCommandPriCounterVec: IntCounter {
         "priority" => CommandPriority,
     }
+
+    pub struct MiniBatchHistogramVec: Histogram {
+        "type" => CommandKind,
+    }
 }
 
 lazy_static! {

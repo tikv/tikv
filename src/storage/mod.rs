@@ -34,7 +34,7 @@ use tikv_util::collections::HashMap;
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
-pub use self::metrics::CommandKind;
+pub use self::metrics::{CommandKind, MiniBatchHistogramVec};
 use self::mvcc::Lock;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};

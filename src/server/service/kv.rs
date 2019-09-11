@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
 use std::iter::{self, FromIterator};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -43,6 +44,7 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 const MINIBATCH_TIMEOUT_MILLIS: u64 = 1;
 const MINIBATCH_CROSS_COMMAND_ENABLED: bool = true;
+const MINIBATCH_INIT_RATIO: f32 = 2.0;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -73,12 +75,11 @@ fn numerize_command_kind(tag: &CommandKind) -> u8 {
 struct RegionVerId {
     region: u64,
     epoch: u64,
-    tag: u8,
 }
 
 impl PartialEq for RegionVerId {
     fn eq(&self, other: &Self) -> bool {
-        self.tag == other.tag && self.region == other.region && self.epoch == other.epoch
+        self.region == other.region && self.epoch == other.epoch
     }
 }
 
@@ -98,27 +99,166 @@ impl MiniBatchMeta {
     }
 }
 
-struct MiniBatcher {
+struct MiniBatcherInner {
+    tag: CommandKind,
     commands: Vec<Command>,
     router: HashMap<RegionVerId, MiniBatchMeta>,
-    input: u64,
-    batched: u64,
-    key_conflict: u64,
     total: u64,
+    input: u64,
+    batchable: u64,
+    key_conflict: u64,
+    output: u64,
     last_submit: Instant,
+    ratio: f32,
+}
+
+impl MiniBatcherInner {
+    pub fn new(tag: CommandKind) -> Self {
+        MiniBatcherInner {
+            tag,
+            commands: vec![],
+            router: HashMap::default(),
+            total: 0,
+            input: 0,
+            batchable: 0,
+            key_conflict: 0,
+            output: 0,
+            last_submit: Instant::now(),
+            ratio: MINIBATCH_INIT_RATIO,
+        }
+    }
+
+    pub fn maybe_submit<E: Engine>(
+        &mut self,
+        tx: &Sender<(u64, batch_commands_response::Response)>,
+        storage: &Storage<E>,
+    ) {
+        if !MINIBATCH_CROSS_COMMAND_ENABLED || self.batchable as f32 / self.output as f32 > self.ratio {
+            self.submit(tx, storage);
+        }
+    }
+
+    pub fn should_submit<E: Engine>(
+        &mut self,
+        tx: &Sender<(u64, batch_commands_response::Response)>,
+        storage: &Storage<E>,
+    ) {
+        if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
+            self.ratio -= 0.01;
+            self.submit(tx, storage);
+        } else {
+            self.ratio += 0.01;
+        }
+    }
+
+    fn submit<E: Engine>(
+        &mut self,
+        tx: &Sender<(u64, batch_commands_response::Response)>,
+        storage: &Storage<E>,
+    ) {
+        if self.commands.len() > 0 {
+            self.report();
+        }
+        let commands = self.take_commands();
+        let mut max_ratio = 0;
+        match self.tag {
+            CommandKind::prewrite => {
+                for cmd in commands {
+                    let tx = tx.clone();
+                    let ratio = if let Command::MiniBatch { commands, .. } = &cmd { commands.len() } else { 0 };
+                    if max_ratio < ratio { max_ratio = ratio; }
+                    storage.batch_prewrite(
+                        cmd,
+                        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
+                            // let v = v.map_err(Error::from);
+                            let mut resp = PrewriteResponse::default();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else {
+                                resp.set_errors(extract_key_errors(v).into());
+                            }
+                            let mut res = batch_commands_response::Response::default();
+                            res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
+                            tx.send_and_notify((id, res));
+                            // if !tx.send_and_notify((id, res)).is_err() {
+                                // timer.observe_duration();
+                            // }
+                        }),
+                    );
+                }
+                MINIBATCH_MAX_BATCHED_RATIO_HISTOGRAM_VEC.prewrite.observe(max_ratio as f64);
+            }
+            CommandKind::commit => {
+                for cmd in commands {
+                    let tx = tx.clone();
+                    let ratio = if let Command::MiniBatch { commands, .. } = &cmd { commands.len() } else { 0 };
+                    if max_ratio < ratio { max_ratio = ratio; }
+                    storage.batch_commit(
+                        cmd,
+                        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
+                            // let v = v.map_err(Error::from);
+                            let mut resp = CommitResponse::default();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = v {
+                                resp.set_error(extract_key_error(&e));
+                            }
+                            let mut res = batch_commands_response::Response::default();
+                            res.cmd = Some(batch_commands_response::response::Cmd::Commit(resp));
+                            tx.send_and_notify((id, res));
+                            // if !tx.send_and_notify((id, res)).is_err() {
+                                // timer.observe_duration();
+                            // }
+                        }),
+                    );
+                }
+                MINIBATCH_MAX_BATCHED_RATIO_HISTOGRAM_VEC.commit.observe(max_ratio as f64);
+            }
+            _ => {}
+        }
+    }
+
+    fn take_commands(&mut self) -> Vec<Command> {
+        self.router.clear();
+        self.input = 0;
+        self.batchable = 0;
+        self.output = 0;
+        self.key_conflict = 0;
+        self.last_submit = Instant::now();
+        std::mem::replace(&mut self.commands, vec![])
+    }
+
+    fn report(&self) {
+        let a = self.input as f64 / self.batchable as f64;
+        let b = self.batchable as f64 / self.output as f64;
+        match self.tag {
+            CommandKind::prewrite => {
+                MINIBATCH_READY_RATIO_HISTOGRAM_VEC.prewrite.observe(self.ratio as f64);
+                MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC.prewrite.observe(a);
+                MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC.prewrite.observe(b);
+            }
+            CommandKind::commit => {
+                MINIBATCH_READY_RATIO_HISTOGRAM_VEC.commit.observe(self.ratio as f64);
+                MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC.commit.observe(a);
+                MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC.commit.observe(b);
+            }
+            _ => {}
+        }
+    }
+}
+
+struct MiniBatcher {
+    inners: BTreeMap<u8, MiniBatcherInner>,
     tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
 impl MiniBatcher {
     pub fn new(tx: Sender<(u64, batch_commands_response::Response)>) -> Self {
+        let mut inners = BTreeMap::default();
+        inners.insert(numerize_command_kind(&CommandKind::prewrite), MiniBatcherInner::new(CommandKind::prewrite));
+        inners.insert(numerize_command_kind(&CommandKind::commit), MiniBatcherInner::new(CommandKind::commit));
         MiniBatcher {
-            commands: vec![],
-            router: HashMap::default(),
-            input: 0,
-            batched: 0,
-            key_conflict: 0,
-            total: 0,
-            last_submit: Instant::now(),
+            inners,
             tx,
         }
     }
@@ -128,14 +268,16 @@ impl MiniBatcher {
         request_id: u64,
         request: &mut batch_commands_request::Request,
     ) -> bool {
-        self.total += 1;
-        self.input += 1;
         match &mut request.cmd {
             Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
+                let inner = self.inners.get_mut(&numerize_command_kind(&CommandKind::prewrite));
+                if inner.is_none() { return false; }
+                let inner = inner.unwrap();
+                inner.total += 1;
+                inner.input += 1;
                 let ver = RegionVerId {
                     region: req.get_context().get_region_id(),
                     epoch: req.get_context().get_region_epoch().get_version(),
-                    tag: numerize_command_kind(&CommandKind::prewrite),
                 };
                 let mutations: Vec<Mutation> = req
                     .take_mutations()
@@ -164,11 +306,11 @@ impl MiniBatcher {
                     }
                 };
                 
-                match self.router.get_mut(&ver) {
+                match inner.router.get_mut(&ver) {
                     Some(meta) => {
                         for m in &mutations {
                             if meta.key_set.contains(m.key().clone().as_encoded()) {
-                                self.key_conflict += 1;
+                                inner.key_conflict += 1;
                                 return false;
                             }
                         }
@@ -176,35 +318,40 @@ impl MiniBatcher {
                             meta.key_set.insert(m.key().clone().into_encoded());
                         }
                         let cmd = create_cmd(mutations);
-                        if let Command::MiniBatch{ ref mut commands, ref mut ids, .. } = self.commands[meta.idx] {
+                        if let Command::MiniBatch{ ref mut commands, ref mut ids, .. } = inner.commands[meta.idx] {
                             commands.push(cmd);
                             ids.push(request_id);
                         }
                     }
                     None => {
                         let mut meta = MiniBatchMeta::new();
-                        meta.idx = self.commands.len();
+                        meta.idx = inner.commands.len();
                         for m in &mutations {
                             meta.key_set.insert(m.key().clone().into_encoded());
                         }
                         meta.size = 1;
-                        self.router.insert(ver, meta);
+                        inner.router.insert(ver, meta);
                         let cmd = create_cmd(mutations);
-                        self.commands.push(Command::MiniBatch {
+                        inner.commands.push(Command::MiniBatch {
                             tag: CommandKind::prewrite,
                             commands: vec![cmd],
                             ids: vec![request_id],
                         });
+                        inner.output += 1;
                     }
                 }
-                self.batched += 1;
+                inner.batchable += 1;
                 true
             }
             Some(batch_commands_request::request::Cmd::Commit(req)) => {
+                let inner = self.inners.get_mut(&numerize_command_kind(&CommandKind::commit));
+                if inner.is_none() { return false; }
+                let inner = inner.unwrap();
+                inner.total += 1;
+                inner.input += 1;
                 let ver = RegionVerId {
                     region: req.get_context().get_region_id(),
                     epoch: req.get_context().get_region_epoch().get_version(),
-                    tag: numerize_command_kind(&CommandKind::commit),
                 };
                 let keys: Vec<Key> = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
                 let mut create_cmd = |keys| {
@@ -215,11 +362,11 @@ impl MiniBatcher {
                         commit_ts: req.get_commit_version(),
                     }
                 };
-                match self.router.get_mut(&ver) {
+                match inner.router.get_mut(&ver) {
                     Some(meta) => {
                         for key in &keys {
                             if meta.key_set.contains(key.clone().as_encoded()) {
-                                self.key_conflict += 1;
+                                inner.key_conflict += 1;
                                 return false;
                             }
                         }
@@ -227,124 +374,57 @@ impl MiniBatcher {
                             meta.key_set.insert(key.clone().into_encoded());
                         }
                         let cmd = create_cmd(keys);
-                        if let Command::MiniBatch{ ref mut commands, ref mut ids, .. } = self.commands[meta.idx] {
+                        if let Command::MiniBatch{ ref mut commands, ref mut ids, .. } = inner.commands[meta.idx] {
                             commands.push(cmd);
                             ids.push(request_id);
                         }
                     }
                     None => {
                         let mut meta = MiniBatchMeta::new();
-                        meta.idx = self.commands.len();
+                        meta.idx = inner.commands.len();
                         for key in &keys {
                             meta.key_set.insert(key.clone().into_encoded());
                         }
                         meta.size = 1;
-                        self.router.insert(ver, meta);
+                        inner.router.insert(ver, meta);
                         let cmd = create_cmd(keys);
-                        self.commands.push(Command::MiniBatch {
+                        inner.commands.push(Command::MiniBatch {
                             tag: CommandKind::commit,
                             commands: vec![cmd],
                             ids: vec![request_id],
                         });
+                        inner.output += 1;
                     }
                 }
-                self.batched += 1;
+                inner.batchable += 1;
                 true
             }
             _ => { false }
         }
     }
 
-    fn report(&self) {
-        MINIBATCH_RATE_HISTOGRAM.observe(self.commands.len() as f64 / self.batched as f64);
-        MINIBATCH_SIZE_HISTOGRAM.observe(self.input as f64);
-        info!("MiniBatcher report";
-            "region_flatten" => format!("{:?}", self.router.keys()),
-            "batch_commands" => self.input,
-            "batched" => self.batched,
-            "key_conflicted" => self.key_conflict,
-            "batch_prewrite" => self.commands.len());
-    }
-
-    pub fn ready(&self) -> bool {
-        !MINIBATCH_CROSS_COMMAND_ENABLED ||
-        self.total < 50 || // bootstrap
-        self.batched as f32 / self.commands.len() as f32 > 2.0
-    }
-
-    pub fn submit<E: Engine>(
-        &mut self,
-        storage: &Storage<E>,
-    ) {
-        if self.commands.len() > 0 {
-            self.report();
-        }
-        let commands = self.take_commands();
-        for cmd in commands {
-            let tx = self.tx.clone();
-            let tag = cmd.tag();
-            match tag {
-                CommandKind::prewrite => {
-                    storage.batch_prewrite(
-                        cmd,
-                        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
-                            // let v = v.map_err(Error::from);
-                            let mut resp = PrewriteResponse::default();
-                            if let Some(err) = extract_region_error(&v) {
-                                resp.set_region_error(err);
-                            } else {
-                                resp.set_errors(extract_key_errors(v).into());
-                            }
-                            let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
-                            tx.send_and_notify((id, res));
-                            // if !tx.send_and_notify((id, res)).is_err() {
-                                // timer.observe_duration();
-                            // }
-                        }),
-                    );
-                }
-                CommandKind::commit => {
-                    storage.batch_commit(
-                        cmd,
-                        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
-                            // let v = v.map_err(Error::from);
-                            let mut resp = CommitResponse::default();
-                            if let Some(err) = extract_region_error(&v) {
-                                resp.set_region_error(err);
-                            } else if let Err(e) = v {
-                                resp.set_error(extract_key_error(&e));
-                            }
-                            let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::Commit(resp));
-                            tx.send_and_notify((id, res));
-                            // if !tx.send_and_notify((id, res)).is_err() {
-                                // timer.observe_duration();
-                            // }
-                        }),
-                    );
-                }
-                _ => {}
-            }
-
-        }
-    }
-
-    fn take_commands(&mut self) -> Vec<Command> {
-        self.router.clear();
-        self.input = 0;
-        self.batched = 0;
-        self.key_conflict = 0;
-        self.last_submit = Instant::now();
-        std::mem::replace(&mut self.commands, vec![])
-    }
+    // info!("MiniBatcher report";
+    //     "region_flatten" => format!("{:?}", self.router.keys()),
+    //     "batch_commands" => self.input,
+    //     "batched" => self.batched,
+    //     "key_conflicted" => self.key_conflict,
+    //     "batch_prewrite" => self.commands.len());
 
     pub fn maybe_submit<E: Engine>(
         &mut self,
         storage: &Storage<E>,
     ) {
-        if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
-            self.submit(storage);
+        for (_, inner) in &mut self.inners {
+            inner.maybe_submit(&self.tx, storage);
+        }
+    }
+
+    pub fn should_submit<E: Engine>(
+        &mut self,
+        storage: &Storage<E>,
+    ) {
+        for (_, inner) in &mut self.inners {
+            inner.should_submit(&self.tx, storage);
         }
     }
 }
@@ -1277,7 +1357,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
             self.timer_pool.lock().unwrap().spawn(
                 timer.interval(start, Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS))
                     .for_each(move |_| {
-                        minibatcher.lock().unwrap().maybe_submit(&storage);
+                        minibatcher.lock().unwrap().should_submit(&storage);
                         Ok(())
                     })
                     .map_err(|e| error!("batch_commands timer errored"; "err" => ?e))
@@ -1292,10 +1372,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
                     handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
                 }
             }
-            let mut mb = minibatcher.lock().unwrap();
-            if mb.ready() {
-                mb.submit(&storage);
-            }
+            minibatcher.lock().unwrap().maybe_submit(&storage);
             future::ok::<_, _>(())
         });
 
