@@ -29,7 +29,6 @@ make_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
-        batch_command,
     }
 
     pub label_enum CommandStageKind {

@@ -144,9 +144,12 @@ impl MiniBatcherInner {
         storage: &Storage<E>,
     ) {
         if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
-            self.ratio -= 0.01;
+            if self.commands.len() > 0 && self.ratio > 1.1 {
+                // commands drop zero means batch_commands is not called
+                self.ratio -= 0.01;
+            }
             self.submit(tx, storage);
-        } else {
+        } else if self.commands.len() > 0 && self.ratio < 10.0 {
             self.ratio += 0.01;
         }
     }
@@ -158,9 +161,11 @@ impl MiniBatcherInner {
     ) {
         if self.commands.len() > 0 {
             self.report();
+        } else {
+            return;
         }
         let commands = self.take_commands();
-        let mut max_ratio = 0;
+        let mut max_ratio = 1;
         match self.tag {
             CommandKind::prewrite => {
                 for cmd in commands {
@@ -439,8 +444,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         thread_load: Arc<ThreadLoad>,
     ) -> Self {
         let timer_pool = Arc::new(Mutex::new(ThreadPoolBuilder::new()
-            .pool_size(4)
-            .name_prefix("minibatch_timer_pool")
+            .pool_size(1)
+            .name_prefix("minibatch_timer_guard")
             .build()));
         Service {
             storage,
