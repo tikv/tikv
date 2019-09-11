@@ -315,7 +315,7 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::import::test_helpers::*;
+    use crate::test_helpers::*;
 
     use engine::rocks::util::new_engine;
     use tempfile::Builder;
