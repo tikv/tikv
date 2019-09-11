@@ -906,42 +906,47 @@ impl<T: std::io::Write> TimeEncoder for T {}
 pub trait TimeEncoder: NumberEncoder {
     fn encode_time(&mut self, v: &Time) -> Result<()> {
         if !v.is_zero() {
-            self.encode_u16(v.time.year() as u16)?;
+            self.encode_u32_le(v.time.hour() as u32)?;
+            self.encode_u32_le(v.time.nanosecond() / 1000)?;
+            self.encode_u16_le(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
             self.write_u8(v.time.day() as u8)?;
-            self.write_u8(v.time.hour() as u8)?;
             self.write_u8(v.time.minute() as u8)?;
             self.write_u8(v.time.second() as u8)?;
-            self.encode_u32(v.time.nanosecond() / 1000)?;
         } else {
-            let len = mem::size_of::<u16>() + mem::size_of::<u32>() + 5;
+            let len = mem::size_of::<u16>() + 2 * mem::size_of::<u32>() + 4;
             let buf = vec![0; len];
             self.write_all(&buf)?;
         }
+        self.encode_u16_le(0 as u16)?;
+        // above 16 bytes
 
         let tp: FieldTypeTp = v.time_type.into();
         self.write_u8(tp.to_u8().unwrap())?;
-        self.write_u8(v.fsp).map_err(From::from)
+        self.write_u8(v.fsp)?;
+        self.encode_u16_le(0 as u16).map_err(From::from)
+        // above 20 bytes
     }
 }
 
 impl Time {
     /// `decode` decodes time encoded by `encode_time` for Chunk format.
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
-        let year = i32::from(number::decode_u16(data)?);
-        let (month, day, hour, minute, second) = if data.len() >= 5 {
+        let hour = number::decode_u32_le(data)?;
+        let nanoseconds = 1000 * number::decode_u32_le(data)?;
+        let year = i32::from(number::decode_u16_le(data)?);
+
+        let (month, day, minute, second) = if data.len() >= 4 {
             (
                 u32::from(data[0]),
                 u32::from(data[1]),
                 u32::from(data[2]),
                 u32::from(data[3]),
-                u32::from(data[4]),
             )
         } else {
             return Err(Error::unexpected_eof());
         };
-        *data = &data[5..];
-        let nanoseconds = 1000 * number::decode_u32(data)?;
+        *data = &data[6..];
         let (tp, fsp) = if data.len() >= 2 {
             (
                 FieldTypeTp::from_u8(data[0]).unwrap_or(FieldTypeTp::Unspecified),

@@ -39,15 +39,17 @@ impl Column {
             | FieldTypeTp::Long
             | FieldTypeTp::LongLong
             | FieldTypeTp::Year
-            | FieldTypeTp::Float
-            | FieldTypeTp::Double => {
+            | FieldTypeTp::Double
+            | FieldTypeTp::Duration => {
                 //TODO:no Datum::F32
                 Column::new_fixed_len(8, init_cap)
             }
-            FieldTypeTp::Duration
-            | FieldTypeTp::Date
-            | FieldTypeTp::DateTime
-            | FieldTypeTp::Timestamp => Column::new_fixed_len(16, init_cap),
+
+            FieldTypeTp::Float => Column::new_fixed_len(4, init_cap),
+
+            FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
+                Column::new_fixed_len(20, init_cap)
+            }
             FieldTypeTp::NewDecimal => Column::new_fixed_len(DECIMAL_STRUCT_SIZE, init_cap),
             _ => Column::new_var_len_column(init_cap),
         }
@@ -71,11 +73,12 @@ impl Column {
                     Datum::I64(self.get_i64(idx)?)
                 }
             }
-            FieldTypeTp::Float | FieldTypeTp::Double => Datum::F64(self.get_f64(idx)?),
+            FieldTypeTp::Double => Datum::F64(self.get_f64(idx)?),
+            FieldTypeTp::Float => Datum::F64(f64::from(self.get_f32(idx)?)),
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
                 Datum::Time(self.get_time(idx)?)
             }
-            FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx)?),
+            FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
             FieldTypeTp::Enum | FieldTypeTp::Bit | FieldTypeTp::Set => {
@@ -232,7 +235,11 @@ impl Column {
 
     /// Append a f64 datum to the column.
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
-        self.data.encode_f64_le(v)?;
+        if self.fixed_len == 4 {
+            self.data.encode_f32_le(v)?;
+        } else {
+            self.data.encode_f64_le(v)?;
+        }
         self.finish_append_fixed()
     }
 
@@ -242,6 +249,14 @@ impl Column {
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
         number::decode_f64_le(&mut data).map_err(Error::from)
+    }
+
+    /// Get the f32 datum of the row in the column.
+    pub fn get_f32(&self, idx: usize) -> Result<f32> {
+        let start = idx * self.fixed_len;
+        let end = start + self.fixed_len;
+        let mut data = &self.data[start..end];
+        number::decode_f32_le(&mut data).map_err(Error::from)
     }
 
     /// Called when the variant datum has been appended.
@@ -282,16 +297,16 @@ impl Column {
 
     /// Append a duration datum to the column.
     pub fn append_duration(&mut self, d: Duration) -> Result<()> {
-        self.data.encode_duration(d)?;
+        self.data.encode_duration_to_chunk(d)?;
         self.finish_append_fixed()
     }
 
     /// Get the duration datum of the row in the column.
-    pub fn get_duration(&self, idx: usize) -> Result<Duration> {
+    pub fn get_duration(&self, idx: usize, fsp: isize) -> Result<Duration> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        Duration::decode(&mut data)
+        Duration::decode_from_chunk(&mut data, fsp)
     }
 
     /// Append a decimal datum to the column.
@@ -346,7 +361,7 @@ impl Column {
         } else {
             col.var_offsets.clear();
             for _ in 0..=length {
-                col.var_offsets.push(number::decode_i32_le(buf)? as usize);
+                col.var_offsets.push(number::decode_i64_le(buf)? as usize);
             }
             col.var_offsets[col.length]
         };
@@ -371,7 +386,7 @@ pub trait ColumnEncoder: NumberEncoder {
         if !col.is_fixed() {
             //let length = (col.length+1)*4;
             for v in &col.var_offsets {
-                self.encode_i32_le(*v as i32)?;
+                self.encode_i64_le(*v as i64)?;
             }
         }
         // data
@@ -457,11 +472,19 @@ mod tests {
 
     #[test]
     fn test_column_f64() {
-        let fields = vec![
-            field_type(FieldTypeTp::Float),
-            field_type(FieldTypeTp::Double),
-        ];
+        let fields = vec![field_type(FieldTypeTp::Double)];
         let data = vec![Datum::Null, Datum::F64(f64::MIN), Datum::F64(f64::MAX)];
+        test_colum_datum(fields, data);
+    }
+
+    #[test]
+    fn test_column_f32() {
+        let fields = vec![field_type(FieldTypeTp::Float)];
+        let data = vec![
+            Datum::Null,
+            Datum::F64(std::f32::MIN.into()),
+            Datum::F64(std::f32::MAX.into()),
+        ];
         test_colum_datum(fields, data);
     }
 

@@ -776,6 +776,11 @@ pub trait DurationEncoder: NumberEncoder {
         self.encode_i64(v.to_nanos())?;
         self.encode_i64(i64::from(v.get_fsp())).map_err(From::from)
     }
+
+    fn encode_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
+        self.encode_i64_le(v.to_nanos())?;
+        Ok(())
+    }
 }
 
 impl Duration {
@@ -783,6 +788,11 @@ impl Duration {
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Duration> {
         let nanos = number::decode_i64(data)?;
         let fsp = number::decode_i64(data)?;
+        Duration::from_nanos(nanos, fsp as i8)
+    }
+
+    pub fn decode_from_chunk(data: &mut BytesSlice<'_>, fsp: isize) -> Result<Duration> {
+        let nanos = number::decode_i64_le(data)?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 }
@@ -1086,8 +1096,8 @@ mod tests {
         for (input, fsp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
-            buf.encode_duration(t).unwrap();
-            let got = Duration::decode(&mut buf.as_slice()).unwrap();
+            buf.encode_duration_to_chunk(t).unwrap();
+            let got = Duration::decode_from_chunk(&mut buf.as_slice(), fsp as isize).unwrap();
             assert_eq!(t, got);
         }
     }
@@ -1206,8 +1216,10 @@ mod benches {
             for &duration in cases {
                 let t = test::black_box(duration);
                 let mut buf = vec![];
-                buf.encode_duration(t).unwrap();
-                let got = test::black_box(Duration::decode(&mut buf.as_slice()).unwrap());
+                buf.encode_duration_to_chunk(t).unwrap();
+                let got = test::black_box(
+                    Duration::decode_from_chunk(&mut buf.as_slice(), t.fsp() as isize).unwrap(),
+                );
                 assert_eq!(t, got);
             }
         })

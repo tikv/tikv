@@ -3,7 +3,9 @@
 use tipb::FieldType;
 
 use super::LazyBatchColumn;
+use crate::codec::chunk::{Chunk, ChunkEncoder};
 use crate::codec::data_type::VectorValue;
+use crate::codec::mysql::Tz;
 use crate::codec::Result;
 
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
@@ -128,6 +130,48 @@ impl LazyBatchColumnVec {
                 col.encode(*idx, &schema[offset], output)?;
             }
         }
+        Ok(())
+    }
+
+    /// Encode into arrow format.
+    pub fn encode_to_chunk(
+        &mut self,
+        logical_rows: impl AsRef<[usize]>,
+        output_offsets: impl AsRef<[u32]>,
+        schema: impl AsRef<[FieldType]>,
+        output: &mut Vec<u8>,
+        time_zone: &Tz,
+    ) -> Result<()> {
+        // Step 1 : Decode all data.
+        let schema = schema.as_ref();
+        let output_offsets = output_offsets.as_ref();
+        for offset in output_offsets {
+            let offset = *offset as usize;
+            let col = &mut self.columns[offset];
+            col.ensure_decoded(time_zone, &schema[offset], logical_rows.as_ref())
+                .unwrap();
+        }
+
+        // Step 2 : Make the chunk and append data.
+        let mut fields: Vec<FieldType> = Vec::new();
+        for offset in output_offsets {
+            let offset = *offset as usize;
+            let field_type = &schema[offset];
+            fields.push(field_type.clone());
+        }
+        let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len());
+
+        for idx in logical_rows.as_ref() {
+            for colcur in 0..output_offsets.len() {
+                let idx = *idx as usize;
+                let offset = output_offsets[colcur] as usize;
+                let col = &self.columns[offset];
+                col.append_to_chunk(idx, &schema[offset], &mut chunk, colcur)?;
+            }
+        }
+
+        // Step 3 : Encode chunk to output.
+        output.encode_chunk(&chunk).unwrap();
         Ok(())
     }
 

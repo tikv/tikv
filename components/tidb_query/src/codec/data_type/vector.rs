@@ -4,9 +4,10 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::FieldType;
 
 use super::*;
+use crate::codec::chunk::Chunk;
 use crate::codec::data_type::scalar::ScalarValueRef;
-use crate::codec::datum;
 use crate::codec::Result;
+use crate::codec::{datum, Datum};
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
@@ -328,6 +329,94 @@ impl VectorValue {
                 Ok(())
             }
         }
+    }
+
+    pub fn append_to_chunk(
+        &self,
+        row_index: usize,
+        field_type: &FieldType,
+        chunk: &mut Chunk,
+        colcur: usize,
+    ) -> Result<()> {
+        match self {
+            VectorValue::Int(ref vec) => match &vec[row_index] {
+                None => {
+                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    if field_type
+                        .as_accessor()
+                        .flag()
+                        .contains(FieldTypeFlag::UNSIGNED)
+                    {
+                        chunk
+                            .append_datum(colcur, &Datum::U64(*val as u64))
+                            .unwrap();
+                    } else {
+                        chunk.append_datum(colcur, &Datum::I64(*val)).unwrap();
+                    }
+                }
+            },
+            VectorValue::Real(ref vec) => match &vec[row_index] {
+                None => {
+                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    chunk
+                        .append_datum(colcur, &Datum::F64(f64::from(*val)))
+                        .unwrap();
+                }
+            },
+            VectorValue::Decimal(ref vec) => match &vec[row_index] {
+                None => {
+                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    chunk
+                        .append_datum(colcur, &Datum::Dec(val.clone()))
+                        .unwrap();
+                }
+            },
+            VectorValue::Bytes(ref vec) => match &vec[row_index] {
+                None => {
+                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    chunk
+                        .append_datum(colcur, &Datum::Bytes(val.clone()))
+                        .unwrap();
+                }
+            },
+            VectorValue::DateTime(ref vec) => match &vec[row_index] {
+                None => {
+                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    chunk
+                        .append_datum(colcur, &Datum::Time(val.clone()))
+                        .unwrap();
+                }
+            },
+            VectorValue::Duration(ref vec) => match &vec[row_index] {
+                None => {
+                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    chunk.append_datum(colcur, &Datum::Dur(*val)).unwrap();
+                }
+            },
+            VectorValue::Json(ref vec) => match &vec[row_index] {
+                None => {
+                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    chunk
+                        .append_datum(colcur, &Datum::Json(val.clone()))
+                        .unwrap();
+                }
+            },
+        }
+        Ok(())
     }
 }
 
