@@ -2,10 +2,10 @@
 
 #![recursion_limit = "200"]
 
-#[macro_use(slog_error, slog_warn)]
-extern crate slog;
-#[macro_use]
-extern crate slog_global;
+//#[macro_use(slog_error, slog_warn)]
+//extern crate slog;
+//#[macro_use]
+//extern crate slog_global;
 #[macro_use]
 extern crate prometheus;
 #[macro_use]
@@ -93,11 +93,11 @@ impl Engines {
         }
     }
 
-    pub fn write_kv(&self, wb: &RawWriteBatch) -> Result<()> {
+    pub fn write_kv(&self, wb: &WriteBatch) -> Result<()> {
         self.kv.write(wb).map_err(Error::Engine)
     }
 
-    pub fn write_kv_opt(&self, wb: &RawWriteBatch, opts: &WriteOptions) -> Result<()> {
+    pub fn write_kv_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
         self.kv.write_opt(wb, &opts.into()).map_err(Error::Engine)
     }
 
@@ -105,11 +105,11 @@ impl Engines {
         self.kv.sync_wal().map_err(Error::Engine)
     }
 
-    pub fn write_raft(&self, wb: &RawWriteBatch) -> Result<()> {
+    pub fn write_raft(&self, wb: &WriteBatch) -> Result<()> {
         self.raft.write(wb).map_err(Error::Engine)
     }
 
-    pub fn write_raft_opt(&self, wb: &RawWriteBatch, opts: &WriteOptions) -> Result<()> {
+    pub fn write_raft_opt(&self, wb: &WriteBatch, opts: &WriteOptions) -> Result<()> {
         self.raft.write_opt(wb, &opts.into()).map_err(Error::Engine)
     }
 
