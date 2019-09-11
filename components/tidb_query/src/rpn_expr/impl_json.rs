@@ -9,6 +9,16 @@ use crate::codec::data_type::*;
 use crate::codec::mysql::json::*;
 use crate::Result;
 
+#[inline]
+fn encode_to_json_path(path: &Option<Bytes>) -> Result<Option<PathExpression>> {
+    let json_path = match path.as_ref() {
+        None => return Ok(None),
+        Some(p) => std::str::from_utf8(&p).map_err(crate::codec::Error::from),
+    }?;
+
+    Ok(Some(parse_json_path_expr(&json_path)?))
+}
+
 #[rpn_fn]
 #[inline]
 fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
@@ -51,14 +61,7 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
         let path: &Option<Bytes> = chunk[0].as_ref();
         let value: &Option<Json> = chunk[1].as_ref();
 
-        let json_path = match path.as_ref() {
-            None => return Ok(None),
-            Some(p) => std::str::from_utf8(&p).map_err(crate::codec::Error::from),
-        }?;
-
-        let path_expr = parse_json_path_expr(&json_path)?;
-
-        path_expr_list.push(path_expr);
+        path_expr_list.push(try_opt!(encode_to_json_path(path)));
 
         let value = value.as_ref().map_or(Json::None, |json| json.to_owned());
         values.push(value);
@@ -221,14 +224,7 @@ fn path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpression>>> {
     for arg in args {
         let json_path: &Option<Bytes> = arg.as_ref();
 
-        let json_path = match json_path.as_ref() {
-            None => return Ok(None),
-            Some(p) => std::str::from_utf8(&p).map_err(crate::codec::Error::from),
-        }?;
-
-        let path_expr = parse_json_path_expr(&json_path)?;
-
-        path_expr_list.push(path_expr);
+        path_expr_list.push(try_opt!(encode_to_json_path(json_path)));
     }
     Ok(Some(path_expr_list))
 }
