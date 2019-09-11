@@ -3543,11 +3543,7 @@ mod tests {
         // OVERFLOWING
         let big = (0..85).map(|_| '9').collect::<String>();
         let val: Result<Decimal> = big.as_bytes().convert(&mut ctx);
-        assert!(
-            val.is_err(),
-            "expected error, but got {:?}",
-            val.unwrap().to_string()
-        );
+        assert!(val.is_err(), "expected error, but got {:?}", val);
         assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
 
         // OVERFLOW_AS_WARNING
