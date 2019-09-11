@@ -406,8 +406,8 @@ macro_rules! impl_ext {
                 match self {
                     VectorValue::$ty(ref mut vec) => vec.push(v),
                     other => panic!(
-                        "Cannot call `{}` over to a {} column",
-                        stringify!($name),
+                        "Cannot call `{}` over a {} column",
+                        stringify!($push_name),
                         other.eval_type()
                     ),
                 };
