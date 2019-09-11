@@ -8,6 +8,7 @@ use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
 
+use quick_error::quick_error;
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
 use tipb::{self, ScalarFuncSig};
