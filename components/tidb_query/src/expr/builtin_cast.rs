@@ -866,10 +866,8 @@ mod tests {
         for (sig, tp, flag, col, expect) in cases {
             let col_expr = col_expr(0, tp);
             let mut exp = scalar_func_expr(sig, &[col_expr]);
-            if flag.is_some() {
-                exp.mut_field_type()
-                    .as_mut_accessor()
-                    .set_flag(flag.unwrap());
+            if let Some(flag) = flag {
+                exp.mut_field_type().as_mut_accessor().set_flag(flag);
             }
             let e = Expression::build(&ctx, exp).unwrap();
             let res = e.eval_int(&mut ctx, &col).unwrap();
@@ -1336,8 +1334,8 @@ mod tests {
                 .as_mut_accessor()
                 .set_flen(flen)
                 .set_decimal(tidb_query_datatype::UNSPECIFIED_LENGTH);
-            if to_tp.is_some() {
-                ex.mut_field_type().as_mut_accessor().set_tp(to_tp.unwrap());
+            if let Some(to_tp) = to_tp {
+                ex.mut_field_type().as_mut_accessor().set_tp(to_tp);
             }
             ex.mut_field_type().set_charset(String::from(charset));
             let e = Expression::build(&ctx, ex).unwrap();
@@ -1724,11 +1722,8 @@ mod tests {
         ];
         for (flag, cols, exp) in cases {
             let mut col_expr = col_expr(0, FieldTypeTp::LongLong);
-            if flag.is_some() {
-                col_expr
-                    .mut_field_type()
-                    .as_mut_accessor()
-                    .set_flag(flag.unwrap());
+            if let Some(flag) = flag {
+                col_expr.mut_field_type().as_mut_accessor().set_flag(flag);
             }
             let ex = scalar_func_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();

@@ -239,6 +239,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -291,6 +292,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -343,6 +345,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -395,6 +398,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         titan: TitanDBConfig {
             enabled: true,
@@ -469,6 +473,7 @@ fn test_serde_custom_tikv_config() {
             titan: TitanCfConfig::default(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
     };
     value.storage = StorageConfig {
