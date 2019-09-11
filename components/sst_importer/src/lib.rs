@@ -12,6 +12,8 @@ extern crate serde_derive;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 mod config;
 mod errors;
