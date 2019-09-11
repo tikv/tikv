@@ -361,6 +361,9 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
             self.handle_backup_task(task);
         } else {
             // TODO: support incremental backup
+            BACKUP_RANGE_ERROR_VEC
+                .with_label_values(&["incremental"])
+                .inc();
             error!("incremental backup is not supported yet");
         }
     }
@@ -808,6 +811,39 @@ pub mod tests {
         endpoint.handle_backup_task(task);
         check_response(rx, |resp| {
             assert!(resp.is_none());
+        });
+    }
+
+    #[test]
+    fn test_busy() {
+        let (_tmp, endpoint) = new_endpoint();
+        let engine = endpoint.engine.clone();
+
+        endpoint
+            .region_info
+            .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
+
+        let mut req = BackupRequest::new();
+        req.set_start_key(vec![]);
+        req.set_end_key(vec![]);
+        req.set_start_version(1);
+        req.set_end_version(1);
+        req.set_path("noop://foo".to_owned());
+
+        let (tx, rx) = unbounded();
+        let (task, _) = Task::new(req.clone(), tx).unwrap();
+        // Pause the engine 6 seconds to trigger Timeout error.
+        // The Timeout error is translated to server is busy.
+        engine.pause(Duration::from_secs(6));
+        endpoint.handle_backup_task(task);
+        check_response(rx, |resp| {
+            let resp = resp.unwrap();
+            assert!(resp.get_error().has_region_error(), "{:?}", resp);
+            assert!(
+                resp.get_error().get_region_error().has_server_is_busy(),
+                "{:?}",
+                resp
+            );
         });
     }
 
