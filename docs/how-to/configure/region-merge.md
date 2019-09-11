@@ -22,7 +22,7 @@ Region Merge is initiated by the Placement Driver (PD). The steps are:
 > - All replicas of the two Regions to be merged must locate on the same set of TiKVs (It is ensured by PD scheduler).
 > - Newly split Regions won't be merged within the period of time specified by `split-merge-interval`.
 > - Region Merge won't happen within the period of time specified by `split-merge-interval` after PD starts or restarts.
->- Region Merge won't happen for two Regions that belong to different tables if `namespace-classifier = table` (default).
+> - Region Merge won't happen for two Regions that belong to different tables if `namespace-classifier = table` (default).
 
 ## Configure Region Merge
 
