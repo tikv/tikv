@@ -539,7 +539,7 @@ impl<S: Snapshot> MvccTxn<S> {
     pub fn batch_prewrite<Sched: MsgScheduler>(
         &mut self,
         cid: u64,
-        commands: &Vec<Command>,
+        commands: &[Command],
         ids: &mut Vec<u64>,
         scheduler: &Sched,
     ) -> Result<u64> {
@@ -780,11 +780,10 @@ impl<S: Snapshot> MvccTxn<S> {
     pub fn batch_commit<Sched: MsgScheduler>(
         &mut self,
         cid: u64,
-        commands: &Vec<Command>,
+        commands: &[Command],
         ids: &mut Vec<u64>,
         scheduler: &Sched,
     ) -> Result<u64> {
-        info!("batch_commit"; "len" => commands.len());
         let tag = commands[0].tag();
         let mut rows = 0;
         let len = commands.len();

@@ -90,13 +90,6 @@ make_static_metric! {
 }
 
 lazy_static! {
-    pub static ref SCHED_BATCH_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_scheduler_batch_prewrite_count",
-        "Bucketed histogram of batched command request",
-        &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
-    )
-    .unwrap();
     pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_storage_command_total",
         "Total number of commands received.",

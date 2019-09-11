@@ -438,7 +438,6 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                 _ => 0,
             };
             statistics.add(&txn.take_statistics());
-            info!("process_batch_prewrite"; "applies_mutation" => rows);
             let modifies = txn.into_modifies();
             // send all modifies to raftstore
             SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();

@@ -64,7 +64,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     timer_pool: Arc<Mutex<ThreadPool>>,
 }
 
-fn numerize_command_kind(tag: &CommandKind) -> u8 {
+fn numerize_command_kind(tag: CommandKind) -> u8 {
     match tag {
         CommandKind::prewrite => 1,
         CommandKind::commit => 2,
@@ -147,12 +147,12 @@ impl MiniBatcherInner {
         storage: &Storage<E, L>,
     ) {
         if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
-            if self.commands.len() > 0 && self.ratio > 1.1 {
+            if !self.commands.is_empty() && self.ratio > 1.1 {
                 // commands drop zero means batch_commands is not called
                 self.ratio -= 0.01;
             }
             self.submit(tx, storage);
-        } else if self.commands.len() > 0 && self.ratio < 10.0 {
+        } else if !self.commands.is_empty() && self.ratio < 10.0 {
             self.ratio += 0.01;
         }
     }
@@ -162,7 +162,7 @@ impl MiniBatcherInner {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) {
-        if self.commands.len() > 0 {
+        if !self.commands.is_empty() {
             self.report();
         } else {
             return;
@@ -259,14 +259,14 @@ impl MiniBatcherInner {
             CommandKind::prewrite => {
                 MINIBATCH_READY_RATIO_HISTOGRAM_VEC
                     .prewrite
-                    .observe(self.ratio as f64);
+                    .observe(f64::from(self.ratio));
                 MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC.prewrite.observe(a);
                 MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC.prewrite.observe(b);
             }
             CommandKind::commit => {
                 MINIBATCH_READY_RATIO_HISTOGRAM_VEC
                     .commit
-                    .observe(self.ratio as f64);
+                    .observe(f64::from(self.ratio));
                 MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC.commit.observe(a);
                 MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC.commit.observe(b);
             }
@@ -284,11 +284,11 @@ impl MiniBatcher {
     pub fn new(tx: Sender<(u64, batch_commands_response::Response)>) -> Self {
         let mut inners = BTreeMap::default();
         inners.insert(
-            numerize_command_kind(&CommandKind::prewrite),
+            numerize_command_kind(CommandKind::prewrite),
             MiniBatcherInner::new(CommandKind::prewrite),
         );
         inners.insert(
-            numerize_command_kind(&CommandKind::commit),
+            numerize_command_kind(CommandKind::commit),
             MiniBatcherInner::new(CommandKind::commit),
         );
         MiniBatcher { inners, tx }
@@ -303,7 +303,7 @@ impl MiniBatcher {
             Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
                 let inner = self
                     .inners
-                    .get_mut(&numerize_command_kind(&CommandKind::prewrite));
+                    .get_mut(&numerize_command_kind(CommandKind::prewrite));
                 if inner.is_none() {
                     return false;
                 }
@@ -388,7 +388,7 @@ impl MiniBatcher {
             Some(batch_commands_request::request::Cmd::Commit(req)) => {
                 let inner = self
                     .inners
-                    .get_mut(&numerize_command_kind(&CommandKind::commit));
+                    .get_mut(&numerize_command_kind(CommandKind::commit));
                 if inner.is_none() {
                     return false;
                 }
@@ -460,13 +460,13 @@ impl MiniBatcher {
     //     "batch_prewrite" => self.commands.len());
 
     pub fn maybe_submit<E: Engine, L: LockMgr>(&mut self, storage: &Storage<E, L>) {
-        for (_, inner) in &mut self.inners {
+        for inner in self.inners.values_mut() {
             inner.maybe_submit(&self.tx, storage);
         }
     }
 
     pub fn should_submit<E: Engine, L: LockMgr>(&mut self, storage: &Storage<E, L>) {
-        for (_, inner) in &mut self.inners {
+        for inner in self.inners.values_mut() {
             inner.should_submit(&self.tx, storage);
         }
     }
@@ -1426,7 +1426,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let minibatcher = MiniBatcher::new(tx.clone());
         let minibatcher = Arc::new(Mutex::new(minibatcher));
         if MINIBATCH_CROSS_COMMAND_ENABLED {
-            info!("batch_commands spawn interval timer");
             let storage = storage.clone();
             let minibatcher = minibatcher.clone();
             let start = Instant::now() + Duration::from_millis(100);
