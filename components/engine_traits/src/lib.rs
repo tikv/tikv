@@ -29,14 +29,14 @@ pub const DATA_KEY_PREFIX_LEN: usize = 1;
 pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
 #[derive(Clone, Debug)]
-pub struct KvEngines<E> {
-    pub kv: E,
-    pub raft: E,
+pub struct KvEngines<K, R> {
+    pub kv: K,
+    pub raft: R,
     pub shared_block_cache: bool,
 }
 
-impl<E: KvEngine> KvEngines<E> {
-    pub fn new(kv_engine: E, raft_engine: E, shared_block_cache: bool) -> Self {
+impl<K: KvEngine, R: KvEngine> KvEngines<K, R> {
+    pub fn new(kv_engine: K, raft_engine: R, shared_block_cache: bool) -> Self {
         KvEngines {
             kv: kv_engine,
             raft: raft_engine,
@@ -44,11 +44,11 @@ impl<E: KvEngine> KvEngines<E> {
         }
     }
 
-    pub fn write_kv(&self, wb: &E::Batch) -> Result<()> {
+    pub fn write_kv(&self, wb: &K::Batch) -> Result<()> {
         self.kv.write(wb)
     }
 
-    pub fn write_kv_opt(&self, wb: &E::Batch, opts: &WriteOptions) -> Result<()> {
+    pub fn write_kv_opt(&self, wb: &K::Batch, opts: &WriteOptions) -> Result<()> {
         self.kv.write_opt(opts, wb)
     }
 
@@ -56,11 +56,11 @@ impl<E: KvEngine> KvEngines<E> {
         self.kv.sync()
     }
 
-    pub fn write_raft(&self, wb: &E::Batch) -> Result<()> {
+    pub fn write_raft(&self, wb: &R::Batch) -> Result<()> {
         self.raft.write(wb)
     }
 
-    pub fn write_raft_opt(&self, wb: &E::Batch, opts: &WriteOptions) -> Result<()> {
+    pub fn write_raft_opt(&self, wb: &R::Batch, opts: &WriteOptions) -> Result<()> {
         self.raft.write_opt(opts, wb)
     }
 

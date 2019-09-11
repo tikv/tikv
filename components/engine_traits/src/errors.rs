@@ -42,25 +42,3 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
-
-impl From<Error> for raft::Error {
-    fn from(err: Error) -> raft::Error {
-        raft::Error::Store(raft::StorageError::Other(err.into()))
-    }
-}
-
-impl From<Error> for kvproto::errorpb::Error {
-    fn from(err: Error) -> kvproto::errorpb::Error {
-        let mut errorpb = kvproto::errorpb::Error::default();
-        errorpb.set_message(format!("{}", err));
-
-        if let Error::NotInRange(key, region_id, start_key, end_key) = err {
-            errorpb.mut_key_not_in_region().set_key(key);
-            errorpb.mut_key_not_in_region().set_region_id(region_id);
-            errorpb.mut_key_not_in_region().set_start_key(start_key);
-            errorpb.mut_key_not_in_region().set_end_key(end_key);
-        }
-
-        errorpb
-    }
-}
