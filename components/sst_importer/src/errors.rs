@@ -9,8 +9,6 @@ use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use uuid::ParseError;
 
-use crate::raftstore::errors::Error as RaftStoreError;
-
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -41,11 +39,6 @@ quick_error! {
             from()
             description("Engine error")
             display("Engine {:?}", err)
-        }
-        RaftStore(err: RaftStoreError) {
-            from()
-            cause(err)
-            description(err.description())
         }
         ParseIntError(err: ParseIntError) {
             from()
