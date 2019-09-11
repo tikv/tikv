@@ -275,6 +275,7 @@ impl<S: Snapshot> PointGetter<S> {
             // So in all scenarios we should not provide results in future calls when we enter this
             // branch.
             self.write_cursor_valid = false;
+            return Ok(None);
         }
 
         loop {
