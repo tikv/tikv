@@ -61,15 +61,24 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     timer_pool: Arc<Mutex<ThreadPool>>,
 }
 
+fn numerize_command_kind(tag: &CommandKind) -> u8 {
+    match tag {
+        CommandKind::prewrite => { 1 }
+        CommandKind::commit => { 2 }
+        _ => { 0 }
+    }
+}
+
 #[derive(Eq, Hash, Debug)]
 struct RegionVerId {
     region: u64,
     epoch: u64,
+    tag: u8,
 }
 
 impl PartialEq for RegionVerId {
     fn eq(&self, other: &Self) -> bool {
-        self.region == other.region && self.epoch == other.epoch
+        self.tag == other.tag && self.region == other.region && self.epoch == other.epoch
     }
 }
 
@@ -126,6 +135,7 @@ impl MiniBatcher {
                 let ver = RegionVerId {
                     region: req.get_context().get_region_id(),
                     epoch: req.get_context().get_region_epoch().get_version(),
+                    tag: numerize_command_kind(&CommandKind::prewrite),
                 };
                 let mutations: Vec<Mutation> = req
                     .take_mutations()
@@ -194,6 +204,7 @@ impl MiniBatcher {
                 let ver = RegionVerId {
                     region: req.get_context().get_region_id(),
                     epoch: req.get_context().get_region_epoch().get_version(),
+                    tag: numerize_command_kind(&CommandKind::commit),
                 };
                 let keys: Vec<Key> = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
                 let mut create_cmd = |keys| {
@@ -298,14 +309,14 @@ impl MiniBatcher {
                         cmd,
                         Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
                             // let v = v.map_err(Error::from);
-                            let mut resp = PrewriteResponse::default();
+                            let mut resp = CommitResponse::default();
                             if let Some(err) = extract_region_error(&v) {
                                 resp.set_region_error(err);
-                            } else {
-                                resp.set_errors(extract_key_errors(v).into());
+                            } else if let Err(e) = v {
+                                resp.set_error(extract_key_error(&e));
                             }
                             let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
+                            res.cmd = Some(batch_commands_response::response::Cmd::Commit(resp));
                             tx.send_and_notify((id, res));
                             // if !tx.send_and_notify((id, res)).is_err() {
                                 // timer.observe_duration();
