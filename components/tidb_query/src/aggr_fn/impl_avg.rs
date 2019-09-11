@@ -34,14 +34,8 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
 
         assert_eq!(aggr_def.get_tp(), ExprType::Avg);
 
-        // AVG outputs two columns.
-        out_schema.push(
-            FieldTypeBuilder::new()
-                .tp(FieldTypeTp::LongLong)
-                .flag(FieldTypeFlag::UNSIGNED)
-                .build(),
-        );
-        out_schema.push(aggr_def.take_field_type());
+        let col_sum_ft = aggr_def.take_field_type();
+        let col_sum_et = box_try!(EvalType::try_from(col_sum_ft.as_accessor().tp()));
 
         // Rewrite expression to insert CAST() if needed.
         let child = aggr_def.take_children().into_iter().next().unwrap();
@@ -51,6 +45,21 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
 
         let rewritten_eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
+        if col_sum_et != rewritten_eval_type {
+            return Err(other_err!(
+                "Unexpected return field type {}",
+                col_sum_ft.as_accessor().tp()
+            ));
+        }
+
+        // AVG outputs two columns.
+        out_schema.push(
+            FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build(),
+        );
+        out_schema.push(col_sum_ft);
         out_exp.push(exp);
 
         Ok(match rewritten_eval_type {
@@ -258,5 +267,20 @@ mod tests {
             aggr_result[1].as_decimal_slice(),
             &[Some(Decimal::from(43u64))]
         );
+    }
+
+    #[test]
+    fn test_illegal_request() {
+        let expr = ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double) // Expect NewDecimal but give Real
+            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong)) // FIXME: This type can be incorrect as well
+            .build();
+        AggrFnDefinitionParserAvg.check_supported(&expr).unwrap();
+
+        let src_schema = [FieldTypeTp::LongLong.into()];
+        let mut schema = vec![];
+        let mut exp = vec![];
+        AggrFnDefinitionParserAvg
+            .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .unwrap_err();
     }
 }
