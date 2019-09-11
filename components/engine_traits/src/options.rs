@@ -169,24 +169,3 @@ pub enum DeleteRangeType {
     DeleteFiles,
     DeleteRange,
 }
-
-#[derive(Clone)]
-pub struct IngestExternalFileOptions {
-    pub move_files: bool,
-}
-
-impl IngestExternalFileOptions {
-    pub fn new() -> IngestExternalFileOptions {
-        IngestExternalFileOptions { move_files: false }
-    }
-
-    pub fn move_files(&mut self, v: bool) {
-        self.move_files = v;
-    }
-}
-
-impl Default for IngestExternalFileOptions {
-    fn default() -> IngestExternalFileOptions {
-        IngestExternalFileOptions { move_files: false }
-    }
-}

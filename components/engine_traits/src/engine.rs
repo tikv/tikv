@@ -53,13 +53,8 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<()>;
-    fn ingest_external_file_cf(
-        &self,
-        opts: &IngestExternalFileOptions,
-        cf: &str,
-        files: &[&str],
-    ) -> Result<()>;
 
+    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()>;
     fn validate_file_for_ingestion<P: AsRef<Path>>(
         &self,
         cf: &str,
