@@ -43,7 +43,7 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
-const MINIBATCH_TIMEOUT_MILLIS: u64 = 1;
+const MINIBATCH_TIMEOUT_MICROS: u64 = 200;
 const MINIBATCH_CROSS_COMMAND_ENABLED: bool = true;
 const MINIBATCH_INIT_RATIO: f32 = 2.0;
 const MINIBATCH_REPORT_TO_LOG: bool = false;
@@ -73,16 +73,10 @@ fn numerize_command_kind(tag: CommandKind) -> u8 {
     }
 }
 
-#[derive(Eq, Hash, Debug)]
+#[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
     region: u64,
     epoch: u64,
-}
-
-impl PartialEq for RegionVerId {
-    fn eq(&self, other: &Self) -> bool {
-        self.region == other.region && self.epoch == other.epoch
-    }
 }
 
 struct MiniBatchMeta {
@@ -147,7 +141,7 @@ impl MiniBatcherInner {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) {
-        if self.last_submit.elapsed() > Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS) {
+        if self.last_submit.elapsed() > Duration::from_micros(MINIBATCH_TIMEOUT_MICROS) {
             if !self.commands.is_empty() && self.ratio > 1.1 {
                 // commands drop zero means batch_commands is not called
                 self.ratio -= 0.01;
@@ -1438,7 +1432,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
             let timer = GLOBAL_TIMER_HANDLE.clone();
             self.timer_pool.lock().unwrap().spawn(
                 timer
-                    .interval(start, Duration::from_millis(MINIBATCH_TIMEOUT_MILLIS))
+                    .interval(start, Duration::from_micros(MINIBATCH_TIMEOUT_MICROS))
                     .for_each(move |_| {
                         minibatcher.lock().unwrap().should_submit(&storage);
                         Ok(())
