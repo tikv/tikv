@@ -84,13 +84,13 @@ impl BackupWriter {
     pub fn save(mut self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let name = self.name;
         let save_and_build_file =
-            |cf, mut contents: &[u8], limiter: Option<&Arc<IOLimiter>>| -> Result<File> {
+            |cf, mut contents: &[u8], limiter: Option<Arc<IOLimiter>>| -> Result<File> {
                 BACKUP_RANGE_SIZE_HISTOGRAM_VEC
                     .with_label_values(&[cf])
                     .observe(contents.len() as _);
                 let name = format!("{}_{}.sst", name, cf);
                 let checksum = tikv_util::file::calc_crc32_bytes(contents);
-                let mut limit_reader = LimitReader::new(limiter.cloned(), &mut contents);
+                let mut limit_reader = LimitReader::new(limiter, &mut contents);
                 storage.write(&name, &mut limit_reader)?;
                 let mut file = File::new();
                 file.set_crc32(checksum);
@@ -104,7 +104,7 @@ impl BackupWriter {
             // Save default cf contents.
             buf.reserve(self.default.file_size() as _);
             self.default.finish_into(&mut buf)?;
-            let default = save_and_build_file(CF_DEFAULT, &mut buf, self.limiter.as_ref())?;
+            let default = save_and_build_file(CF_DEFAULT, &mut buf, self.limiter.clone())?;
             files.push(default);
             buf.clear();
         }
@@ -112,7 +112,7 @@ impl BackupWriter {
             // Save write cf contents.
             buf.reserve(self.write.file_size() as _);
             self.write.finish_into(&mut buf)?;
-            let write = save_and_build_file(CF_WRITE, &mut buf, self.limiter.as_ref())?;
+            let write = save_and_build_file(CF_WRITE, &mut buf, self.limiter)?;
             files.push(write);
         }
         BACKUP_RANGE_HISTOGRAM_VEC
