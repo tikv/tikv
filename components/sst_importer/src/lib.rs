@@ -8,8 +8,6 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(slog_error, slog_warn, slog_info)]
-extern crate slog;
 #[macro_use]
 extern crate slog_global;
 #[allow(unused_extern_crates)]

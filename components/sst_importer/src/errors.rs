@@ -7,7 +7,7 @@ use std::result;
 
 use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;
-use uuid::ParseError;
+use uuid::{parser::ParseError, BytesError};
 
 quick_error! {
     #[derive(Debug)]
@@ -23,6 +23,11 @@ quick_error! {
             description(err.description())
         }
         Uuid(err: ParseError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        UuidBytes(err: BytesError) {
             from()
             cause(err)
             description(err.description())
