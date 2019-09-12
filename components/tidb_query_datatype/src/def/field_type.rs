@@ -5,8 +5,6 @@ use std::fmt;
 use tipb::ColumnInfo;
 use tipb::FieldType;
 
-use num_traits::FromPrimitive;
-
 /// Valid values of `tipb::FieldType::tp` and `tipb::ColumnInfo::tp`.
 ///
 /// `FieldType` is the field type of a column defined by schema.
@@ -16,7 +14,8 @@ use num_traits::FromPrimitive;
 /// are flattened into `ColumnInfo`. Semantically these fields are identical.
 ///
 /// Please refer to [mysql/type.go](https://github.com/pingcap/parser/blob/master/mysql/type.go).
-#[derive(Primitive, PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
+#[repr(i32)]
 pub enum FieldTypeTp {
     Unspecified = 0, // Default
     Tiny = 1,
@@ -48,6 +47,30 @@ pub enum FieldTypeTp {
     Geometry = 0xff,
 }
 
+impl FieldTypeTp {
+    fn from_i32(i: i32) -> Option<FieldTypeTp> {
+        if (FieldTypeTp::Unspecified as i32 >= 0 && i <= FieldTypeTp::Bit as i32)
+            || (i >= FieldTypeTp::JSON as i32 && i <= FieldTypeTp::Geometry as i32)
+        {
+            Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i) })
+        } else {
+            None
+        }
+    }
+
+    pub fn from_u8(i: u8) -> Option<FieldTypeTp> {
+        if i <= FieldTypeTp::Bit as u8 || i >= FieldTypeTp::JSON as u8 {
+            Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i32::from(i)) })
+        } else {
+            None
+        }
+    }
+
+    pub fn to_u8(self) -> Option<u8> {
+        Some(self as i32 as u8)
+    }
+}
+
 impl fmt::Display for FieldTypeTp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
@@ -74,10 +97,21 @@ impl From<FieldTypeTp> for ColumnInfo {
 /// `tipb::ColumnInfo::collation`.
 ///
 /// The default value is `UTF8Bin`.
-#[derive(Primitive, PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
+#[repr(i32)]
 pub enum Collation {
     Binary = 63,
     UTF8Bin = 83, // Default
+}
+
+impl Collation {
+    fn from_i32(i: i32) -> Option<Collation> {
+        match i {
+            63 => Some(Collation::Binary),
+            83 => Some(Collation::UTF8Bin),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Collation {
