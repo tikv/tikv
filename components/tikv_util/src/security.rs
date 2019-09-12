@@ -3,7 +3,6 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
-use std::ptr;
 
 use grpcio::{
     Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
@@ -92,11 +91,9 @@ pub struct SecurityManager {
 
 impl Drop for SecurityManager {
     fn drop(&mut self) {
-        unsafe {
-            for b in &mut self.key {
-                ptr::write_volatile(b, 0);
-            }
-        }
+        use zeroize::Zeroize;
+
+        self.key.zeroize();
     }
 }
 
