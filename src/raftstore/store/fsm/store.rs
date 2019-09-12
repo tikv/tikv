@@ -653,10 +653,10 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm>]) {
-        self.poll_ctx.lease_time = None;
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
+        self.poll_ctx.lease_time = None;
         if self.poll_ctx.need_flush_trans {
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
