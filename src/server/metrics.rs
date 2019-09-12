@@ -88,6 +88,24 @@ lazy_static! {
             exponential_buckets(1f64, 5f64, 10).unwrap()
         )
         .unwrap();
+    pub static ref MINIBATCH_INPUT_SIZE_HISTOGRAM_VEC: MiniBatchHistogramVec =
+        register_static_histogram_vec!(
+            MiniBatchHistogramVec,
+            "tikv_minibatch_input_size",
+            "Number of batchable commands sent to minibatcher",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref MINIBATCH_OUTPUT_SIZE_HISTOGRAM_VEC: MiniBatchHistogramVec =
+        register_static_histogram_vec!(
+            MiniBatchHistogramVec,
+            "tikv_minibatch_output_size",
+            "Number of batched commands submitted by minibatcher",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
     pub static ref SEND_SNAP_HISTOGRAM: Histogram = register_histogram!(
         "tikv_server_send_snapshot_duration_seconds",
         "Bucketed histogram of server send snapshots duration",

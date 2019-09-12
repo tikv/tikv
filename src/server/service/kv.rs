@@ -46,6 +46,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 const MINIBATCH_TIMEOUT_MILLIS: u64 = 1;
 const MINIBATCH_CROSS_COMMAND_ENABLED: bool = true;
 const MINIBATCH_INIT_RATIO: f32 = 2.0;
+const MINIBATCH_REPORT_TO_LOG: bool = false;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -152,7 +153,7 @@ impl MiniBatcherInner {
                 self.ratio -= 0.01;
             }
             self.submit(tx, storage);
-        } else if !self.commands.is_empty() && self.ratio < 10.0 {
+        } else if !self.commands.is_empty() && self.ratio < 25.0 {
             self.ratio += 0.01;
         }
     }
@@ -253,6 +254,14 @@ impl MiniBatcherInner {
     }
 
     fn report(&self) {
+        if MINIBATCH_REPORT_TO_LOG {
+            info!("MiniBatcher report";
+            "region_flatten" => format!("{:?}", self.router.keys()),
+            "input" => self.input,
+            "batchable" => self.batchable,
+            "output" => self.output,
+            "key_conflicted" => self.key_conflict);
+        }
         let a = self.input as f64 / self.batchable as f64;
         let b = self.batchable as f64 / self.output as f64;
         match self.tag {
@@ -262,6 +271,8 @@ impl MiniBatcherInner {
                     .observe(f64::from(self.ratio));
                 MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC.prewrite.observe(a);
                 MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC.prewrite.observe(b);
+                MINIBATCH_INPUT_SIZE_HISTOGRAM_VEC.prewrite.observe(self.batchable as f64);
+                MINIBATCH_OUTPUT_SIZE_HISTOGRAM_VEC.prewrite.observe(self.output as f64);
             }
             CommandKind::commit => {
                 MINIBATCH_READY_RATIO_HISTOGRAM_VEC
@@ -269,6 +280,8 @@ impl MiniBatcherInner {
                     .observe(f64::from(self.ratio));
                 MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC.commit.observe(a);
                 MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC.commit.observe(b);
+                MINIBATCH_INPUT_SIZE_HISTOGRAM_VEC.commit.observe(self.batchable as f64);
+                MINIBATCH_OUTPUT_SIZE_HISTOGRAM_VEC.commit.observe(self.output as f64);
             }
             _ => {}
         }
@@ -451,13 +464,6 @@ impl MiniBatcher {
             _ => false,
         }
     }
-
-    // info!("MiniBatcher report";
-    //     "region_flatten" => format!("{:?}", self.router.keys()),
-    //     "batch_commands" => self.input,
-    //     "batched" => self.batched,
-    //     "key_conflicted" => self.key_conflict,
-    //     "batch_prewrite" => self.commands.len());
 
     pub fn maybe_submit<E: Engine, L: LockMgr>(&mut self, storage: &Storage<E, L>) {
         for inner in self.inners.values_mut() {
