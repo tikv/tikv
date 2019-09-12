@@ -616,9 +616,7 @@ cast_as_duration!(
 mod tests {
     use super::Result;
     use crate::codec::data_type::{Decimal, Int, Real, ScalarValue};
-    use crate::codec::error::{
-        ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
-    };
+    use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
     use crate::codec::mysql::{Duration, Json, Time};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
@@ -781,20 +779,6 @@ mod tests {
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
                 ERR_DATA_OUT_OF_RANGE,
-                "{}",
-                log
-            );
-        } else {
-            assert_eq!(ctx.warnings.warning_cnt, 0, "{}", log);
-        }
-    }
-
-    fn check_truncated(ctx: &EvalContext, truncated: bool, log: &str) {
-        if truncated {
-            assert_eq!(ctx.warnings.warning_cnt, 1, "{}", log);
-            assert_eq!(
-                ctx.warnings.warnings[0].get_code(),
-                WARN_DATA_TRUNCATED,
                 "{}",
                 log
             );
