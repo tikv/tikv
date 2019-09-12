@@ -72,10 +72,7 @@ mod tests {
 
     #[test]
     fn test_pd_cfg() {
-        let mut cfg = Config::default();
-        // endpoints is required.
-        cfg.validate().unwrap_err();
-        cfg.endpoints = vec!["127.0.0.1:2333".to_owned()];
+        let cfg = Config::default();
         cfg.validate().unwrap();
     }
 }
