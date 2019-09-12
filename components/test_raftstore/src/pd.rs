@@ -92,8 +92,10 @@ enum Operator {
         target_region_id: u64,
         policy: Arc<RwLock<SchedulePolicy>>,
     },
-    HalfSplitRegion {
+    SplitRegion {
         region_epoch: metapb::RegionEpoch,
+        policy: pdpb::CheckPolicy,
+        keys: Vec<Vec<u8>>,
     },
 }
 
@@ -134,7 +136,7 @@ impl Operator {
                     new_pd_merge_region(region)
                 }
             }
-            Operator::HalfSplitRegion { .. } => new_half_split_region(),
+            Operator::SplitRegion { policy, ref keys, .. } => new_split_region(policy, keys.clone()),
         }
     }
 
@@ -169,7 +171,7 @@ impl Operator {
                 }
                 unreachable!()
             }
-            Operator::HalfSplitRegion { ref region_epoch } => {
+            Operator::SplitRegion { ref region_epoch, .. } => {
                 region.get_region_epoch() != region_epoch
             }
             Operator::RemovePeer {
@@ -805,15 +807,17 @@ impl TestPdClient {
         self.schedule_operator(region_id, op);
     }
 
-    pub fn half_split_region(&self, mut region: metapb::Region) {
-        let op = Operator::HalfSplitRegion {
+    pub fn split_region(&self, mut region: metapb::Region, policy: pdpb::CheckPolicy, keys: Vec<Vec<u8>>) {
+        let op = Operator::SplitRegion {
             region_epoch: region.take_region_epoch(),
+            policy: policy,
+            keys: keys,
         };
         self.schedule_operator(region.get_id(), op);
     }
 
-    pub fn must_half_split_region(&self, region: metapb::Region) {
-        self.half_split_region(region.clone());
+    pub fn must_split_region(&self, region: metapb::Region, policy: pdpb::CheckPolicy, keys: Vec<Vec<u8>>) {
+        self.split_region(region.clone(), policy, keys);
         for _ in 1..500 {
             sleep_ms(10);
 
