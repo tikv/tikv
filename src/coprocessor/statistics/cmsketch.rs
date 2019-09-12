@@ -66,6 +66,7 @@ mod tests {
     use super::*;
 
     use std::cmp::min;
+    use std::slice::from_ref;
 
     use rand::distributions::Distribution;
     use rand::rngs::StdRng;
@@ -74,7 +75,6 @@ mod tests {
 
     use tidb_query::codec::datum;
     use tidb_query::codec::datum::Datum;
-    use tikv_util::as_slice;
     use tikv_util::collections::HashMap;
 
     impl CmSketch {
@@ -108,14 +108,14 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x01020304);
         for _ in 0..total {
             let val = gen.sample(&mut rng) as u64;
-            let bytes = datum::encode_value(as_slice(&Datum::U64(val))).unwrap();
+            let bytes = datum::encode_value(from_ref(&Datum::U64(val))).unwrap();
             c.insert(&bytes);
             let counter = map.entry(val).or_insert(0);
             *counter += 1;
         }
         let mut total = 0u64;
         for (val, num) in &map {
-            let bytes = datum::encode_value(as_slice(&Datum::U64(*val))).unwrap();
+            let bytes = datum::encode_value(from_ref(&Datum::U64(*val))).unwrap();
             let estimate = c.query(&bytes);
             let err = if *num > estimate {
                 *num - estimate

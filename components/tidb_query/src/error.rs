@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::codec::Error as CodecError;
+use failure::Fail;
 
 #[derive(Fail, Debug)]
 pub enum EvaluateError {

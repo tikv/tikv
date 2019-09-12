@@ -38,7 +38,7 @@ indexmap = { version = "1.0", features = ["serde-1"] }
 safemem = { version = "0.3", default-features = false }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
@@ -50,8 +50,8 @@ tidb_query_codegen = { path = "../tidb_query_codegen" }
 codec = { path = "../codec" }
 
 [dependencies.prometheus]
-version = "0.4.2"
-default-features = false
+git = "https://github.com/pingcap/rust-prometheus.git"
+rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 features = ["nightly", "push", "process"]
 
 [dev-dependencies]

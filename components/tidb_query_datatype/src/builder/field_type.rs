@@ -4,7 +4,7 @@ use tipb::FieldType;
 
 use crate::FieldTypeAccessor;
 
-/// Helper to build `FieldType`.
+/// Helper to build a `FieldType` protobuf message.
 pub struct FieldTypeBuilder(FieldType);
 
 impl FieldTypeBuilder {
