@@ -7,9 +7,7 @@ use std::result;
 
 use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;
-use uuid::ParseError;
-
-use crate::raftstore::errors::Error as RaftStoreError;
+use uuid::{parser::ParseError, BytesError};
 
 quick_error! {
     #[derive(Debug)]
@@ -29,6 +27,11 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        UuidBytes(err: BytesError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         Future(err: Canceled) {
             from()
             cause(err)
@@ -41,11 +44,6 @@ quick_error! {
             from()
             description("Engine error")
             display("Engine {:?}", err)
-        }
-        RaftStore(err: RaftStoreError) {
-            from()
-            cause(err)
-            description(err.description())
         }
         ParseIntError(err: ParseIntError) {
             from()

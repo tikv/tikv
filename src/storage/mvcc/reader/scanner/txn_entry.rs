@@ -12,7 +12,7 @@ use crate::storage::mvcc::Result;
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics};
 
-use super::util::CheckLockResult;
+use super::super::util::CheckLockResult;
 use super::ScannerConfig;
 
 /// A dedicate scanner that outputs content in each CF.
@@ -165,7 +165,8 @@ impl<S: Snapshot> Scanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
+                        match super::super::util::check_lock(&current_user_key, self.cfg.ts, &lock)?
+                        {
                             CheckLockResult::NotLocked => {}
                             // TODO: We need to scan locks into batch
                             //       in the future.
@@ -309,7 +310,7 @@ impl<S: Snapshot> Scanner<S> {
         } else {
             // Value is in the default CF.
             let default_cursor = &mut self.default_cursor;
-            let value = super::util::near_load_data_by_write(
+            let value = super::super::util::near_load_data_by_write(
                 default_cursor,
                 user_key,
                 write,

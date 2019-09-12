@@ -14,7 +14,7 @@ use tikv_util::escape;
 
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Json,
-    JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+    JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{Error, Result};
 use crate::codec::convert::{ConvertTo, ToInt};
@@ -802,7 +802,7 @@ pub fn decode_datum(data: &mut BytesSlice<'_>) -> Result<Datum> {
             DECIMAL_FLAG => data.decode_decimal().map(Datum::Dec)?,
             VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64)?,
             VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64)?,
-            JSON_FLAG => Json::decode(data).map(Datum::Json)?,
+            JSON_FLAG => data.decode_json().map(Datum::Json)?,
             f => return Err(invalid_type!("unsupported data type `{}`", f)),
         };
         Ok(datum)
@@ -992,7 +992,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         JSON_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            Json::decode(&mut v)?;
+            v.decode_json()?;
             l - v.len()
         }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),
@@ -1008,9 +1008,9 @@ mod tests {
     use super::*;
     use crate::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
     use crate::expr::{EvalConfig, EvalContext};
-    use tikv_util::as_slice;
 
     use std::cmp::Ordering;
+    use std::slice::from_ref;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::{i16, i32, i64, i8, u16, u32, u64, u8};
@@ -1610,8 +1610,8 @@ mod tests {
             }
 
             if same_type(&lhs, &rhs) {
-                let lhs_bs = encode_key(as_slice(&lhs)).unwrap();
-                let rhs_bs = encode_key(as_slice(&rhs)).unwrap();
+                let lhs_bs = encode_key(from_ref(&lhs)).unwrap();
+                let rhs_bs = encode_key(from_ref(&rhs)).unwrap();
 
                 if ret != lhs_bs.cmp(&rhs_bs) {
                     panic!("{:?} should be {:?} to {:?} when encoded", lhs, ret, rhs);
@@ -1709,7 +1709,7 @@ mod tests {
             let mut buf = key_bs.as_slice();
             for exp in &case {
                 let (act, rem) = split_datum(buf, false).unwrap();
-                let exp_bs = encode_key(as_slice(exp)).unwrap();
+                let exp_bs = encode_key(from_ref(exp)).unwrap();
                 assert_eq!(exp_bs, act);
                 buf = rem;
             }
@@ -1719,7 +1719,7 @@ mod tests {
             let mut buf = value_bs.as_slice();
             for exp in &case {
                 let (act, rem) = split_datum(buf, false).unwrap();
-                let exp_bs = encode_value(as_slice(exp)).unwrap();
+                let exp_bs = encode_value(from_ref(exp)).unwrap();
                 assert_eq!(exp_bs, act);
                 buf = rem;
             }
