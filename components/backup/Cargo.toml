@@ -11,7 +11,7 @@ protobuf = "2.8"
 raft = "0.6.0-alpha"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 engine = { path = "../engine" }
 tikv_util = { path = "../tikv_util" }
 futures = "0.1"
@@ -28,11 +28,12 @@ failure = "0.1"
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 
 [dependencies.prometheus]
-version = "0.4.2"
+git = "https://github.com/pingcap/rust-prometheus.git"
+rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 default-features = false
 features = ["nightly", "push", "process"]
 
 [dev-dependencies]
 test_util = { path = "../test_util" }
 test_raftstore = { path = "../test_raftstore" }
-uuid = { version = "0.6", features = [ "serde", "v4" ] }
+uuid = { version = "0.7", features = [ "serde", "v4" ] }

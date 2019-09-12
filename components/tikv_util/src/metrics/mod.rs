@@ -41,6 +41,7 @@ pub fn run_prometheus(
                 prometheus::hostname_grouping_key(),
                 &address,
                 metric_familys,
+                None,
             );
             if let Err(e) = res {
                 error!("fail to push metrics"; "err" => ?e);

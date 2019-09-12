@@ -12,7 +12,7 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(slog_o, slog_error, slog_warn, slog_info, slog_debug, slog_crit)]
+#[macro_use(slog_o)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
@@ -490,7 +490,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = log::max_log_level().to_log_level() {
+        if let Some(level) = log::max_level().to_level() {
             let drainer = logger::term_drainer();
             let _ = logger::init_log(
                 drainer,
