@@ -763,6 +763,15 @@ fn test_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(mid_key.as_slice(), right.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
+
+    let region = pd_client.get_region(b"x").unwrap();
+    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"x1".to_vec(), b"y2".to_vec()]);
+    let x1 = pd_client.get_region(b"x1").unwrap();
+    assert_eq!(x1.get_start_key(), b"x1");
+    assert_eq!(x1.get_end_key(), b"y2");
+    let y2 = pd_client.get_region(b"y2").unwrap();
+    assert_eq!(y2.get_start_key(), b"y2");
+    assert_eq!(y2.get_end_key(), b"");
 }
 
 #[test]
