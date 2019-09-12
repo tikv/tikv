@@ -4,7 +4,7 @@ use super::error::{ProfError, ProfResult};
 use crate::AllocStats;
 use jemalloc_ctl::{stats, Epoch as JeEpoch};
 use jemallocator::ffi::malloc_stats_print;
-use libc::{self, c_char, c_uint, c_void, size_t};
+use libc::{self, c_char, c_void};
 use std::{io, ptr, slice};
 
 pub type Allocator = jemallocator::Jemalloc;
@@ -30,18 +30,6 @@ pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
     // Stats are cached. Need to advance epoch to refresh.
     JeEpoch::new()?.advance()?;
 
-    let mut dirty_page_cnt: c_uint = 0 as c_uint;
-    let mut c_uint_len: size_t = std::mem::size_of::<c_uint>() as size_t;
-    unsafe {
-        let _r = jemalloc_sys::mallctl(
-            &b"stats.arenas.4096.pdirty\0"[0] as *const _ as *const c_char,
-            &mut dirty_page_cnt as *mut _ as *mut c_void,
-            &mut c_uint_len as *mut _,
-            std::ptr::null_mut(),
-            0,
-        );
-    }
-
     Ok(Some(vec![
         ("allocated", stats::allocated()?),
         ("active", stats::active()?),
@@ -49,12 +37,11 @@ pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
         ("resident", stats::resident()?),
         ("mapped", stats::mapped()?),
         ("retained", stats::retained()?),
-        ("dirty", dirty_page_cnt as usize * 4096),
         (
-            "fragmentation",
-            stats::resident()?
-                - (stats::allocated()? + stats::metadata()? + dirty_page_cnt as usize * 4096),
+            "dirty",
+            stats::resident()? - stats::active()? - stats::metadata()?,
         ),
+        ("fragmentation", stats::active()? - stats::allocated()?),
     ]))
 }
 
