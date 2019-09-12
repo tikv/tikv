@@ -19,11 +19,6 @@ pub trait BatchExecutor: Send {
     type StorageStats;
 
     /// Gets the schema of the output.
-    ///
-    /// Provides an `Arc` instead of a pure reference to make it possible to share this schema in
-    /// multiple executors. Actually the schema is only possible to be shared in executors, but it
-    /// requires the ability to store a reference to a field in the same structure. There are other
-    /// solutions so far but looks like `Arc` is the simplest one.
     fn schema(&self) -> &[FieldType];
 
     /// Pulls next several rows of data (stored by column).
