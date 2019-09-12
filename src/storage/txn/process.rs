@@ -415,9 +415,7 @@ fn process_read_impl<E: Engine>(
                         )),
                     })
                 }
-                None => {
-                    Ok(ProcessResult::MvccStartTs { mvcc: None })
-                },
+                None => Ok(ProcessResult::MvccStartTs { mvcc: None }),
             }
         }
         // Scans locks with timestamp <= `max_ts`

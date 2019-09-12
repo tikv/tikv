@@ -7,11 +7,6 @@ use prometheus::local::LocalHistogramVec;
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
 pub struct PerfStatisticsFields {
-    // pub internal_key_skipped_count: usize,
-    // pub internal_delete_skipped_count: usize,
-    // pub block_cache_hit_count: usize,
-    // pub block_read_count: usize,
-    // pub block_read_byte: usize,
     pub user_key_comparison_count: usize, // total number of user key comparisons
     pub block_cache_hit_count: usize,     // total number of block cache hits
     pub block_read_count: usize,          // total number of block reads (with IO)
