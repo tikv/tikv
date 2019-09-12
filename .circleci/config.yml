@@ -144,4 +144,5 @@ workflows:
   version: 2
   ci-test:
       jobs:
-        - test
+        # The test job is deprecated.
+        # - test
