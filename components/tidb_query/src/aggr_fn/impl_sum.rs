@@ -33,8 +33,8 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
 
         assert_eq!(aggr_def.get_tp(), ExprType::Sum);
 
-        // SUM outputs one column.
-        out_schema.push(aggr_def.take_field_type());
+        let out_ft = aggr_def.take_field_type();
+        let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
 
         // Rewrite expression, inserting CAST if necessary. See `typeInfer4Sum` in TiDB.
         let child = aggr_def.take_children().into_iter().next().unwrap();
@@ -45,6 +45,15 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
 
         let rewritten_eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
+        if out_et != rewritten_eval_type {
+            return Err(other_err!(
+                "Unexpected return field type {}",
+                out_ft.as_accessor().tp()
+            ));
+        }
+
+        // SUM outputs one column.
+        out_schema.push(out_ft);
         out_exp.push(exp);
 
         // Choose a type-aware SUM implementation based on the eval type after rewriting exp.
@@ -193,5 +202,20 @@ mod tests {
         state.push_result(&mut ctx, &mut aggr_result).unwrap();
 
         assert_eq!(aggr_result[0].as_real_slice(), &[Real::new(54.5).ok()]);
+    }
+
+    #[test]
+    fn test_illegal_request() {
+        let expr = ExprDefBuilder::aggr_func(ExprType::Sum, FieldTypeTp::Double) // Expect NewDecimal but give Double
+            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong)) // FIXME: This type can be incorrect as well
+            .build();
+        AggrFnDefinitionParserSum.check_supported(&expr).unwrap();
+
+        let src_schema = [FieldTypeTp::LongLong.into()];
+        let mut schema = vec![];
+        let mut exp = vec![];
+        AggrFnDefinitionParserSum
+            .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .unwrap_err();
     }
 }
