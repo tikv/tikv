@@ -773,7 +773,10 @@ impl ConvertTo<f64> for &[u8] {
                 Ok(val)
             }
             // if reaches here, it means our code has bug
-            Err(err) => Err(box_err!("parse float err: {}, this is a bug", err)),
+            Err(err) => {
+                debug_assert!(false);
+                Err(box_err!("parse float err: {}, this is a bug", err))
+            }
         }
     }
 }

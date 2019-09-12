@@ -650,13 +650,13 @@ impl Duration {
         self.format("")
     }
 
-    /// If the error is overflow, the result will return true,
-    /// otherwise, only one of result or err will be returned
+    /// If the error is overflow, the result will be returned, too.
+    /// Otherwise, only one of result or err will be returned
     pub fn from_i64_without_ctx(mut n: i64, fsp: u8) -> (Option<Duration>, Option<Error>) {
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
             let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
-            return (Some(max), Some(Error::overflow("Duration", &n.to_string())));
+            return (Some(max), Some(Error::overflow("Duration", n)));
         }
 
         let negative = n < 0;
@@ -685,27 +685,21 @@ impl Duration {
 
     pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: u8) -> Result<Duration> {
         let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
-        match err {
-            Some(e) => {
+        err.map_or_else(
+            || {
+                debug_assert!(dur.is_some());
+                dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
+            },
+            |e| {
                 if e.is_overflow() {
                     ctx.handle_overflow_err(e)?;
-                    if let Some(d) = dur {
-                        Ok(d)
-                    } else {
-                        Err(box_err!("Expect a not none result here, this is a bug"))
-                    }
+                    debug_assert!(dur.is_some());
+                    dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
                 } else {
                     Err(e)
                 }
-            }
-            None => {
-                if let Some(d) = dur {
-                    Ok(d)
-                } else {
-                    Err(box_err!("Expect a not none result here, this is a bug"))
-                }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -724,7 +718,9 @@ impl ConvertTo<Decimal> for Duration {
     /// Port from TiDB' Duration::ToNumber
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        self.to_numeric_string().parse()
+        let r = self.to_numeric_string().parse::<Decimal>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
     }
 }
 
