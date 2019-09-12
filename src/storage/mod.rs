@@ -4397,4 +4397,120 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
     }
+
+    #[test]
+    fn test_check_txn_status() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let k = Key::from_raw(b"k");
+        let v = b"b".to_vec();
+
+        let ts = mvcc::compose_ts;
+
+        // No lock and no commit info. Gets nothing.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(10, 0),
+                ts(12, 0),
+                ts(15, 0),
+                expect_value_callback(tx.clone(), 0, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v.clone()))],
+                k.as_encoded().to_vec(),
+                ts(10, 0),
+                options.clone(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If lock exists and not expired, returns the lock's TTL.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(10, 0),
+                ts(12, 0),
+                ts(15, 0),
+                expect_value_callback(tx.clone(), 0, (100, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // TODO: Check the lock's min_commit_ts field.
+
+        storage
+            .async_commit(
+                Context::default(),
+                vec![k.clone()],
+                ts(10, 0),
+                ts(20, 0),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If the transaction is committed, returns the commit_ts.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(10, 0),
+                ts(12, 0),
+                ts(15, 0),
+                expect_value_callback(tx.clone(), 0, (0, ts(20, 0))),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v))],
+                k.as_encoded().to_vec(),
+                ts(25, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If the lock has expired, cleanup it and return nothing.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(25, 0),
+                ts(126, 0),
+                ts(127, 0),
+                expect_value_callback(tx.clone(), 0, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_commit(
+                Context::default(),
+                vec![k.clone()],
+                ts(25, 0),
+                ts(28, 0),
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
 }

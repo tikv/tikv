@@ -20,6 +20,17 @@ use std::io;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
+pub const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
+
+// Extracts physical part of a timestamp, in milliseconds.
+pub fn extract_physical(ts: u64) -> u64 {
+    ts >> TSO_PHYSICAL_SHIFT_BITS
+}
+
+pub fn compose_ts(physical: u64, logical: u64) -> u64 {
+    (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
+}
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {

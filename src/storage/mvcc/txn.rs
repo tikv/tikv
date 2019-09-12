@@ -4,7 +4,7 @@ use super::lock::{Lock, LockType};
 use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
-use super::{Error, Result};
+use super::{extract_physical, Error, Result};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -13,13 +13,6 @@ use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
-
-const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
-
-// Extracts physical part of a timestamp, in milliseconds.
-fn extract_physical(ts: u64) -> u64 {
-    ts >> TSO_PHYSICAL_SHIFT_BITS
-}
 
 pub struct GcInfo {
     pub found_versions: usize,
@@ -748,7 +741,6 @@ mod tests {
 
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::txn::TSO_PHYSICAL_SHIFT_BITS;
     use crate::storage::mvcc::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{
@@ -1744,7 +1736,7 @@ mod tests {
 
         let (k, v) = (b"k1", b"v1");
 
-        let ts = |physical: u64, logical: u64| (physical << TSO_PHYSICAL_SHIFT_BITS) + logical;
+        let ts = super::super::compose_ts;
 
         // Try to check a not exist thing.
         must_check_txn_status(&engine, k, ts(8, 0), ts(12, 0), ts(13, 0), 0, 0);
