@@ -8,8 +8,8 @@ use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use super::{Error, Result};
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
-    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationEncoder, Json, JsonEncoder, Time,
-    TimeEncoder,
+    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationEncoder, Json, JsonDecoder,
+    JsonEncoder, Time, TimeEncoder,
 };
 use crate::codec::Datum;
 
@@ -319,7 +319,7 @@ impl Column {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
         let mut data = &self.data[start..end];
-        Json::decode(&mut data)
+        data.decode_json()
     }
 
     /// Return the total rows in the column.

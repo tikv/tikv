@@ -416,6 +416,7 @@ mod tests {
 
     use crate::codec::datum::{self, Datum};
     use tikv_util::collections::{HashMap, HashSet};
+    use tikv_util::map;
 
     use super::*;
 

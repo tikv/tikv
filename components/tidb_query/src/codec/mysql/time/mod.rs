@@ -98,12 +98,16 @@ fn ymd_hms_nanos<T: TimeZone>(
         })
 }
 
+// Safety: caller must ensure `bs` is valid utf8.
 #[inline]
-fn from_bytes(bs: &[u8]) -> &str {
-    unsafe { str::from_utf8_unchecked(bs) }
+unsafe fn from_bytes(bs: &[u8]) -> &str {
+    str::from_utf8_unchecked(bs)
 }
 
-fn split_ymd_hms_with_frac_as_s(
+// Safety: caller must ensure each byte of `s` and `frac` is a valid unicode
+// character (i.e., `s` and `frac` may be sliced at any index and should give
+// a valid unicode string).
+unsafe fn split_ymd_hms_with_frac_as_s(
     mut s: &[u8],
     frac: &[u8],
 ) -> Result<(i32, u32, u32, u32, u32, u32)> {
@@ -136,7 +140,8 @@ fn split_ymd_hms_with_frac_as_s(
     Ok((year, month, day, hour, minute, secs))
 }
 
-fn split_ymd_with_frac_as_hms(
+// Safety: caller must ensure `s` and `frac` are valid ascii.
+unsafe fn split_ymd_with_frac_as_hms(
     mut s: &[u8],
     frac: &[u8],
     is_float: bool,
@@ -357,12 +362,14 @@ impl Time {
                 need_adjust = s1.len() != 14 && s1.len() != 8;
                 has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
                 match s1.len() {
-                    14 | 12 | 11 | 10 | 9 => {
+                    // Safety: `s1` and `frac_str` must be ascii strings.
+                    14 | 12 | 11 | 10 | 9 => unsafe {
                         split_ymd_hms_with_frac_as_s(s1.as_bytes(), frac_str.as_bytes())?
-                    }
-                    8 | 6 | 5 => {
+                    },
+                    // Safety: `s1` and `frac_str` must be ascii strings.
+                    8 | 6 | 5 => unsafe {
                         split_ymd_with_frac_as_hms(s1.as_bytes(), frac_str.as_bytes(), is_float)?
-                    }
+                    },
                     _ => {
                         return Err(box_err!(
                             "invalid datetime: {}, s1: {}, len: {}",
@@ -531,12 +538,12 @@ impl Time {
         let diff = i64::from(nanos) - i64::from(expect_nanos);
         let new_time = self.time.checked_add_signed(Duration::nanoseconds(diff));
 
-        if new_time.is_none() {
-            Err(box_err!("round_frac {} overflows", self.time))
-        } else {
-            self.time = new_time.unwrap();
+        if let Some(new_time) = new_time {
+            self.time = new_time;
             self.fsp = fsp;
             Ok(())
+        } else {
+            Err(box_err!("round_frac {} overflows", self.time))
         }
     }
 
@@ -898,8 +905,6 @@ impl<T: std::io::Write> TimeEncoder for T {}
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
     fn encode_time(&mut self, v: &Time) -> Result<()> {
-        use num::ToPrimitive;
-
         if !v.is_zero() {
             self.encode_u16(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
@@ -923,8 +928,6 @@ pub trait TimeEncoder: NumberEncoder {
 impl Time {
     /// `decode` decodes time encoded by `encode_time` for Chunk format.
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
-        use num_traits::FromPrimitive;
-
         let year = i32::from(number::decode_u16(data)?);
         let (month, day, hour, minute, second) = if data.len() >= 5 {
             (
