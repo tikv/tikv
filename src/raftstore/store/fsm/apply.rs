@@ -553,9 +553,9 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
 
     // When write batch contains more than `recommended` keys, write the batch
     // to engine.
-//    if kv_wb_keys >= WRITE_BATCH_MAX_KEYS {
-//        return true;
-//    }
+    //    if kv_wb_keys >= WRITE_BATCH_MAX_KEYS {
+    //        return true;
+    //    }
 
     // Some commands may modify keys covered by the current write batch, so we
     // must write the current write batch to the engine first.
@@ -2624,8 +2624,10 @@ impl ApplyFsm {
                 apply_ctx.timer = Some(SlowTimer::new());
             }
             if apply_ctx.kv_wbs.is_empty() {
-                apply_ctx.kv_wbs.push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
-				apply_ctx.kv_wb = 0;
+                apply_ctx
+                    .kv_wbs
+                    .push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                apply_ctx.kv_wb = 0;
             }
             self.delegate
                 .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
@@ -2995,38 +2997,38 @@ mod tests {
     #[test]
     fn test_should_write_to_engine() {
         // ComputeHash command
-//        let mut req = RaftCmdRequest::new();
-//        req.mut_admin_request()
-//            .set_cmd_type(AdminCmdType::ComputeHash);
-//        let wb = WriteBatch::new();
-//        assert_eq!(should_write_to_engine(&req, wb.count()), true);
-//
-//        // IngestSST command
-//        let mut req = Request::new();
-//        req.set_cmd_type(CmdType::IngestSST);
-//        req.set_ingest_sst(IngestSSTRequest::new());
-//        let mut cmd = RaftCmdRequest::new();
-//        cmd.mut_requests().push(req);
-//        let wb = WriteBatch::new();
-//        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
-//
-//        // Write batch keys reach WRITE_BATCH_MAX_KEYS
-//        let req = RaftCmdRequest::new();
-//        let wb = WriteBatch::new();
-//        for i in 0..WRITE_BATCH_MAX_KEYS {
-//            let key = format!("key_{}", i);
-//            wb.put(key.as_bytes(), b"value").unwrap();
-//        }
-//        assert_eq!(should_write_to_engine(&req, wb.count()), true);
-//
-//        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
-//        let req = RaftCmdRequest::new();
-//        let wb = WriteBatch::new();
-//        for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
-//            let key = format!("key_{}", i);
-//            wb.put(key.as_bytes(), b"value").unwrap();
-//        }
-//        assert_eq!(should_write_to_engine(&req, wb.count()), false);
+        //        let mut req = RaftCmdRequest::new();
+        //        req.mut_admin_request()
+        //            .set_cmd_type(AdminCmdType::ComputeHash);
+        //        let wb = WriteBatch::new();
+        //        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+        //
+        //        // IngestSST command
+        //        let mut req = Request::new();
+        //        req.set_cmd_type(CmdType::IngestSST);
+        //        req.set_ingest_sst(IngestSSTRequest::new());
+        //        let mut cmd = RaftCmdRequest::new();
+        //        cmd.mut_requests().push(req);
+        //        let wb = WriteBatch::new();
+        //        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
+        //
+        //        // Write batch keys reach WRITE_BATCH_MAX_KEYS
+        //        let req = RaftCmdRequest::new();
+        //        let wb = WriteBatch::new();
+        //        for i in 0..WRITE_BATCH_MAX_KEYS {
+        //            let key = format!("key_{}", i);
+        //            wb.put(key.as_bytes(), b"value").unwrap();
+        //        }
+        //        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+        //
+        //        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
+        //        let req = RaftCmdRequest::new();
+        //        let wb = WriteBatch::new();
+        //        for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
+        //            let key = format!("key_{}", i);
+        //            wb.put(key.as_bytes(), b"value").unwrap();
+        //        }
+        //        assert_eq!(should_write_to_engine(&req, wb.count()), false);
     }
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
