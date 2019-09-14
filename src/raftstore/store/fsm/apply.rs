@@ -540,7 +540,7 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_count: usize) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -554,9 +554,9 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_keys: usize) -> bool {
 
     // When write batch contains more than `recommended` keys, write the batch
     // to engine.
-    //    if kv_wb_keys >= WRITE_BATCH_MAX_KEYS {
-    //        return true;
-    //    }
+    if kv_wb_count >= 16 {
+        return true;
+    }
 
     // Some commands may modify keys covered by the current write batch, so we
     // must write the current write batch to the engine first.
@@ -805,7 +805,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb().count()) || apply_ctx.kv_wb > 16 {
+            if should_write_to_engine(&cmd, apply_ctx.kv_wbs.len()) {
                 apply_ctx.commit(self);
             }
             apply_ctx.check_switch_write_batch();
