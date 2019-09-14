@@ -435,7 +435,7 @@ fn test_serde_custom_tikv_config() {
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         enable_multithread_write: false,
-        memtable_write_pool_size: 2,
+        memtable_write_pool_size: 0,
         defaultcf: RaftDefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
