@@ -230,6 +230,7 @@ impl WaiterManager {
         detector_scheduler: DetectorScheduler,
         cfg: &Config,
     ) -> Self {
+        assert_eq!(has_waiter.load(Ordering::Relaxed), false);
         Self {
             wait_table: Rc::new(RefCell::new(WaitTable::new(has_waiter))),
             detector_scheduler,
@@ -487,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_table_is_empty() {
+    fn test_has_waiter() {
         let has_waiter = Arc::new(AtomicBool::new(false));
         let mut wait_table = WaitTable::new(Arc::clone(&has_waiter));
         assert_eq!(has_waiter.load(Ordering::Relaxed), false);
@@ -508,6 +509,7 @@ mod tests {
 
     #[test]
     fn test_waiter_manager() {
+        use kvproto::kvrpcpb::LockInfo;
         use std::sync::mpsc;
         use tikv_util::worker::FutureWorker;
 
@@ -523,13 +525,20 @@ mod tests {
         let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 
-        // timeout
         let (tx, rx) = mpsc::channel();
-        let cb = Box::new(move |result| {
-            tx.send(result).unwrap();
-        });
-        let pr = ProcessResult::Res;
-        waiter_mgr_scheduler.wait_for(0, StorageCb::Boolean(cb), pr, Lock { ts: 0, hash: 0 });
+        let storage_callback = |tx: mpsc::Sender<_>| {
+            StorageCb::Boolean(Box::new(move |result| {
+                tx.send(result).unwrap();
+            }))
+        };
+
+        // timeout
+        waiter_mgr_scheduler.wait_for(
+            0,
+            storage_callback(tx.clone()),
+            ProcessResult::Res,
+            Lock { ts: 0, hash: 0 },
+        );
         assert_eq!(
             rx.recv_timeout(Duration::from_millis(2000))
                 .unwrap()
@@ -538,21 +547,59 @@ mod tests {
         );
 
         // wake-up
-        let (tx, rx) = mpsc::channel();
-        let cb = Box::new(move |result| {
-            tx.send(result).unwrap();
-        });
-        waiter_mgr_scheduler.wait_for(
-            0,
-            StorageCb::Boolean(cb),
-            ProcessResult::Res,
-            Lock { ts: 0, hash: 1 },
-        );
-        waiter_mgr_scheduler.wake_up(0, vec![3, 1, 2], 1);
-        assert!(rx
-            .recv_timeout(Duration::from_millis(500))
-            .unwrap()
-            .is_err());
+        let mut txns = vec![2, 1, 0];
+        for &txn_ts in &txns {
+            waiter_mgr_scheduler.wait_for(
+                txn_ts,
+                storage_callback(tx.clone()),
+                ProcessResult::Res,
+                Lock {
+                    ts: 0,
+                    hash: txn_ts,
+                },
+            );
+        }
+        waiter_mgr_scheduler.wake_up(0, txns.clone(), 1);
+        // Transaction with smaller start_ts should be waken up earlier.
+        txns.sort();
+        for txn in txns {
+            let res = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+            match res {
+                Err(StorageError::Txn(TxnError::Mvcc(MvccError::WriteConflict {
+                    start_ts,
+                    ..
+                }))) => assert_eq!(start_ts, txn),
+
+                _ => panic!("unexpected result"),
+            };
+        }
+
+        // deadlock
+        let txn_start_ts = 0;
+        let lock = Lock { ts: 1, hash: 2 };
+        let pr = ProcessResult::MultiRes {
+            results: vec![Err(StorageError::from(TxnError::from(
+                MvccError::KeyIsLocked(LockInfo::default()),
+            )))],
+        };
+        waiter_mgr_scheduler.wait_for(txn_start_ts, storage_callback(tx.clone()), pr, lock);
+        let deadlock_hash = 3;
+        waiter_mgr_scheduler.deadlock(txn_start_ts, lock, deadlock_hash);
+        let res = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        match res {
+            Err(StorageError::Txn(TxnError::Mvcc(MvccError::Deadlock {
+                start_ts,
+                lock_ts,
+                deadlock_key_hash,
+                ..
+            }))) => {
+                assert_eq!(start_ts, txn_start_ts);
+                assert_eq!(lock_ts, lock.ts);
+                assert_eq!(deadlock_key_hash, deadlock_hash);
+            }
+
+            _ => panic!("unexpected result"),
+        };
     }
 
     #[test]

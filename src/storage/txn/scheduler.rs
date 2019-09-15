@@ -162,7 +162,7 @@ struct SchedulerInner<L: LockMgr> {
 
 #[inline]
 fn id_index(cid: u64) -> usize {
-    cid as usize % TASKS_SLOTS_NUM
+    cid as usize & (TASKS_SLOTS_NUM - 1)
 }
 
 impl<L: LockMgr> SchedulerInner<L> {

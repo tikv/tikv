@@ -79,10 +79,7 @@ impl RpcClient {
     }
 
     /// Gets given key's Region and Region's leader from PD.
-    pub fn get_region_and_leader(
-        &self,
-        key: &[u8],
-    ) -> Result<(metapb::Region, Option<metapb::Peer>)> {
+    fn get_region_and_leader(&self, key: &[u8]) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
             .start_coarse_timer();
