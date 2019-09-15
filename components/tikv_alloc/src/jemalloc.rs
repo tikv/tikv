@@ -64,7 +64,6 @@ mod tests {
 #[cfg(feature = "mem-profiling")]
 mod profiling {
     use std::ffi::CString;
-    use std::ptr;
 
     use jemallocator;
     use libc::c_char;
@@ -74,23 +73,6 @@ mod profiling {
     // C string should end with a '\0'.
     const PROF_ACTIVE: &'static [u8] = b"prof.active\0";
     const PROF_DUMP: &'static [u8] = b"prof.dump\0";
-
-    struct DumpPathGuard(Option<Vec<u8>>);
-
-    impl DumpPathGuard {
-        fn from_cstring(s: Option<CString>) -> DumpPathGuard {
-            DumpPathGuard(s.map(|s| s.into_bytes_with_nul()))
-        }
-
-        /// caller should ensure that the pointer should not be accessed after
-        /// the guard is dropped.
-        #[inline]
-        unsafe fn get_mut_ptr(&mut self) -> *mut c_char {
-            self.0
-                .as_mut()
-                .map_or(ptr::null_mut(), |v| v.as_mut_ptr() as *mut c_char)
-        }
-    }
 
     pub fn activate_prof() -> ProfResult<()> {
         info!("start profiler");
@@ -115,12 +97,11 @@ mod profiling {
     }
 
     /// Dump the profile to the `path`.
-    ///
-    /// If `path` is `None`, will dump it in the working directory with an auto-generated name.
     pub fn dump_prof(path: &str) -> ProfResult<()> {
         // TODO: return errors in this function
-        let mut c_path = DumpPathGuard::from_cstring(Some(CString::new(path).unwrap()));
-        let res = unsafe { jemallocator::mallctl_set(PROF_DUMP, c_path.get_mut_ptr()) };
+        let mut bytes = CString::new(path).unwrap().into_bytes_with_nul();
+        let ptr = bytes.as_mut_ptr() as *mut c_char;
+        let res = unsafe { jemallocator::mallctl_set(PROF_DUMP, ptr) };
         match res {
             Err(e) => {
                 error!("failed to dump the profile to {:?}: {}", path, e);

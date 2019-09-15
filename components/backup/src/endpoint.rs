@@ -10,6 +10,7 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
+use engine::rocks::util::io_limiter::IOLimiter;
 use engine::DB;
 use external_storage::*;
 use futures::sync::mpsc::*;
@@ -42,7 +43,7 @@ pub struct Task {
     start_ts: u64,
     end_ts: u64,
 
-    storage: Arc<dyn ExternalStorage>,
+    storage: LimitedStorage,
     pub(crate) resp: UnboundedSender<BackupResponse>,
 
     cancel: Arc<AtomicBool>,
@@ -64,24 +65,36 @@ impl fmt::Debug for Task {
     }
 }
 
+#[derive(Clone)]
+struct LimitedStorage {
+    limiter: Option<Arc<IOLimiter>>,
+    storage: Arc<dyn ExternalStorage>,
+}
+
 impl Task {
     /// Create a backup task based on the given backup request.
     pub fn new(
         req: BackupRequest,
         resp: UnboundedSender<BackupResponse>,
     ) -> Result<(Task, Arc<AtomicBool>)> {
-        let start_key = req.get_start_key().to_owned();
-        let end_key = req.get_end_key().to_owned();
-        let start_ts = req.get_start_version();
-        let end_ts = req.get_end_version();
-        let storage = create_storage(req.get_path())?;
         let cancel = Arc::new(AtomicBool::new(false));
+
+        let limiter = if req.get_rate_limit() != 0 {
+            Some(Arc::new(IOLimiter::new(req.get_rate_limit() as _)))
+        } else {
+            None
+        };
+        let storage = LimitedStorage {
+            storage: create_storage(req.get_path())?,
+            limiter,
+        };
+
         Ok((
             Task {
-                start_key,
-                end_key,
-                start_ts,
-                end_ts,
+                start_key: req.get_start_key().to_owned(),
+                end_key: req.get_end_key().to_owned(),
+                start_ts: req.get_start_version(),
+                end_ts: req.get_end_version(),
                 resp,
                 storage,
                 cancel: cancel.clone(),
@@ -193,7 +206,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         brange: BackupRange,
         start_ts: u64,
         end_ts: u64,
-        storage: Arc<dyn ExternalStorage>,
+        storage: LimitedStorage,
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
     ) {
         // TODO: support incremental backup
@@ -232,7 +245,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 .unwrap();
             let mut batch = EntryBatch::with_capacity(1024);
             let name = backup_file_name(store_id, &brange.region);
-            let mut writer = match BackupWriter::new(db, &name) {
+            let mut writer = match BackupWriter::new(db, &name, storage.limiter) {
                 Ok(w) => w,
                 Err(e) => {
                     error!("backup writer failed"; "error" => ?e);
@@ -259,7 +272,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 .with_label_values(&["scan"])
                 .observe(start.elapsed().as_secs_f64());
             // Save sst files to storage.
-            let files = match writer.save(&storage) {
+            let files = match writer.save(&storage.storage) {
                 Ok(files) => files,
                 Err(e) => {
                     error!("backup save file failed"; "error" => ?e);
@@ -361,6 +374,9 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
             self.handle_backup_task(task);
         } else {
             // TODO: support incremental backup
+            BACKUP_RANGE_ERROR_VEC
+                .with_label_values(&["incremental"])
+                .inc();
             error!("incremental backup is not supported yet");
         }
     }
@@ -556,6 +572,10 @@ pub mod tests {
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
                 let ls = LocalStorage::new(tmp.path()).unwrap();
+                let storage = LimitedStorage {
+                    storage: Arc::new(ls) as _,
+                    limiter: None,
+                };
                 let (tx, rx) = unbounded();
                 let task = Task {
                     start_key: start_key.to_vec(),
@@ -563,7 +583,7 @@ pub mod tests {
                     start_ts: 1,
                     end_ts: 1,
                     resp: tx,
-                    storage: Arc::new(ls),
+                    storage,
                     cancel: Arc::default(),
                 };
                 endpoint.handle_backup_task(task);
@@ -651,6 +671,7 @@ pub mod tests {
         }
 
         // TODO: check key number for each snapshot.
+        let limiter = Arc::new(IOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
         for (ts, len) in backup_tss {
             let mut req = BackupRequest::new();
             req.set_start_key(vec![]);
@@ -666,7 +687,16 @@ pub mod tests {
                 "local://{}",
                 tmp.path().join(format!("{}", ts)).display()
             ));
-            let (task, _) = Task::new(req, tx).unwrap();
+            if len % 2 == 0 {
+                req.set_rate_limit(10 * 1024 * 1024);
+            }
+            let (mut task, _) = Task::new(req, tx).unwrap();
+            if len % 2 == 0 {
+                // Make sure the rate limiter is set.
+                assert!(task.storage.limiter.is_some());
+                // Share the same rate limiter.
+                task.storage.limiter = Some(limiter.clone());
+            }
             endpoint.handle_backup_task(task);
             let (resp, rx) = rx.into_future().wait().unwrap();
             let resp = resp.unwrap();
@@ -808,6 +838,39 @@ pub mod tests {
         endpoint.handle_backup_task(task);
         check_response(rx, |resp| {
             assert!(resp.is_none());
+        });
+    }
+
+    #[test]
+    fn test_busy() {
+        let (_tmp, endpoint) = new_endpoint();
+        let engine = endpoint.engine.clone();
+
+        endpoint
+            .region_info
+            .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
+
+        let mut req = BackupRequest::new();
+        req.set_start_key(vec![]);
+        req.set_end_key(vec![]);
+        req.set_start_version(1);
+        req.set_end_version(1);
+        req.set_path("noop://foo".to_owned());
+
+        let (tx, rx) = unbounded();
+        let (task, _) = Task::new(req.clone(), tx).unwrap();
+        // Pause the engine 6 seconds to trigger Timeout error.
+        // The Timeout error is translated to server is busy.
+        engine.pause(Duration::from_secs(6));
+        endpoint.handle_backup_task(task);
+        check_response(rx, |resp| {
+            let resp = resp.unwrap();
+            assert!(resp.get_error().has_region_error(), "{:?}", resp);
+            assert!(
+                resp.get_error().get_region_error().has_server_is_busy(),
+                "{:?}",
+                resp
+            );
         });
     }
 

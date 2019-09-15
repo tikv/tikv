@@ -214,7 +214,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 let statistics = if readonly {
                     self.process_read(snapshot, task)
                 } else {
-                    with_tls_engine(|engine| self.process_write(engine, snapshot, task))
+                    // Safety: `self.sched_pool` ensures a TLS engine exists.
+                    unsafe { with_tls_engine(|engine| self.process_write(engine, snapshot, task)) }
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
@@ -269,8 +270,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if lock_info.is_some() {
-                    let (lock, is_first_lock) = lock_info.unwrap();
+                if let Some(lock_info) = lock_info {
+                    let (lock, is_first_lock) = lock_info;
                     Msg::WaitForLock {
                         cid,
                         start_ts: ts,

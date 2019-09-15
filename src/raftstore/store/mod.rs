@@ -3,7 +3,7 @@
 pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
-pub use ::keys;
+pub use keys;
 pub mod msg;
 pub mod transport;
 pub mod util;

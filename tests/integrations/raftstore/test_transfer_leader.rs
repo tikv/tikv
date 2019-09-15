@@ -94,6 +94,9 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
             if let Some(leader) = cluster.leader_of_region(1) {
                 if leader.get_id() == id {
+                    // make sure new leader apply an entry on its term
+                    // so we can use its local reader safely
+                    cluster.must_put(b"k1", b"v1");
                     break;
                 }
             }
