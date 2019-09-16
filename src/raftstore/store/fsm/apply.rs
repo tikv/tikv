@@ -336,6 +336,12 @@ impl ApplyContext {
         }
     }
 
+    pub fn callback_size(&self) -> usize {
+        let mut count = 0;
+        self.cbs.iter().map(|cb| count += cb.cbs.len());
+        return count;
+    }
+
     /// Prepares for applying entries for `delegate`.
     ///
     /// A general apply progress for a delegate is:
@@ -540,7 +546,7 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_count: usize) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_count: usize, kv_count: usize) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -554,7 +560,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, kv_wb_count: usize) -> bool {
 
     // When write batch contains more than `recommended` keys, write the batch
     // to engine.
-    if kv_wb_count >= 16 {
+    if kv_wb_count >= 16 && kv_count >= WRITE_BATCH_MAX_KEYS {
         return true;
     }
 
@@ -805,7 +811,8 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.kv_wbs.len()) {
+            // if should_write_to_engine(&cmd, apply_ctx.kv_wb, apply_ctx.kv_wb().count()) || (apply_ctx.kv_wb > 1 && apply_ctx.callback_size() >= 96) {
+            if should_write_to_engine(&cmd, apply_ctx.kv_wb, apply_ctx.kv_wb().count()) {
                 apply_ctx.commit(self);
             }
             apply_ctx.check_switch_write_batch();
