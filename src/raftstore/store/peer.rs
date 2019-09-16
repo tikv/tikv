@@ -1319,7 +1319,7 @@ impl Peer {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (ctx.lease_time.unwrap_or_else(monotonic_raw_now) - propose_time)
+                            (ctx.current_time.unwrap_or_else(monotonic_raw_now) - propose_time)
                                 .to_std()
                                 .unwrap(),
                         ));
@@ -1711,10 +1711,10 @@ impl Peer {
         cb: Callback,
     ) {
         // Try to renew leader lease on every consistent read/write request.
-        if poll_ctx.lease_time.is_none() {
-            poll_ctx.lease_time = Some(monotonic_raw_now());
+        if poll_ctx.current_time.is_none() {
+            poll_ctx.current_time = Some(monotonic_raw_now());
         }
-        meta.renew_lease_time = poll_ctx.lease_time;
+        meta.renew_lease_time = poll_ctx.current_time;
 
         if !cb.is_none() {
             let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
