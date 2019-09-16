@@ -398,6 +398,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 self.out_most_executor.schema(),
                                 data,
                             )?;
+                            chunks.push(chunk);
                         }
                         EncodeType::TypeArrow => {
                             result.physical_columns.encode_to_chunk(
@@ -407,11 +408,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 data,
                                 &self.config.tz,
                             )?;
+                            batchdata.extend_from_slice(data);
                         }
                     }
-                    batchdata.extend_from_slice(data);
                 }
-                chunks.push(chunk);
             }
 
             if is_drained {
