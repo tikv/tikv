@@ -1123,41 +1123,22 @@ mod tests {
                         .map(|x| x.as_ref().map(|x| x.to_string()));
                     let pd_res_log = pd_res.as_ref().map(|x| x.to_string());
                     let log = format!(
-                        "test_func_name: {}, \
+                            "test_func_name: {}, \
                          input: {}, base_res: {}, \
                          origin_flen: {}, origin_decimal: {}, \
                          res_flen: {}, res_decimal: {}, \
                          in_union: {}, is_unsigned: {}, in_dml: {}, in_dml_flag: {:?}, \
                          cond: {:?}, sign: {:?}, res_type: {:?}, \
                          overflow_as_warning: {}, truncate_as_warning: {}, expect_warning_err_code: {:?} \
-                         expect: {}, expect_from_produce_dec_with_specified_tp: {:?}, result: {:?}",
-                        func_name, input_as_debug_str_func(&input), base_res,
-                        origin_flen, origin_decimal,
-                        res_flen, res_decimal,
-                        in_union, is_unsigned, in_dml, in_dml_flag,
-                        cond, sign, res_type,
-                        overflow_as_warning, truncate_as_warning, warning_err_code,
-                        expect.to_string(), pd_res_log, cast_func_res_log
-                    );
-
-                    if pd_res.is_err() {
-                        println!("{}", log);
-                    }
-                    if &expect != pd_res.as_ref().unwrap() {
-                        println!(
-                            "expect: {:?}, pd_res: {:?}",
-                            expect,
-                            pd_res.as_ref().unwrap()
+                         expect: {}, expect_from_produce_dec_with_specified_tp(this is just for debug): {:?}, result: {:?}",
+                            func_name, input_as_debug_str_func(&input), base_res,
+                            origin_flen, origin_decimal,
+                            res_flen, res_decimal,
+                            in_union, is_unsigned, in_dml, in_dml_flag,
+                            cond, sign, res_type,
+                            overflow_as_warning, truncate_as_warning, warning_err_code,
+                            expect.to_string(), pd_res_log, cast_func_res_log
                         );
-                    }
-                    assert!(pd_res.is_ok(), "{}", log);
-                    assert_eq!(
-                        expect, pd_res.unwrap(),
-                        "the expect decimal is not same as decimal constructed \
-                         by base_dec with produce_dec_with_specified_tp, this is the bug of this test function, \
-                         the log of this case is: {}",
-                        log
-                    );
 
                     check_result(Some(&expect), &cast_func_res, log.as_str());
                     check_warning(&ctx, warning_err_code, log.as_str());
@@ -1166,6 +1147,9 @@ mod tests {
         }
     }
 
+    // These test depend on the correctness of
+    // Decimal::from(u64), Decimal::from(i64), Decimal::from_f64(), Decimal::from_bytes()
+    // Decimal::zero(), Decimal::round, max_or_min_dec, max_decimal
     #[test]
     fn test_unsigned_int_as_signed_or_unsigned_decimal() {
         test_none_with_ctx_and_extra(cast_unsigned_int_as_signed_or_unsigned_decimal);
