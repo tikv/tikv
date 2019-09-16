@@ -143,7 +143,8 @@ impl<S: Snapshot> BackwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
+                        match super::super::util::check_lock(&current_user_key, self.cfg.ts, &lock)?
+                        {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
                             CheckLockResult::Ignored(ts) => get_ts = ts,

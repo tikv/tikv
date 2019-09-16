@@ -155,7 +155,8 @@ impl Peekable for RegionSnapshot {
             self.region.get_end_key(),
         )?;
         self.data_key_init(key);
-        self.snap.get_value(&self.key_builder_buf.borrow().as_ref().unwrap().as_slice())
+        self.snap
+            .get_value(&self.key_builder_buf.borrow().as_ref().unwrap().as_slice())
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
@@ -166,7 +167,10 @@ impl Peekable for RegionSnapshot {
             self.region.get_end_key(),
         )?;
         self.data_key_init(key);
-        self.snap.get_value_cf(cf, &self.key_builder_buf.borrow().as_ref().unwrap().as_slice())
+        self.snap.get_value_cf(
+            cf,
+            &self.key_builder_buf.borrow().as_ref().unwrap().as_slice(),
+        )
     }
 }
 
@@ -207,12 +211,11 @@ fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     }
 }
 
-
 fn data_buf_key<'a>(buf_key: &'a mut Option<Vec<u8>>, key: &[u8]) -> &'a Vec<u8> {
     match buf_key {
         None => {
             *buf_key = Some(keys::data_key(key));
-        },
+        }
         Some(ref mut buf) => {
             buf.clear();
             keys::data_key_ref(key, buf);
