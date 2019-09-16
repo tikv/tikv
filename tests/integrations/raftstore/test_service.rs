@@ -517,7 +517,10 @@ fn test_split_region() {
                 .unwrap()
         })
         .collect();
-    assert_eq!(result_split_keys, vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec(), b"e".to_vec()]);
+    assert_eq!(
+        result_split_keys,
+        vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec(), b"e".to_vec()]
+    );
 }
 
 #[test]
