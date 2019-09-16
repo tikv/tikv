@@ -192,9 +192,13 @@ pub fn validate_data_key(key: &[u8]) -> bool {
 
 pub fn data_key(key: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(DATA_PREFIX_KEY.len() + key.len());
-    v.extend_from_slice(DATA_PREFIX_KEY);
-    v.extend_from_slice(key);
+    data_key_ref(key, &mut v);
     v
+}
+
+pub fn data_key_ref(key: &[u8], cleared_key_buf: &mut Vec<u8>) {
+    cleared_key_buf.extend_from_slice(DATA_PREFIX_KEY);
+    cleared_key_buf.extend_from_slice(key);
 }
 
 pub fn origin_key(key: &[u8]) -> &[u8] {
