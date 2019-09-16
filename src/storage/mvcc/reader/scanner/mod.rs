@@ -3,7 +3,6 @@
 mod backward;
 mod forward;
 mod txn_entry;
-mod util;
 
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
