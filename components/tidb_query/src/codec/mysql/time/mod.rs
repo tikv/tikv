@@ -938,9 +938,10 @@ pub trait TimeDecoder: NumberDecoder {
             u32::from(buf[4]),
         );
         let nanoseconds = 1000 * self.read_u32()?;
+        let buf = self.read_bytes(2)?;
         let (tp, fsp) = (
-            FieldTypeTp::from_u8(self.read_u8()?).unwrap_or(FieldTypeTp::Unspecified),
-            self.read_u8()?,
+            FieldTypeTp::from_u8(buf[0]).unwrap_or(FieldTypeTp::Unspecified),
+            buf[1],
         );
         let tz = Tz::utc(); // TODO
         if year == 0
