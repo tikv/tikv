@@ -186,6 +186,7 @@ impl LazyBatchColumn {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn ensure_all_decoded(&mut self, time_zone: &Tz, field_type: &FieldType) -> Result<()> {
         let logical_rows: Vec<_> = (0..self.len()).collect();
         self.ensure_decoded(time_zone, field_type, &logical_rows)

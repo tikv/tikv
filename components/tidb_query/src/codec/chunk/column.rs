@@ -41,7 +41,6 @@ impl Column {
             | FieldTypeTp::Year
             | FieldTypeTp::Double
             | FieldTypeTp::Duration => {
-                //TODO:no Datum::F32
                 Column::new_fixed_len(8, init_cap)
             }
 
