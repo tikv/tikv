@@ -18,8 +18,6 @@
 // FIXME: ditto. probably a result of the above
 #![allow(clippy::no_effect)]
 
-#[macro_use(slog_error, slog_warn, slog_debug)]
-extern crate slog;
 #[macro_use(error, debug, warn)]
 extern crate slog_global;
 #[macro_use(box_err, box_try, try_opt)]

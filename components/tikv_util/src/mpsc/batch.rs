@@ -24,6 +24,9 @@ struct State {
 impl State {
     fn new(notify_size: usize) -> State {
         State {
+            // Any pointer that is put into `recv_task` must be a valid and owned
+            // pointer (it must not be dropped). When a pointer is retrieved from
+            // `recv_task`, the user is responsible for its proper destruction.
             recv_task: AtomicPtr::new(null_mut()),
             notify_size,
             pending: AtomicUsize::new(0),
@@ -44,6 +47,7 @@ impl State {
         let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
         if !t.is_null() {
             self.pending.store(0, Ordering::Release);
+            // Safety: see comment on `recv_task`.
             let t = unsafe { Box::from_raw(t) };
             t.notify();
         }
@@ -58,10 +62,21 @@ impl State {
         let t = Box::into_raw(Box::new(task::current()));
         let origin = self.recv_task.swap(t, Ordering::AcqRel);
         if !origin.is_null() {
+            // Safety: see comment on `recv_task`.
             unsafe { drop(Box::from_raw(origin)) };
             return true;
         }
         false
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
+        if !t.is_null() {
+            // Safety: see comment on `recv_task`.
+            unsafe { drop(Box::from_raw(t)) };
+        }
     }
 }
 

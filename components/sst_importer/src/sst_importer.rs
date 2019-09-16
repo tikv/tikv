@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
-use uuid::Uuid;
+use uuid::{Builder as UuidBuilder, Uuid};
 
 use engine::rocks::util::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 use engine::rocks::{IngestExternalFileOptions, DB};
@@ -278,7 +278,7 @@ const SST_SUFFIX: &str = ".sst";
 fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}{}",
-        Uuid::from_bytes(meta.get_uuid())?,
+        UuidBuilder::from_slice(meta.get_uuid())?.build(),
         meta.get_region_id(),
         meta.get_region_epoch().get_conf_ver(),
         meta.get_region_epoch().get_version(),
@@ -315,7 +315,7 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::import::test_helpers::*;
+    use crate::test_helpers::*;
 
     use engine::rocks::util::new_engine;
     use tempfile::Builder;
