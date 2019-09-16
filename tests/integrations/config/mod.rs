@@ -189,7 +189,7 @@ fn test_serde_custom_tikv_config() {
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
         enable_multithread_write: true,
-        memtable_write_pool_size: 2,
+        memtable_write_pool_size: 0,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),

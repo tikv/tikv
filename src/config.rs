@@ -710,7 +710,7 @@ impl Default for DbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             enable_multithread_write: true,
-            memtable_write_pool_size: 2,
+            memtable_write_pool_size: 0,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
