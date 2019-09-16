@@ -336,11 +336,9 @@ impl ApplyContext {
         }
     }
 
-    pub fn callback_size(&self) -> usize {
-        let mut count = 0;
-        self.cbs.iter().map(|cb| count += cb.cbs.len());
-        return count;
-    }
+    //    pub fn callback_size(&self) -> usize {
+    //        self.cbs.iter().fold(0, |count, cb| count + cb.cbs.len())
+    //    }
 
     /// Prepares for applying entries for `delegate`.
     ///
