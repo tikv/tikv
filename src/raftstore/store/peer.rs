@@ -787,7 +787,7 @@ impl Peer {
     }
 
     /// Steps the raft message.
-    pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
+    pub fn step(&mut self, mut m: eraftpb::Message) -> Result<()> {
         fail_point!(
             "step_message_3_1",
             { self.peer.get_store_id() == 3 && self.region_id == 1 },
@@ -801,6 +801,22 @@ impl Peer {
             // As another role know we're not missing.
             self.leader_missing_time.take();
         }
+        // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
+        // request directly, rather than send a heartbeat to check quorum.
+        let msg_type = m.get_msg_type();
+        if msg_type == MessageType::MsgReadIndex {
+            if let LeaseState::Valid = self.inspect_lease() {
+                let mut resp = eraftpb::Message::default();
+                resp.set_msg_type(MessageType::MsgReadIndexResp);
+                resp.to = m.from;
+                resp.index = self.get_store().committed_index();
+                resp.set_entries(m.take_entries());
+
+                self.pending_messages.push(resp);
+                return Ok(());
+            }
+        }
+
         self.raft_group.step(m)?;
         Ok(())
     }
@@ -1898,7 +1914,7 @@ impl Peer {
 
     fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
         ctx.raft_metrics.propose.local_read += 1;
-        cb.invoke_read(self.handle_read(ctx, req, false, None))
+        cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
     }
 
     fn pre_read_index(&self) -> Result<()> {
