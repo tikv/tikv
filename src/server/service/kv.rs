@@ -275,6 +275,38 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         ctx.spawn(future);
     }
 
+    fn kv_txn_heart_beat(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: TxnHeartBeatRequest,
+        sink: UnarySink<TxnHeartBeatResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .kv_txn_heart_beat
+            .start_coarse_timer();
+        let future = future_txn_heart_beat(&self.storage, req)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "kv_txn_heart_beat",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
+    fn kv_check_txn_status(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: CheckTxnStatusRequest,
+        _sink: UnarySink<CheckTxnStatusResponse>,
+    ) {
+        unimplemented!();
+    }
+
     fn kv_scan_lock(
         &mut self,
         ctx: RpcContext<'_>,
@@ -1136,6 +1168,16 @@ fn handle_batch_commands_request<E: Engine, L: LockMgr>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
+        Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC
+                .kv_check_txn_status
+                .start_coarse_timer();
+            let resp = future_txn_heart_beat(&storage, req)
+                .map(oneof!(batch_commands_response::response::Cmd::TxnHeartBeat))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
+        Some(batch_commands_request::request::Cmd::CheckTxnStatus(_)) => unimplemented!(),
         Some(batch_commands_request::request::Cmd::ScanLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
             let resp = future_scan_lock(&storage, req)
@@ -1536,6 +1578,35 @@ fn future_batch_rollback<E: Engine, L: LockMgr>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(extract_key_error(&e));
+        }
+        resp
+    })
+}
+
+fn future_txn_heart_beat<E: Engine, L: LockMgr>(
+    storage: &Storage<E, L>,
+    mut req: TxnHeartBeatRequest,
+) -> impl Future<Item = TxnHeartBeatResponse, Error = Error> {
+    let primary_key = Key::from_raw(req.get_primary_lock());
+
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_txn_heart_beat(
+        req.take_context(),
+        primary_key,
+        req.get_start_version(),
+        req.get_advise_lock_ttl(),
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = TxnHeartBeatResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((ttl, _)) => resp.set_lock_ttl(ttl),
+                Err(e) => resp.set_error(extract_key_error(&e)),
+            }
         }
         resp
     })
