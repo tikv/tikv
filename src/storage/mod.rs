@@ -2703,6 +2703,7 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
+                0,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -2713,6 +2714,7 @@ mod tests {
                 Context::default(),
                 Key::from_raw(b"x"),
                 100,
+                0,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2720,6 +2722,53 @@ mod tests {
         expect_none(
             storage
                 .async_get(Context::default(), Key::from_raw(b"x"), 105)
+                .wait(),
+        );
+
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        let ts = mvcc::compose_ts;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec()))],
+                b"x".to_vec(),
+                ts(110, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                Key::from_raw(b"x"),
+                ts(110, 0),
+                ts(120, 0),
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { info })) => {
+                        assert_eq!(info.get_lock_ttl(), 100)
+                    }
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                Key::from_raw(b"x"),
+                ts(110, 0),
+                ts(220, 0),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            storage
+                .async_get(Context::default(), Key::from_raw(b"x"), ts(230, 0))
                 .wait(),
         );
     }
