@@ -2,8 +2,11 @@
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
+use crate::codec::data_type::VectorValue;
 use crate::codec::Datum;
 use std::io::Write;
+use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::FieldTypeFlag;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 use tipb::FieldType;
@@ -54,6 +57,90 @@ impl Chunk {
     #[inline]
     pub fn append_datum(&mut self, col_idx: usize, v: &Datum) -> Result<()> {
         self.columns[col_idx].append_datum(v)
+    }
+
+    /// Append a datum from vec to the column
+    #[inline]
+    pub fn append_vec(
+        &mut self,
+        row_index: usize,
+        field_type: &FieldType,
+        vec: &VectorValue,
+        column_index: usize,
+    ) -> Result<()> {
+        match vec {
+            VectorValue::Int(ref vec) => match &vec[row_index] {
+                None => {
+                    self.append_datum(column_index, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    if field_type
+                        .as_accessor()
+                        .flag()
+                        .contains(FieldTypeFlag::UNSIGNED)
+                    {
+                        self.append_datum(column_index, &Datum::U64(*val as u64))
+                            .unwrap();
+                    } else {
+                        self.append_datum(column_index, &Datum::I64(*val)).unwrap();
+                    }
+                }
+            },
+            VectorValue::Real(ref vec) => match &vec[row_index] {
+                None => {
+                    self.append_datum(column_index, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    self.append_datum(column_index, &Datum::F64(f64::from(*val)))
+                        .unwrap();
+                }
+            },
+            VectorValue::Decimal(ref vec) => match &vec[row_index] {
+                None => {
+                    self.append_datum(column_index, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    self.append_datum(column_index, &Datum::Dec(val.clone()))
+                        .unwrap();
+                }
+            },
+            VectorValue::Bytes(ref vec) => match &vec[row_index] {
+                None => {
+                    self.append_datum(column_index, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    self.append_datum(column_index, &Datum::Bytes(val.clone()))
+                        .unwrap();
+                }
+            },
+            VectorValue::DateTime(ref vec) => match &vec[row_index] {
+                None => {
+                    self.append_datum(column_index, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    self.append_datum(column_index, &Datum::Time(val.clone()))
+                        .unwrap();
+                }
+            },
+            VectorValue::Duration(ref vec) => match &vec[row_index] {
+                None => {
+                    self.append_datum(column_index, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    self.append_datum(column_index, &Datum::Dur(*val)).unwrap();
+                }
+            },
+            VectorValue::Json(ref vec) => match &vec[row_index] {
+                None => {
+                    self.append_datum(column_index, &Datum::Null).unwrap();
+                }
+                Some(val) => {
+                    self.append_datum(column_index, &Datum::Json(val.clone()))
+                        .unwrap();
+                }
+            },
+        }
+        Ok(())
     }
 
     /// Get the Row in the chunk with the row index.

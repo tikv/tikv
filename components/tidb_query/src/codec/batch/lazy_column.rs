@@ -6,7 +6,6 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::FieldType;
 
 use super::BufferVec;
-use crate::codec::chunk::Chunk;
 use crate::codec::data_type::VectorValue;
 use crate::codec::mysql::Tz;
 use crate::codec::raw_datum::RawDatumDecoder;
@@ -214,21 +213,6 @@ impl LazyBatchColumn {
                 Ok(())
             }
             LazyBatchColumn::Decoded(ref v) => v.encode(row_index, field_type, output),
-        }
-    }
-
-    pub fn append_to_chunk(
-        &self,
-        row_index: usize,
-        field_type: &FieldType,
-        chunk: &mut Chunk,
-        column_index: usize,
-    ) -> Result<()> {
-        match self {
-            LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
-            LazyBatchColumn::Decoded(ref v) => {
-                v.append_to_chunk(row_index, field_type, chunk, column_index)
-            }
         }
     }
 }

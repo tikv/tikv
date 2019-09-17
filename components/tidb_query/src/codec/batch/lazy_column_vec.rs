@@ -148,8 +148,7 @@ impl LazyBatchColumnVec {
         for offset in output_offsets {
             let offset = *offset as usize;
             let col = &mut self.columns[offset];
-            col.ensure_decoded(time_zone, &schema[offset], logical_rows.as_ref())
-                .unwrap();
+            col.ensure_decoded(time_zone, &schema[offset], logical_rows.as_ref())?;
         }
 
         // Step 2 : Make the chunk and append data.
@@ -161,12 +160,17 @@ impl LazyBatchColumnVec {
         }
         let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len());
 
-        for idx in logical_rows.as_ref() {
-            for column_index in 0..output_offsets.len() {
-                let idx = *idx as usize;
-                let offset = output_offsets[column_index] as usize;
+        for row_idx in logical_rows.as_ref() {
+            for column_idx in 0..output_offsets.len() {
+                let row_idx = *row_idx as usize;
+                let offset = output_offsets[column_idx] as usize;
                 let col = &self.columns[offset];
-                col.append_to_chunk(idx, &schema[offset], &mut chunk, column_index)?;
+                match col {
+                    LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
+                    LazyBatchColumn::Decoded(ref v) => {
+                        chunk.append_vec(row_idx, &schema[offset], v, column_idx)?;
+                    }
+                }
             }
         }
 
