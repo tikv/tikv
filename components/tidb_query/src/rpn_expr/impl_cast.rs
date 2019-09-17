@@ -13,9 +13,10 @@ use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
 use crate::codec::Error;
-use crate::expr::{EvalContext, Flag};
+use crate::expr::{EvalContext, EvalWarnings, Flag};
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
+use std::num::IntErrorKind;
 
 fn get_cast_fn_rpn_meta(
     from_field_type: &FieldType,
@@ -26,10 +27,10 @@ fn get_cast_fn_rpn_meta(
     let func_meta = match (from, to) {
         // any as int
         (EvalType::Int, EvalType::Int) => {
-            if !to_field_type.is_unsigned() {
-                cast_int_as_int_fn_meta()
+            if !from_field_type.is_unsigned() && to_field_type.is_unsigned() {
+                cast_signed_int_as_unsigned_int_fn_meta()
             } else {
-                cast_int_as_uint_fn_meta()
+                cast_int_as_int_others_fn_meta()
             }
         }
         (EvalType::Real, EvalType::Int) => {
@@ -173,21 +174,12 @@ fn in_union(implicit_args: &[ScalarValue]) -> bool {
 // - cast_duration_as_int_or_uint -> cast_any_as_any<Duration, Int>
 // - cast_json_as_int -> cast_any_as_any<Json, Int>
 
-// this include cast_signed_or_unsigned_int_to_int
-#[rpn_fn]
-#[inline]
-fn cast_int_as_int(val: &Option<Int>) -> Result<Option<i64>> {
-    match val {
-        None => Ok(None),
-        Some(val) => Ok(Some(*val)),
-    }
-}
-
-// this include cast_signed_or_unsigned_int_to_uint,
-// only signed int to uint has special case.
 #[rpn_fn(capture = [extra])]
 #[inline]
-fn cast_int_as_uint(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Option<i64>> {
+fn cast_signed_int_as_unsigned_int(
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<i64>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -198,6 +190,15 @@ fn cast_int_as_uint(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Opt
                 Ok(Some(val))
             }
         }
+    }
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_int_as_int_others(val: &Option<Int>) -> Result<Option<i64>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Some(*val)),
     }
 }
 
@@ -215,13 +216,102 @@ fn cast_real_as_uint(
             if in_union(&extra.implicit_args) && val < 0f64 {
                 Ok(Some(0))
             } else {
-                // FIXME, mysql's double to unsigned is very special,
+                // FIXME: mysql's double to unsigned is very special,
                 //  it **seems** that if the float num bigger than i64::MAX,
                 //  then return i64::MAX always.
                 //  This may be the bug of mysql.
                 //  So I don't change ours' behavior here.
                 let val: u64 = val.convert(ctx)?;
                 Ok(Some(val as i64))
+            }
+        }
+    }
+}
+
+fn cast_string_as_int_or_uint_helper(
+    ctx: &mut EvalContext,
+    val: &str,
+    is_str_neg: bool,
+    is_res_unsigned: bool,
+) -> Result<Option<i64>> {
+    let mut ctx_clone = EvalContext {
+        cfg: ctx.cfg.clone(),
+        warnings: EvalWarnings::new(10),
+    };
+    let valid_int_prefix = get_valid_int_prefix(&mut ctx_clone, val);
+    // check if there is any overflow err or warning,
+    // if there is, use handle_overflow_for_cast_string_as_int to handle it.
+    //
+    // TODO: TiDB's floatStrToIntStr will append a overflow warning when the intStr is too long.
+    //  So in this case, there will make strconv.ParseUint or strconv.ParseInt return err.
+    //  So in TiDB's impl, there are one overflow warning and one overflow err handled by
+    //  `handle_overflow_for_cast_string_as_int`(TiDB's version).
+    //  Then although its result is same as ours, it may has two overflow warning.
+    //  I think this is TiDB's bug. This comment is just for note.
+    let valid_int_prefix = match valid_int_prefix {
+        Ok(r) => {
+            let mut overflow_err = None;
+            for w in ctx_clone.warnings.warnings {
+                if w.get_code() == ERR_DATA_OUT_OF_RANGE {
+                    overflow_err = Some(w);
+                } else {
+                    ctx.warnings.append_tipb_err_type_warning(w);
+                }
+            }
+            if let Some(e) = overflow_err {
+                // cast tipb::Error to tidb_query::codec::error
+                let err = Error::Eval(e.get_msg().to_string(), ERR_DATA_OUT_OF_RANGE);
+                return handle_overflow_for_cast_string_as_int(ctx, err, is_str_neg, val).map(Some);
+            }
+            r
+        }
+        Err(e) => {
+            ctx.warnings.merge(&mut ctx_clone.warnings);
+            if e.is_overflow() {
+                return handle_overflow_for_cast_string_as_int(ctx, e, is_str_neg, val).map(Some);
+            } else {
+                return Err(e.into());
+            }
+        }
+    };
+    let parse_res = if !is_str_neg {
+        valid_int_prefix.parse::<u64>().map(|x| x as i64)
+    } else {
+        valid_int_prefix.parse::<i64>()
+    };
+    match parse_res {
+        Ok(x) => {
+            if !is_str_neg {
+                let x = x as u64;
+                if !is_res_unsigned && x > std::i64::MAX as u64 {
+                    ctx.warnings
+                        .append_warning(Error::cast_as_signed_overflow())
+                }
+            } else if is_res_unsigned {
+                ctx.warnings
+                    .append_warning(Error::cast_neg_int_as_unsigned());
+            }
+            Ok(Some(x as i64))
+        }
+        Err(e) => {
+            match e.kind() {
+                IntErrorKind::Overflow => {
+                    // FIXME: TiDB here construct err according to is_str_neg,
+                    //  however, it seems that we should according to is_res_unsigned.
+                    //  Fix this after fix TiDB's.
+                    let err = if is_str_neg {
+                        Error::overflow("BIGINT UNSIGNED", valid_int_prefix)
+                    } else {
+                        Error::overflow("BIGINT", valid_int_prefix)
+                    };
+                     handle_overflow_for_cast_string_as_int(
+                        ctx,
+                        err,
+                        is_str_neg,
+                        val,
+                    ).map(Some)
+                }
+                _ => Err(other_err!("in cast_string_as_int_or_uint_helper, parse string failed, the err is: {}, this is a bug", e))
             }
         }
     }
@@ -237,46 +327,24 @@ fn cast_string_as_int_or_uint(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO, in TiDB',s if `b.args[0].GetType().Hybrid()`,
+            // TODO: in TiDB, if `b.args[0].GetType().Hybrid()` || `IsBinaryLiteral(b.args[0])`,
             //  then it will return res from EvalInt() directly.
             let is_unsigned = extra.ret_field_type.is_unsigned();
             let val = get_valid_utf8_prefix(ctx, val.as_slice())?;
             let val = val.trim();
             let neg = val.starts_with('-');
             if !neg {
-                // FIXME, here we handle overflow in `convert`,
-                //  so here the err handle is not same as TiDB's
-                let r: crate::codec::error::Result<u64> = val.as_bytes().convert(ctx);
-                match r {
-                    Ok(x) => {
-                        if !is_unsigned && x > std::i64::MAX as u64 {
-                            ctx.warnings
-                                .append_warning(Error::cast_as_signed_overflow())
-                        }
-                        Ok(Some(x as i64))
-                    }
-                    Err(e) => handle_overflow_for_cast_string_as_int(ctx, e, false, val).map(Some),
-                }
+                cast_string_as_int_or_uint_helper(ctx, val, false, is_unsigned)
             } else if in_union(extra.implicit_args) && is_unsigned {
                 Ok(Some(0))
             } else {
-                let r: crate::codec::error::Result<i64> = val.as_bytes().convert(ctx);
-                match r {
-                    Ok(x) => {
-                        if is_unsigned {
-                            ctx.warnings
-                                .append_warning(Error::cast_neg_int_as_unsigned());
-                        }
-                        Ok(Some(x))
-                    }
-                    Err(e) => handle_overflow_for_cast_string_as_int(ctx, e, true, val).map(Some),
-                }
+                cast_string_as_int_or_uint_helper(ctx, val, true, is_unsigned)
             }
         }
     }
 }
 
-// FIXME, TiDB's this func can return err and res at the same time, however, we can't,
+// FIXME: TiDB's this func can return err and res at the same time, however, we can't,
 //  so it may be some inconsistency between this func and TiDB's
 fn handle_overflow_for_cast_string_as_int(
     ctx: &mut EvalContext,
@@ -285,9 +353,10 @@ fn handle_overflow_for_cast_string_as_int(
     origin_str: &str,
 ) -> Result<i64> {
     if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT) && err.is_overflow() {
-        // TODO, here our `handle_overflow_err` is not same as TiDB's HandleOverflow,
-        //  the latter will return `err` if OverflowAsWarning, but we will return `truncated_wrong_val`.
-        ctx.handle_overflow_err(Error::truncated_wrong_val("INTEGER", origin_str))?;
+        let e = ctx.handle_overflow_err(Error::truncated_wrong_val("INTEGER", origin_str));
+        if e.is_err() {
+            return Err(err.into());
+        }
         if is_neg {
             Ok(std::i64::MIN)
         } else {
@@ -308,7 +377,7 @@ fn cast_decimal_as_uint(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO, here TiDB round before call `val.is_negative()`
+            // TODO: here TiDB round before call `val.is_negative()`
             if in_union(extra.implicit_args) && val.is_negative() {
                 Ok(Some(0))
             } else {
@@ -342,7 +411,7 @@ fn cast_uint_as_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO, TiDB's uint to decimal seems has bug, fix this after fix TiDB's
+            // TODO: TiDB's uint to decimal seems has bug, fix this after fix TiDB's
             let dec = if in_union(extra.implicit_args) && *val < 0 {
                 Decimal::zero()
             } else {
@@ -400,7 +469,7 @@ fn cast_uint_as_real(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Op
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO, TiDB's here may has bug(val is uint, why it will <0 ?),
+            // TODO: TiDB's here may has bug(val is uint, why it will <0 ?),
             // fix this after TiDB's had fixed.
             if in_union(extra.implicit_args) && *val < 0 {
                 return Ok(Some(Real::new(0f64).unwrap()));
@@ -633,7 +702,7 @@ mod tests {
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
     ) -> EvalContext {
-        let mut flag: Flag = Flag::default();
+        let mut flag: Flag = Flag::empty();
         if overflow_as_warning {
             flag |= Flag::OVERFLOW_AS_WARNING;
         }
@@ -715,13 +784,56 @@ mod tests {
         }
     }
 
+    fn check_warning_2(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
+        // if ctx.warnings.warning_cnt != err_code.len() {
+        //     println!(
+        //         "ctx.warnings.warning_cnt != err_code.len(), log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
+        //         log, ctx.warnings.warnings, err_code
+        //     );
+        //     return;
+        // }
+        assert_eq!(
+            ctx.warnings.warning_cnt,
+            err_code.len(),
+            "{}, warnings: {:?}",
+            log,
+            ctx.warnings.warnings
+        );
+        for i in 0..err_code.len() {
+            let e1 = err_code[i];
+            let e2 = ctx.warnings.warnings[i].get_code();
+            // if e1 != e2 {
+            //     println!(
+            //         "err_code!=expect, log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
+            //         log, ctx.warnings.warnings, err_code
+            //     );
+            //     break;
+            // }
+            assert_eq!(
+                e1, e2,
+                "log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
+                log, ctx.warnings.warnings, err_code
+            );
+        }
+    }
+
     fn check_result<R: Debug + PartialEq>(expect: Option<&R>, res: &Result<Option<R>>, log: &str) {
         assert!(res.is_ok(), "{}", log);
         let res = res.as_ref().unwrap();
         if res.is_none() {
+            // if expect.is_some() {
+            //     println!("expect should be none, but it is some, log: {}", log);
+            // }
             assert!(expect.is_none(), "{}", log);
         } else {
             let res = res.as_ref().unwrap();
+            // if expect.unwrap() != res {
+            //     println!(
+            //         "expect.unwrap()==res: {}, log: {}",
+            //         expect.unwrap() == res,
+            //         log
+            //     );
+            // }
             assert_eq!(res, expect.unwrap(), "{}", log);
         }
     }
@@ -737,43 +849,43 @@ mod tests {
     // then should not set ctx with overflow_as_warning/truncated_as_warning flag,
     // and then if there is unexpected overflow/truncate,
     // then we will find them in `unwrap`
-
     #[test]
-    fn test_int_as_int() {
-        test_none_with_nothing(cast_int_as_int);
-
+    fn test_int_as_int_others() {
+        test_none_with_nothing(cast_int_as_int_others);
         let cs = vec![
             (i64::MAX, i64::MAX),
             (i64::MIN, i64::MIN),
             (u64::MAX as i64, u64::MAX as i64),
         ];
         for (input, expect) in cs {
-            let r = cast_int_as_int(&Some(input));
+            let r = cast_int_as_int_others(&Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
     }
 
     #[test]
-    fn test_int_as_uint() {
-        test_none_with_extra(cast_int_as_uint);
+    fn test_signed_int_as_unsigned_int() {
+        test_none_with_extra(cast_signed_int_as_unsigned_int);
 
         let cs = vec![
             // (origin, result, in_union)
+            // in union
             (-10, 0u64, true),
             (10, 10u64, true),
+            (i64::MIN, 0u64, true),
             (i64::MAX, i64::MAX as u64, true),
-            (u64::MAX as i64, 0u64, true),
+            // not in union
             (-10, (-10i64) as u64, false),
             (10, 10u64, false),
+            (i64::MIN, i64::MIN as u64, false),
             (i64::MAX, i64::MAX as u64, false),
-            (u64::MAX as i64, u64::MAX, false),
         ];
         for (input, expect, in_union) in cs {
             let rtf = make_ret_field_type(true);
             let ia = make_implicit_args(in_union);
             let extra = make_extra(&rtf, &ia);
-            let r = cast_int_as_uint(&extra, &Some(input));
+            let r = cast_signed_int_as_unsigned_int(&extra, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -904,69 +1016,95 @@ mod tests {
             }
         }
 
-        let cs: Vec<(&str, i64, Option<i32>, Cond)> = vec![
+        let cs: Vec<(&str, i64, Vec<i32>, Cond)> = vec![
             // (origin, expect, err_code, condition)
 
-            // branch 1
+            // has no prefix `-`
             (
                 " 9223372036854775807  ",
                 9223372036854775807i64,
-                None,
+                vec![],
                 Cond::None,
             ),
             (
                 "9223372036854775807",
                 9223372036854775807i64,
-                None,
+                vec![],
                 Cond::None,
             ),
             (
                 "9223372036854775808",
                 9223372036854775808u64 as i64,
-                Some(ERR_UNKNOWN),
+                vec![ERR_UNKNOWN],
                 Cond::None,
             ),
             (
                 "9223372036854775808",
                 9223372036854775808u64 as i64,
-                None,
+                vec![],
                 Cond::Unsigned,
             ),
-            // FIXME, in mysql, this case will return 18446744073709551615
+            (
+                " 9223372036854775807abc  ",
+                9223372036854775807i64,
+                vec![ERR_TRUNCATE_WRONG_VALUE],
+                Cond::None,
+            ),
+            (
+                "9223372036854775807abc",
+                9223372036854775807i64,
+                vec![ERR_TRUNCATE_WRONG_VALUE],
+                Cond::None,
+            ),
+            (
+                "9223372036854775808abc",
+                9223372036854775808u64 as i64,
+                vec![ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN],
+                Cond::None,
+            ),
+            (
+                "9223372036854775808abc",
+                9223372036854775808u64 as i64,
+                vec![ERR_TRUNCATE_WRONG_VALUE],
+                Cond::Unsigned,
+            ),
+            // TODO: there are some cases that has not be covered.
+
+            // FIXME: in mysql, this case will return 18446744073709551615
             //  and `show warnings` will show
             //  `| Warning | 1292 | Truncated incorrect INTEGER value: '18446744073709551616'`
             //  fix this cast_string_as_int_or_uint after fix TiDB's
             // ("18446744073709551616", 18446744073709551615 as i64, Some(ERR_TRUNCATE_WRONG_VALUE) , Cond::Unsigned)
-            // FIXME, our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
+            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
             // ("18446744073709551616", 18446744073709551615u64 as i64, Some(ERR_TRUNCATE_WRONG_VALUE), Cond::InSelectStmt),
 
-            // branch 2
-            ("-10", 0, None, Cond::InUnionAndUnsigned),
-            ("-9223372036854775808", 0, None, Cond::InUnionAndUnsigned),
-            // branch 3
-            ("-10", -10i64, None, Cond::None),
+            // has prefix `-` and in_union and unsigned
+            ("-10", 0, vec![], Cond::InUnionAndUnsigned),
+            ("-9223372036854775808", 0, vec![], Cond::InUnionAndUnsigned),
+            // has prefix `-` and not in_union or not unsigned
+            ("-10", -10i64, vec![], Cond::None),
             (
                 "-9223372036854775808",
                 -9223372036854775808i64,
-                None,
+                vec![],
                 Cond::None,
             ),
-            // FIXME, if not is select stmt, should has this err code ERR_DATA_OUT_OF_RANGE, too.
+            // FIXME: if not is select stmt, should has this err code ERR_DATA_OUT_OF_RANGE, too.
             // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::None),
-            // FIXME, our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
+            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
             // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::InSelectStmt),
-            ("-10", -10i64, Some(ERR_UNKNOWN), Cond::Unsigned),
-            // FIXME, our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
+            ("-10", -10i64, vec![ERR_UNKNOWN], Cond::Unsigned),
+            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
             // ("-9223372036854775808", -9223372036854775808i64, Some(ERR_UNKNOWN), Cond::Unsigned),
-            // FIXME, if not is select stmt, should has this err code ERR_DATA_OUT_OF_RANGE, too.
+            // FIXME: if not is select stmt, should has this err code ERR_DATA_OUT_OF_RANGE, too.
             // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::Unsigned),
-            // FIXME, our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
+            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
             // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::Unsigned),
         ];
 
         for (input, expect, err_code, cond) in cs {
             let mut ctx = if let Cond::InSelectStmt = cond {
-                let mut flag: Flag = Flag::default();
+                let mut flag: Flag = Flag::empty();
                 flag |= Flag::OVERFLOW_AS_WARNING;
                 flag |= Flag::TRUNCATE_AS_WARNING;
                 flag |= Flag::IN_SELECT_STMT;
@@ -987,7 +1125,7 @@ mod tests {
                 input, expect, err_code, cond, r
             );
             check_result(Some(&expect), &r, log.as_str());
-            check_warning(&ctx, err_code, log.as_str());
+            check_warning_2(&ctx, err_code, log.as_str());
         }
     }
 
@@ -1119,8 +1257,8 @@ mod tests {
 
     #[test]
     fn test_time_as_int_and_uint() {
-        // TODO, add more test case
-        // TODO, add test that make cast_any_as_any::<Time, Int> returning truncated error
+        // TODO: add more test case
+        // TODO: add test that make cast_any_as_any::<Time, Int> returning truncated error
         let cs: Vec<(Time, i64)> = vec![
             (
                 Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
@@ -1149,7 +1287,7 @@ mod tests {
 
     #[test]
     fn test_duration_as_int() {
-        // TODO, add more test case
+        // TODO: add more test case
         let cs: Vec<(Duration, i64)> = vec![
             (Duration::parse(b"17:51:04.78", 2).unwrap(), 175105),
             (Duration::parse(b"-17:51:04.78", 2).unwrap(), -175105),

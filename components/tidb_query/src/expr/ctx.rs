@@ -53,12 +53,6 @@ bitflags! {
     }
 }
 
-impl Default for Flag {
-    fn default() -> Self {
-        Flag { bits: 0 }
-    }
-}
-
 impl SqlMode {
     /// Returns if 'STRICT_TRANS_TABLES' or 'STRICT_ALL_TABLES' mode is set.
     pub fn is_strict(self) -> bool {
@@ -169,7 +163,7 @@ impl EvalConfig {
 }
 
 // Warning details caused in eval computation.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct EvalWarnings {
     // max number of warnings to return.
     max_warning_cnt: usize,
@@ -180,7 +174,7 @@ pub struct EvalWarnings {
 }
 
 impl EvalWarnings {
-    fn new(max_warning_cnt: usize) -> EvalWarnings {
+    pub fn new(max_warning_cnt: usize) -> EvalWarnings {
         EvalWarnings {
             max_warning_cnt,
             warning_cnt: 0,
@@ -192,6 +186,13 @@ impl EvalWarnings {
         self.warning_cnt += 1;
         if self.warnings.len() < self.max_warning_cnt {
             self.warnings.push(err.into());
+        }
+    }
+
+    pub fn append_tipb_err_type_warning(&mut self, err: tipb::Error) {
+        self.warning_cnt += 1;
+        if self.warnings.len() < self.max_warning_cnt {
+            self.warnings.push(err);
         }
     }
 
@@ -207,8 +208,8 @@ impl EvalWarnings {
     }
 }
 
-#[derive(Debug)]
 /// Some global variables needed in an evaluation.
+#[derive(Debug, Clone)]
 pub struct EvalContext {
     pub cfg: Arc<EvalConfig>,
     pub warnings: EvalWarnings,
