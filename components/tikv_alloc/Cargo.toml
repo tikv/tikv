@@ -15,7 +15,7 @@ mimalloc = ["mimallocator"]
 
 [dependencies]
 libc = "0.2"
-log = "0.3"
+log = "0.4"
 
 [dev-dependencies]
 tempfile = "3.0"

@@ -19,7 +19,7 @@ use tikv_util::codec::BytesSlice;
 
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use crate::codec::mysql::{self, Decimal, Json};
+use crate::codec::mysql::{self, Decimal};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -802,16 +802,21 @@ impl Time {
 }
 
 impl ConvertTo<f64> for Time {
+    /// This function should not return err,
+    /// if it return err, then the err is because of bug.
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         if self.is_zero() {
             return Ok(0f64);
         }
-        let f: f64 = box_try!(self.to_numeric_string().parse());
-        Ok(f)
+        let r = self.to_numeric_string().parse::<f64>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
     }
 }
 
 impl ConvertTo<Decimal> for Time {
+    // Port from TiDB's Time::ToNumber
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         if self.is_zero() {
@@ -822,22 +827,9 @@ impl ConvertTo<Decimal> for Time {
     }
 }
 
-impl ConvertTo<Json> for Time {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        let s = if self.time_type == TimeType::DateTime || self.time_type == TimeType::Timestamp {
-            // TODO: avoid this clone
-            let mut val = self.clone();
-            val.fsp = mysql::MAX_FSP as u8;
-            val.to_string()
-        } else {
-            self.to_string()
-        };
-        Ok(Json::String(s))
-    }
-}
-
 impl ConvertTo<MyDuration> for Time {
+    /// Port from TiDB's Time::ConvertToDuration
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<MyDuration> {
         if self.is_zero() {
             return Ok(MyDuration::zero());
@@ -905,8 +897,6 @@ impl<T: std::io::Write> TimeEncoder for T {}
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
     fn encode_time(&mut self, v: &Time) -> Result<()> {
-        use num::ToPrimitive;
-
         if !v.is_zero() {
             self.encode_u16(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
@@ -930,8 +920,6 @@ pub trait TimeEncoder: NumberEncoder {
 impl Time {
     /// `decode` decodes time encoded by `encode_time` for Chunk format.
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
-        use num_traits::FromPrimitive;
-
         let year = i32::from(number::decode_u16(data)?);
         let (month, day, hour, minute, second) = if data.len() >= 5 {
             (
