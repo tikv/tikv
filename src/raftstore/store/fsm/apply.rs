@@ -336,10 +336,6 @@ impl ApplyContext {
         }
     }
 
-    pub fn callback_size(&self) -> usize {
-        self.cbs.iter().fold(0, |count, cb| count + cb.cbs.len())
-    }
-
     /// Prepares for applying entries for `delegate`.
     ///
     /// A general apply progress for a delegate is:
@@ -809,9 +805,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.kv_wb, apply_ctx.kv_wb().count())
-                || (apply_ctx.kv_wb > 1 && apply_ctx.callback_size() >= 128)
-            {
+            if should_write_to_engine(&cmd, apply_ctx.kv_wb, apply_ctx.kv_wb().count()) {
                 apply_ctx.commit(self);
             }
             apply_ctx.check_switch_write_batch();
