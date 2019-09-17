@@ -225,14 +225,14 @@ impl VectorValue {
             // NullBitMap: (logical_rows.len()/8+1) bytes.  RowCount: 8 bytes.  NullCount: 8 bytes.
             VectorValue::Int(_) => Ok(logical_rows.len() * 8 + (logical_rows.len() / 8 + 1) + 16),
             VectorValue::Real(_) => Ok(logical_rows.len() * 8 + (logical_rows.len() / 8 + 1) + 16),
-            VectorValue::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1)
-                + (logical_rows.len() / 8 + 1)
-                + 16),
+            VectorValue::Decimal(_) => {
+                Ok(logical_rows.len() * DECIMAL_STRUCT_SIZE + (logical_rows.len() / 8 + 1) + 16)
+            }
             VectorValue::DateTime(_) => {
                 Ok(logical_rows.len() * 20 + (logical_rows.len() / 8 + 1) + 16)
             }
             VectorValue::Duration(_) => {
-                Ok(logical_rows.len() * 20 + (logical_rows.len() / 8 + 1) + 16)
+                Ok(logical_rows.len() * 8 + (logical_rows.len() / 8 + 1) + 16)
             }
             VectorValue::Bytes(vec) => {
                 let mut size = (logical_rows.len() / 8 + 1) + 16;
