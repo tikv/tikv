@@ -200,6 +200,7 @@ impl Time {
             (&input[..=fsp as usize], fsp + 1)
         };
 
+        // TODO: use TEN_POW instead.
         let frac = str_to_u32(input)? * 10u32.pow(6u32.checked_sub(len).unwrap_or(0));
         Ok(if round {
             let frac = if frac < 1_000_000 { frac * 10 } else { frac };
@@ -297,7 +298,7 @@ impl Time {
         Ok((carry, parts))
     }
 
-    pub fn parse_datetime(
+    pub fn parse(
         ctx: &mut EvalContext,
         input: &str,
         fsp: i8,
@@ -531,7 +532,7 @@ impl TimeValidator {
 
         let datetime =
             date.unwrap()
-                .and_hms_micro_opt(self.hour, self.minute, self.second, self.micro);
+            .and_hms_micro_opt(self.hour, self.minute, self.second, self.micro);
 
         if datetime.is_none() {
             handle_invalid_date!(self, ctx);
@@ -595,8 +596,8 @@ impl Time {
             TimeValidator::new(
                 year, month, day, hour, minute, second, micro, fsp, time_type,
             )
-            .check(ctx)
-            .map(Time::from)
+                .check(ctx)
+                .map(Time::from)
         } else {
             Err(Error::truncated())
         }
@@ -710,6 +711,7 @@ impl std::fmt::Display for Time {
             write!(
                 f,
                 ".{:0width$}",
+                // TODO: use TEN_POW instead.
                 self.microseconds() / 10u32.pow((6 - fsp) as u32),
                 width = fsp
             )?;
@@ -785,11 +787,11 @@ mod tests {
                 3,
                 false,
             ),
-        ];
+            ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
                 expected,
-                Time::parse_datetime(&mut ctx, actual, fsp, TimeType::DateTime, round)?.to_string()
+                Time::parse(&mut ctx, actual, fsp, TimeType::DateTime, round)?.to_string()
             );
         }
         Ok(())
