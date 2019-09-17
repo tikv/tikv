@@ -129,12 +129,14 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
 
 impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
-        let workers = ThreadPoolBuilder::new().name_prefix("backworker").build();
+        let workers = ThreadPoolBuilder::new()
+            .name_prefix("backworker")
+            .pool_size(8) // TODO: make it configure.
+            .build();
         Endpoint {
             store_id,
             engine,
             region_info,
-            // TODO: support more config.
             workers,
             db,
         }
@@ -314,7 +316,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             response.set_end_key(end_key.clone());
             match res {
                 Ok((mut files, stat)) => {
-                    info!("backup region finish";
+                    debug!("backup region finish";
                         "region" => ?brange.region,
                         "start_key" => hex::encode_upper(&start_key),
                         "end_key" => hex::encode_upper(&end_key),
