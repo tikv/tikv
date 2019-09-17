@@ -61,7 +61,10 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                 .on_tick(move || tls_flush(&reporter))
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
                 .before_stop(move || {
-                    destroy_tls_engine::<E>();
+                    // Safety: we call `set_` and `destroy_` with the same engine type.
+                    unsafe {
+                        destroy_tls_engine::<E>();
+                    }
                     tls_flush(&reporter2)
                 })
                 .build()
@@ -82,7 +85,8 @@ pub fn build_read_pool_for_test<E: Engine>(
             let engine = Arc::new(Mutex::new(engine.clone()));
             Builder::from_config(config)
                 .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                .before_stop(|| destroy_tls_engine::<E>())
+                // Safety: we call `set_` and `destroy_` with the same engine type.
+                .before_stop(|| unsafe { destroy_tls_engine::<E>() })
                 .build()
         })
         .collect()

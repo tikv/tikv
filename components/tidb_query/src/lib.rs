@@ -18,24 +18,10 @@
 // FIXME: ditto. probably a result of the above
 #![allow(clippy::no_effect)]
 
-#[macro_use]
-extern crate lazy_static;
-#[macro_use(slog_error, slog_warn, slog_debug)]
-extern crate slog;
-#[macro_use]
+#[macro_use(error, debug, warn)]
 extern crate slog_global;
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
-extern crate bitflags;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate failure;
-#[macro_use]
+#[macro_use(box_err, box_try, try_opt)]
 extern crate tikv_util;
-#[macro_use]
-extern crate match_template;
 
 #[cfg(test)]
 extern crate test;
