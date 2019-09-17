@@ -225,6 +225,93 @@ mod tests {
         assert_eq!(scan_result, expected);
     }
 
+    #[test]
+    fn test_scan_with_lock_and_write() {
+        let build_engine = || {
+            let engine = TestEngineBuilder::new().build().unwrap();
+            engine
+        };
+        let add_write_at_ts = |commit_ts, engine, key, value| {
+            must_prewrite_put(engine, key, value, key, commit_ts);
+            must_commit(engine, key, commit_ts, commit_ts);
+        };
+
+        let add_lock_at_ts = |lock_ts, engine, key| {
+            must_prewrite_put(engine, key, b"lock", key, lock_ts);
+            must_locked(engine, key, lock_ts);
+        };
+
+        // Lock after write
+        let engine = build_engine();
+
+        add_write_at_ts(5, &engine, b"a", b"a_value");
+        add_lock_at_ts(4, &engine, b"b");
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+
+        let scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+            .build()
+            .unwrap();
+        let expected_result = vec![
+            (b"a".to_vec(), Some(b"a_value".to_vec())),
+            (b"b".to_vec(), None),
+        ];
+        check_scan_result(scanner, &expected_result);
+
+        // Lock before write for same key
+        let engine = TestEngineBuilder::new().build().unwrap();
+        add_write_at_ts(4, &engine, b"a", b"a_value");
+        add_lock_at_ts(5, &engine, b"a");
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+
+        let scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+            .build()
+            .unwrap();
+        let expected_result = vec![(b"a".to_vec(), None)];
+        check_scan_result(scanner, &expected_result);
+
+        // Lock before write in different keys
+        let engine = TestEngineBuilder::new().build().unwrap();
+        add_lock_at_ts(5, &engine, b"a");
+        add_write_at_ts(4, &engine, b"b", b"b_value");
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+
+        let scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+            .build()
+            .unwrap();
+        let expected_result = vec![
+            (b"a".to_vec(), None),
+            (b"b".to_vec(), Some(b"b_value".to_vec())),
+        ];
+        check_scan_result(scanner, &expected_result);
+
+        // Only a lock here
+        let engine = TestEngineBuilder::new().build().unwrap();
+        add_lock_at_ts(4, &engine, b"a");
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+
+        let scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+            .build()
+            .unwrap();
+        let expected_result = vec![(b"a".to_vec(), None)];
+        check_scan_result(scanner, &expected_result);
+
+        // Write Only
+        let engine = TestEngineBuilder::new().build().unwrap();
+        add_write_at_ts(4, &engine, b"a", b"a_value");
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+
+        let scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+            .build()
+            .unwrap();
+        let expected_result = vec![(b"a".to_vec(), Some(b"a_value".to_vec()))];
+        check_scan_result(scanner, &expected_result);
+    }
+
     fn test_scan_with_lock_impl(desc: bool) {
         let engine = TestEngineBuilder::new().build().unwrap();
 
