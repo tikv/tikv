@@ -134,7 +134,7 @@ impl LazyBatchColumnVec {
     }
 
     /// Encode into arrow format.
-    pub fn encode_to_chunk(
+    pub fn encode_arrow(
         &mut self,
         logical_rows: impl AsRef<[usize]>,
         output_offsets: impl AsRef<[u32]>,
@@ -162,11 +162,11 @@ impl LazyBatchColumnVec {
         let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len());
 
         for idx in logical_rows.as_ref() {
-            for colcur in 0..output_offsets.len() {
+            for column_index in 0..output_offsets.len() {
                 let idx = *idx as usize;
-                let offset = output_offsets[colcur] as usize;
+                let offset = output_offsets[column_index] as usize;
                 let col = &self.columns[offset];
-                col.append_to_chunk(idx, &schema[offset], &mut chunk, colcur)?;
+                col.append_to_chunk(idx, &schema[offset], &mut chunk, column_index)?;
             }
         }
 

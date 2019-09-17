@@ -401,7 +401,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                             chunks.push(chunk);
                         }
                         EncodeType::TypeArrow => {
-                            result.physical_columns.encode_to_chunk(
+                            result.physical_columns.encode_arrow(
                                 &result.logical_rows,
                                 &self.output_offsets,
                                 self.out_most_executor.schema(),

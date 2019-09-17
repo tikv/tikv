@@ -336,12 +336,12 @@ impl VectorValue {
         row_index: usize,
         field_type: &FieldType,
         chunk: &mut Chunk,
-        colcur: usize,
+        column_index: usize,
     ) -> Result<()> {
         match self {
             VectorValue::Int(ref vec) => match &vec[row_index] {
                 None => {
-                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                    chunk.append_datum(column_index, &Datum::Null).unwrap();
                 }
                 Some(val) => {
                     if field_type
@@ -350,68 +350,68 @@ impl VectorValue {
                         .contains(FieldTypeFlag::UNSIGNED)
                     {
                         chunk
-                            .append_datum(colcur, &Datum::U64(*val as u64))
+                            .append_datum(column_index, &Datum::U64(*val as u64))
                             .unwrap();
                     } else {
-                        chunk.append_datum(colcur, &Datum::I64(*val)).unwrap();
+                        chunk.append_datum(column_index, &Datum::I64(*val)).unwrap();
                     }
                 }
             },
             VectorValue::Real(ref vec) => match &vec[row_index] {
                 None => {
-                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                    chunk.append_datum(column_index, &Datum::Null).unwrap();
                 }
                 Some(val) => {
                     chunk
-                        .append_datum(colcur, &Datum::F64(f64::from(*val)))
+                        .append_datum(column_index, &Datum::F64(f64::from(*val)))
                         .unwrap();
                 }
             },
             VectorValue::Decimal(ref vec) => match &vec[row_index] {
                 None => {
-                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                    chunk.append_datum(column_index, &Datum::Null).unwrap();
                 }
                 Some(val) => {
                     chunk
-                        .append_datum(colcur, &Datum::Dec(val.clone()))
+                        .append_datum(column_index, &Datum::Dec(val.clone()))
                         .unwrap();
                 }
             },
             VectorValue::Bytes(ref vec) => match &vec[row_index] {
                 None => {
-                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                    chunk.append_datum(column_index, &Datum::Null).unwrap();
                 }
                 Some(val) => {
                     chunk
-                        .append_datum(colcur, &Datum::Bytes(val.clone()))
+                        .append_datum(column_index, &Datum::Bytes(val.clone()))
                         .unwrap();
                 }
             },
             VectorValue::DateTime(ref vec) => match &vec[row_index] {
                 None => {
-                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                    chunk.append_datum(column_index, &Datum::Null).unwrap();
                 }
                 Some(val) => {
                     chunk
-                        .append_datum(colcur, &Datum::Time(val.clone()))
+                        .append_datum(column_index, &Datum::Time(val.clone()))
                         .unwrap();
                 }
             },
             VectorValue::Duration(ref vec) => match &vec[row_index] {
                 None => {
-                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                    chunk.append_datum(column_index, &Datum::Null).unwrap();
                 }
                 Some(val) => {
-                    chunk.append_datum(colcur, &Datum::Dur(*val)).unwrap();
+                    chunk.append_datum(column_index, &Datum::Dur(*val)).unwrap();
                 }
             },
             VectorValue::Json(ref vec) => match &vec[row_index] {
                 None => {
-                    chunk.append_datum(colcur, &Datum::Null).unwrap();
+                    chunk.append_datum(column_index, &Datum::Null).unwrap();
                 }
                 Some(val) => {
                     chunk
-                        .append_datum(colcur, &Datum::Json(val.clone()))
+                        .append_datum(column_index, &Datum::Json(val.clone()))
                         .unwrap();
                 }
             },

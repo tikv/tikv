@@ -222,12 +222,12 @@ impl LazyBatchColumn {
         row_index: usize,
         field_type: &FieldType,
         chunk: &mut Chunk,
-        colcur: usize,
+        column_index: usize,
     ) -> Result<()> {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
             LazyBatchColumn::Decoded(ref v) => {
-                v.append_to_chunk(row_index, field_type, chunk, colcur)
+                v.append_to_chunk(row_index, field_type, chunk, column_index)
             }
         }
     }

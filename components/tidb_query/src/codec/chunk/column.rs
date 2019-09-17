@@ -40,9 +40,7 @@ impl Column {
             | FieldTypeTp::LongLong
             | FieldTypeTp::Year
             | FieldTypeTp::Double
-            | FieldTypeTp::Duration => {
-                Column::new_fixed_len(8, init_cap)
-            }
+            | FieldTypeTp::Duration => Column::new_fixed_len(8, init_cap),
 
             FieldTypeTp::Float => Column::new_fixed_len(4, init_cap),
 
