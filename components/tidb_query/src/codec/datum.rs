@@ -14,7 +14,7 @@ use tikv_util::escape;
 
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Json,
-    JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+    JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{Error, Result};
 use crate::codec::convert::{ConvertTo, ToInt};
@@ -168,7 +168,7 @@ impl Datum {
             Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
             Datum::Time(ref t) => cmp_f64(t.convert(ctx)?, f),
-            Datum::Json(ref json) => Datum::F64(f).cmp_json(ctx, json),
+            Datum::Json(_) => Ok(Ordering::Less),
         }
     }
 
@@ -192,7 +192,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = bs.convert(ctx)?;
+                let f: f64 = bs.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -207,6 +207,7 @@ impl Datum {
                 Ok(d.cmp(dec))
             }
             _ => {
+                // FIXME: here is not same as TiDB's
                 let f = dec.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
@@ -233,7 +234,8 @@ impl Datum {
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
             _ => {
-                let f = time.convert(ctx)?;
+                let f: Decimal = time.convert(ctx)?;
+                let f: f64 = f.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -246,6 +248,7 @@ impl Datum {
             Datum::U64(d) => Json::U64(d).cmp(json),
             Datum::F64(d) => Json::Double(d).cmp(json),
             Datum::Dec(ref d) => {
+                // FIXME: it this same as TiDB's?
                 let ff = d.convert(ctx)?;
                 Json::Double(ff).cmp(json)
             }
@@ -268,9 +271,9 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => {
-                Some(!bs.is_empty() && bs.to_int(ctx, FieldTypeTp::LongLong)? != 0)
-            }
+            Datum::Bytes(ref bs) => Some(
+                !bs.is_empty() && <&[u8] as ConvertTo<i64>>::convert(&bs.as_slice(), ctx)? != 0,
+            ),
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
@@ -331,11 +334,13 @@ impl Datum {
             Datum::I64(i) => Ok(i),
             Datum::U64(u) => u.to_int(ctx, tp),
             Datum::F64(f) => f.to_int(ctx, tp),
-            Datum::Bytes(bs) => bs.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Time(t) => t.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Dur(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Dec(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Json(j) => j.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Bytes(bs) => bs.to_int(ctx, tp),
+            Datum::Time(t) => t.to_int(ctx, tp),
+            // FIXME: in Datum::Dur, to_int's error handle is not same as TiDB's
+            Datum::Dur(d) => d.to_int(ctx, tp),
+            // FIXME: in Datum::Dec, to_int's error handle is not same as TiDB's
+            Datum::Dec(d) => d.to_int(ctx, tp),
+            Datum::Json(j) => j.to_int(ctx, tp),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
@@ -404,7 +409,7 @@ impl Datum {
             Datum::Dur(d) => d.convert(&mut EvalContext::default()),
             d => match d.coerce_to_dec()? {
                 Datum::Dec(d) => Ok(d),
-                d => Err(box_err!("failed to conver {} to decimal", d)),
+                d => Err(box_err!("failed to convert {} to decimal", d)),
             },
         }
     }
@@ -467,7 +472,7 @@ impl Datum {
     /// Try its best effort to convert into a decimal datum.
     /// source function name is `ConvertDatumToDecimal`.
     fn coerce_to_dec(self) -> Result<Datum> {
-        let dec = match self {
+        let dec: Decimal = match self {
             Datum::I64(i) => i.into(),
             Datum::U64(u) => u.into(),
             Datum::F64(f) => {
@@ -802,7 +807,7 @@ pub fn decode_datum(data: &mut BytesSlice<'_>) -> Result<Datum> {
             DECIMAL_FLAG => data.decode_decimal().map(Datum::Dec)?,
             VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64)?,
             VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64)?,
-            JSON_FLAG => Json::decode(data).map(Datum::Json)?,
+            JSON_FLAG => data.decode_json().map(Datum::Json)?,
             f => return Err(invalid_type!("unsupported data type `{}`", f)),
         };
         Ok(datum)
@@ -992,7 +997,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         JSON_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            Json::decode(&mut v)?;
+            v.decode_json()?;
             l - v.len()
         }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),
@@ -1008,9 +1013,9 @@ mod tests {
     use super::*;
     use crate::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
     use crate::expr::{EvalConfig, EvalContext};
-    use tikv_util::as_slice;
 
     use std::cmp::Ordering;
+    use std::slice::from_ref;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::{i16, i32, i64, i8, u16, u32, u64, u8};
@@ -1610,8 +1615,8 @@ mod tests {
             }
 
             if same_type(&lhs, &rhs) {
-                let lhs_bs = encode_key(as_slice(&lhs)).unwrap();
-                let rhs_bs = encode_key(as_slice(&rhs)).unwrap();
+                let lhs_bs = encode_key(from_ref(&lhs)).unwrap();
+                let rhs_bs = encode_key(from_ref(&rhs)).unwrap();
 
                 if ret != lhs_bs.cmp(&rhs_bs) {
                     panic!("{:?} should be {:?} to {:?} when encoded", lhs, ret, rhs);
@@ -1709,7 +1714,7 @@ mod tests {
             let mut buf = key_bs.as_slice();
             for exp in &case {
                 let (act, rem) = split_datum(buf, false).unwrap();
-                let exp_bs = encode_key(as_slice(exp)).unwrap();
+                let exp_bs = encode_key(from_ref(exp)).unwrap();
                 assert_eq!(exp_bs, act);
                 buf = rem;
             }
@@ -1719,7 +1724,7 @@ mod tests {
             let mut buf = value_bs.as_slice();
             for exp in &case {
                 let (act, rem) = split_datum(buf, false).unwrap();
-                let exp_bs = encode_value(as_slice(exp)).unwrap();
+                let exp_bs = encode_value(from_ref(exp)).unwrap();
                 assert_eq!(exp_bs, act);
                 buf = rem;
             }
@@ -1869,7 +1874,16 @@ mod tests {
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
-            let got = d.into_i64(&mut ctx).unwrap();
+            let d2 = d.clone();
+            let got = d.into_i64(&mut ctx);
+            assert!(
+                got.is_ok(),
+                "datum: {}, got: {:?}, expect: {}",
+                d2,
+                got,
+                exp
+            );
+            let got = got.unwrap();
             assert_eq!(got, exp);
         }
     }

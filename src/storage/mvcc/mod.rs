@@ -9,9 +9,7 @@ mod txn;
 mod write;
 
 pub use self::lock::{Lock, LockType};
-pub use self::reader::EntryScanner;
-pub use self::reader::MvccReader;
-pub use self::reader::{Scanner, ScannerBuilder};
+pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
 
@@ -194,7 +192,6 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
     }
 }
 
-#[cfg(test)]
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
@@ -536,6 +533,36 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         assert!(txn.rollback(Key::from_raw(key)).is_err());
+    }
+
+    pub fn must_txn_heart_beat<E: Engine>(
+        engine: &E,
+        primary_key: &[u8],
+        start_ts: u64,
+        advise_ttl: u64,
+        expect_ttl: u64,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        let ttl = txn
+            .txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
+            .unwrap();
+        write(engine, &ctx, txn.into_modifies());
+        assert_eq!(ttl, expect_ttl);
+    }
+
+    pub fn must_txn_heart_beat_err<E: Engine>(
+        engine: &E,
+        primary_key: &[u8],
+        start_ts: u64,
+        advise_ttl: u64,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
+            .unwrap_err();
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {

@@ -1,10 +1,197 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Implementation of the `rpn_fn` attribute macro.
+//!
+//! The macro should be applied to a function:
+//!
+//! ```rust
+//! #[rpn_fn]
+//! fn foo(x: &Option<u32>) -> Result<Option<u8>> {
+//!     Ok(None)
+//! }
+//! ```
+//!
+//! The expanded function implements an operation in the coprocessor.
+//!
+//! ## Arguments to macro
+//!
+//! If neither `varg` or `raw_varg` are supplied, then the generated arguments
+//! follow from the supplied function's arguments. Each argument must have a type
+//! `&Option<T>` for some `T`.
+//!
+//! ### `varg`
+//!
+//! The RPN operator takes a variable number of arguments. The arguments are passed
+//! as a `&[&Option<T>]`. E.g.,
+//!
+//! ```ignore
+//! #[rpn_fn(varg)]
+//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
+//! ### `raw_varg`
+//!
+//! The RPN operator takes a variable number of arguments. The arguments are passed
+//! as a `&[ScalarValueRef]`. E.g.,
+//!
+//! ```ignore
+//! #[rpn_fn(raw_varg)]
+//! pub fn foo(args: &[ScalarValueRef<'_>]) -> Result<Option<Real>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
+//! Use `raw_varg` where the function takes a variable number of arguments and the types
+//! are not the same, for example, RPN function `case_when`.
+//!
+//! ### `min_args`
+//!
+//! The minimum number of arguments. The macro will generate code to check this
+//! as part of validation. Only valid if `varg` or `raw_varg` is also used.
+//! E.g., `#[rpn_fn(varg, min_args = 2)]`
+//!
+//! ### `extra_validator`
+//!
+//! A function name for custom validation code to be run when an operation is
+//! validated. The validator function should have the signature `&tipb::Expr -> Result<()>`.
+//! E.g., `#[rpn_fn(raw_varg, extra_validator = json_object_validator)]`
+//!
+//! ### `capture`
+//!
+//! An array of argument names which are passed from the caller to the expanded
+//! function. The argument names must be in scope in the generated `eval` or `run`
+//! methods. Currently, that includes the following arguments (the supplied
+//! function must accept these arguments with the corresponding types, in
+//! addition to any other arguments):
+//!
+//! * `ctx: &mut expr::EvalContext`
+//! * `output_rows: usize`
+//! * `args: &[rpn_expr::RpnStackNode<'_>]`
+//! * `extra: &mut rpn_expr::RpnFnCallExtra<'_>`
+//!
+//! ```ignore
+//! // This generates `with_context_fn_meta() -> RpnFnMeta`
+//! #[rpn_fn(capture = [ctx])]
+//! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+//!
+//! ## Generated code
+//!
+//! ### Vararg functions
+//!
+//! This includes `varg` and `raw_varg`.
+//!
+//! The supplied function is preserved and a constructor function is generated
+//! with a `_fn_meta` suffix, e.g., `#[rpb_fn] fn foo ...` will preserve `foo` and
+//! generate `foo_fn_meta`. The constructor function returns an `rpn_expr::RpnFnMeta`
+//! value.
+//!
+//! The constructor function will include code for validating the runtime arguments
+//! and running the function, pointers to these functions are stored in the result.
+//!
+//! ### Non-vararg functions
+//!
+//! Generate the following (examples assume a supplied function called `foo_bar`:
+//!
+//! * A trait to represent the function (`FooBar_Fn`) with a single function `eval`.
+//!   - An impl of that trait for all argument types which panics
+//!   - An impl of that trait for the supported argument type which calls the supplied function.
+//! * An evaluator struct (`FooBar_Evaluator`) which implements `rpn_expr::function::Evaluator`,
+//!   which includes an `eval` method which dispatches to `FooBar_Fn::eval`.
+//! * A constructor function similar to the vararg case.
+//!
+//! The supplied function is preserved.
+//!
+//! The supported argument type is represented as a type-level list, for example, a
+//! a function which takes two unsigned ints has an argument representation
+//! something like `Arg<UInt, Arg<UInt, Null>>`. See documentation in
+//! `components/tidb_query/src/rpn_expr/types/function.rs` for more details.
+//!
+//! The `_Fn` trait can be customised by implementing it manually.
+//! For example, you are going to implement an RPN function called `regex_match` taking two
+//! arguments, the regex and the string to match. You want to build the regex only once if the
+//! first argument is a scalar. The code may look like:
+//!
+//! ```ignore
+//! fn regex_match_impl(regex: &Regex, text: &Option<Bytes>) -> Result<Option<i32>> {
+//!     // match text
+//! }
+//!
+//! #[rpn_fn]
+//! fn regex_match(regex: &Option<Bytes>, text: &Option<Bytes>) -> Result<Option<i32>> {
+//!     let regex = build_regex(regex);
+//!     regex_match_impl(&regex, text)
+//! }
+//!
+//! // Pay attention that the first argument is specialized to `ScalarArg`
+//! impl<'a, Arg1> RegexMatch_Fn for Arg<ScalarArg<'a, Bytes>, Arg<Arg1, Null>>
+//! where Arg1: RpnFnArg<Type = &'a Option<Bytes>> {
+//!     fn eval(
+//!         self,
+//!         ctx: &mut EvalContext,
+//          output_rows: usize,
+//          args: &[RpnStackNode<'_>],
+//          extra: &mut RpnFnCallExtra<'_>,
+//!     ) -> Result<VectorValue> {
+//!         let (regex, arg) = self.extract(0);
+//!         let regex = build_regex(regex);
+//!         let mut result = Vec::with_capacity(output_rows);
+//!         for row in 0..output_rows {
+//!             let (text, _) = arg.extract(row);
+//!             result.push(regex_match_impl(&regex, text)?);
+//!         }
+//!         Ok(Evaluable::into_vector_value(result))
+//!     }
+//! }
+//! ```
+//!
+//! If the RPN function accepts variable number of arguments and all arguments have the same eval
+//! type, like RPN function `coalesce`, you can use `#[rpn_fn(varg)]` like:
+//!
+//! ```ignore
+//! #[rpn_fn(varg)]
+//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
+//!     // Your RPN function logic
+//! }
+//! ```
+
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
-use quote::ToTokens;
+use quote::{quote, ToTokens};
 use syn::punctuated::Punctuated;
 use syn::*;
+
+/// Entry point for the `rpn_fn` attribute.
+pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
+    let attr = parse2::<RpnFnAttr>(attr)?;
+    let item_fn = parse2::<ItemFn>(item_fn)?;
+
+    // FIXME: The macro cannot handle lifetime definitions now
+    if let Some(lifetime) = item_fn.decl.generics.lifetimes().next() {
+        return Err(Error::new_spanned(
+            lifetime,
+            "Lifetime definition is not allowed",
+        ));
+    }
+
+    if attr.is_varg {
+        Ok(VargsRpnFn::new(attr, item_fn)?.generate())
+    } else if attr.is_raw_varg {
+        Ok(RawVargsRpnFn::new(attr, item_fn)?.generate())
+    } else {
+        Ok(NormalRpnFn::new(attr, item_fn)?.generate())
+    }
+}
+
+// ************** Parsing ******************************************************
+
+mod kw {
+    syn::custom_keyword!(Option);
+}
 
 /// Parses an attribute like `#[rpn_fn(varg, capture = [ctx, output_rows])`.
 #[derive(Debug, Default)]
@@ -15,9 +202,9 @@ struct RpnFnAttr {
     /// Whether or not the function is a raw varg function. Raw varg function accepts `&[ScalarValueRef]`.
     is_raw_varg: bool,
 
-    /// The minimal accepted arguments, which will be checked in validator.
+    /// The minimal accepted arguments, which will be checked by the validator.
     ///
-    /// Only varg or raw varg function accepts a range of number of arguments. Other kind of
+    /// Only varg or raw_varg function accepts a range of number of arguments. Other kind of
     /// function strictly stipulates number of arguments according to the function definition.
     min_args: Option<usize>,
 
@@ -117,89 +304,6 @@ impl parse::Parse for RpnFnAttr {
     }
 }
 
-mod kw {
-    syn::custom_keyword!(Option);
-}
-
-/// Helper utility to generate RPN function validator function.
-struct ValidatorFnGenerator {
-    tokens: Vec<TokenStream>,
-}
-
-impl ValidatorFnGenerator {
-    pub fn new() -> Self {
-        Self { tokens: Vec::new() }
-    }
-
-    pub fn validate_return_type(mut self, evaluable: &TypePath) -> Self {
-        self.tokens.push(quote! {
-            function::validate_expr_return_type(expr, #evaluable::EVAL_TYPE)?;
-        });
-        self
-    }
-
-    pub fn validate_min_args(mut self, min_args: Option<usize>) -> Self {
-        if let Some(min_args) = min_args {
-            self.tokens.push(quote! {
-                function::validate_expr_arguments_gte(expr, #min_args)?;
-            });
-        }
-        self
-    }
-
-    pub fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
-        self.tokens.push(quote! {
-            for child in expr.get_children() {
-                function::validate_expr_return_type(child, #args_evaluable::EVAL_TYPE)?;
-            }
-        });
-        self
-    }
-
-    pub fn validate_args_type(mut self, args_evaluables: &[TypePath]) -> Self {
-        let args_len = args_evaluables.len();
-        let args_n = 0..args_len;
-        self.tokens.push(quote! {
-            function::validate_expr_arguments_eq(expr, #args_len)?;
-            let children = expr.get_children();
-            #(
-                function::validate_expr_return_type(
-                    &children[#args_n],
-                    #args_evaluables::EVAL_TYPE
-                )?;
-            )*
-        });
-        self
-    }
-
-    pub fn validate_by_fn(mut self, extra_validator: &Option<TokenStream>) -> Self {
-        if let Some(ts) = extra_validator {
-            self.tokens.push(quote! {
-                #ts(expr)?;
-            });
-        }
-        self
-    }
-
-    pub fn generate(
-        self,
-        impl_generics: &ImplGenerics<'_>,
-        where_clause: Option<&WhereClause>,
-    ) -> TokenStream {
-        let inners = self.tokens;
-        quote! {
-            fn validate #impl_generics (
-                expr: &tipb::Expr
-            ) -> crate::Result<()> #where_clause {
-                use crate::codec::data_type::Evaluable;
-                use crate::rpn_expr::function;
-                #( #inners )*
-                Ok(())
-            }
-        }
-    }
-}
-
 /// Parses an evaluable type like `Option<T>`.
 struct RpnFnEvaluableType {
     eval_type: TypePath,
@@ -290,27 +394,88 @@ impl parse::Parse for RpnFnSignatureReturnType {
     }
 }
 
-pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream> {
-    let attr = parse2::<RpnFnAttr>(attr)?;
-    let item_fn = parse2::<ItemFn>(item_fn)?;
+// ************** Code generation **********************************************
 
-    // FIXME: The macro cannot handle lifetime definitions now
-    if let Some(lifetime) = item_fn.decl.generics.lifetimes().next() {
-        return Err(Error::new_spanned(
-            lifetime,
-            "Lifetime definition is not allowed",
-        ));
+/// Helper utility to generate RPN function validator function.
+struct ValidatorFnGenerator {
+    tokens: Vec<TokenStream>,
+}
+
+impl ValidatorFnGenerator {
+    fn new() -> Self {
+        Self { tokens: Vec::new() }
     }
 
-    if attr.is_varg {
-        Ok(VargsRpnFn::new(attr, item_fn)?.generate())
-    } else if attr.is_raw_varg {
-        Ok(RawVargsRpnFn::new(attr, item_fn)?.generate())
-    } else {
-        Ok(NormalRpnFn::new(attr, item_fn)?.generate())
+    fn validate_return_type(mut self, evaluable: &TypePath) -> Self {
+        self.tokens.push(quote! {
+            function::validate_expr_return_type(expr, #evaluable::EVAL_TYPE)?;
+        });
+        self
+    }
+
+    fn validate_min_args(mut self, min_args: Option<usize>) -> Self {
+        if let Some(min_args) = min_args {
+            self.tokens.push(quote! {
+                function::validate_expr_arguments_gte(expr, #min_args)?;
+            });
+        }
+        self
+    }
+
+    fn validate_args_identical_type(mut self, args_evaluable: &TypePath) -> Self {
+        self.tokens.push(quote! {
+            for child in expr.get_children() {
+                function::validate_expr_return_type(child, #args_evaluable::EVAL_TYPE)?;
+            }
+        });
+        self
+    }
+
+    fn validate_args_type(mut self, args_evaluables: &[TypePath]) -> Self {
+        let args_len = args_evaluables.len();
+        let args_n = 0..args_len;
+        self.tokens.push(quote! {
+            function::validate_expr_arguments_eq(expr, #args_len)?;
+            let children = expr.get_children();
+            #(
+                function::validate_expr_return_type(
+                    &children[#args_n],
+                    #args_evaluables::EVAL_TYPE
+                )?;
+            )*
+        });
+        self
+    }
+
+    fn validate_by_fn(mut self, extra_validator: &Option<TokenStream>) -> Self {
+        if let Some(ts) = extra_validator {
+            self.tokens.push(quote! {
+                #ts(expr)?;
+            });
+        }
+        self
+    }
+
+    fn generate(
+        self,
+        impl_generics: &ImplGenerics<'_>,
+        where_clause: Option<&WhereClause>,
+    ) -> TokenStream {
+        let inners = self.tokens;
+        quote! {
+            fn validate #impl_generics (
+                expr: &tipb::Expr
+            ) -> crate::Result<()> #where_clause {
+                use crate::codec::data_type::Evaluable;
+                use crate::rpn_expr::function;
+                #( #inners )*
+                Ok(())
+            }
+        }
     }
 }
 
+/// Generates a `varg` RPN fn.
 #[derive(Debug)]
 struct VargsRpnFn {
     captures: Vec<Expr>,
@@ -322,7 +487,7 @@ struct VargsRpnFn {
 }
 
 impl VargsRpnFn {
-    pub fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
+    fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         if item_fn.decl.inputs.len() != attr.captures.len() + 1 {
             return Err(Error::new_spanned(
                 item_fn.decl.inputs,
@@ -354,7 +519,7 @@ impl VargsRpnFn {
         })
     }
 
-    pub fn generate(self) -> TokenStream {
+    fn generate(self) -> TokenStream {
         vec![
             self.generate_constructor(),
             self.item_fn.into_token_stream(),
@@ -425,6 +590,7 @@ impl VargsRpnFn {
     }
 }
 
+/// Generates a `raw_varg` RPN fn.
 #[derive(Debug)]
 struct RawVargsRpnFn {
     captures: Vec<Expr>,
@@ -435,7 +601,7 @@ struct RawVargsRpnFn {
 }
 
 impl RawVargsRpnFn {
-    pub fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
+    fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         if item_fn.decl.inputs.len() != attr.captures.len() + 1 {
             return Err(Error::new_spanned(
                 item_fn.decl.inputs,
@@ -460,7 +626,7 @@ impl RawVargsRpnFn {
         })
     }
 
-    pub fn generate(self) -> TokenStream {
+    fn generate(self) -> TokenStream {
         vec![
             self.generate_constructor(),
             self.item_fn.into_token_stream(),
@@ -531,6 +697,7 @@ impl RawVargsRpnFn {
     }
 }
 
+/// Generates an RPN fn which is neither `varg` or `raw_varg`.
 #[derive(Debug)]
 struct NormalRpnFn {
     captures: Vec<Expr>,
@@ -543,7 +710,7 @@ struct NormalRpnFn {
 }
 
 impl NormalRpnFn {
-    pub fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
+    fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         let mut arg_types = Vec::new();
         for fn_arg in item_fn.decl.inputs.iter().skip(attr.captures.len()) {
             let arg_type =
@@ -574,7 +741,7 @@ impl NormalRpnFn {
         })
     }
 
-    pub fn generate(self) -> TokenStream {
+    fn generate(self) -> TokenStream {
         vec![
             self.generate_fn_trait(),
             self.generate_dummy_fn_trait_impl(),
