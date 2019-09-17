@@ -207,7 +207,7 @@ impl Datum {
                 Ok(d.cmp(dec))
             }
             _ => {
-                // FIXME, here is not same as TiDB's
+                // FIXME: here is not same as TiDB's
                 let f = dec.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
@@ -248,7 +248,7 @@ impl Datum {
             Datum::U64(d) => Json::U64(d).cmp(json),
             Datum::F64(d) => Json::Double(d).cmp(json),
             Datum::Dec(ref d) => {
-                // FIXME, it this same as TiDB's?
+                // FIXME: it this same as TiDB's?
                 let ff = d.convert(ctx)?;
                 Json::Double(ff).cmp(json)
             }
@@ -336,9 +336,9 @@ impl Datum {
             Datum::F64(f) => f.to_int(ctx, tp),
             Datum::Bytes(bs) => bs.to_int(ctx, tp),
             Datum::Time(t) => t.to_int(ctx, tp),
-            // FIXME, in Datum::Dur, to_int's error handle is not same as TiDB's
+            // FIXME: in Datum::Dur, to_int's error handle is not same as TiDB's
             Datum::Dur(d) => d.to_int(ctx, tp),
-            // FIXME, in Datum::Dec, to_int's error handle is not same as TiDB's
+            // FIXME: in Datum::Dec, to_int's error handle is not same as TiDB's
             Datum::Dec(d) => d.to_int(ctx, tp),
             Datum::Json(j) => j.to_int(ctx, tp),
             _ => Err(box_err!("failed to convert {} to i64", self)),

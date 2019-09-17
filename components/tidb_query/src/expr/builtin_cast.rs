@@ -153,20 +153,16 @@ impl ScalarFunc {
 
     pub fn cast_int_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if !self.children[0].is_unsigned() {
-            Ok(Some(produce_float_with_specified_tp(
-                ctx,
-                &self.field_type,
-                val as f64,
-            )?))
+        let val = if !self.children[0].is_unsigned() {
+            val as f64
         } else {
-            let uval = val as u64;
-            Ok(Some(produce_float_with_specified_tp(
-                ctx,
-                &self.field_type,
-                uval as f64,
-            )?))
-        }
+            val as u64 as f64
+        };
+        Ok(Some(produce_float_with_specified_tp(
+            ctx,
+            &self.field_type,
+            val,
+        )?))
     }
 
     pub fn cast_real_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {

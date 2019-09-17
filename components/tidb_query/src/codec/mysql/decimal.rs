@@ -1794,7 +1794,7 @@ impl ConvertTo<Decimal> for Real {
 }
 
 impl ConvertTo<Decimal> for &[u8] {
-    // FIXME, the err handle is not exactly same as TiDB's,
+    // FIXME: the err handle is not exactly same as TiDB's,
     //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
@@ -1826,7 +1826,7 @@ impl ConvertTo<Decimal> for Json {
             Json::String(s) => {
                 Decimal::from_str(s.as_str()).or_else(|e| {
                     ctx.handle_truncate_err(e)?;
-                    // FIXME, if TiDB's MyDecimal::FromString return err,
+                    // FIXME: if TiDB's MyDecimal::FromString return err,
                     //  it may has res. However, if TiKV's Decimal::from_str
                     //  return err, it has no res, so I return zero here,
                     //  but it may different from TiDB's MyDecimal::FromString
@@ -2419,7 +2419,7 @@ mod tests {
                 -18446744073709552000.0,
                 Ok(Decimal::from_str("-18446744073709552000").unwrap()),
             ),
-            // FIXME, because of rust's bug,
+            // FIXME: because of rust's bug,
             //  (1<<64)(18446744073709551616), (1<<65)(36893488147419103232) can not be represent by f64
             //  so these cases can not pass
             // (18446744073709551616.0, Ok(Decimal::from_str("18446744073709551616").unwrap())),

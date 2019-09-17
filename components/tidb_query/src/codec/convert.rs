@@ -151,8 +151,6 @@ pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
 /// `truncate_f64` (`TruncateFloat` in TiDB) tries to truncate f.
 /// If the result exceeds the max/min float that flen/decimal
 /// allowed, returns the max/min float allowed.
-///
-/// This function can only return `Res::Ok` or `Res::Overflow`, no `Res::Truncated` will be returned.
 pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
     if f.is_nan() {
         return Res::Overflow(0f64);
@@ -290,8 +288,10 @@ impl ToInt for f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
             Ok(upper_bound)
         } else if val == upper_bound as f64 {
-            // because in rustc, `let a = upper_bound as f64; a as u64` seems has bug,
-            // it don't return upper_bound
+            // Because u64::MAX can not be represented precisely in iee754(64bit),
+            // so u64::MAX as f64 will make a num bigger than u64::MAX,
+            // which can not be represented by 64bit integer.
+            // So (u64::MAX as f64) as u64 is undefined behavior.
             Ok(upper_bound)
         } else {
             Ok(val as u64)
@@ -343,14 +343,14 @@ impl ToInt for &[u8] {
         // in TiDB, it use strconv.ParseUint here,
         // strconv.ParseUint will return 0 and a err if the str is neg
         if s.starts_with('-') {
-            ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &s))?;
+            ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", s))?;
             return Ok(0);
         }
         let val = s.parse::<u64>();
         match val {
             Ok(val) => val.to_uint(ctx, tp),
             Err(_) => {
-                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &s))?;
+                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", s))?;
                 // To make compatible with TiDB,
                 // return `integer_unsigned_upper_bound(tp);` when overflow.
                 // see TiDB's `types.StrToUint` and [strconv.ParseUint](https://golang.org/pkg/strconv/#ParseUint)
