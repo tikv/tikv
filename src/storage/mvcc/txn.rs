@@ -892,8 +892,8 @@ mod tests {
         must_cleanup_err(&engine, k, ts(10, 0), ts(20, 0));
         must_locked(&engine, k, ts(10, 0));
 
-        // Try to cleanup another transaction's lock.
-        must_cleanup_err(&engine, k, ts(10, 1), ts(120, 0));
+        // Try to cleanup another transaction's lock. Does nothing.
+        must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
         must_locked(&engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
