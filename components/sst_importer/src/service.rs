@@ -2,23 +2,21 @@
 
 use futures::Future;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
+use std::fmt::Debug;
 
-use super::Error;
-
-pub fn make_rpc_error(err: Error) -> RpcStatus {
+pub fn make_rpc_error<E: Debug>(err: E) -> RpcStatus {
+    // FIXME: Just spewing debug error formatting here seems pretty unfriendly
     RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)))
 }
 
-pub fn send_rpc_error<M, E>(ctx: RpcContext<'_>, sink: UnarySink<M>, error: E)
-where
-    Error: From<E>,
-{
-    let err = make_rpc_error(Error::from(error));
+pub fn send_rpc_error<M, E: Debug>(ctx: RpcContext<'_>, sink: UnarySink<M>, error: E) {
+    let err = make_rpc_error(error);
     ctx.spawn(sink.fail(err).map_err(|e| {
         warn!("send rpc failed"; "err" => %e);
     }));
 }
 
+#[macro_export]
 macro_rules! send_rpc_response {
     ($res:ident, $sink:ident, $label:ident, $timer:ident) => {{
         let res = match $res {

@@ -13,7 +13,7 @@ use tikv_util::codec::number;
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::mysql::charset;
-use crate::codec::mysql::{Decimal, DecimalDecoder, Duration, Json, Time, MAX_FSP};
+use crate::codec::mysql::{Decimal, DecimalDecoder, Duration, Json, JsonDecoder, Time, MAX_FSP};
 use crate::codec::{self, datum, Datum};
 
 mod builtin_arithmetic;
@@ -274,7 +274,9 @@ impl Expression {
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::MysqlJson => Json::decode(&mut expr.get_val())
+            ExprType::MysqlJson => expr
+                .get_val()
+                .decode_json()
                 .map(Datum::Json)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
@@ -587,10 +589,8 @@ mod tests {
         for (flag, cols, exp) in cases {
             let col_expr = col_expr(0);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
-            if flag.is_some() {
-                ex.mut_field_type()
-                    .as_mut_accessor()
-                    .set_flag(flag.unwrap());
+            if let Some(flag) = flag {
+                ex.mut_field_type().as_mut_accessor().set_flag(flag);
             }
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval(&mut ctx, &cols).unwrap();
