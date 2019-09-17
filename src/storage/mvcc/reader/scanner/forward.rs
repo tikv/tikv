@@ -10,8 +10,9 @@ use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
-use super::util::CheckLockResult;
+use super::super::util::CheckLockResult;
 use super::ScannerConfig;
+
 /// This struct can be used to scan keys starting from the given user key (greater than or equal).
 ///
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
@@ -165,7 +166,8 @@ impl<S: Snapshot> ForwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
+                        match super::super::util::check_lock(&current_user_key, self.cfg.ts, &lock)?
+                        {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
                             CheckLockResult::Ignored(ts) => get_ts = ts,
@@ -303,7 +305,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             None => {
                 // Value is in the default CF.
                 self.ensure_default_cursor()?;
-                let value = super::util::near_load_data_by_write(
+                let value = super::super::util::near_load_data_by_write(
                     &mut self.default_cursor.as_mut().unwrap(),
                     user_key,
                     write,
