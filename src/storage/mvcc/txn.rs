@@ -495,14 +495,17 @@ impl<S: Snapshot> MvccTxn<S> {
     /// committed.
     pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
         let is_pessimistic_txn = match self.reader.load_lock(&key)? {
-            Some(ref lock) if lock.ts == self.start_ts => {
+            Some(ref mut lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
                 // If the lock is not expired, do not rollback it but report key is locked.
                 if current_ts > 0
                     && extract_physical(lock.ts) + lock.ttl >= extract_physical(current_ts)
                 {
+                    // The `lock.primary` field will not be accessed again. Use mem::replace to
+                    // avoid cloning.
+                    let primary = ::std::mem::replace(&mut lock.primary, Default::default());
                     let mut info = kvproto::kvrpcpb::LockInfo::default();
-                    info.set_primary_lock(lock.primary);
+                    info.set_primary_lock(primary);
                     info.set_lock_version(lock.ts);
                     info.set_key(key.into_raw()?);
                     info.set_lock_ttl(lock.ttl);
