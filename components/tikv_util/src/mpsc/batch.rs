@@ -128,6 +128,10 @@ pub struct Receiver<T> {
 }
 
 impl<T> Sender<T> {
+    pub fn is_empty(&self) -> bool {
+        self.sender.is_empty()
+    }
+
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         self.sender.send(t)?;
