@@ -82,7 +82,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         Ok(PointGetter {
             snapshot: self.snapshot,
             multi: self.multi,
-            fill_cache: self.fill_cache,
             omit_value: self.omit_value,
             isolation_level: self.isolation_level,
             ts: self.ts,
@@ -91,7 +90,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 
             write_cursor,
             write_cursor_valid: true,
-            default_cursor: None,
 
             drained: false,
         })
@@ -105,7 +103,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 pub struct PointGetter<S: Snapshot> {
     snapshot: S,
     multi: bool,
-    fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
     ts: u64,
@@ -114,8 +111,6 @@ pub struct PointGetter<S: Snapshot> {
 
     write_cursor: Cursor<S::Iter>,
     write_cursor_valid: bool,
-    /// Default cursor will be built only when necessary.
-    default_cursor: Option<Cursor<S::Iter>>,
 
     /// Indicating whether or not this structure can serve more requests. It is meaningful only
     /// when `multi == false`, to protect from producing undefined values when trying to get
@@ -166,11 +161,9 @@ impl<S: Snapshot> PointGetter<S> {
     /// see whether it conflicts with the given `ts`. If there is no conflict or no lock,
     /// the safe `ts` will be returned.
     ///
-    /// Unlike default CF, lock CF is always retrieved via `get_cf` instead of a cursor seek,
-    /// because in common cases we expect to get nothing in lock cf. Using a get_cf instead of
-    /// seek make it fast in such cases due to no need to continue move and skip deleted entries
-    /// until find one user key.
-    #[inline]
+    /// In common cases we expect to get nothing in lock cf. Using a `get_cf` instead of `seek`
+    /// is fast in such cases due to no need for RocksDB to continue move and skip deleted entries
+    /// until find a user key.
     fn load_and_check_lock(&mut self, user_key: &Key, ts: u64) -> Result<CheckLockResult> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
@@ -182,19 +175,6 @@ impl<S: Snapshot> PointGetter<S> {
         } else {
             Ok(CheckLockResult::NotLocked)
         }
-    }
-
-    /// Creates the default cursor if not created. This function will only be called when
-    /// `multi == true`.
-    fn ensure_default_cursor(&mut self) -> Result<()> {
-        if self.default_cursor.is_some() {
-            return Ok(());
-        }
-        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .fill_cache(self.fill_cache)
-            .build()?;
-        self.default_cursor = Some(cursor);
-        Ok(())
     }
 
     /// Load the value.
@@ -265,25 +245,16 @@ impl<S: Snapshot> PointGetter<S> {
                 // Value is carried in `write`.
                 Ok(value)
             }
-            None => {
-                if self.multi {
-                    self.load_data_from_default_cf_multi_get(write, user_key)
-                } else {
-                    self.load_data_from_default_cf_single_get(write, user_key)
-                }
-            }
+            None => self.load_data_from_default_cf(write, user_key),
         }
     }
 
-    /// Load the value from default CF. Use `snapshot.get_cf()` directly.
+    /// Load the value from default CF.
     ///
-    /// TODO: If we only get a few keys, it is also better to use get_cf instead of building a
-    /// cursor.
-    fn load_data_from_default_cf_single_get(
-        &mut self,
-        write: Write,
-        user_key: &Key,
-    ) -> Result<Value> {
+    /// We assume that mostly the keys given to batch get keys are not very close to each other.
+    /// `near_seek` will likely fall back to `seek` in such scenario, which takes 2x time
+    /// compared to `get_cf`. Thus we use `get_cf` directly here.
+    fn load_data_from_default_cf(&mut self, write: Write, user_key: &Key) -> Result<Value> {
         // TODO: Not necessary to receive a `Write`.
         self.statistics.data.get += 1;
         // TODO: We can avoid this clone.
@@ -301,22 +272,6 @@ impl<S: Snapshot> PointGetter<S> {
                 "load_data_from_default_cf",
             ))
         }
-    }
-
-    /// Load the value from default CF. Use cursor to read value.
-    fn load_data_from_default_cf_multi_get(
-        &mut self,
-        write: Write,
-        user_key: &Key,
-    ) -> Result<Value> {
-        self.ensure_default_cursor()?;
-        let value = super::util::near_load_data_by_write(
-            &mut self.default_cursor.as_mut().unwrap(),
-            user_key,
-            write,
-            &mut self.statistics,
-        )?;
-        Ok(value)
     }
 }
 
@@ -497,47 +452,39 @@ mod tests {
         must_get_none(&mut getter, b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
         // Get again
         must_get_none(&mut getter, b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         // Get a key that exists
         must_get_value(&mut getter, b"foo2", b"foo2v");
         let s = getter.take_statistics();
         // We have to check every version so there is 42 next and 0 seek
         assert_seek_next_prev(&s.write, 0, 42, 0);
-        assert_seek_next_prev(&s.data, 1, 0, 0);
         // Get again
         must_get_value(&mut getter, b"foo2", b"foo2v");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         // Get a smaller key
         must_get_none(&mut getter, b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         // Get a key that does not exist
         must_get_none(&mut getter, b"z");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 2, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         // Get a key that exists
         must_get_value(&mut getter, b"zz", b"zzv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 1, 0);
         // Get again
         must_get_value(&mut getter, b"zz", b"zzv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
     }
 
     /// Some ts larger than get ts
@@ -550,32 +497,26 @@ mod tests {
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_seek_next_prev(&s.data, 1, 0, 0);
 
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         must_get_none(&mut getter, b"bo");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 1, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         must_get_none(&mut getter, b"box");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 1, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         must_get_value(&mut getter, b"foo1", b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 1, 0);
-        assert_seek_next_prev(&s.data, 0, 2, 0);
 
         must_get_none(&mut getter, b"zz");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, SEEK_BOUND as usize, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
     }
 
     /// All ts larger than get ts
@@ -588,19 +529,16 @@ mod tests {
         must_get_none(&mut getter, b"foo1");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         must_get_none(&mut getter, b"non_exist");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, SEEK_BOUND as usize, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         // Cursor never move back.
         must_get_none(&mut getter, b"foo1");
         must_get_none(&mut getter, b"foo0");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 0, 0, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
     }
 
     /// There are some locks in the Lock CF.
@@ -615,7 +553,6 @@ mod tests {
         must_get_none(&mut getter, b"foo2");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 2, 0);
-        assert_seek_next_prev(&s.data, 0, 0, 0);
 
         let mut getter = new_multi_point_getter(&engine, 3);
         must_get_none(&mut getter, b"a");
@@ -627,7 +564,6 @@ mod tests {
         must_get_none(&mut getter, b"foo2");
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 1, 2, 0);
-        assert_seek_next_prev(&s.data, 1, 0, 0);
 
         let mut getter = new_multi_point_getter(&engine, 4);
         must_get_none(&mut getter, b"a");
@@ -637,7 +573,6 @@ mod tests {
         must_get_err(&mut getter, b"foo2");
         must_get_none(&mut getter, b"zz");
         assert_seek_next_prev(&s.write, 1, 2, 0);
-        assert_seek_next_prev(&s.data, 1, 0, 0);
     }
 
     /// Single Point Getter can only get once.
