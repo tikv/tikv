@@ -585,7 +585,6 @@ pub fn produce_dec_with_specified_tp(
     mut dec: Decimal,
     ft: &FieldType,
 ) -> Result<Decimal> {
-    let origin_clone = dec.clone();
     let (flen, decimal) = (ft.as_accessor().flen(), ft.as_accessor().decimal());
     if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
         if flen < decimal {
