@@ -650,13 +650,13 @@ impl Duration {
         self.format("")
     }
 
-    /// If the error is overflow, the result will return true,
-    /// otherwise, only one of result or err will be returned
+    /// If the error is overflow, the result will be returned, too.
+    /// Otherwise, only one of result or err will be returned
     pub fn from_i64_without_ctx(mut n: i64, fsp: u8) -> (Option<Duration>, Option<Error>) {
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
             let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
-            return (Some(max), Some(Error::overflow("Duration", &n.to_string())));
+            return (Some(max), Some(Error::overflow("Duration", n)));
         }
 
         let negative = n < 0;
@@ -685,27 +685,21 @@ impl Duration {
 
     pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: u8) -> Result<Duration> {
         let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
-        match err {
-            Some(e) => {
+        err.map_or_else(
+            || {
+                debug_assert!(dur.is_some());
+                dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
+            },
+            |e| {
                 if e.is_overflow() {
                     ctx.handle_overflow_err(e)?;
-                    if dur.is_none() {
-                        Err(box_err!("Expect a not none result here, this is a bug"))
-                    } else {
-                        Ok(dur.unwrap())
-                    }
+                    debug_assert!(dur.is_some());
+                    dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
                 } else {
                     Err(e)
                 }
-            }
-            None => {
-                if dur.is_none() {
-                    Err(box_err!("Expect a not none result here, this is a bug"))
-                } else {
-                    Ok(dur.unwrap())
-                }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -724,7 +718,9 @@ impl ConvertTo<Decimal> for Duration {
     /// Port from TiDB' Duration::ToNumber
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        self.to_numeric_string().parse()
+        let r = self.to_numeric_string().parse::<Decimal>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
     }
 }
 
@@ -1240,11 +1236,125 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, add test for num>=10000000000
-            //  after Duration::from_f64 had impl logic for num>=10000000000
-            // (10000000000, 0, Ok(Duration::parse("0:0:0".as_bytes(), 0).unwrap())),
-            // (10000235959, 0, Ok(Duration::parse("23:59:59".as_bytes(), 0).unwrap())),
-            // (10000000000, 0, Ok(Duration::parse("0:0:0".as_bytes(), 0).unwrap())),
+            // TODO, fix these test case after Duration::from_f64
+            //  had impl logic for num>=10000000000
+            (
+                10000000000,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000000000,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000000000,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
         ];
         for (input, fsp, expect, overflow) in cs {
             let cfg = Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING));
@@ -1268,8 +1378,7 @@ mod tests {
             );
 
             assert_eq!(r.is_ok(), expect.is_ok(), "{}", log.as_str());
-            if r.is_ok() {
-                let r = r.unwrap();
+            if let Ok(r) = r {
                 assert_eq!(r, expect.unwrap(), "{}", log.as_str());
             } else {
                 let e = r.err().unwrap();

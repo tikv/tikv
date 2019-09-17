@@ -7,7 +7,6 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-use crate::raftstore::store::keys;
 use engine::rocks::{SstWriterBuilder, DB};
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {

@@ -11,6 +11,7 @@ use hex::{self, FromHex};
 
 use tidb_query_datatype;
 use tidb_query_datatype::prelude::*;
+use tikv_util::try_opt_or;
 
 use super::{EvalContext, Result, ScalarFunc};
 use crate::codec::{datum, Datum};
