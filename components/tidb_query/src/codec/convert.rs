@@ -389,11 +389,7 @@ impl ToInt for Decimal {
         let val = dec.as_i64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(r)
-        } else {
-            r.to_int(ctx, tp)
-        }
+        r.to_int(ctx, tp)
     }
 
     #[inline]
@@ -403,11 +399,7 @@ impl ToInt for Decimal {
         let val = dec.as_u64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(r)
-        } else {
-            r.to_uint(ctx, tp)
-        }
+        r.to_uint(ctx, tp)
     }
 }
 
@@ -470,11 +462,7 @@ impl ToInt for Json {
             Json::Double(d) => d.to_int(ctx, tp),
             Json::String(ref s) => s.as_bytes().to_int(ctx, tp),
         }?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(val)
-        } else {
-            val.to_int(ctx, tp)
-        }
+        val.to_int(ctx, tp)
     }
 
     // Port from TiDB's types.ConvertJSONToInt
@@ -488,11 +476,7 @@ impl ToInt for Json {
             Json::Double(d) => d.to_uint(ctx, tp),
             Json::String(ref s) => s.as_bytes().to_uint(ctx, tp),
         }?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(val)
-        } else {
-            val.to_uint(ctx, tp)
-        }
+        val.to_uint(ctx, tp)
     }
 }
 
