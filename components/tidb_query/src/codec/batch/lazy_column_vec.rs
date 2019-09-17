@@ -112,6 +112,21 @@ impl LazyBatchColumnVec {
         Ok(size)
     }
 
+    /// Returns maximum encoded size in arrow format.
+    // TODO: Move to other place.
+    pub fn maximum_encoded_size_arrow(
+        &self,
+        logical_rows: impl AsRef<[usize]>,
+        output_offsets: impl AsRef<[u32]>,
+    ) -> Result<usize> {
+        let logical_rows = logical_rows.as_ref();
+        let mut size = 0;
+        for offset in output_offsets.as_ref() {
+            size += self.columns[(*offset) as usize].maximum_encoded_size_arrow(logical_rows)?;
+        }
+        Ok(size)
+    }
+
     /// Encodes into binary format.
     // TODO: Move to other place.
     pub fn encode(

@@ -383,15 +383,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 let mut chunk = Chunk::default();
                 {
                     let data = chunk.mut_rows_data();
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
-                    );
                     // Although `schema()` can be deeply nested, it is ok since we process data in
                     // batch.
                     match self.config.encode_type {
                         EncodeType::TypeDefault => {
+                            data.reserve(result.physical_columns.maximum_encoded_size(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                            )?);
                             result.physical_columns.encode(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -401,6 +400,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                             chunks.push(chunk);
                         }
                         EncodeType::TypeArrow => {
+                            data.reserve(result.physical_columns.maximum_encoded_size_arrow(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                            )?);
                             result.physical_columns.encode_arrow(
                                 &result.logical_rows,
                                 &self.output_offsets,
