@@ -6,7 +6,6 @@ use engine::{
     SyncSnapshot,
 };
 use kvproto::metapb::Region;
-use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
@@ -23,10 +22,6 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
     region: Arc<Region>,
-
-    // TODO: Try to use KeyBuilder to replace key_builder_buf
-    //    key_builder_buf: Option<RefCell<Vec<u8>>>,
-    key_builder_buf: RefCell<Option<Vec<u8>>>,
 }
 
 impl RegionSnapshot {
@@ -42,7 +37,6 @@ impl RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
-            key_builder_buf: RefCell::new(None),
         }
     }
 
@@ -125,15 +119,6 @@ impl RegionSnapshot {
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
     }
-
-    pub fn data_key_init(&self, key: &[u8]) {
-        let mut key_builder_ref = self.key_builder_buf.borrow_mut();
-        if key_builder_ref.is_none() {
-            *key_builder_ref = Some(Vec::with_capacity(key.len() * 2));
-        };
-        assert!(key_builder_ref.is_some());
-        keys::data_key_ref(key, &mut key_builder_ref.as_mut().unwrap());
-    }
 }
 
 impl Clone for RegionSnapshot {
@@ -141,7 +126,6 @@ impl Clone for RegionSnapshot {
         RegionSnapshot {
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
-            key_builder_buf: RefCell::new(None),
         }
     }
 }
@@ -154,9 +138,8 @@ impl Peekable for RegionSnapshot {
             self.region.get_start_key(),
             self.region.get_end_key(),
         )?;
-        self.data_key_init(key);
-        self.snap
-            .get_value(&self.key_builder_buf.borrow().as_ref().unwrap().as_slice())
+        let data_key = keys::data_key(key);
+        self.snap.get_value(&data_key)
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
@@ -166,11 +149,8 @@ impl Peekable for RegionSnapshot {
             self.region.get_start_key(),
             self.region.get_end_key(),
         )?;
-        self.data_key_init(key);
-        self.snap.get_value_cf(
-            cf,
-            &self.key_builder_buf.borrow().as_ref().unwrap().as_slice(),
-        )
+        let data_key = keys::data_key(key);
+        self.snap.get_value_cf(cf, &data_key)
     }
 }
 
