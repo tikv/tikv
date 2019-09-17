@@ -175,6 +175,9 @@ pub enum Command {
         key: Key,
         /// The transaction timestamp.
         start_ts: u64,
+        /// The approximate current ts when cleanup request is invoked, which is used to check the
+        /// lock's TTL. 0 means do not check TTL.
+        current_ts: u64,
     },
     /// Rollback from the transaction that was started at `start_ts`.
     ///
@@ -1231,9 +1234,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         ctx: Context,
         key: Key,
         start_ts: u64,
+        current_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Cleanup { ctx, key, start_ts };
+        let cmd = Command::Cleanup {
+            ctx,
+            key,
+            start_ts,
+            current_ts,
+        };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
         Ok(())
