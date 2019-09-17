@@ -101,9 +101,7 @@ impl PartialOrd for Json {
         let right_data = right.as_f64();
         // tidb treats boolean as integer, but boolean is different from integer in JSON.
         // so we need convert them to same type and then compare.
-        if left_data.is_ok() && right_data.is_ok() {
-            let left = left_data.unwrap();
-            let right = right_data.unwrap();
+        if let (Ok(left), Ok(right)) = (left_data, right_data) {
             return left.partial_cmp(&right);
         }
 

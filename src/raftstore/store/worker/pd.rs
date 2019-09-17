@@ -301,6 +301,8 @@ pub struct Runner<T: PdClient> {
 }
 
 impl<T: PdClient> Runner<T> {
+    const INTERVAL_DIVISOR: u32 = 2;
+
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
@@ -309,7 +311,7 @@ impl<T: PdClient> Runner<T> {
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
     ) -> Runner<T> {
-        let interval = Duration::from_secs(store_heartbeat_interval).div_f64(2.0);
+        let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start() {
             error!("failed to start stats collector, error = {:?}", e);
