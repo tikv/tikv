@@ -9,7 +9,9 @@ use rand::RngCore;
 use tempfile::{Builder, TempDir};
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader, CheckPolicy};
+use kvproto::pdpb::{
+    ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
+};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};

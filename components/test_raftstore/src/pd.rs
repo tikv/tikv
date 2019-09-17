@@ -136,7 +136,9 @@ impl Operator {
                     new_pd_merge_region(region)
                 }
             }
-            Operator::SplitRegion { policy, ref keys, .. } => new_split_region(policy, keys.clone()),
+            Operator::SplitRegion {
+                policy, ref keys, ..
+            } => new_split_region(policy, keys.clone()),
         }
     }
 
@@ -171,9 +173,9 @@ impl Operator {
                 }
                 unreachable!()
             }
-            Operator::SplitRegion { ref region_epoch, .. } => {
-                region.get_region_epoch() != region_epoch
-            }
+            Operator::SplitRegion {
+                ref region_epoch, ..
+            } => region.get_region_epoch() != region_epoch,
             Operator::RemovePeer {
                 ref peer,
                 ref mut policy,
@@ -807,7 +809,12 @@ impl TestPdClient {
         self.schedule_operator(region_id, op);
     }
 
-    pub fn split_region(&self, mut region: metapb::Region, policy: pdpb::CheckPolicy, keys: Vec<Vec<u8>>) {
+    pub fn split_region(
+        &self,
+        mut region: metapb::Region,
+        policy: pdpb::CheckPolicy,
+        keys: Vec<Vec<u8>>,
+    ) {
         let op = Operator::SplitRegion {
             region_epoch: region.take_region_epoch(),
             policy: policy,
@@ -816,7 +823,12 @@ impl TestPdClient {
         self.schedule_operator(region.get_id(), op);
     }
 
-    pub fn must_split_region(&self, region: metapb::Region, policy: pdpb::CheckPolicy, keys: Vec<Vec<u8>>) {
+    pub fn must_split_region(
+        &self,
+        region: metapb::Region,
+        policy: pdpb::CheckPolicy,
+        keys: Vec<Vec<u8>>,
+    ) {
         self.split_region(region.clone(), policy, keys);
         for _ in 1..500 {
             sleep_ms(10);
