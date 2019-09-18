@@ -338,6 +338,7 @@ dependencies = [
 name = "cmd"
 version = "0.0.1"
 dependencies = [
+ "backup",
  "chrono",
  "clap",
  "engine",
