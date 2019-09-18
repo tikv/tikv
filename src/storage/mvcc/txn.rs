@@ -95,29 +95,6 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
 
-    fn lock_key_with_ts(
-        &mut self,
-        key: Key,
-        start_ts: u64,
-        lock_type: LockType,
-        primary: Vec<u8>,
-        short_value: Option<Value>,
-        options: &Options,
-    ) {
-        let lock = Lock::new(
-            lock_type,
-            primary,
-            start_ts,
-            options.lock_ttl,
-            short_value,
-            options.for_update_ts,
-            options.txn_size,
-        )
-        .to_bytes();
-        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
-        self.writes.push(Modify::Put(CF_LOCK, key, lock));
-    }
-
     fn lock_key(
         &mut self,
         key: Key,
@@ -169,31 +146,6 @@ impl<S: Snapshot> MvccTxn<S> {
 
     fn key_exist(&mut self, key: &Key, ts: u64) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
-    }
-
-    fn prewrite_key_value_with_ts(
-        &mut self,
-        key: Key,
-        start_ts: u64,
-        lock_type: LockType,
-        primary: Vec<u8>,
-        value: Option<Value>,
-        options: &Options,
-    ) {
-        if let Some(value) = value {
-            if is_short_value(&value) {
-                // If the value is short, embed it in Lock.
-                self.lock_key_with_ts(key, start_ts, lock_type, primary, Some(value), options);
-            } else {
-                // value is long
-                let ts = self.start_ts;
-                self.put_value(key.clone(), ts, value);
-
-                self.lock_key_with_ts(key, start_ts, lock_type, primary, None, options);
-            }
-        } else {
-            self.lock_key(key, lock_type, primary, None, options);
-        }
     }
 
     fn prewrite_key_value(
@@ -705,13 +657,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     ..
                 } = &commands[i]
                 {
+                    self.start_ts = *start_ts;
                     rows += mutations.len();
                     for m in mutations {
                         let lock_type = LockType::from_mutation(&m);
                         let (key, value) = m.clone().into_key_value();
-                        self.prewrite_key_value_with_ts(
+                        self.prewrite_key_value(
                             key,
-                            *start_ts,
                             lock_type,
                             primary.to_vec(),
                             value,
