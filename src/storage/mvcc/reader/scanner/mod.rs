@@ -227,9 +227,8 @@ mod tests {
 
     #[test]
     fn test_scan_with_lock_and_write() {
-        let build_engine = || {
-            let engine = TestEngineBuilder::new().build().unwrap();
-            engine
+        let new_engine = || {
+            TestEngineBuilder::new().build().unwrap()
         };
         let add_write_at_ts = |commit_ts, engine, key, value| {
             must_prewrite_put(engine, key, value, key, commit_ts);
@@ -242,7 +241,7 @@ mod tests {
         };
 
         // Lock after write
-        let engine = build_engine();
+        let engine = new_engine();
 
         add_write_at_ts(5, &engine, b"a", b"a_value");
         add_lock_at_ts(4, &engine, b"b");
@@ -259,7 +258,7 @@ mod tests {
         check_scan_result(scanner, &expected_result);
 
         // Lock before write for same key
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let engine = new_engine();
         add_write_at_ts(4, &engine, b"a", b"a_value");
         add_lock_at_ts(5, &engine, b"a");
 
@@ -272,7 +271,7 @@ mod tests {
         check_scan_result(scanner, &expected_result);
 
         // Lock before write in different keys
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let engine = new_engine();
         add_lock_at_ts(5, &engine, b"a");
         add_write_at_ts(4, &engine, b"b", b"b_value");
 
@@ -288,7 +287,7 @@ mod tests {
         check_scan_result(scanner, &expected_result);
 
         // Only a lock here
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let engine = new_engine();
         add_lock_at_ts(4, &engine, b"a");
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
@@ -300,7 +299,7 @@ mod tests {
         check_scan_result(scanner, &expected_result);
 
         // Write Only
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let engine = new_engine();
         add_write_at_ts(4, &engine, b"a", b"a_value");
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
