@@ -17,6 +17,67 @@ fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
         .map(|json_arg| Bytes::from(json_arg.json_type())))
 }
 
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
+#[inline]
+fn json_set(args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    json_modify(args, ModifyType::Set)
+}
+
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
+#[inline]
+fn json_insert(args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    json_modify(args, ModifyType::Insert)
+}
+
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
+#[inline]
+fn json_replace(args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    json_modify(args, ModifyType::Replace)
+}
+
+#[inline]
+fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> {
+    assert!(args.len() >= 2);
+    // base Json argument
+    let base: &Option<Json> = args[0].as_ref();
+    let mut base = base.as_ref().map_or(Json::None, |json| json.to_owned());
+
+    let buf_size = args.len() / 2;
+
+    let mut path_expr_list = Vec::with_capacity(buf_size);
+    let mut values = Vec::with_capacity(buf_size);
+
+    for chunk in args[1..].chunks(2) {
+        let path: &Option<Bytes> = chunk[0].as_ref();
+        let value: &Option<Json> = chunk[1].as_ref();
+
+        path_expr_list.push(try_opt!(parse_json_path(path)));
+
+        let value = value.as_ref().map_or(Json::None, |json| json.to_owned());
+        values.push(value);
+    }
+    base.modify(&path_expr_list, values, mt)?;
+
+    Ok(Some(base))
+}
+
+/// validate the arguments are `(&Option<Json>, &[(Option<Bytes>, Option<Json>)])`
+fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
+    let children = expr.get_children();
+    assert!(children.len() >= 2);
+    if children.len() % 2 != 1 {
+        return Err(other_err!(
+            "Incorrect parameter count in the call to native function 'JSON_OBJECT'"
+        ));
+    }
+    super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
+    for chunk in children[1..].chunks(2) {
+        super::function::validate_expr_return_type(&chunk[0], EvalType::Bytes)?;
+        super::function::validate_expr_return_type(&chunk[1], EvalType::Json)?;
+    }
+    Ok(())
+}
+
 #[rpn_fn(varg)]
 #[inline]
 fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
@@ -121,10 +182,7 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
         Some(j) => j.to_owned(),
     };
 
-    let path_expr_list = match path_list(&args[1..])? {
-        Some(p) => p,
-        None => return Ok(None),
-    };
+    let path_expr_list = try_opt!(parse_json_path_list(&args[1..]));
 
     Ok(j.extract(&path_expr_list))
 }
@@ -139,39 +197,40 @@ fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
         Some(j) => j.to_owned(),
     };
 
-    let path_expr_list = match path_list(&args[1..])? {
-        Some(p) => p,
-        None => return Ok(None),
-    };
+    let path_expr_list = try_opt!(parse_json_path_list(&args[1..]));
 
     j.remove(&path_expr_list)?;
     Ok(Some(j))
 }
 
-fn path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpression>>> {
+fn parse_json_path_list(args: &[ScalarValueRef]) -> Result<Option<Vec<PathExpression>>> {
     let mut path_expr_list = Vec::with_capacity(args.len());
     for arg in args {
         let json_path: &Option<Bytes> = arg.as_ref();
 
-        let json_path = match json_path.as_ref() {
-            None => return Ok(None),
-            Some(p) => std::str::from_utf8(&p).map_err(crate::codec::Error::from),
-        }?;
-
-        let path_expr = parse_json_path_expr(&json_path)?;
-
-        path_expr_list.push(path_expr);
+        path_expr_list.push(try_opt!(parse_json_path(json_path)));
     }
     Ok(Some(path_expr_list))
+}
+
+#[inline]
+fn parse_json_path(path: &Option<Bytes>) -> Result<Option<PathExpression>> {
+    let json_path = match path.as_ref() {
+        None => return Ok(None),
+        Some(p) => std::str::from_utf8(&p).map_err(crate::codec::Error::from),
+    }?;
+
+    Ok(Some(parse_json_path_expr(&json_path)?))
 }
 
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
+    use super::*;
+
     use tipb::ScalarFuncSig;
 
-    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -196,6 +255,64 @@ mod tests {
                 .evaluate(ScalarFuncSig::JsonTypeSig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_json_modify() {
+        let cases: Vec<(_, Vec<ScalarValue>, _)> = vec![
+            (
+                ScalarFuncSig::JsonSetSig,
+                vec![
+                    None::<Json>.into(),
+                    None::<Bytes>.into(),
+                    None::<Json>.into(),
+                ],
+                None::<Json>,
+            ),
+            (
+                ScalarFuncSig::JsonSetSig,
+                vec![
+                    Some(Json::I64(9)).into(),
+                    Some(b"$[1]".to_vec()).into(),
+                    Some(Json::U64(3)).into(),
+                ],
+                Some(r#"[9,3]"#.parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::JsonInsertSig,
+                vec![
+                    Some(Json::I64(9)).into(),
+                    Some(b"$[1]".to_vec()).into(),
+                    Some(Json::U64(3)).into(),
+                ],
+                Some(r#"[9,3]"#.parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::JsonReplaceSig,
+                vec![
+                    Some(Json::I64(9)).into(),
+                    Some(b"$[1]".to_vec()).into(),
+                    Some(Json::U64(3)).into(),
+                ],
+                Some(r#"9"#.parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::JsonSetSig,
+                vec![
+                    Some(Json::from_str(r#"{"a":"x"}"#).unwrap()).into(),
+                    Some(b"$.a".to_vec()).into(),
+                    None::<Json>.into(),
+                ],
+                Some(r#"{"a":null}"#.parse().unwrap()),
+            ),
+        ];
+        for (sig, args, expect_output) in cases {
+            let output: Option<Json> = RpnFnScalarEvaluator::new()
+                .push_params(args.clone())
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", args);
         }
     }
 

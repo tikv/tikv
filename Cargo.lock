@@ -338,6 +338,7 @@ dependencies = [
 name = "cmd"
 version = "0.0.1"
 dependencies = [
+ "backup",
  "chrono",
  "clap",
  "engine",
@@ -1185,11 +1186,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#9a1bd6a31da241b7a6b9de6513aa64b0d89ad800"
+source = "git+https://github.com/pingcap/kvproto.git#3a4a632801d5ebcd85409f24927484b9870bca9d"
 dependencies = [
  "futures",
  "grpcio",
- "protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)",
+ "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-build",
  "raft-proto 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
 ]

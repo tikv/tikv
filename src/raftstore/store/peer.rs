@@ -787,7 +787,7 @@ impl Peer {
     }
 
     /// Steps the raft message.
-    pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
+    pub fn step(&mut self, mut m: eraftpb::Message) -> Result<()> {
         fail_point!(
             "step_message_3_1",
             { self.peer.get_store_id() == 3 && self.region_id == 1 },
@@ -801,6 +801,22 @@ impl Peer {
             // As another role know we're not missing.
             self.leader_missing_time.take();
         }
+        // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
+        // request directly, rather than send a heartbeat to check quorum.
+        let msg_type = m.get_msg_type();
+        if msg_type == MessageType::MsgReadIndex {
+            if let LeaseState::Valid = self.inspect_lease() {
+                let mut resp = eraftpb::Message::default();
+                resp.set_msg_type(MessageType::MsgReadIndexResp);
+                resp.to = m.from;
+                resp.index = self.get_store().committed_index();
+                resp.set_entries(m.take_entries());
+
+                self.pending_messages.push(resp);
+                return Ok(());
+            }
+        }
+
         self.raft_group.step(m)?;
         Ok(())
     }
@@ -1211,6 +1227,12 @@ impl Peer {
 
         self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
 
+        if !ready.committed_entries.as_ref().map_or(true, Vec::is_empty)
+            && ctx.current_time.is_none()
+        {
+            ctx.current_time.replace(monotonic_raw_now());
+        }
+
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
@@ -1319,9 +1341,7 @@ impl Peer {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
                         ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (ctx.lease_time.unwrap_or_else(monotonic_raw_now) - propose_time)
-                                .to_std()
-                                .unwrap(),
+                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
                         ));
                         self.maybe_renew_leader_lease(propose_time, ctx, None);
                         lease_to_be_updated = false;
@@ -1711,10 +1731,10 @@ impl Peer {
         cb: Callback,
     ) {
         // Try to renew leader lease on every consistent read/write request.
-        if poll_ctx.lease_time.is_none() {
-            poll_ctx.lease_time = Some(monotonic_raw_now());
+        if poll_ctx.current_time.is_none() {
+            poll_ctx.current_time = Some(monotonic_raw_now());
         }
-        meta.renew_lease_time = poll_ctx.lease_time;
+        meta.renew_lease_time = poll_ctx.current_time;
 
         if !cb.is_none() {
             let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
@@ -1894,7 +1914,7 @@ impl Peer {
 
     fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
         ctx.raft_metrics.propose.local_read += 1;
-        cb.invoke_read(self.handle_read(ctx, req, false, None))
+        cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
     }
 
     fn pre_read_index(&self) -> Result<()> {
