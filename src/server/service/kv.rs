@@ -856,7 +856,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
-        let split_keys = if !req.get_split_key().is_empty() {
+        let mut split_keys = if !req.get_split_key().is_empty() {
             vec![Key::from_raw(req.get_split_key()).into_encoded()]
         } else {
             req.take_split_keys()
@@ -864,6 +864,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
                 .map(|x| Key::from_raw(&x).into_encoded())
                 .collect()
         };
+        split_keys.sort();
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
             split_keys,
