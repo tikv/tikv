@@ -111,7 +111,7 @@
 # snap-max-write-bytes-per-sec = "100MB"
 
 ## Milliseconds before one mini batch is submitted
-# minibatch-timeout-millis = 1
+# minibatch-timeout-millis = 0
 
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
