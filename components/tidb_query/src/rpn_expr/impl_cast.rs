@@ -761,13 +761,6 @@ mod tests {
     }
 
     fn check_warning_2(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
-        // if ctx.warnings.warning_cnt != err_code.len() {
-        //     println!(
-        //         "ctx.warnings.warning_cnt != err_code.len(), log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
-        //         log, ctx.warnings.warnings, err_code
-        //     );
-        //     return;
-        // }
         assert_eq!(
             ctx.warnings.warning_cnt,
             err_code.len(),
@@ -778,13 +771,6 @@ mod tests {
         for i in 0..err_code.len() {
             let e1 = err_code[i];
             let e2 = ctx.warnings.warnings[i].get_code();
-            // if e1 != e2 {
-            //     println!(
-            //         "err_code!=expect, log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
-            //         log, ctx.warnings.warnings, err_code
-            //     );
-            //     break;
-            // }
             assert_eq!(
                 e1, e2,
                 "log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
@@ -797,19 +783,9 @@ mod tests {
         assert!(res.is_ok(), "{}", log);
         let res = res.as_ref().unwrap();
         if res.is_none() {
-            // if expect.is_some() {
-            //     println!("expect should be none, but it is some, log: {}", log);
-            // }
             assert!(expect.is_none(), "{}", log);
         } else {
             let res = res.as_ref().unwrap();
-            // if expect.unwrap() != res {
-            //     println!(
-            //         "expect.unwrap()==res: {}, log: {}",
-            //         expect.unwrap() == res,
-            //         log
-            //     );
-            // }
             assert_eq!(res, expect.unwrap(), "{}", log);
         }
     }
