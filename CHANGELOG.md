@@ -16,7 +16,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Fix the issue that ReadIndex does not return anything when there is no leader [#5351](https://github.com/tikv/tikv/pull/5351)
 + Exclude shared block cache from core dump [#5322](https://github.com/tikv/tikv/pull/5322)
 
-## [3.0.2] -2019-08-06
+## [3.0.2] - 2019-08-06
 * Fix the bug that TiKV panics if the Raft Log is not written in time [#5160](https://github.com/tikv/tikv/pull/5160)
 * Fix the bug that the panic information is not written into the log file after TiKV panics [#5198](https://github.com/tikv/tikv/pull/5198)
 * Fix the bug that the insert operation might be incorrectly performed in the pessimistic transaction [#5203](https://github.com/tikv/tikv/pull/5203)
@@ -99,7 +99,7 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
 + Misc
     - Add dist_release. [4841](https://github.com/tikv/tikv/pull/4841)
 
-## [3.0.0-rc.2] -2019-05-28
+## [3.0.0-rc.2] - 2019-05-28
 + Engine
     - Support multiple column families sharing a block cache [#4563](https://github.com/tikv/tikv/pull/4563)
 + Server
