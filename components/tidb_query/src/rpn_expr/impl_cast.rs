@@ -13,7 +13,7 @@ use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
 use crate::codec::Error;
-use crate::expr::{EvalContext, EvalWarnings, Flag};
+use crate::expr::{EvalContext, Flag};
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
 use std::num::IntErrorKind;
@@ -234,46 +234,22 @@ fn cast_string_as_int_or_uint_helper(
     is_str_neg: bool,
     is_res_unsigned: bool,
 ) -> Result<Option<i64>> {
-    let mut ctx_clone = EvalContext {
-        cfg: ctx.cfg.clone(),
-        warnings: EvalWarnings::new(10),
-    };
-    let valid_int_prefix = get_valid_int_prefix(&mut ctx_clone, val);
-    // check if there is any overflow err or warning,
-    // if there is, use handle_overflow_for_cast_string_as_int to handle it.
+    // In TiDB, they only handle overflow using ctx when `sc.InSelectStmt` is true,
+    // However, according to https://github.com/pingcap/tidb/blob/e173c7f5c1041b3c7e67507889d50a7bdbcdfc01/executor/executor.go#L153,
+    // when InSelectStmt, OverflowAsWarning is always true,
+    // and when not InSelectStmt, OverflowAsWarning is always not true.
+    // So we needn't to check `sc.InSelectStmt` and can handle it using ctx directly.
     //
+    // Be careful that, if this flag(OverflowAsWarning)'s setting had changed,
+    // then here's behavior will change, so it may make some bug different to find.
+    let valid_int_prefix = get_valid_int_prefix(ctx, val)?;
+
     // TODO: TiDB's floatStrToIntStr will append a overflow warning when the intStr is too long.
     //  So in this case, there will make strconv.ParseUint or strconv.ParseInt return err.
     //  So in TiDB's impl, there are one overflow warning and one overflow err handled by
     //  `handle_overflow_for_cast_string_as_int`(TiDB's version).
     //  Then although its result is same as ours, it may has two overflow warning.
     //  I think this is TiDB's bug. This comment is just for note.
-    let valid_int_prefix = match valid_int_prefix {
-        Ok(r) => {
-            let mut overflow_err = None;
-            for w in ctx_clone.warnings.warnings {
-                if w.get_code() == ERR_DATA_OUT_OF_RANGE {
-                    overflow_err = Some(w);
-                } else {
-                    ctx.warnings.append_tipb_err_type_warning(w);
-                }
-            }
-            if let Some(e) = overflow_err {
-                // cast tipb::Error to tidb_query::codec::error
-                let err = Error::Eval(e.get_msg().to_string(), ERR_DATA_OUT_OF_RANGE);
-                return handle_overflow_for_cast_string_as_int(ctx, err, is_str_neg, val).map(Some);
-            }
-            r
-        }
-        Err(e) => {
-            ctx.warnings.merge(&mut ctx_clone.warnings);
-            if e.is_overflow() {
-                return handle_overflow_for_cast_string_as_int(ctx, e, is_str_neg, val).map(Some);
-            } else {
-                return Err(e.into());
-            }
-        }
-    };
     let parse_res = if !is_str_neg {
         valid_int_prefix.parse::<u64>().map(|x| x as i64)
     } else {
@@ -304,7 +280,7 @@ fn cast_string_as_int_or_uint_helper(
                     } else {
                         Error::overflow("BIGINT", valid_int_prefix)
                     };
-                     handle_overflow_for_cast_string_as_int(
+                    handle_overflow_for_cast_string_as_int(
                         ctx,
                         err,
                         is_str_neg,
