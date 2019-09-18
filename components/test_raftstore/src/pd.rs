@@ -817,8 +817,8 @@ impl TestPdClient {
     ) {
         let op = Operator::SplitRegion {
             region_epoch: region.take_region_epoch(),
-            policy: policy,
-            keys: keys,
+            policy,
+            keys,
         };
         self.schedule_operator(region.get_id(), op);
     }
