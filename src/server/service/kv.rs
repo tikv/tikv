@@ -179,24 +179,34 @@ impl MiniBatcherInner {
                     if max_ratio < ratio {
                         max_ratio = ratio;
                     }
-                    storage.batch_prewrite(
-                        cmd,
-                        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
-                            // let v = v.map_err(Error::from);
-                            let mut resp = PrewriteResponse::default();
-                            if let Some(err) = extract_region_error(&v) {
-                                resp.set_region_error(err);
-                            } else {
-                                resp.set_errors(extract_key_errors(v).into());
-                            }
-                            let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::Prewrite(resp));
-                            tx.send_and_notify((id, res));
-                            // if !tx.send_and_notify((id, res)).is_err() {
-                                // timer.observe_duration();
-                            // }
-                        }),
-                    );
+                    let res =
+                        storage.batch_prewrite(
+                            cmd,
+                            Box::new(
+                                move |id,
+                                      v: Result<
+                                    Vec<Result<(), storage::Error>>,
+                                    storage::Error,
+                                >| {
+                                    let mut resp = PrewriteResponse::default();
+                                    if let Some(err) = extract_region_error(&v) {
+                                        resp.set_region_error(err);
+                                    } else {
+                                        resp.set_errors(extract_key_errors(v).into());
+                                    }
+                                    let mut res = batch_commands_response::Response::default();
+                                    res.cmd = Some(
+                                        batch_commands_response::response::Cmd::Prewrite(resp),
+                                    );
+                                    if tx.send_and_notify((id, res)).is_err() {
+                                        error!("KvService response batch commands fail");
+                                    }
+                                },
+                            ),
+                        );
+                    if let Err(e) = res {
+                        error!("storage batch prewrite failed"; "err" => ?e);
+                    }
                 }
                 MINIBATCH_MAX_BATCHED_RATIO_HISTOGRAM_VEC
                     .prewrite
@@ -213,24 +223,33 @@ impl MiniBatcherInner {
                     if max_ratio < ratio {
                         max_ratio = ratio;
                     }
-                    storage.batch_commit(
-                        cmd,
-                        Box::new(move |id, v: Result<Vec<Result<(), storage::Error>>, storage::Error>| {
-                            // let v = v.map_err(Error::from);
-                            let mut resp = CommitResponse::default();
-                            if let Some(err) = extract_region_error(&v) {
-                                resp.set_region_error(err);
-                            } else if let Err(e) = v {
-                                resp.set_error(extract_key_error(&e));
-                            }
-                            let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::Commit(resp));
-                            tx.send_and_notify((id, res));
-                            // if !tx.send_and_notify((id, res)).is_err() {
-                                // timer.observe_duration();
-                            // }
-                        }),
-                    );
+                    let res =
+                        storage.batch_commit(
+                            cmd,
+                            Box::new(
+                                move |id,
+                                      v: Result<
+                                    Vec<Result<(), storage::Error>>,
+                                    storage::Error,
+                                >| {
+                                    let mut resp = CommitResponse::default();
+                                    if let Some(err) = extract_region_error(&v) {
+                                        resp.set_region_error(err);
+                                    } else if let Err(e) = v {
+                                        resp.set_error(extract_key_error(&e));
+                                    }
+                                    let mut res = batch_commands_response::Response::default();
+                                    res.cmd =
+                                        Some(batch_commands_response::response::Cmd::Commit(resp));
+                                    if tx.send_and_notify((id, res)).is_err() {
+                                        error!("KvService response batch commands fail");
+                                    }
+                                },
+                            ),
+                        );
+                    if let Err(e) = res {
+                        error!("storage batch prewrite failed"; "err" => ?e);
+                    }
                 }
                 MINIBATCH_MAX_BATCHED_RATIO_HISTOGRAM_VEC
                     .commit
@@ -493,7 +512,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
         thread_load: Arc<ThreadLoad>,
         minibatch_timeout_millis: u64,
     ) -> Self {
-        info!("Service::new()"; "minibatch-timeout" => minibatch_timeout_millis);
         let timer_pool = Arc::new(Mutex::new(
             ThreadPoolBuilder::new()
                 .pool_size(1)

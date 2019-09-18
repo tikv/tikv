@@ -374,8 +374,8 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                if ids.is_some() {
-                    for id in ids.unwrap() {
+                if let Some(ids) = ids {
+                    for id in ids {
                         if id < u64::max_value() {
                             self.batch_finish_with_err(
                                 cid,

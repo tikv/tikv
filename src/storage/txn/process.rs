@@ -296,7 +296,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         let lock_mgr = self.take_lock_mgr();
         match task.cmd {
             cmd @ Command::MiniBatch { .. } => {
-                process_batch_write_impl(
+                if process_batch_write_impl(
                     cid,
                     cmd,
                     snapshot,
@@ -304,7 +304,11 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                     scheduler,
                     self.take_pool(),
                     &mut statistics,
-                );
+                )
+                .is_err()
+                {
+                    error!("write command failed at batch write");
+                }
                 statistics
             }
             cmd => {
