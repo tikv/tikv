@@ -662,13 +662,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     for m in mutations {
                         let lock_type = LockType::from_mutation(&m);
                         let (key, value) = m.clone().into_key_value();
-                        self.prewrite_key_value(
-                            key,
-                            lock_type,
-                            primary.to_vec(),
-                            value,
-                            &options,
-                        );
+                        self.prewrite_key_value(key, lock_type, primary.to_vec(), value, &options);
                     }
                 }
             }
