@@ -1,6 +1,6 @@
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
 use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;
@@ -25,7 +25,7 @@ pub type KvPair = (Vec<u8>, Value);
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
@@ -191,6 +191,12 @@ impl Clone for Key {
         let mut key = Vec::with_capacity(self.0.capacity());
         key.extend_from_slice(&self.0);
         Key(key)
+    }
+}
+
+impl Debug for Key {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.write_hex_upper(f)
     }
 }
 
