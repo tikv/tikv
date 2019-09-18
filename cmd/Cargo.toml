@@ -53,6 +53,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.
 tikv_util = { path = "../components/tikv_util" }
 engine = { path = "../components/engine" }
 tikv_alloc = { path = "../components/tikv_alloc" }
+backup = { path = "../components/backup" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
