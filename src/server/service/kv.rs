@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::iter::{self, FromIterator};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -43,8 +44,7 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
-const MINIBATCH_TIMEOUT_MICROS: u64 = 200;
-const MINIBATCH_CROSS_COMMAND_ENABLED: bool = true;
+
 const MINIBATCH_INIT_RATIO: f32 = 2.0;
 const MINIBATCH_REPORT_TO_LOG: bool = false;
 
@@ -61,6 +61,9 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     snap_scheduler: Scheduler<SnapTask>,
 
     thread_load: Arc<ThreadLoad>,
+
+    // timeout set to 0 means batch is collected without crossing commands
+    minibatch_timeout_millis: u64,
 
     timer_pool: Arc<Mutex<ThreadPool>>,
 }
@@ -105,11 +108,12 @@ struct MiniBatcherInner {
     key_conflict: u64,
     output: u64,
     last_submit: Instant,
+    timeout: u64,
     ratio: f32,
 }
 
 impl MiniBatcherInner {
-    pub fn new(tag: CommandKind) -> Self {
+    pub fn new(tag: CommandKind, timeout: u64) -> Self {
         MiniBatcherInner {
             tag,
             commands: vec![],
@@ -120,6 +124,7 @@ impl MiniBatcherInner {
             key_conflict: 0,
             output: 0,
             last_submit: Instant::now(),
+            timeout,
             ratio: MINIBATCH_INIT_RATIO,
         }
     }
@@ -129,9 +134,8 @@ impl MiniBatcherInner {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) {
-        if !MINIBATCH_CROSS_COMMAND_ENABLED
-            || self.batchable as f32 / self.output as f32 > self.ratio
-        {
+        if self.timeout == 0 {
+            // || self.batchable as f32 / self.output as f32 > self.ratio {
             self.submit(tx, storage);
         }
     }
@@ -141,13 +145,12 @@ impl MiniBatcherInner {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) {
-        if self.last_submit.elapsed() > Duration::from_micros(MINIBATCH_TIMEOUT_MICROS) {
+        if self.last_submit.elapsed() > Duration::from_millis(self.timeout) {
             if !self.commands.is_empty() && self.ratio > 1.1 {
-                // commands drop zero means batch_commands is not called
                 self.ratio -= 0.01;
             }
             self.submit(tx, storage);
-        } else if !self.commands.is_empty() && self.ratio < 25.0 {
+        } else if !self.commands.is_empty() && self.ratio < 50.0 {
             self.ratio += 0.01;
         }
     }
@@ -265,8 +268,12 @@ impl MiniBatcherInner {
                     .observe(f64::from(self.ratio));
                 MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC.prewrite.observe(a);
                 MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC.prewrite.observe(b);
-                MINIBATCH_INPUT_SIZE_HISTOGRAM_VEC.prewrite.observe(self.batchable as f64);
-                MINIBATCH_OUTPUT_SIZE_HISTOGRAM_VEC.prewrite.observe(self.output as f64);
+                MINIBATCH_INPUT_SIZE_HISTOGRAM_VEC
+                    .prewrite
+                    .observe(self.batchable as f64);
+                MINIBATCH_OUTPUT_SIZE_HISTOGRAM_VEC
+                    .prewrite
+                    .observe(self.output as f64);
             }
             CommandKind::commit => {
                 MINIBATCH_READY_RATIO_HISTOGRAM_VEC
@@ -274,8 +281,12 @@ impl MiniBatcherInner {
                     .observe(f64::from(self.ratio));
                 MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC.commit.observe(a);
                 MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC.commit.observe(b);
-                MINIBATCH_INPUT_SIZE_HISTOGRAM_VEC.commit.observe(self.batchable as f64);
-                MINIBATCH_OUTPUT_SIZE_HISTOGRAM_VEC.commit.observe(self.output as f64);
+                MINIBATCH_INPUT_SIZE_HISTOGRAM_VEC
+                    .commit
+                    .observe(self.batchable as f64);
+                MINIBATCH_OUTPUT_SIZE_HISTOGRAM_VEC
+                    .commit
+                    .observe(self.output as f64);
             }
             _ => {}
         }
@@ -288,15 +299,15 @@ struct MiniBatcher {
 }
 
 impl MiniBatcher {
-    pub fn new(tx: Sender<(u64, batch_commands_response::Response)>) -> Self {
+    pub fn new(tx: Sender<(u64, batch_commands_response::Response)>, timeout: u64) -> Self {
         let mut inners = BTreeMap::default();
         inners.insert(
             numerize_command_kind(CommandKind::prewrite),
-            MiniBatcherInner::new(CommandKind::prewrite),
+            MiniBatcherInner::new(CommandKind::prewrite, timeout),
         );
         inners.insert(
             numerize_command_kind(CommandKind::commit),
-            MiniBatcherInner::new(CommandKind::commit),
+            MiniBatcherInner::new(CommandKind::commit, timeout),
         );
         MiniBatcher { inners, tx }
     }
@@ -480,7 +491,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         thread_load: Arc<ThreadLoad>,
+        minibatch_timeout_millis: u64,
     ) -> Self {
+        info!("Service::new()"; "minibatch-timeout" => minibatch_timeout_millis);
         let timer_pool = Arc::new(Mutex::new(
             ThreadPoolBuilder::new()
                 .pool_size(1)
@@ -494,6 +507,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
             snap_scheduler,
             thread_load,
             timer_pool,
+            minibatch_timeout_millis,
         }
     }
 
@@ -1423,16 +1437,19 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-        let minibatcher = MiniBatcher::new(tx.clone());
+        let minibatcher = MiniBatcher::new(tx.clone(), self.minibatch_timeout_millis);
+        let stopped = Arc::new(AtomicBool::new(false));
         let minibatcher = Arc::new(Mutex::new(minibatcher));
-        if MINIBATCH_CROSS_COMMAND_ENABLED {
+        if self.minibatch_timeout_millis > 0 {
             let storage = storage.clone();
             let minibatcher = minibatcher.clone();
+            let stopped = Arc::clone(&stopped);
             let start = Instant::now() + Duration::from_millis(100);
             let timer = GLOBAL_TIMER_HANDLE.clone();
             self.timer_pool.lock().unwrap().spawn(
                 timer
-                    .interval(start, Duration::from_micros(MINIBATCH_TIMEOUT_MICROS))
+                    .interval(start, Duration::from_millis(self.minibatch_timeout_millis))
+                    .take_while(move |_| future::ok(!stopped.load(Ordering::Relaxed)))
                     .for_each(move |_| {
                         minibatcher.lock().unwrap().should_submit(&storage);
                         Ok(())
@@ -1446,21 +1463,21 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, mut req) in request_ids.into_iter().zip(requests) {
                 if !minibatcher.lock().unwrap().filter(id, &mut req) {
-                    handle_batch_commands_request(
-                        &storage,
-                        &cop,
-                        &peer,
-                        id,
-                        req,
-                        tx.clone(),
-                    );
+                    handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
                 }
             }
             minibatcher.lock().unwrap().maybe_submit(&storage);
-            future::ok::<_, _>(())
+            future::ok(())
         });
 
-        ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
+        ctx.spawn(
+            request_handler
+                .map_err(|e| error!("batch_commands error"; "err" => %e))
+                .and_then(move |_| {
+                    stopped.store(true, Ordering::Relaxed);
+                    Ok(())
+                }),
+        );
 
         let thread_load = Arc::clone(&self.thread_load);
         let response_retriever = BatchReceiver::new(

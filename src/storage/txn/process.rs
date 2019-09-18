@@ -307,12 +307,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 statistics
             }
             cmd => {
-                let msg = match process_write_impl(
-                    cmd,
-                    snapshot,
-                    lock_mgr,
-                    &mut statistics,
-                ) {
+                let msg = match process_write_impl(cmd, snapshot, lock_mgr, &mut statistics) {
                     // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
                     // message when it finishes.
                     Ok(WriteResult {
