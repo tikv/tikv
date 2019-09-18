@@ -576,11 +576,19 @@ impl<T: PdClient> Runner<T> {
                         .with_label_values(&["split region"])
                         .inc();
 
-                    let split_region = resp.take_split_region();
+                    let mut split_region = resp.take_split_region();
                     info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
-                    let msg = CasualMessage::HalfSplitRegion {
-                        region_epoch: epoch,
-                        policy: split_region.get_policy(),
+                    let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
+                        CasualMessage::SplitRegion{
+                            region_epoch: epoch,
+                            split_keys: split_region.take_keys().into_vec(),
+                            callback: Callback::None,
+                        }
+                    } else {
+                        CasualMessage::HalfSplitRegion {
+                            region_epoch: epoch,
+                            policy: split_region.get_policy(),
+                        }
                     };
                     if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
                         error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
