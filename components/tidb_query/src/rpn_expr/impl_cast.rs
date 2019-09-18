@@ -43,7 +43,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Bytes, EvalType::Int) => cast_string_as_int_or_uint_fn_meta(),
         (EvalType::Decimal, EvalType::Int) => {
             if !to_field_type.is_unsigned() {
-                cast_any_as_decimal_fn_meta::<Int>()
+                cast_any_as_any_fn_meta::<Decimal, Int>()
             } else {
                 cast_decimal_as_uint_fn_meta()
             }
@@ -179,7 +179,7 @@ fn in_union(implicit_args: &[ScalarValue]) -> bool {
 fn cast_signed_int_as_unsigned_int(
     extra: &RpnFnCallExtra<'_>,
     val: &Option<Int>,
-) -> Result<Option<i64>> {
+) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -195,7 +195,7 @@ fn cast_signed_int_as_unsigned_int(
 
 #[rpn_fn]
 #[inline]
-fn cast_int_as_int_others(val: &Option<Int>) -> Result<Option<i64>> {
+fn cast_int_as_int_others(val: &Option<Int>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => Ok(Some(*val)),
@@ -208,7 +208,7 @@ fn cast_real_as_uint(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra<'_>,
     val: &Option<Real>,
-) -> Result<Option<i64>> {
+) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -233,7 +233,7 @@ fn cast_string_as_int_or_uint_helper(
     val: &str,
     is_str_neg: bool,
     is_res_unsigned: bool,
-) -> Result<Option<i64>> {
+) -> Result<Option<Int>> {
     // In TiDB, they only handle overflow using ctx when `sc.InSelectStmt` is true,
     // However, according to https://github.com/pingcap/tidb/blob/e173c7f5c1041b3c7e67507889d50a7bdbcdfc01/executor/executor.go#L153,
     // when InSelectStmt, OverflowAsWarning is always true,
@@ -299,7 +299,7 @@ fn cast_string_as_int_or_uint(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra<'_>,
     val: &Option<Bytes>,
-) -> Result<Option<i64>> {
+) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -349,7 +349,7 @@ fn cast_decimal_as_uint(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra<'_>,
     val: &Option<Decimal>,
-) -> Result<Option<i64>> {
+) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(val) => {
@@ -366,7 +366,7 @@ fn cast_decimal_as_uint(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-fn cast_json_as_uint(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option<i64>> {
+fn cast_json_as_uint(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option<Int>> {
     match val {
         None => Ok(None),
         Some(j) => {
