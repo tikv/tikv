@@ -310,6 +310,10 @@ impl MiniBatcherInner {
             _ => {}
         }
     }
+
+    fn empty(&self) -> bool {
+        self.commands.is_empty()
+    }
 }
 
 struct MiniBatcher {
@@ -499,6 +503,15 @@ impl MiniBatcher {
         for inner in self.inners.values_mut() {
             inner.should_submit(&self.tx, storage);
         }
+    }
+
+    pub fn empty(&self) -> bool {
+        for inner in self.inners.values() {
+            if !inner.empty() {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -1462,13 +1475,19 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         if self.minibatch_timeout_millis > 0 {
             let storage = storage.clone();
             let minibatcher = minibatcher.clone();
+            let minibatcher2 = minibatcher.clone();
             let stopped = Arc::clone(&stopped);
             let start = Instant::now() + Duration::from_millis(100);
             let timer = GLOBAL_TIMER_HANDLE.clone();
             self.timer_pool.lock().unwrap().spawn(
                 timer
                     .interval(start, Duration::from_millis(self.minibatch_timeout_millis))
-                    .take_while(move |_| future::ok(!stopped.load(Ordering::Relaxed)))
+                    .take_while(move |_| {
+                        future::ok(
+                            !stopped.load(Ordering::Relaxed)
+                                || !minibatcher2.lock().unwrap().empty(),
+                        )
+                    })
                     .for_each(move |_| {
                         minibatcher.lock().unwrap().should_submit(&storage);
                         Ok(())
