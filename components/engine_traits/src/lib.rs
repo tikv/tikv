@@ -21,6 +21,7 @@ mod engine;
 pub use crate::engine::*;
 mod options;
 pub use crate::options::*;
+mod util;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
 
