@@ -16,7 +16,6 @@ pub trait Peekable {
 
     fn get_msg<M: protobuf::Message + Default>(&self, key: &[u8]) -> Result<Option<M>> {
         let value = self.get(key)?;
-
         if value.is_none() {
             return Ok(None);
         }
@@ -32,7 +31,6 @@ pub trait Peekable {
         key: &[u8],
     ) -> Result<Option<M>> {
         let value = self.get_cf(cf, key)?;
-
         if value.is_none() {
             return Ok(None);
         }

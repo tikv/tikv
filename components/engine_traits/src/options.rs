@@ -20,7 +20,7 @@ impl Default for ReadOptions {
 
 #[derive(Clone)]
 pub struct WriteOptions {
-    pub sync: bool,
+    sync: bool,
 }
 
 impl WriteOptions {
@@ -56,12 +56,12 @@ impl Default for CFOptions {
 
 #[derive(Clone)]
 pub struct IterOptions {
-    pub lower_bound: Option<KeyBuilder>,
-    pub upper_bound: Option<KeyBuilder>,
-    pub prefix_same_as_start: bool,
-    pub fill_cache: bool,
-    pub key_only: bool,
-    pub seek_mode: SeekMode,
+    lower_bound: Option<KeyBuilder>,
+    upper_bound: Option<KeyBuilder>,
+    prefix_same_as_start: bool,
+    fill_cache: bool,
+    key_only: bool,
+    seek_mode: SeekMode,
 }
 
 impl IterOptions {
@@ -80,33 +80,27 @@ impl IterOptions {
         }
     }
 
-    #[inline]
     pub fn use_prefix_seek(mut self) -> IterOptions {
         self.seek_mode = SeekMode::Prefix;
         self
     }
 
-    #[inline]
     pub fn total_order_seek_used(&self) -> bool {
         self.seek_mode == SeekMode::TotalOrder
     }
 
-    #[inline]
-    pub fn fill_cache(&mut self, v: bool) {
+    pub fn set_fill_cache(&mut self, v: bool) {
         self.fill_cache = v;
     }
 
-    #[inline]
-    pub fn key_only(&mut self, v: bool) {
+    pub fn set_key_only(&mut self, v: bool) {
         self.key_only = v;
     }
 
-    #[inline]
     pub fn lower_bound(&self) -> Option<&[u8]> {
         self.lower_bound.as_ref().map(|v| v.as_slice())
     }
 
-    #[inline]
     pub fn set_lower_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
         let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
         self.lower_bound = Some(builder);
@@ -122,12 +116,10 @@ impl IterOptions {
         }
     }
 
-    #[inline]
     pub fn upper_bound(&self) -> Option<&[u8]> {
         self.upper_bound.as_ref().map(|v| v.as_slice())
     }
 
-    #[inline]
     pub fn set_upper_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
         let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
         self.upper_bound = Some(builder);
@@ -143,10 +135,8 @@ impl IterOptions {
         }
     }
 
-    #[inline]
-    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOptions {
+    pub fn set_prefix_same_as_start(&mut self, enable: bool) {
         self.prefix_same_as_start = enable;
-        self
     }
 }
 

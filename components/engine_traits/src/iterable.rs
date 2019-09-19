@@ -72,7 +72,7 @@ pub trait Iterable {
         scan_impl(self.iterator_cf_opt(&iter_opt, cf)?, start_key, f)
     }
 
-    // Seek the first key >= given key, if no found, return None.
+    // Seek the first key >= given key, if not found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.iterator()?;
         iter.seek(SeekKey::Key(key));
@@ -83,7 +83,7 @@ pub trait Iterable {
         }
     }
 
-    // Seek the first key >= given key, if no found, return None.
+    // Seek the first key >= given key, if not found, return None.
     fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.iterator_cf(cf)?;
         iter.seek(SeekKey::Key(key));
@@ -95,14 +95,14 @@ pub trait Iterable {
     }
 }
 
-fn scan_impl<Iter: Iterator, F>(mut it: Iter, start_key: &[u8], mut f: F) -> Result<()>
+fn scan_impl<Iter, F>(mut it: Iter, start_key: &[u8], mut f: F) -> Result<()>
 where
+    Iter: Iterator,
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
     it.seek(SeekKey::Key(start_key));
     while it.valid() {
         let r = f(it.key()?, it.value()?)?;
-
         if !r || !it.next() {
             break;
         }
