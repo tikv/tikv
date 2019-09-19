@@ -63,7 +63,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     thread_load: Arc<ThreadLoad>,
 
     // timeout set to 0 means batch is collected without crossing commands
-    minibatch_timeout_millis: u64,
+    minibatch_wait_millis: u64,
 
     timer_pool: Arc<Mutex<ThreadPool>>,
 }
@@ -523,7 +523,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         thread_load: Arc<ThreadLoad>,
-        minibatch_timeout_millis: u64,
+        minibatch_wait_millis: u64,
     ) -> Self {
         let timer_pool = Arc::new(Mutex::new(
             ThreadPoolBuilder::new()
@@ -538,7 +538,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
             snap_scheduler,
             thread_load,
             timer_pool,
-            minibatch_timeout_millis,
+            minibatch_wait_millis,
         }
     }
 
@@ -1469,10 +1469,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-        let minibatcher = MiniBatcher::new(tx.clone(), self.minibatch_timeout_millis);
+        let minibatcher = MiniBatcher::new(tx.clone(), self.minibatch_wait_millis);
         let stopped = Arc::new(AtomicBool::new(false));
         let minibatcher = Arc::new(Mutex::new(minibatcher));
-        if self.minibatch_timeout_millis > 0 {
+        if self.minibatch_wait_millis > 0 {
             let storage = storage.clone();
             let minibatcher = minibatcher.clone();
             let minibatcher2 = minibatcher.clone();
@@ -1481,7 +1481,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
             let timer = GLOBAL_TIMER_HANDLE.clone();
             self.timer_pool.lock().unwrap().spawn(
                 timer
-                    .interval(start, Duration::from_millis(self.minibatch_timeout_millis))
+                    .interval(start, Duration::from_millis(self.minibatch_wait_millis))
                     .take_while(move |_| {
                         future::ok(
                             !stopped.load(Ordering::Relaxed)

@@ -76,7 +76,7 @@ fn test_serde_custom_tikv_config() {
         stats_concurrency: 10,
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
-        minibatch_timeout_millis: 1,
+        minibatch_wait_duration: ReadableDuration::millis(1),
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
