@@ -1547,6 +1547,15 @@ impl Decimal {
         Res::Ok(x)
     }
 
+    pub fn from_f64(val: f64) -> Result<Decimal> {
+        if val.is_infinite() {
+            Err(invalid_type!("{} can't be convert to decimal'", val))
+        } else {
+            let r = val.to_string();
+            Decimal::from_str(r.as_str())
+        }
+    }
+
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
@@ -1710,18 +1719,15 @@ enable_conv_for_int!(usize, u64);
 enable_conv_for_int!(isize, i64);
 
 impl ConvertTo<f64> for Decimal {
-    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        let val = self.to_string().parse()?;
-        Ok(val)
-    }
-}
-
-impl ConvertTo<Json> for Decimal {
+    /// This function should not return err,
+    /// if it return err, then the err because of bug.
+    ///
+    /// Port from TiDB's MyDecimal::ToFloat64.
     #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
-        let val: f64 = self.convert(ctx)?;
-        Ok(Json::Double(val))
+    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+        let r = self.to_string().parse::<f64>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
     }
 }
 
@@ -1776,12 +1782,7 @@ impl ConvertTo<Decimal> for f64 {
     /// rather than the accurate value the float represent.
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        if !self.is_finite() {
-            return Err(invalid_type!("{} can't be convert to decimal'", self));
-        }
-
-        let s = format!("{}", self);
-        s.parse()
+        Decimal::from_f64(*self)
     }
 }
 
@@ -1793,20 +1794,13 @@ impl ConvertTo<Decimal> for Real {
 }
 
 impl ConvertTo<Decimal> for &[u8] {
+    // FIXME: the err handle is not exactly same as TiDB's,
+    //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let dec = match Decimal::from_bytes(self)? {
-            Res::Ok(d) => d,
-            Res::Overflow(d) => {
-                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))?;
-                d
-            }
-            Res::Truncated(d) => {
-                ctx.handle_truncate(true)?;
-                d
-            }
-        };
-        Ok(dec)
+        let r = Decimal::from_bytes(self)?;
+        let err = Error::overflow("DECIMAL", "");
+        r.into_result_with_overflow_err(ctx, err)
     }
 }
 
@@ -1821,6 +1815,29 @@ impl ConvertTo<Decimal> for Bytes {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         self.as_slice().convert(ctx)
+    }
+}
+
+impl ConvertTo<Decimal> for Json {
+    /// Port from TiDB's types.ConvertJSONToDecimal
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        match self {
+            Json::String(s) => {
+                Decimal::from_str(s.as_str()).or_else(|e| {
+                    ctx.handle_truncate_err(e)?;
+                    // FIXME: if TiDB's MyDecimal::FromString return err,
+                    //  it may has res. However, if TiKV's Decimal::from_str
+                    //  return err, it has no res, so I return zero here,
+                    //  but it may different from TiDB's MyDecimal::FromString
+                    Ok(Decimal::zero())
+                })
+            }
+            _ => {
+                let r: f64 = self.convert(ctx)?;
+                Decimal::from_f64(r)
+            }
+        }
     }
 }
 
@@ -2380,6 +2397,69 @@ mod tests {
     }
 
     #[test]
+    fn test_from_f64() {
+        let cs = vec![
+            (
+                std::f64::INFINITY,
+                Err(Error::InvalidDataType(String::new())),
+            ),
+            (
+                -std::f64::INFINITY,
+                Err(Error::InvalidDataType(String::new())),
+            ),
+            (10.123, Ok(Decimal::from_str("10.123").unwrap())),
+            (-10.123, Ok(Decimal::from_str("-10.123").unwrap())),
+            (10.111, Ok(Decimal::from_str("10.111").unwrap())),
+            (-10.111, Ok(Decimal::from_str("-10.111").unwrap())),
+            (
+                18446744073709552000.0,
+                Ok(Decimal::from_str("18446744073709552000").unwrap()),
+            ),
+            (
+                -18446744073709552000.0,
+                Ok(Decimal::from_str("-18446744073709552000").unwrap()),
+            ),
+            // FIXME: because of rust's bug,
+            //  (1<<64)(18446744073709551616), (1<<65)(36893488147419103232) can not be represent by f64
+            //  so these cases can not pass
+            // (18446744073709551616.0, Ok(Decimal::from_str("18446744073709551616").unwrap())),
+            // (-18446744073709551616.0, Ok(Decimal::from_str("-18446744073709551616").unwrap())),
+            // (36893488147419103000.0, Ok(Decimal::from_str("36893488147419103000.0").unwrap())),
+            // (-36893488147419103000.0, Ok(Decimal::from_str("-36893488147419103000.0").unwrap())),
+            (
+                36893488147419103000.0,
+                Ok(Decimal::from_str("36893488147419103000.0").unwrap()),
+            ),
+            (
+                -36893488147419103000.0,
+                Ok(Decimal::from_str("-36893488147419103000.0").unwrap()),
+            ),
+        ];
+        for (input, expect) in cs {
+            let r = Decimal::from_f64(input);
+            let log = format!(
+                "input: {}, expect: {:?}, output: {:?}",
+                input,
+                expect.as_ref().map(|x| x.to_string()),
+                r.as_ref().map(|x| x.to_string())
+            );
+            match expect {
+                Err(e) => {
+                    assert!(r.is_err(), "{}", log.as_str());
+                    match e {
+                        Error::InvalidDataType(_) => (),
+                        _ => panic!("{}", log.as_str()),
+                    }
+                }
+                Ok(d) => {
+                    assert!(r.is_ok(), "{}", log.as_str());
+                    assert_eq!(r.unwrap(), d, "{}", log.as_str());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_to_i64() {
         let cases = vec![
             (
@@ -2886,25 +2966,25 @@ mod tests {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
-            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
-            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e -1", Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001", Res::Ok("10")),
             (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
             (WORD_BUF_LEN, b"1e1073741823",
-            Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+             Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
             (WORD_BUF_LEN, b"-1e1073741823",
-            Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
-            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+             Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN, b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
              Res::Overflow("0")),
-            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
-            Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
+            (WORD_BUF_LEN, b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+             Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
             // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
-            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
-            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
+            (WORD_BUF_LEN, b"1eabc", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e 1ddd", Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e - 1", Res::Ok("1")),
             // with word_buf_len 1
-            (1,b"123450000098765",Res::Overflow("98765")),
-            (1,b"123450.000098765", Res::Truncated("123450")),
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {

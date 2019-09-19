@@ -338,6 +338,7 @@ dependencies = [
 name = "cmd"
 version = "0.0.1"
 dependencies = [
+ "backup",
  "chrono",
  "clap",
  "engine",
@@ -1185,7 +1186,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0e61b6f435c1d08d96020418bc7322ff83c66f10"
+source = "git+https://github.com/pingcap/kvproto.git#121d118fa10e253013b7dc03d0d5b9148f859b78"
 dependencies = [
  "futures",
  "grpcio",
