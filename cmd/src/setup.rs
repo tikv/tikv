@@ -15,11 +15,11 @@ pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 #[macro_export]
 macro_rules! fatal {
-    ($lvl:expr, $($arg:tt)+) => ({
+    ($lvl:expr $(, $arg:expr)*) => ({
         if $crate::setup::LOG_INITIALIZED.load(::std::sync::atomic::Ordering::SeqCst) {
-            crit!($lvl, $($arg)+);
+            crit!($lvl $(, $arg)*);
         } else {
-            eprintln!($lvl, $($arg)+);
+            eprintln!($lvl $(, $arg)*);
         }
         slog_global::clear_global();
         ::std::process::exit(1)
@@ -107,20 +107,18 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(labels_vec) = matches.values_of("labels") {
         let mut labels = HashMap::default();
-        labels_vec
-            .map(|s| {
-                let mut parts = s.split('=');
-                let key = parts.next().unwrap().to_owned();
-                let value = match parts.next() {
-                    None => fatal!("invalid label: {}", s),
-                    Some(v) => v.to_owned(),
-                };
-                if parts.next().is_some() {
-                    fatal!("invalid label: {}", s);
-                }
-                labels.insert(key, value);
-            })
-            .count();
+        for label in labels_vec {
+            let mut parts = label.split('=');
+            let key = parts.next().unwrap().to_owned();
+            let value = match parts.next() {
+                None => fatal!("invalid label: {}", label),
+                Some(v) => v.to_owned(),
+            };
+            if parts.next().is_some() {
+                fatal!("invalid label: {}", label);
+            }
+            labels.insert(key, value);
+        }
         config.server.labels = labels;
     }
 

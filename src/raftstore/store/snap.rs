@@ -1503,18 +1503,17 @@ pub mod tests {
         let key = keys::data_key(TEST_KEY);
         for cf in SNAPSHOT_CFS {
             let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
-            if p1.is_some() {
+            if let Some(p1) = p1 {
                 let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
-                if p2.is_none() {
+                if let Some(p2) = p2 {
+                    if p2 != p1 {
+                        panic!(
+                            "cf {}: key {:?}, value {:?}, expected {:?}",
+                            cf, key, p2, p1
+                        );
+                    }
+                } else {
                     panic!("cf {}: expect key {:?} has value", cf, key);
-                }
-                let p1 = p1.unwrap();
-                let p2 = p2.unwrap();
-                if p2 != p1 {
-                    panic!(
-                        "cf {}: key {:?}, value {:?}, expected {:?}",
-                        cf, key, p2, p1
-                    );
                 }
             }
         }
