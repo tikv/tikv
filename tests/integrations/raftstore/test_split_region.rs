@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::{fs, thread};
 
 use kvproto::metapb;
+use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
@@ -728,20 +729,20 @@ fn test_server_quick_election_after_split() {
 }
 
 #[test]
-fn test_node_half_split_region() {
+fn test_node_split_region() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_half_split_region(&mut cluster);
+    test_split_region(&mut cluster);
 }
 
 #[test]
-fn test_server_half_split_region() {
+fn test_server_split_region() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_half_split_region(&mut cluster);
+    test_split_region(&mut cluster);
 }
 
-fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // length of each key+value
     let item_len = 74;
     // make bucket's size to item_len, which means one row one bucket
@@ -754,7 +755,7 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let max_key = put_till_size(cluster, 9 * item_len, &mut range);
     let target = pd_client.get_region(&max_key).unwrap();
     assert_eq!(region, target);
-    pd_client.must_half_split_region(target);
+    pd_client.must_split_region(target, pdpb::CheckPolicy::Scan, vec![]);
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
@@ -762,6 +763,19 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(mid_key.as_slice(), right.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
+
+    let region = pd_client.get_region(b"x").unwrap();
+    pd_client.must_split_region(
+        region,
+        pdpb::CheckPolicy::Usekey,
+        vec![b"x1".to_vec(), b"y2".to_vec()],
+    );
+    let x1 = pd_client.get_region(b"x1").unwrap();
+    assert_eq!(x1.get_start_key(), b"x1");
+    assert_eq!(x1.get_end_key(), b"y2");
+    let y2 = pd_client.get_region(b"y2").unwrap();
+    assert_eq!(y2.get_start_key(), b"y2");
+    assert_eq!(y2.get_end_key(), b"");
 }
 
 #[test]
