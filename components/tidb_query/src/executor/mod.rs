@@ -358,6 +358,7 @@ pub mod tests {
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::collections::HashMap;
+    use tikv_util::map;
     use tipb::ColumnInfo;
     use tipb::TableScan;
     use tipb::{Expr, ExprType};
