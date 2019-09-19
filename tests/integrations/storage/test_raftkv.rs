@@ -9,8 +9,6 @@ use raft::eraftpb::MessageType;
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
-use std::thread;
-use std::time;
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::{CFStatistics, Key};
@@ -119,7 +117,7 @@ fn test_read_index_on_replica() {
         follower_peer.unwrap(),
         region.clone(),
         false,
-        std::time::Duration::from_secs(5),
+        time::Duration::from_secs(5),
     );
     assert!(!resp.as_ref().unwrap().get_header().has_error());
     assert_ne!(
