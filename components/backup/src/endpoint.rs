@@ -145,7 +145,7 @@ impl BackupRange {
             }
         };
         let stat = scanner.take_statistics();
-        return Ok((files, stat));
+        Ok((files, stat))
     }
 }
 
