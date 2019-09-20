@@ -354,7 +354,7 @@ dependencies = [
  "pd_client",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
- "rand 0.6.5",
+ "rand",
  "serde",
  "serde_json",
  "signal",
@@ -377,7 +377,7 @@ dependencies = [
  "libc",
  "panic_hook",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "rand 0.6.5",
+ "rand",
  "static_assertions 0.3.1",
  "tikv_alloc",
 ]
@@ -658,7 +658,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
- "rand 0.6.5",
+ "rand",
  "slog",
  "slog-global",
  "tempfile",
@@ -674,7 +674,7 @@ checksum = "f63eec71a3013ee912a0ecb339ff0c5fa5ed9660df04bfefa10c250b885d018c"
 dependencies = [
  "lazy_static",
  "log",
- "rand 0.6.5",
+ "rand",
 ]
 
 [[package]]
@@ -865,12 +865,6 @@ checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
 ]
-
-[[package]]
-name = "gcc"
-version = "0.3.54"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e33ec290da0d127825013597dbdfc28bee4964690c7ce1166cbc2a7bd08b1bb"
 
 [[package]]
 name = "getset"
@@ -1726,7 +1720,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94c8c7923936b28d546dfd14d4472eaf34c99b14e1c973a32b3e6d4eb04298c9"
 dependencies = [
  "libc",
- "rand 0.6.5",
+ "rand",
  "rustc_version",
  "smallvec",
  "winapi 0.3.4",
@@ -1932,7 +1926,7 @@ dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)",
- "rand 0.6.5",
+ "rand",
  "slog",
  "slog-envlogger",
  "slog-stdlog",
@@ -1961,15 +1955,6 @@ version = "0.6.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8892d0cb5e5f3b7d213ab9c7de44217d52b2751982654c69cdfbfa393940a42a"
 replace = "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
-
-[[package]]
-name = "rand"
-version = "0.3.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2791d88c6defac799c3f20d74f094ca33b9332612d9aef9078519c82e4fe04a5"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "rand"
@@ -2209,29 +2194,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-crypto"
-version = "0.2.36"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f76d05d3993fd5f4af9434e8e436db163a12a9d40e1a58a726f27a01dfd12a2a"
-dependencies = [
- "gcc",
- "libc",
- "rand 0.3.14",
- "rustc-serialize",
- "time",
-]
-
-[[package]]
 name = "rustc-demangle"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcfe5b13211b4d78e5c2cadfebd7769197d95c639c35a50057eb4c05de811395"
-
-[[package]]
-name = "rustc-serialize"
-version = "0.3.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcf128d1287d2ea9d80910b5f1120d0b8eede3fbf1abe91c40d39ea7d51e6fda"
 
 [[package]]
 name = "rustc_version"
@@ -2657,7 +2623,7 @@ checksum = "7dc4738f2e68ed2855de5ac9cdbe05c9216773ecde4739b2f095002ab03a13ef"
 dependencies = [
  "cfg-if",
  "libc",
- "rand 0.6.5",
+ "rand",
  "redox_syscall",
  "remove_dir_all",
  "winapi 0.3.4",
@@ -2710,7 +2676,7 @@ dependencies = [
  "pd_client",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
- "rand 0.6.5",
+ "rand",
  "slog",
  "slog-global",
  "tempfile",
@@ -2735,7 +2701,7 @@ dependencies = [
 name = "test_util"
 version = "0.0.1"
 dependencies = [
- "rand 0.6.5",
+ "rand",
  "rand_isaac",
  "slog",
  "tikv_alloc",
@@ -2784,16 +2750,16 @@ dependencies = [
  "nom 5.0.0-beta1",
  "num",
  "num-traits",
+ "openssl",
  "ordered-float",
  "panic_hook",
  "profiler",
  "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
- "rand 0.6.5",
+ "rand",
  "rand_xorshift",
  "regex",
- "rust-crypto",
  "safemem",
  "serde",
  "serde_derive",
@@ -2876,7 +2842,7 @@ dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
- "rand 0.6.5",
+ "rand",
  "rand_xorshift",
  "serde",
  "serde_derive",
@@ -2954,7 +2920,7 @@ dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
- "rand 0.6.5",
+ "rand",
  "regex",
  "serde",
  "serde_derive",
@@ -3168,7 +3134,7 @@ dependencies = [
  "futures",
  "log",
  "num_cpus",
- "rand 0.6.5",
+ "rand",
  "slab",
  "tokio-executor",
 ]
@@ -3359,7 +3325,7 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbc611eb48397705a6b0f6e917da23ae517e4d127123d2cf7674206627d32a"
 dependencies = [
- "rand 0.6.5",
+ "rand",
  "serde",
 ]
 
@@ -3502,7 +3468,7 @@ version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2057772d87bedea0efd93842ee0e0f52fc0c313c556d5fa8ee787771c051a61f"
 dependencies = [
- "rand 0.6.5",
+ "rand",
 ]
 
 [[package]]
