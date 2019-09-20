@@ -610,7 +610,7 @@ pub mod tests {
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
-                    if r.len() == 0 {
+                    if r.is_empty() {
                         // if return a empty vec then the progress is finished
                         assert_eq!(
                             ranges.len(),
