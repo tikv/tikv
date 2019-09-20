@@ -169,7 +169,7 @@ pub struct Progress<R: RegionInfoProvider> {
     next_start: Option<Key>,
     end_key: Option<Key>,
     region_info: R,
-    stopped: Arc<AtomicBool>,
+    stopped: bool,
 }
 
 impl<R: RegionInfoProvider> Progress<R> {
@@ -179,7 +179,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             next_start,
             end_key,
             region_info,
-            stopped: Arc::new(AtomicBool::default()),
+            stopped: Default::default(),
         }
     }
 
@@ -187,7 +187,7 @@ impl<R: RegionInfoProvider> Progress<R> {
     ///
     /// The number of the returned BackupRanges should <= n
     fn forword(&mut self, n: usize) -> Vec<BackupRange> {
-        if self.stopped.load(Ordering::SeqCst) {
+        if self.stopped {
             return Vec::new();
         }
         let store_id = self.store_id;
@@ -245,11 +245,11 @@ impl<R: RegionInfoProvider> Progress<R> {
             // region, we need to set the stopped flag here in case
             // we run with next_start set to None
             if b.region.get_end_key().is_empty() {
-                self.stopped.store(true, Ordering::SeqCst);
+                self.stopped = true;
             }
             self.next_start = b.end_key.clone();
         } else {
-            self.stopped.store(true, Ordering::SeqCst);
+            self.stopped = true;
         }
         branges
     }
@@ -609,6 +609,17 @@ pub mod tests {
                     let mut r = prs.forword(n);
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
+
+                    if r.len() == 0 {
+                        // if return a empty vec then the progress is finished
+                        assert_eq!(
+                            ranges.len(),
+                            expect.len(),
+                            "got {:?}, expect {:?}",
+                            ranges,
+                            expect
+                        );
+                    }
                     ranges.append(&mut r);
                 }
 
