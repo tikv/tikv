@@ -35,7 +35,7 @@ features = ["nightly", "push", "process"]
 
 [dependencies.rocksdb]
 git = "https://github.com/yiwu-arbug/rust-rocksdb.git"
-branch = "bench_6.0"
+branch = "bench_6.1"
 package = "rocksdb"
 
 [dev-dependencies]
