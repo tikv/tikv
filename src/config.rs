@@ -41,7 +41,7 @@ use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK, CF_WRITE};
 use pd_client::Config as PdConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
@@ -357,7 +357,7 @@ impl Default for DefaultCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
-            optimize_filters_for_hits: true,
+            optimize_filters_for_hits: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -409,14 +409,77 @@ impl DefaultCfConfig {
     }
 }
 
-cf_config!(WriteCfConfig);
+cf_config!(LatestCfConfig);
 
-impl Default for WriteCfConfig {
-    fn default() -> WriteCfConfig {
+impl Default for LatestCfConfig {
+    fn default() -> LatestCfConfig {
+        LatestCfConfig {
+            block_size: ReadableSize::kb(64),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_DEFAULT) as u64),
+            disable_block_cache: false,
+            cache_index_and_filter_blocks: true,
+            pin_l0_filter_and_index_blocks: true,
+            use_bloom_filter: true,
+            optimize_filters_for_hits: false,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
+            compression_per_level: [
+                DBCompressionType::No,
+                DBCompressionType::No,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Zstd,
+                DBCompressionType::Zstd,
+            ],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(512),
+            target_file_size_base: ReadableSize::mb(8),
+            level0_file_num_compaction_trigger: 4,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
+            titan: TitanCfConfig::default(),
+        }
+    }
+}
+
+impl LatestCfConfig {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts
+    }
+}
+
+cf_config!(HistoryCfConfig);
+
+impl Default for HistoryCfConfig {
+    fn default() -> HistoryCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
         let mut titan = TitanCfConfig::default();
         titan.blob_run_mode = BlobRunMode::ReadOnly;
-        WriteCfConfig {
+        HistoryCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
             disable_block_cache: false,
@@ -462,7 +525,7 @@ impl Default for WriteCfConfig {
     }
 }
 
-impl WriteCfConfig {
+impl HistoryCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, cache);
         // Prefix extractor(trim the timestamp at tail) for write cf.
@@ -481,6 +544,73 @@ impl WriteCfConfig {
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts
+    }
+}
+
+cf_config!(RollbackCfConfig);
+
+impl Default for RollbackCfConfig {
+    fn default() -> RollbackCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
+        let mut titan = TitanCfConfig::default();
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        RollbackCfConfig {
+            block_size: ReadableSize::kb(64),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
+            disable_block_cache: false,
+            cache_index_and_filter_blocks: true,
+            pin_l0_filter_and_index_blocks: true,
+            use_bloom_filter: true,
+            optimize_filters_for_hits: false,
+            whole_key_filtering: false,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
+            compression_per_level: [
+                DBCompressionType::No,
+                DBCompressionType::No,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Zstd,
+                DBCompressionType::Zstd,
+            ],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(512),
+            target_file_size_base: ReadableSize::mb(8),
+            level0_file_num_compaction_trigger: 4,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
+            titan,
+        }
+    }
+}
+
+impl RollbackCfConfig {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
+        // Prefix extractor(trim the timestamp at tail) for write cf.
+        let e = Box::new(FixedSuffixSliceTransform::new(8));
+        cf_opts
+            .set_prefix_extractor("FixedSuffixSliceTransform", e)
+            .unwrap();
+        // Create prefix bloom filter for memtable.
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts
     }
 }
@@ -673,7 +803,9 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub defaultcf: DefaultCfConfig,
-    pub writecf: WriteCfConfig,
+    pub latestcf: LatestCfConfig,
+    pub historycf: HistoryCfConfig,
+    pub rollbackcf: RollbackCfConfig,
     pub lockcf: LockCfConfig,
     pub raftcf: RaftCfConfig,
     pub titan: TitanDBConfig,
@@ -708,7 +840,9 @@ impl Default for DbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             defaultcf: DefaultCfConfig::default(),
-            writecf: WriteCfConfig::default(),
+            latestcf: LatestCfConfig::default(),
+            historycf: HistoryCfConfig::default(),
+            rollbackcf: RollbackCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: TitanDBConfig::default(),
@@ -773,26 +907,36 @@ impl DbConfig {
     pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
+            CFOptions::new(CF_LATEST, self.latestcf.build_opt(cache)),
+            CFOptions::new(CF_HISTORY, self.historycf.build_opt(cache)),
+            CFOptions::new(CF_ROLLBACK, self.rollbackcf.build_opt(cache)),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             // TODO: rmeove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+            // Deprecated
+            CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
         ]
     }
 
     pub fn build_cf_opts_v2(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
+            CFOptions::new(CF_LATEST, self.latestcf.build_opt(cache)),
+            CFOptions::new(CF_HISTORY, self.historycf.build_opt(cache)),
+            CFOptions::new(CF_ROLLBACK, self.rollbackcf.build_opt(cache)),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+            // Deprecated
+            CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
         ]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.defaultcf.validate()?;
         self.lockcf.validate()?;
-        self.writecf.validate()?;
+        self.latestcf.validate()?;
+        self.historycf.validate()?;
+        self.rollbackcf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
         Ok(())
@@ -801,8 +945,10 @@ impl DbConfig {
     fn write_into_metrics(&self) {
         write_into_metrics!(self.defaultcf, CF_DEFAULT, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
-        write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.latestcf, CF_LATEST, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.historycf, CF_HISTORY, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.rollbackcf, CF_ROLLBACK, CONFIG_ROCKSDB_GAUGE);
     }
 }
 
@@ -1425,18 +1571,6 @@ impl TiKvConfig {
             let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
                 + self.server.end_point_request_max_handle_duration.as_secs();
             self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
-        }
-        // When shared block cache is enabled, if its capacity is set, it overrides individual
-        // block cache sizes. Otherwise use the sum of block cache size of all column families
-        // as the shared cache size.
-        let cache_cfg = &mut self.storage.block_cache;
-        if cache_cfg.shared && cache_cfg.capacity.is_none() {
-            cache_cfg.capacity = Some(ReadableSize {
-                0: self.rocksdb.defaultcf.block_cache_size.0
-                    + self.rocksdb.writecf.block_cache_size.0
-                    + self.rocksdb.lockcf.block_cache_size.0
-                    + self.raftdb.defaultcf.block_cache_size.0,
-            });
         }
     }
 

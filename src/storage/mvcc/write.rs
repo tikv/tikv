@@ -3,7 +3,7 @@
 use super::super::types::Value;
 use super::lock::LockType;
 use super::{Error, Result};
-use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::storage::{SHORT_VALUE_MAX_LEN, VALUE_PREFIX};
 use byteorder::ReadBytesExt;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
@@ -54,7 +54,8 @@ impl WriteType {
 pub struct Write {
     pub write_type: WriteType,
     pub start_ts: u64,
-    pub short_value: Option<Value>,
+    pub commit_ts: u64,
+    pub value: Option<Value>,
 }
 
 impl std::fmt::Debug for Write {
@@ -62,10 +63,11 @@ impl std::fmt::Debug for Write {
         f.debug_struct("Write")
             .field("write_type", &self.write_type)
             .field("start_ts", &self.start_ts)
+            .field("commit_ts", &self.commit_ts)
             .field(
-                "short_value",
+                "value",
                 &self
-                    .short_value
+                    .value
                     .as_ref()
                     .map(|v| hex::encode_upper(v))
                     .unwrap_or_else(|| "None".to_owned()),
@@ -75,21 +77,28 @@ impl std::fmt::Debug for Write {
 }
 
 impl Write {
-    pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
+    pub fn new(
+        write_type: WriteType,
+        start_ts: u64,
+        commit_ts: u64,
+        value: Option<Value>,
+    ) -> Write {
         Write {
             write_type,
             start_ts,
-            short_value,
+            commit_ts,
+            value,
         }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
         b.push(self.write_type.to_u8());
-        b.encode_var_u64(self.start_ts).unwrap();
-        if let Some(ref v) = self.short_value {
-            b.push(SHORT_VALUE_PREFIX);
-            b.push(v.len() as u8);
+        b.encode_u64(self.start_ts).unwrap();
+        b.encode_u64(self.commit_ts).unwrap();
+        if let Some(ref v) = self.value {
+            b.push(VALUE_PREFIX);
+            b.encode_var_u64(v.len() as u64);
             b.extend_from_slice(v);
         }
         b
@@ -100,23 +109,25 @@ impl Write {
             return Err(Error::BadFormatWrite);
         }
         let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
-        let start_ts = number::decode_var_u64(&mut b)?;
+        let start_ts = number::decode_u64(&mut b)?;
+        let commit_ts = number::decode_u64(&mut b)?;
         if b.is_empty() {
             return Ok(Write::new(write_type, start_ts, None));
         }
 
         let flag = b.read_u8()?;
-        assert_eq!(flag, SHORT_VALUE_PREFIX, "invalid flag [{}] in write", flag);
+        assert_eq!(flag, VALUE_PREFIX, "invalid flag [{}] in write", flag);
 
-        let len = b.read_u8()?;
+        let len = number::decode_var_u64(&mut b)?;
         if len as usize != b.len() {
-            panic!(
-                "short value len [{}] not equal to content len [{}]",
-                len,
-                b.len()
-            );
+            panic!("value len [{}] not equal to content len [{}]", len, b.len());
         }
-        Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
+        Ok(Write::new(
+            write_type,
+            start_ts,
+            commit_ts,
+            Some(b.to_vec()),
+        ))
     }
 
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
@@ -166,7 +177,7 @@ mod tests {
         // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
         let mut writes = vec![
             Write::new(WriteType::Put, 0, None),
-            Write::new(WriteType::Delete, 0, Some(b"short_value".to_vec())),
+            Write::new(WriteType::Delete, 0, Some(b"value".to_vec())),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.to_bytes();
@@ -178,7 +189,7 @@ mod tests {
         // Test `Write::parse()` handles incorrect input.
         assert!(Write::parse(b"").is_err());
 
-        let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
+        let lock = Write::new(WriteType::Lock, 1, Some(b"value".to_vec()));
         let v = lock.to_bytes();
         assert!(Write::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);

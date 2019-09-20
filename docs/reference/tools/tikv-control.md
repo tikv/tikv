@@ -86,10 +86,10 @@ The `--from` and `--to` options of the `scan` command accept two escaped forms o
 ```bash
 $ tikv-ctl --db /path/to/tikv/db scan --from 'zm' --limit 2 --show-cf lock,default,write
 key: zmBootstr\377a\377pKey\000\000\377\000\000\373\000\000\000\000\000\377\000\000s\000\000\000\000\000\372
-         write cf value: start_ts: 399650102814441473 commit_ts: 399650102814441475 short_value: "20"
+         write cf value: start_ts: 399650102814441473 commit_ts: 399650102814441475 value: "20"
 key: zmDB:29\000\000\377\000\374\000\000\000\000\000\000\377\000H\000\000\000\000\000\000\371
-         write cf value: start_ts: 399650105239273474 commit_ts: 399650105239273475 short_value: "\000\000\000\000\000\000\000\002"
-         write cf value: start_ts: 399650105199951882 commit_ts: 399650105213059076 short_value: "\000\000\000\000\000\000\000\001"
+         write cf value: start_ts: 399650105239273474 commit_ts: 399650105239273475 value: "\000\000\000\000\000\000\000\002"
+         write cf value: start_ts: 399650105199951882 commit_ts: 399650105213059076 value: "\000\000\000\000\000\000\000\001"
 ```
 
 ### View MVCC of a given key
@@ -99,8 +99,8 @@ Similar to the `scan` command, the `mvcc` command can be used to view MVCC of a 
 ```bash
 $ tikv-ctl --db /path/to/tikv/db mvcc -k "zmDB:29\000\000\377\000\374\000\000\000\000\000\000\377\000H\000\000\000\000\000\000\371" --show-cf=lock,write,default
 key: zmDB:29\000\000\377\000\374\000\000\000\000\000\000\377\000H\000\000\000\000\000\000\371
-         write cf value: start_ts: 399650105239273474 commit_ts: 399650105239273475 short_value: "\000\000\000\000\000\000\000\002"
-         write cf value: start_ts: 399650105199951882 commit_ts: 399650105213059076 short_value: "\000\000\000\000\000\000\000\001"
+         write cf value: start_ts: 399650105239273474 commit_ts: 399650105239273475 value: "\000\000\000\000\000\000\000\002"
+         write cf value: start_ts: 399650105199951882 commit_ts: 399650105213059076 value: "\000\000\000\000\000\000\000\001"
 ```
 
 In this command, the key is also the escaped form of raw key.

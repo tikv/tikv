@@ -4,7 +4,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -1534,7 +1534,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
 
         // Schedule the task.
-        let cf_names = vec![CF_DEFAULT.to_owned(), CF_WRITE.to_owned()];
+        let cf_names = vec![CF_LATEST.to_owned()];
         if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
             CompactTask::CheckAndCompact {
                 cf_names,
@@ -1968,10 +1968,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 }
 
 fn size_change_filter(info: &CompactionJobInfo) -> bool {
-    // When calculating region size, we only consider write and default
+    // When calculating region size, we only consider LATEST and HISTORY
     // column families.
     let cf = info.cf_name();
-    if cf != CF_WRITE && cf != CF_DEFAULT {
+    if cf != CF_LATEST && cf != CF_HISTORY {
         return false;
     }
     // Compactions in level 0 and level 1 are very frequently.

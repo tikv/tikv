@@ -16,7 +16,7 @@ use engine::rocks::Writable;
 use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{ALL_CFS, CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -2061,7 +2061,11 @@ fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
     }
 
     let cf_name = sst.get_cf_name();
-    if cf_name != CF_DEFAULT && cf_name != CF_WRITE {
+    if cf_name != CF_DEFAULT
+        && cf_name != CF_LATEST
+        && cf_name != CF_HISTORY
+        && cf_name != CF_ROLLBACK
+    {
         return Err(box_err!("invalid cf name {}", cf_name));
     }
 

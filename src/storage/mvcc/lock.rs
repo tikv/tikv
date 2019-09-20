@@ -3,7 +3,7 @@
 use super::super::types::Value;
 use super::{Error, Result};
 use crate::storage::{
-    Mutation, FOR_UPDATE_TS_PREFIX, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
+    Mutation, FOR_UPDATE_TS_PREFIX, SHORT_VALUE_MAX_LEN, TXN_SIZE_PREFIX, VALUE_PREFIX,
 };
 use byteorder::ReadBytesExt;
 use tikv_util::codec::bytes::{self, BytesEncoder};
@@ -57,7 +57,7 @@ pub struct Lock {
     pub primary: Vec<u8>,
     pub ts: u64,
     pub ttl: u64,
-    pub short_value: Option<Value>,
+    pub value: Option<Value>,
     // If for_update_ts != 0, this lock belongs to a pessimistic transaction
     pub for_update_ts: u64,
     pub txn_size: u64,
@@ -69,7 +69,7 @@ impl Lock {
         primary: Vec<u8>,
         ts: u64,
         ttl: u64,
-        short_value: Option<Value>,
+        value: Option<Value>,
         for_update_ts: u64,
         txn_size: u64,
     ) -> Lock {
@@ -78,7 +78,7 @@ impl Lock {
             primary,
             ts,
             ttl,
-            short_value,
+            value,
             for_update_ts,
             txn_size,
         }
@@ -90,13 +90,15 @@ impl Lock {
         );
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
-        b.encode_var_u64(self.ts).unwrap();
+        b.encode_u64(self.ts).unwrap();
         b.encode_var_u64(self.ttl).unwrap();
-        if let Some(ref v) = self.short_value {
-            b.push(SHORT_VALUE_PREFIX);
-            b.push(v.len() as u8);
-            b.extend_from_slice(v);
+        // embed value
+        if let Some(v) = self.value {
+            b.push(VALUE_PREFIX);
+            b.encode_var_u64(v.len() as u64);
+            b.extend_from_slice(value);
         }
+
         if self.for_update_ts > 0 {
             b.push(FOR_UPDATE_TS_PREFIX);
             b.encode_u64(self.for_update_ts).unwrap();
@@ -114,23 +116,15 @@ impl Lock {
         }
         let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
         let primary = bytes::decode_compact_bytes(&mut b)?;
-        let ts = number::decode_var_u64(&mut b)?;
-        let ttl = if b.is_empty() {
-            0
-        } else {
-            number::decode_var_u64(&mut b)?
-        };
+        let ts = number::decode_u64(&mut b)?;
+        let ttl = number::decode_var_u64(&mut b)?;
 
-        if b.is_empty() {
-            return Ok(Lock::new(lock_type, primary, ts, ttl, None, 0, 0));
-        }
-
-        let mut short_value = None;
+        let mut value = None;
         let mut for_update_ts = 0;
         let mut txn_size: u64 = 0;
         while !b.is_empty() {
             match b.read_u8()? {
-                SHORT_VALUE_PREFIX => {
+                VALUE_PREFIX => {
                     let len = b.read_u8()?;
                     if b.len() < len as usize {
                         panic!(
@@ -139,7 +133,7 @@ impl Lock {
                             len,
                         );
                     }
-                    short_value = Some(b[..len as usize].to_vec());
+                    value = Some(b[..len as usize].to_vec());
                     b = &b[len as usize..];
                 }
                 FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?,
@@ -152,7 +146,7 @@ impl Lock {
             primary,
             ts,
             ttl,
-            short_value,
+            value,
             for_update_ts,
             txn_size,
         ))

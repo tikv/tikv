@@ -14,7 +14,7 @@ use engine::rocks::{
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -828,7 +828,7 @@ impl Debugger {
         let start = keys::enc_start_key(&region);
         let end = keys::enc_end_key(&region);
         let collection = box_try!(engine::util::get_range_properties_cf(
-            db, CF_WRITE, &start, &end
+            db, CF_HISTORY, &start, &end
         ));
         for (_, v) in &*collection {
             num_entries += v.num_entries();
@@ -1041,7 +1041,7 @@ impl MvccChecker {
 
                 // If the lock's type is PUT and contains no short value, there
                 // should be a corresponding default record.
-                if l.lock_type == LockType::Put && l.short_value.is_none() {
+                if l.lock_type == LockType::Put && l.value.is_none() {
                     match default {
                         Some(start_ts) if start_ts == l.ts => {
                             next_default = true;
@@ -1062,10 +1062,10 @@ impl MvccChecker {
                 continue;
             }
 
-            // For none-put write or write with short_value, no DEFAULT record
+            // For none-put write or write with value, no DEFAULT record
             // is needed.
             if let Some((_, ref w)) = write {
-                if w.write_type != WriteType::Put || w.short_value.is_some() {
+                if w.write_type != WriteType::Put || w.value.is_some() {
                     next_write = true;
                     continue;
                 }
@@ -1222,7 +1222,7 @@ impl MvccInfoIterator {
             }
             lock_info.set_start_ts(lock.ts);
             lock_info.set_primary(lock.primary);
-            lock_info.set_short_value(lock.short_value.unwrap_or_default());
+            lock_info.set_short_value(lock.value.unwrap_or_default());
             return Ok(Some((key, lock_info)));
         };
         Ok(None)
@@ -1258,7 +1258,7 @@ impl MvccInfoIterator {
                 write_info.set_start_ts(write.start_ts);
                 let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
                 write_info.set_commit_ts(commit_ts);
-                write_info.set_short_value(write.short_value.unwrap_or_default());
+                write_info.set_short_value(write.value.unwrap_or_default());
                 writes.push(write_info);
             }
             return Ok(Some((prefix, writes)));

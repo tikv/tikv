@@ -343,53 +343,15 @@ fn process_read_impl<E: Engine>(
 ) -> Result<ProcessResult> {
     let tag = cmd.tag();
     match cmd {
-        Command::MvccByKey { ref ctx, ref key } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                None,
-                ctx.get_isolation_level(),
-            );
-            let result = find_mvcc_infos_by_key(&mut reader, key, u64::MAX);
-            statistics.add(reader.get_statistics());
-            let (lock, writes, values) = result?;
-            Ok(ProcessResult::MvccKey {
-                mvcc: MvccInfo {
-                    lock,
-                    writes,
-                    values,
-                },
-            })
-        }
+        Command::MvccByKey { ref ctx, ref key } => Ok(ProcessResult::MvccKey {
+            mvcc: MvccInfo {
+                lock: None,
+                writes: vec![],
+                values: vec![],
+            },
+        }),
         Command::MvccByStartTs { ref ctx, start_ts } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                None,
-                ctx.get_isolation_level(),
-            );
-            match reader.seek_ts(start_ts)? {
-                Some(key) => {
-                    let result = find_mvcc_infos_by_key(&mut reader, &key, u64::MAX);
-                    statistics.add(reader.get_statistics());
-                    let (lock, writes, values) = result?;
-                    Ok(ProcessResult::MvccStartTs {
-                        mvcc: Some((
-                            key,
-                            MvccInfo {
-                                lock,
-                                writes,
-                                values,
-                            },
-                        )),
-                    })
-                }
-                None => Ok(ProcessResult::MvccStartTs { mvcc: None }),
-            }
+            Ok(ProcessResult::MvccStartTs { mvcc: None })
         }
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock {
@@ -843,27 +805,3 @@ pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
 }
 
 type LockWritesVals = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
-
-fn find_mvcc_infos_by_key<S: Snapshot>(
-    reader: &mut MvccReader<S>,
-    key: &Key,
-    mut ts: u64,
-) -> Result<LockWritesVals> {
-    let mut writes = vec![];
-    let mut values = vec![];
-    let lock = reader.load_lock(key)?;
-    loop {
-        let opt = reader.seek_write(key, ts)?;
-        match opt {
-            Some((commit_ts, write)) => {
-                ts = commit_ts - 1;
-                writes.push((commit_ts, write));
-            }
-            None => break,
-        };
-    }
-    for (ts, v) in reader.scan_values_in_default(key)? {
-        values.push((ts, v));
-    }
-    Ok((lock, writes, values))
-}

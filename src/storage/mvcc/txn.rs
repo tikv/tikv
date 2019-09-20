@@ -97,7 +97,7 @@ impl<S: Snapshot> MvccTxn<S> {
         key: Key,
         lock_type: LockType,
         primary: Vec<u8>,
-        short_value: Option<Value>,
+        value: Option<Value>,
         options: &Options,
     ) {
         let lock = Lock::new(
@@ -105,7 +105,7 @@ impl<S: Snapshot> MvccTxn<S> {
             primary,
             self.start_ts,
             options.lock_ttl,
-            short_value,
+            value,
             options.for_update_ts,
             options.txn_size,
         );
@@ -117,32 +117,33 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.push(Modify::Delete(CF_LOCK, key));
     }
 
-    fn put_value(&mut self, key: Key, ts: u64, value: Value) {
-        let key = key.append_ts(ts);
-        self.write_size += key.as_encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_DEFAULT, key, value));
-    }
-
-    fn delete_value(&mut self, key: Key, ts: u64) {
-        let key = key.append_ts(ts);
-        self.write_size += key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_DEFAULT, key));
-    }
-
-    fn put_write(&mut self, key: Key, ts: u64, value: Value) {
-        let key = key.append_ts(ts);
+    fn put_latest(&mut self, key: Key, value: Value) {
         self.write_size += CF_WRITE.len() + key.as_encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_WRITE, key, value));
+        self.writes.push(Modify::Put(CF_LATEST, key, value));
+    }
+
+    fn put_history(&mut self, key: Key, commit_ts: u64, value: Value) {
+        let key = key.append_ts(commit_ts);
+        self.write_size += CF_HISTORY.len() + key.as_encoded().len() + value.len();
+        self.writes.push(Modify::Put(CF_HISTORY, key, value));
+    }
+
+    fn put_rollback(&mut self, key: Key, commit_ts: u64, value: Value) {
+        let key = key.append_ts(commit_ts);
+        self.write_size += CF_ROLLBACK.len() + key.as_encoded().len() + value.len();
+        self.writes.push(Modify::Put(CF_ROLLBACK, key, value));
+    }
+
+    fn delete_rollback(&mut self, key: Key, commit_ts: u64) {
+        let key = key.append_ts(commit_ts);
+        self.write_size += CF_ROLLBACK.len() + key.as_encoded().len() + value.len();
+        self.writes.push(Modify::Del(CF_ROLLBACK, key));
     }
 
     fn delete_write(&mut self, key: Key, ts: u64) {
         let key = key.append_ts(ts);
         self.write_size += CF_WRITE.len() + key.as_encoded().len();
         self.writes.push(Modify::Delete(CF_WRITE, key));
-    }
-
-    fn key_exist(&mut self, key: &Key, ts: u64) -> Result<bool> {
-        Ok(self.reader.get_write(&key, ts)?.is_some())
     }
 
     fn prewrite_key_value(
@@ -154,42 +155,10 @@ impl<S: Snapshot> MvccTxn<S> {
         options: &Options,
     ) {
         if let Some(value) = value {
-            if is_short_value(&value) {
-                // If the value is short, embed it in Lock.
-                self.lock_key(key, lock_type, primary, Some(value), options);
-            } else {
-                // value is long
-                let ts = self.start_ts;
-                self.put_value(key.clone(), ts, value);
-
-                self.lock_key(key, lock_type, primary, None, options);
-            }
+            self.lock_key(key, lock_type, primary, value, options);
         } else {
             self.lock_key(key, lock_type, primary, None, options);
         }
-    }
-
-    /// Checks the existence of the key according to `should_not_exist`.
-    /// If not, returns an `AlreadyExist` error.
-    fn check_data_constraint(
-        &mut self,
-        should_not_exist: bool,
-        write: &Write,
-        write_commit_ts: u64,
-        key: &Key,
-    ) -> Result<()> {
-        if !should_not_exist || write.write_type == WriteType::Delete {
-            return Ok(());
-        }
-
-        // The current key exists under any of the following conditions:
-        // 1.The current write type is `PUT`
-        // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
-        if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts - 1)? {
-            return Err(Error::AlreadyExist { key: key.to_raw()? });
-        }
-
-        Ok(())
     }
 
     // Pessimistic transactions only acquire pessimistic locks on row keys.
@@ -259,41 +228,22 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
-        if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
-            // The isolation level of pessimistic transactions is RC. `for_update_ts` is
-            // the commit_ts of the data this transaction read. If exists a commit version
-            // whose commit timestamp is larger than current `for_update_ts`, the
-            // transaction should retry to get the latest data.
-            if commit_ts > for_update_ts {
+        if let Some(latest) = self.reader.get_lastest(&key)? {
+            if latest.commit_ts > for_update_ts {
                 MVCC_CONFLICT_COUNTER
                     .acquire_pessimistic_lock_conflict
                     .inc();
                 return Err(Error::WriteConflict {
                     start_ts: self.start_ts,
-                    conflict_start_ts: write.start_ts,
-                    conflict_commit_ts: commit_ts,
+                    conflict_start_ts: latest.start_ts,
+                    conflict_commit_ts: latest.commit_ts,
                     key: key.into_raw()?,
                     primary: primary.to_vec(),
                 });
             }
-
-            // Handle rollback.
-            // If the start timestamp of write is equal to transaction's start timestamp
-            // as well as commit timestamp, the lock is already rollbacked.
-            if write.start_ts == self.start_ts && commit_ts == self.start_ts {
-                assert!(write.write_type == WriteType::Rollback);
-                return Err(Error::PessimisticLockRollbacked {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                });
-            }
-            // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
-            if commit_ts > self.start_ts {
-                if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-                    if write.start_ts == self.start_ts {
-                        assert!(
-                            commit_ts == self.start_ts && write.write_type == WriteType::Rollback
-                        );
+            if latest.commit_ts > self.start_ts {
+                if let Some(rollback) = self.reader.get_rollback(&key, self.start_ts)? {
+                    if rollback.write_type == WriteType::Rollback {
                         return Err(Error::PessimisticLockRollbacked {
                             start_ts: self.start_ts,
                             key: key.into_raw()?,
@@ -302,8 +252,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
 
-            // Check data constraint when acquiring pessimistic lock.
-            self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+            if should_not_exist && latest.write_type = WriteType::Put {
+                return Err(Error::AlreadyExist { key: key.to_raw()? });
+            }
         }
 
         self.lock_key(key, LockType::Pessimistic, primary.to_vec(), None, options);
@@ -374,26 +325,22 @@ impl<S: Snapshot> MvccTxn<S> {
         // For the insert operation, the old key should not be in the system.
         let should_not_exist = mutation.is_insert();
         let (key, value) = mutation.into_key_value();
-        // Check whether there is a newer version.
-        if !options.skip_constraint_check {
-            if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
-                // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than or equal to
-                // current start timestamp, we should abort current prewrite, even if the commit
-                // type is Rollback.
-                if commit_ts >= self.start_ts {
-                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    return Err(Error::WriteConflict {
-                        start_ts: self.start_ts,
-                        conflict_start_ts: write.start_ts,
-                        conflict_commit_ts: commit_ts,
-                        key: key.into_raw()?,
-                        primary: primary.to_vec(),
-                    });
-                }
-                self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+        if let Some(write) = self.reader.get_latest(&key)? {
+            if write.commit_ts >= self.start_ts {
+                MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                return Err(Error::WriteConflict {
+                    start_ts: self.start_ts,
+                    conflict_start_ts: write.start_ts,
+                    conflict_commit_ts: commit_ts,
+                    key: key.into_raw()?,
+                    primary: primary.to_vec(),
+                });
+            }
+            if should_not_exist && write.write_type = WriteType::Put {
+                return Err(Error::AlreadyExist { key: key.to_raw()? });
             }
         }
+        // TODO: get latest rollback and check conflicts
 
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
@@ -424,7 +371,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn commit(&mut self, key: Key, commit_ts: u64) -> Result<bool> {
-        let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
+        let (lock_type, value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 // A pessimistic lock cannot be committed.
                 if lock.lock_type == LockType::Pessimistic {
@@ -440,11 +387,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         pessimistic: true,
                     });
                 }
-                (
-                    lock.lock_type,
-                    lock.short_value.take(),
-                    lock.for_update_ts != 0,
-                )
+                (lock.lock_type, lock.value.take(), lock.for_update_ts != 0)
             }
             _ => {
                 return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
@@ -477,22 +420,30 @@ impl<S: Snapshot> MvccTxn<S> {
         let write = Write::new(
             WriteType::from_lock_type(lock_type).unwrap(),
             self.start_ts,
-            short_value,
+            commit_ts,
+            value,
         );
-        self.put_write(key.clone(), commit_ts, write.to_bytes());
+        match lock_type {
+            WriteType::Put | WriteType::Delete => {
+                // move last version into history
+                if let Some(latest) = self.get_latest(key)? {
+                    self.put_history(key.clone(), latest.commit_ts, latest.to_bytes());
+                }
+                self.put_latest(key.clone(), write.to_bytes());
+            }
+            WriteType::Lock => {
+                // store Lock type in rollback cf
+                self.put_rollback(key.clone(), write.commit_ts, write.to_bytes());
+            }
+            WriteType::Rollback => panic!("rollback type should not exist in commit stage"),
+        }
         self.unlock_key(key);
         Ok(is_pessimistic_txn)
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
         let is_pessimistic_txn = match self.reader.load_lock(&key)? {
-            Some(ref lock) if lock.ts == self.start_ts => {
-                // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
-                if lock.short_value.is_none() && lock.lock_type == LockType::Put {
-                    self.delete_value(key.clone(), lock.ts);
-                }
-                lock.for_update_ts != 0
-            }
+            Some(ref lock) if lock.ts == self.start_ts => lock.for_update_ts != 0,
             _ => {
                 return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
                     Some((ts, write_type)) => {
@@ -512,28 +463,19 @@ impl<S: Snapshot> MvccTxn<S> {
                         }
                     }
                     None => {
+                        // insert a Rollback to rollback CF when receives Rollback before Prewrite
                         let ts = self.start_ts;
-
-                        // collapse previous rollback if exist.
-                        if self.collapse_rollback {
-                            self.collapse_prev_rollback(key.clone())?;
-                        }
-
-                        // insert a Rollback to WriteCF when receives Rollback before Prewrite
                         let write = Write::new(WriteType::Rollback, ts, None);
-                        self.put_write(key, ts, write.to_bytes());
+                        self.put_rollback(key, ts, write.to_bytes());
                         Ok(false)
                     }
                 };
             }
         };
-        let write = Write::new(WriteType::Rollback, self.start_ts, None);
         let ts = self.start_ts;
-        self.put_write(key.clone(), ts, write.to_bytes());
+        let write = Write::new(WriteType::Rollback, self.start_ts, ts, None);
+        self.put_rollback(key.clone(), ts, write.to_bytes());
         self.unlock_key(key.clone());
-        if self.collapse_rollback {
-            self.collapse_prev_rollback(key)?;
-        }
         Ok(is_pessimistic_txn)
     }
 
@@ -545,15 +487,6 @@ impl<S: Snapshot> MvccTxn<S> {
                 && lock.for_update_ts <= for_update_ts
             {
                 self.unlock_key(key);
-            }
-        }
-        Ok(())
-    }
-
-    fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
-        if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-            if write.write_type == WriteType::Rollback {
-                self.delete_write(key, commit_ts);
             }
         }
         Ok(())
@@ -601,59 +534,59 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut deleted_versions = 0;
         let mut latest_delete = None;
         let mut is_completed = true;
-        while let Some((commit, write)) = self.gc_reader.seek_write(&key, ts)? {
-            ts = commit - 1;
-            found_versions += 1;
-
-            if self.write_size >= MAX_TXN_WRITE_SIZE {
-                // Cannot remove latest delete when we haven't iterate all versions.
-                latest_delete = None;
-                is_completed = false;
-                break;
-            }
-
-            if remove_older {
-                self.delete_write(key.clone(), commit);
-                if write.write_type == WriteType::Put && write.short_value.is_none() {
-                    self.delete_value(key.clone(), write.start_ts);
-                }
-                deleted_versions += 1;
-                continue;
-            }
-
-            if commit > safe_point {
-                continue;
-            }
-
-            // Set `remove_older` after we find the latest value.
-            match write.write_type {
-                WriteType::Put | WriteType::Delete => {
-                    remove_older = true;
-                }
-                WriteType::Rollback | WriteType::Lock => {}
-            }
-
-            // Latest write before `safe_point` can be deleted if its type is Delete,
-            // Rollback or Lock.
-            match write.write_type {
-                WriteType::Delete => {
-                    latest_delete = Some(commit);
-                }
-                WriteType::Rollback | WriteType::Lock => {
-                    self.delete_write(key.clone(), commit);
-                    deleted_versions += 1;
-                }
-                WriteType::Put => {}
-            }
-        }
-        if let Some(commit) = latest_delete {
-            self.delete_write(key, commit);
-            deleted_versions += 1;
-        }
-        MVCC_VERSIONS_HISTOGRAM.observe(found_versions as f64);
-        if deleted_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(deleted_versions as f64);
-        }
+        //        while let Some((commit, write)) = self.gc_reader.seek_write(&key, ts)? {
+        //            ts = commit - 1;
+        //            found_versions += 1;
+        //
+        //            if self.write_size >= MAX_TXN_WRITE_SIZE {
+        //                // Cannot remove latest delete when we haven't iterate all versions.
+        //                latest_delete = None;
+        //                is_completed = false;
+        //                break;
+        //            }
+        //
+        //            if remove_older {
+        //                self.delete_write(key.clone(), commit);
+        //                if write.write_type == WriteType::Put && write.short_value.is_none() {
+        //                    self.delete_value(key.clone(), write.start_ts);
+        //                }
+        //                deleted_versions += 1;
+        //                continue;
+        //            }
+        //
+        //            if commit > safe_point {
+        //                continue;
+        //            }
+        //
+        //            // Set `remove_older` after we find the latest value.
+        //            match write.write_type {
+        //                WriteType::Put | WriteType::Delete => {
+        //                    remove_older = true;
+        //                }
+        //                WriteType::Rollback | WriteType::Lock => {}
+        //            }
+        //
+        //            // Latest write before `safe_point` can be deleted if its type is Delete,
+        //            // Rollback or Lock.
+        //            match write.write_type {
+        //                WriteType::Delete => {
+        //                    latest_delete = Some(commit);
+        //                }
+        //                WriteType::Rollback | WriteType::Lock => {
+        //                    self.delete_write(key.clone(), commit);
+        //                    deleted_versions += 1;
+        //                }
+        //                WriteType::Put => {}
+        //            }
+        //        }
+        //        if let Some(commit) = latest_delete {
+        //            self.delete_write(key, commit);
+        //            deleted_versions += 1;
+        //        }
+        //        MVCC_VERSIONS_HISTOGRAM.observe(found_versions as f64);
+        //        if deleted_versions > 0 {
+        //            GC_DELETE_VERSIONS_HISTOGRAM.observe(deleted_versions as f64);
+        //        }
         Ok(GcInfo {
             found_versions,
             deleted_versions,
@@ -1175,32 +1108,6 @@ mod tests {
         must_get_err(&engine, key, 20);
         must_get_rc(&engine, key, 12, v1);
         must_get_rc(&engine, key, 20, v1);
-    }
-
-    #[test]
-    fn test_collapse_prev_rollback() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let (key, value) = (b"key", b"value");
-
-        // Add a Rollback whose start ts is 1.
-        must_prewrite_put(&engine, key, value, key, 1);
-        must_rollback_collapsed(&engine, key, 1);
-        must_get_rollback_ts(&engine, key, 1);
-
-        // Add a Rollback whose start ts is 2, the previous Rollback whose
-        // start ts is 1 will be collapsed.
-        must_prewrite_put(&engine, key, value, key, 2);
-        must_rollback_collapsed(&engine, key, 2);
-        must_get_none(&engine, key, 2);
-        must_get_rollback_ts(&engine, key, 2);
-        must_get_rollback_ts_none(&engine, key, 1);
-
-        // Rollback arrive before Prewrite, it will collapse the
-        // previous rollback whose start ts is 2.
-        must_rollback_collapsed(&engine, key, 3);
-        must_get_none(&engine, key, 3);
-        must_get_rollback_ts(&engine, key, 3);
-        must_get_rollback_ts_none(&engine, key, 2);
     }
 
     #[test]

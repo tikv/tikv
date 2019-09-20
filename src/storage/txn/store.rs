@@ -148,13 +148,16 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
-        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
-            .fill_cache(self.fill_cache)
-            .isolation_level(self.isolation_level)
-            .multi(false)
-            .build()?;
-        let v = point_getter.get(key)?;
-        statistics.add(&point_getter.take_statistics());
+        let mut reader = MvccReader::new(
+            self.snapshot.clone(),
+            None,
+            fill_cache,
+            None,
+            None,
+            IsolationLevel::Si,
+        );
+        let v = reader.get(key)?;
+        statistics.add(&reader.get_statistics());
         Ok(v)
     }
 
@@ -163,37 +166,20 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Statistics,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        use std::mem::{self, MaybeUninit};
-        type Element = Result<Option<Value>>;
-
-        if keys.len() == 1 {
-            return Ok(vec![self.get(&keys[0], statistics)]);
+        let mut reader = MvccReader::new(
+            self.snapshot.clone(),
+            None,
+            self.fill_cache,
+            None,
+            None,
+            self.isolation_level,
+        );
+        let mut results = Vec::with_capacity(keys.len());
+        for k in keys {
+            results.push(reader.get(k, self.start_ts).map_err(Error::from));
         }
-
-        let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
-        order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-
-        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
-            .fill_cache(self.fill_cache)
-            .isolation_level(self.isolation_level)
-            .multi(true)
-            .build()?;
-
-        let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
-        for _ in 0..keys.len() {
-            values.push(MaybeUninit::uninit());
-        }
-        for (original_order, key) in order_and_keys {
-            let value = point_getter.get(key).map_err(Error::from);
-            unsafe {
-                values[original_order].as_mut_ptr().write(value);
-            }
-        }
-
-        statistics.add(&point_getter.take_statistics());
-
-        let values = unsafe { mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(values) };
-        Ok(values)
+        statistics.add(reader.get_statitics());
+        Ok(results)
     }
 
     #[inline]

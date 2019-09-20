@@ -264,16 +264,29 @@ impl CFStatistics {
 pub struct Statistics {
     pub lock: CFStatistics,
     pub write: CFStatistics,
+    pub latest: CFStatistics,
+    pub history: CFStatistics,
+    pub rollback: CFStatistics,
     pub data: CFStatistics,
 }
 
 impl Statistics {
     pub fn total_op_count(&self) -> usize {
-        self.lock.total_op_count() + self.write.total_op_count() + self.data.total_op_count()
+        self.lock.total_op_count()
+            + self.write.total_op_count()
+            + self.data.total_op_count()
+            + self.latest.total_op_count()
+            + self.history.total_op_count()
+            + self.rollback.total_op_count()
     }
 
     pub fn total_processed(&self) -> usize {
-        self.lock.processed + self.write.processed + self.data.processed
+        self.lock.processed
+            + self.write.processed
+            + self.data.processed
+            + self.latest.processed
+            + self.history.processed
+            + self.rollback.processed
     }
 
     pub fn details(&self) -> [(&'static str, [(&'static str, usize); 8]); 3] {
@@ -286,8 +299,10 @@ impl Statistics {
 
     pub fn add(&mut self, other: &Self) {
         self.lock.add(&other.lock);
-        self.write.add(&other.write);
+        self.latest.add(&other.latest);
+        self.history.add(&other.history);
         self.data.add(&other.data);
+        self.write.add(&other.write);
     }
 
     pub fn scan_detail(&self) -> ScanDetail {
@@ -306,6 +321,9 @@ impl Statistics {
             CF_DEFAULT => &mut self.data,
             CF_LOCK => &mut self.lock,
             CF_WRITE => &mut self.write,
+            CF_LATEST => &mut self.latest,
+            CF_HISTORY => &mut self.history,
+            CF_ROLLBACK => &mut self.rollback,
             _ => unreachable!(),
         }
     }
