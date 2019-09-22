@@ -242,6 +242,7 @@ fn cast_string_as_int_or_uint_helper(
     //
     // Be careful that, if this flag(OverflowAsWarning)'s setting had changed,
     // then here's behavior will change, so it may make some bug different to find.
+
     let valid_int_prefix = get_valid_int_prefix(ctx, val)?;
 
     // TODO: TiDB's floatStrToIntStr will append a overflow warning when the intStr is too long.
@@ -309,12 +310,10 @@ fn cast_string_as_int_or_uint(
             let val = get_valid_utf8_prefix(ctx, val.as_slice())?;
             let val = val.trim();
             let neg = val.starts_with('-');
-            if !neg {
-                cast_string_as_int_or_uint_helper(ctx, val, false, is_unsigned)
-            } else if in_union(extra.implicit_args) && is_unsigned {
+            if in_union(extra.implicit_args) && is_unsigned && neg {
                 Ok(Some(0))
             } else {
-                cast_string_as_int_or_uint_helper(ctx, val, true, is_unsigned)
+                cast_string_as_int_or_uint_helper(ctx, val, neg, is_unsigned)
             }
         }
     }
