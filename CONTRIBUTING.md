@@ -76,7 +76,7 @@ You can run the test suite alone, or just run a specific test:
 ```bash
 # Run the full suite
 make test
-# Run a specific test
+# Run a specific test with $TESTNAME
 cargo test $TESTNAME --all
 ```
 
