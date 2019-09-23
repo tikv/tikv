@@ -22,9 +22,9 @@ pub use self::topn::TopNExecutor;
 
 use std::sync::Arc;
 
+use codec::prelude::NumberDecoder;
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
-use tikv_util::codec::number;
 use tikv_util::collections::HashSet;
 use tipb::ColumnInfo;
 use tipb::{Expr, ExprType};
@@ -53,7 +53,7 @@ impl ExprColumnRefVisitor {
 
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
-            let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
+            let offset = box_try!(expr.get_val().read_i64()) as usize;
             if offset >= self.cols_len {
                 return Err(other_err!(
                     "offset {} overflow, should be less than {}",

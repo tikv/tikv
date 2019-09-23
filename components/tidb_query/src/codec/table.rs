@@ -10,10 +10,9 @@ use tidb_query_datatype::FieldTypeTp;
 use tipb::ColumnInfo;
 
 use super::mysql::{Duration, Time};
-use super::{datum, Datum, Error, Result};
+use super::{datum, datum::DatumDecoder, Datum, Error, Result};
 use crate::expr::EvalContext;
 use codec::prelude::*;
-use tikv_util::codec::number::{self};
 use tikv_util::codec::BytesSlice;
 use tikv_util::collections::{HashMap, HashSet};
 
@@ -76,15 +75,14 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
 
 /// Decodes table ID from the key.
 pub fn decode_table_id(key: &[u8]) -> Result<i64> {
-    if !key.starts_with(TABLE_PREFIX) {
+    let mut buf = key;
+    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
         return Err(invalid_type!(
             "record key expected, but got {}",
             hex::encode_upper(key)
         ));
     }
-
-    let mut remaining = &key[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining).map_err(Error::from)
+    buf.read_i64().map_err(Error::from)
 }
 
 /// `flatten` flattens the datum.
@@ -139,25 +137,22 @@ pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> 
 
 /// `decode_handle` decodes the key and gets the handle.
 pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
-    if !encoded.starts_with(TABLE_PREFIX) {
+    let mut buf = encoded;
+    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
         return Err(invalid_type!(
             "record key expected, but got {}",
             hex::encode_upper(encoded)
         ));
     }
+    buf.read_i64()?;
 
-    let mut remaining = &encoded[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining)?;
-
-    if !remaining.starts_with(RECORD_PREFIX_SEP) {
+    if buf.read_bytes(RECORD_PREFIX_SEP.len())? != RECORD_PREFIX_SEP {
         return Err(invalid_type!(
             "record key expected, but got {}",
             hex::encode_upper(encoded)
         ));
     }
-
-    remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    number::decode_i64(&mut remaining).map_err(Error::from)
+    buf.read_i64().map_err(Error::from)
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
@@ -178,17 +173,17 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
 // `decode_index_key` decodes datums from an index key.
 pub fn decode_index_key(
     ctx: &EvalContext,
-    mut encoded: &[u8],
+    encoded: &[u8],
     infos: &[ColumnInfo],
 ) -> Result<Vec<Datum>> {
-    encoded = &encoded[PREFIX_LEN + ID_LEN..];
+    let mut buf = &encoded[PREFIX_LEN + ID_LEN..];
     let mut res = vec![];
 
     for info in infos {
-        if encoded.is_empty() {
+        if buf.is_empty() {
             return Err(box_err!("{} is too short.", hex::encode_upper(encoded)));
         }
-        let mut v = datum::decode_datum(&mut encoded)?;
+        let mut v = buf.decode_datum()?;
         v = unflatten(ctx, v, info)?;
         res.push(v);
     }
@@ -251,7 +246,7 @@ pub fn decode_col_value(
     ctx: &EvalContext,
     col: &ColumnInfo,
 ) -> Result<Datum> {
-    let d = datum::decode_datum(data)?;
+    let d = data.decode_datum()?;
     unflatten(ctx, d, col)
 }
 
@@ -372,7 +367,7 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
-            let id = datum::decode_datum(&mut tmp_data)?.i64();
+            let id = tmp_data.decode_datum()?.i64();
             let offset = length - tmp_data.len();
             let (val, rem) = datum::split_datum(tmp_data, false)?;
             if cols.contains(&id) {
@@ -403,7 +398,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(datum::decode_datum(&mut tmp_data)?.i64())
+            Some(tmp_data.decode_datum()?.i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))
@@ -607,7 +602,8 @@ mod tests {
             None
         } else {
             Some(
-                datum::decode_datum(&mut (handle_data.as_ref() as &[u8]))
+                (handle_data.as_ref() as &[u8])
+                    .decode_datum()
                     .unwrap()
                     .i64(),
             )

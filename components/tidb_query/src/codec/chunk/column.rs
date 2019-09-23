@@ -12,7 +12,6 @@ use crate::codec::mysql::{
 use crate::codec::Datum;
 
 use codec::prelude::*;
-use tikv_util::codec::number;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 
@@ -212,7 +211,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_i64_le(&mut data).map_err(Error::from)
+        data.read_i64_le().map_err(Error::from)
     }
 
     /// Append u64 datum to the column.
@@ -226,7 +225,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_u64_le(&mut data).map_err(Error::from)
+        data.read_u64_le().map_err(Error::from)
     }
 
     /// Append a f64 datum to the column.
@@ -240,7 +239,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_f64_le(&mut data).map_err(Error::from)
+        data.read_f64_le().map_err(Error::from)
     }
 
     /// Called when the variant datum has been appended.
@@ -328,14 +327,13 @@ impl Column {
 
     #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice<'_>, tp: &dyn FieldTypeAccessor) -> Result<Column> {
-        use tikv_util::codec::read_slice;
-        let length = number::decode_u32_le(buf)? as usize;
+        let length = buf.read_u32_le()? as usize;
         let mut col = Column::new(tp, length);
         col.length = length;
-        col.null_cnt = number::decode_u32_le(buf)? as usize;
+        col.null_cnt = buf.read_u32_le()? as usize;
         let null_length = (col.length + 7) / 8 as usize;
         if col.null_cnt > 0 {
-            col.null_bitmap = read_slice(buf, null_length)?.to_vec();
+            col.null_bitmap = buf.read_bytes(null_length)?.to_vec();
         } else {
             col.null_bitmap = vec![0xFF; null_length];
         }
@@ -345,11 +343,11 @@ impl Column {
         } else {
             col.var_offsets.clear();
             for _ in 0..=length {
-                col.var_offsets.push(number::decode_i32_le(buf)? as usize);
+                col.var_offsets.push(buf.read_i32_le()? as usize);
             }
             col.var_offsets[col.length]
         };
-        col.data = read_slice(buf, data_length)?.to_vec();
+        col.data = buf.read_bytes(data_length)?.to_vec();
         Ok(col)
     }
 }

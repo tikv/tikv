@@ -165,7 +165,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     ) -> Result<()> {
         use crate::codec::{datum, table};
         use byteorder::{BigEndian, ReadBytesExt};
-        use tikv_util::codec::number;
+        use codec::prelude::NumberDecoder;
 
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
@@ -183,8 +183,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 // This is a unique index, and we should look up PK handle in value.
 
                 // NOTE: it is not `number::decode_i64`.
-                value
-                    .read_i64::<BigEndian>()
+                ReadBytesExt::read_i64::<BigEndian>(&mut value)
                     .map_err(|_| other_err!("Failed to decode handle in value as i64"))?
             } else {
                 // This is a normal index. The remaining payload part is the PK handle.
@@ -197,10 +196,10 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 // receiving optional time zone first.
 
                 match flag {
-                    datum::INT_FLAG => number::decode_i64(&mut val)
+                    datum::INT_FLAG => NumberDecoder::read_i64(&mut val)
                         .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
                     datum::UINT_FLAG => {
-                        (number::decode_u64(&mut val)
+                        (NumberDecoder::read_u64(&mut val)
                             .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
                             as i64
                     }
