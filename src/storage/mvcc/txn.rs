@@ -469,7 +469,7 @@ impl<S: Snapshot> MvccTxn<S> {
         if Key::is_user_key_eq(write_key, key.as_encoded()) {
             let write = Write::parse(iter.value(statistics))?;
             if commit_ts >= ts {
-                Ok(Some(Msg::FinishedWithErr {
+                return Ok(Some(Msg::FinishedWithErr {
                     cid,
                     err: txn::Error::Mvcc(Error::WriteConflict {
                         start_ts: ts,
@@ -479,21 +479,31 @@ impl<S: Snapshot> MvccTxn<S> {
                         primary: primary.to_vec(),
                     }),
                     tag,
-                }))
+                }));
             } else if let Result::Err(e) =
                 self.check_data_constraint(is_insert, &write, commit_ts, &key)
             {
-                Ok(Some(Msg::FinishedWithErr {
+                return Ok(Some(Msg::FinishedWithErr {
                     cid,
                     err: txn::Error::Mvcc(e),
                     tag,
-                }))
-            } else {
-                Ok(None)
+                }));
             }
-        } else {
-            Ok(None)
+        } else if iter.prev(statistics) {
+            let write_key = iter.key(statistics);
+            if Key::is_user_key_eq(write_key, key.as_encoded()) {
+                let write = Write::parse(iter.value(statistics))?;
+                let commit_ts = Key::decode_ts_from(write_key)?;
+                if let Err(e) = self.check_data_constraint(is_insert, &write, commit_ts, &key) {
+                    return Ok(Some(Msg::FinishedWithErr {
+                        cid,
+                        err: txn::Error::Mvcc(e),
+                        tag,
+                    }));
+                }
+            }
         }
+        Ok(None)
     }
 
     pub fn batch_prewrite<Sched: MsgScheduler>(
