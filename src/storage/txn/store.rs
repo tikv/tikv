@@ -166,6 +166,10 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         use std::mem::{self, MaybeUninit};
         type Element = Result<Option<Value>>;
 
+        if keys.len() == 1 {
+            return Ok(vec![self.get(&keys[0], statistics)]);
+        }
+
         let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
         order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
 
