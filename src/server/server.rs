@@ -7,7 +7,9 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use futures::{Future, Stream};
-use grpcio::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use grpcio::{
+    ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
+};
 use kvproto::tikvpb::*;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
@@ -94,9 +96,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
         let ip = format!("{}", addr.ip());
+        let mem_quota =
+            ResourceQuota::new(Some("ServerMemQuota")).resize_memory(cfg.grpc_memory_pool_quota);
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
+            .set_resource_quota(mem_quota)
             .max_receive_message_len(-1)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.

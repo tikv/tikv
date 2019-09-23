@@ -18,6 +18,7 @@ const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
+const DEFAULT_GRPC_MEMORY_POOL_QUOTA: usize = 8 * 1024 * 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 
@@ -63,6 +64,7 @@ pub struct Config {
     pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: i32,
+    pub grpc_memory_pool_quota: usize,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
@@ -114,6 +116,7 @@ impl Default for Config {
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
+            grpc_memory_pool_quota: DEFAULT_GRPC_MEMORY_POOL_QUOTA,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             // There will be a heartbeat every secs, it's weird a connection will be idle for more
