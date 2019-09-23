@@ -98,7 +98,7 @@ impl Write {
         b.encode_u64(self.commit_ts).unwrap();
         if let Some(ref v) = self.value {
             b.push(VALUE_PREFIX);
-            b.encode_var_u64(v.len() as u64);
+            b.encode_var_u64(v.len() as u64).unwrap();
             b.extend_from_slice(v);
         }
         b

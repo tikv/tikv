@@ -1,12 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-
 use engine::CF_HISTORY;
-use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::write::{Write, WriteType};
+use crate::storage::mvcc::write::Write;
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
@@ -122,7 +118,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                     value = latest.take_value();
                 } else if self.history_valid {
                     // seek from history
-                    self.ensure_history_cursor();
+                    self.ensure_history_cursor()?;
                     let seek_key = key.clone().append_ts(self.cfg.ts);
                     self.history_cursor
                         .as_mut()
@@ -142,7 +138,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                                     .unwrap()
                                     .value(&mut self.statistics.history),
                             )?;
-                            let value = history.take_value();
+                            value = history.take_value();
                         }
                     } else {
                         self.history_valid = false;

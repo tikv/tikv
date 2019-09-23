@@ -2,17 +2,10 @@
 
 //! A dedicate scanner that outputs content in each CF.
 
-use std::cmp::Ordering;
-
-use kvproto::kvrpcpb::IsolationLevel;
-
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics};
+use crate::storage::{Cursor, Key, Snapshot, Statistics};
 
-use super::super::util::CheckLockResult;
 use super::ScannerConfig;
 
 /// A dedicate scanner that outputs content in each CF.
@@ -22,13 +15,13 @@ use super::ScannerConfig;
 /// Note: The implementation is almost the same as `ForwardScanner`, made a few
 ///       adjustments to output content in each cf.
 pub struct Scanner<S: Snapshot> {
-    cfg: ScannerConfig<S>,
-    lock_cursor: Cursor<S::Iter>,
-    latest_cursor: Cursor<S::Iter>,
-    history_cursor: Cursor<S::Iter>,
-    lower_bound: Option<Key>,
+    _cfg: ScannerConfig<S>,
+    _lock_cursor: Cursor<S::Iter>,
+    _latest_cursor: Cursor<S::Iter>,
+    _history_cursor: Cursor<S::Iter>,
+    _lower_bound: Option<Key>,
     /// Is iteration started
-    is_started: bool,
+    _is_started: bool,
     statistics: Statistics,
 }
 
@@ -43,20 +36,20 @@ impl<S: Snapshot> TxnEntryScanner for Scanner<S> {
 
 impl<S: Snapshot> Scanner<S> {
     pub fn new(
-        cfg: ScannerConfig<S>,
-        lock_cursor: Cursor<S::Iter>,
-        latest_cursor: Cursor<S::Iter>,
-        history_cursor: Cursor<S::Iter>,
-        lower_bound: Option<Key>,
+        _cfg: ScannerConfig<S>,
+        _lock_cursor: Cursor<S::Iter>,
+        _latest_cursor: Cursor<S::Iter>,
+        _history_cursor: Cursor<S::Iter>,
+        _lower_bound: Option<Key>,
     ) -> Result<Scanner<S>> {
         Ok(Scanner {
-            cfg,
-            lock_cursor,
-            latest_cursor,
-            history_cursor,
-            lower_bound,
+            _cfg,
+            _lock_cursor,
+            _latest_cursor,
+            _history_cursor,
+            _lower_bound,
             statistics: Statistics::default(),
-            is_started: false,
+            _is_started: false,
         })
     }
 

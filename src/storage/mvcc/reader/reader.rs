@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
@@ -12,14 +10,11 @@ use engine::{CF_HISTORY, CF_LATEST, CF_LOCK, CF_ROLLBACK};
 use kvproto::kvrpcpb::IsolationLevel;
 use tikv_util::keybuilder::KeyBuilder;
 
-const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
-
 pub struct MvccReader<S: Snapshot> {
     snapshot: S,
     statistics: Statistics,
     // cursors are used for speeding up scans.
     lock_cursor: Option<Cursor<S::Iter>>,
-    latest_cursor: Option<Cursor<S::Iter>>,
     history_cursor: Option<Cursor<S::Iter>>,
     rollback_cursor: Option<Cursor<S::Iter>>,
 
@@ -45,7 +40,6 @@ impl<S: Snapshot> MvccReader<S> {
             snapshot,
             statistics: Statistics::default(),
             lock_cursor: None,
-            latest_cursor: None,
             history_cursor: None,
             rollback_cursor: None,
             scan_mode,
@@ -255,7 +249,7 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(None)
     }
 
-    pub fn get_commit(&mut self, key: &Key, mut ts: u64) -> Result<Option<Write>> {
+    pub fn get_commit(&mut self, key: &Key, ts: u64) -> Result<Option<Write>> {
         if let Some(write) = self.get_latest(key)? {
             if ts >= write.commit_ts {
                 if write.write_type == WriteType::Put {
@@ -265,7 +259,7 @@ impl<S: Snapshot> MvccReader<S> {
                 }
             }
             // seek history
-            if let Some(mut history) = self.seek_history(key, ts)? {
+            if let Some(history) = self.seek_history(key, ts)? {
                 match history.write_type {
                     WriteType::Put => return Ok(Some(history)),
                     WriteType::Delete => return Ok(None),
@@ -386,16 +380,14 @@ impl<S: Snapshot> MvccReader<S> {
         Ok((locks, false))
     }
 
-    pub fn need_gc(&self, safe_point: u64, ratio_threshold: f64) -> bool {
+    pub fn need_gc(&self, _safe_point: u64, _ratio_threshold: f64) -> bool {
         false
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::raftstore::coprocessor::properties::{
-        MvccProperties, MvccPropertiesCollectorFactory,
-    };
+    use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
@@ -405,7 +397,7 @@ mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use std::sync::Arc;
@@ -423,12 +415,6 @@ mod tests {
                 db: Arc::clone(&db),
                 region,
             }
-        }
-
-        pub fn put(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Put((Key::from_raw(pk), vec![]));
-            self.prewrite(m, pk, start_ts);
-            self.commit(pk, start_ts, commit_ts);
         }
 
         pub fn lock(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
@@ -489,18 +475,18 @@ mod tests {
             self.write(txn.into_modifies());
         }
 
-        fn gc(&mut self, pk: &[u8], safe_point: u64) {
-            loop {
-                let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-                let mut txn = MvccTxn::new(snap, safe_point, true).unwrap();
-                txn.gc(Key::from_raw(pk), safe_point).unwrap();
-                let modifies = txn.into_modifies();
-                if modifies.is_empty() {
-                    return;
-                }
-                self.write(modifies);
-            }
-        }
+        //        fn gc(&mut self, pk: &[u8], safe_point: u64) {
+        //            loop {
+        //                let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+        //                let mut txn = MvccTxn::new(snap, safe_point, true).unwrap();
+        //                txn.gc(Key::from_raw(pk), safe_point).unwrap();
+        //                let modifies = txn.into_modifies();
+        //                if modifies.is_empty() {
+        //                    return;
+        //                }
+        //                self.write(modifies);
+        //            }
+        //        }
 
         fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
@@ -530,19 +516,19 @@ mod tests {
             db.write(&wb).unwrap();
         }
 
-        fn flush(&mut self) {
-            for cf in ALL_CFS {
-                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
-                self.db.flush_cf(cf, true).unwrap();
-            }
-        }
+        //        fn flush(&mut self) {
+        //            for cf in ALL_CFS {
+        //                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
+        //                self.db.flush_cf(cf, true).unwrap();
+        //            }
+        //        }
 
-        fn compact(&mut self) {
-            for cf in ALL_CFS {
-                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
-                self.db.compact_range_cf(cf, None, None);
-            }
-        }
+        //        fn compact(&mut self) {
+        //            for cf in ALL_CFS {
+        //                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
+        //                self.db.compact_range_cf(cf, None, None);
+        //            }
+        //        }
     }
 
     fn open_db(path: &str, with_properties: bool) -> Arc<DB> {

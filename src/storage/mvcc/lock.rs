@@ -95,7 +95,7 @@ impl Lock {
         // embed value
         if let Some(v) = &self.value {
             b.push(VALUE_PREFIX);
-            b.encode_var_u64(v.len() as u64);
+            b.encode_var_u64(v.len() as u64).unwrap();
             b.extend_from_slice(v);
         }
 

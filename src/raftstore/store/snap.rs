@@ -16,7 +16,7 @@ use crc::crc32::{self, Digest, Hasher32};
 use engine::rocks::util::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
 use engine::rocks::Snapshot as DbSnapshot;
 use engine::rocks::DB;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::{CfName, CF_HISTORY, CF_LATEST, CF_LOCK, CF_ROLLBACK};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -43,7 +43,7 @@ use crate::raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 pub mod snap_io;
 
 // Data in CF_RAFT should be excluded for a snapshot.
-pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const SNAPSHOT_CFS: &[CfName] = &[CF_LOCK, CF_LATEST, CF_HISTORY, CF_ROLLBACK];
 
 pub const SNAPSHOT_VERSION: u64 = 2;
 
@@ -84,7 +84,7 @@ pub type Result<T> = result::Result<T, Error>;
 // CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]
 pub fn plain_file_used(cf: &str) -> bool {
-    cf == CF_LOCK
+    cf == CF_LOCK || cf == CF_ROLLBACK
 }
 
 #[inline]

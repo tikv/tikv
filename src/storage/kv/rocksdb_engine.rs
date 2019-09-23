@@ -12,7 +12,7 @@ use engine::rocks::util::CFOptions;
 use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
 use engine::Engines;
 use engine::Error as EngineError;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{CfName, CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK};
 use engine::{IterOption, Peekable};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};

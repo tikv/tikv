@@ -1016,6 +1016,7 @@ impl DbConfig {
         self.historycf.validate()?;
         self.rollbackcf.validate()?;
         self.raftcf.validate()?;
+        self.writecf.validate()?;
         self.titan.validate()?;
         Ok(())
     }

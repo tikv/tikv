@@ -4,7 +4,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
-use engine::{CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK};
+use engine::{CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};

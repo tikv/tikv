@@ -10,13 +10,11 @@ use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockMgr};
-use crate::storage::mvcc::{
-    Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
-};
+use crate::storage::mvcc::{Error as MvccError, MvccReader, MvccTxn, MAX_TXN_WRITE_SIZE};
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
     metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCb, Value,
+    ScanMode, Snapshot, Statistics, StorageCb,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -343,16 +341,14 @@ fn process_read_impl<E: Engine>(
 ) -> Result<ProcessResult> {
     let tag = cmd.tag();
     match cmd {
-        Command::MvccByKey { ref ctx, ref key } => Ok(ProcessResult::MvccKey {
+        Command::MvccByKey { .. } => Ok(ProcessResult::MvccKey {
             mvcc: MvccInfo {
                 lock: None,
                 writes: vec![],
                 values: vec![],
             },
         }),
-        Command::MvccByStartTs { ref ctx, start_ts } => {
-            Ok(ProcessResult::MvccStartTs { mvcc: None })
-        }
+        Command::MvccByStartTs { .. } => Ok(ProcessResult::MvccStartTs { mvcc: None }),
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock {
             ref ctx,
@@ -803,5 +799,3 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
 pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
     scheduler.on_msg(msg);
 }
-
-type LockWritesVals = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);

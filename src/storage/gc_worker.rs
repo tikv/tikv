@@ -18,9 +18,8 @@ use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 
-use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
+use super::kv::{Engine, RegionInfoProvider, Statistics};
 use super::metrics::*;
-use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
@@ -30,19 +29,7 @@ use pd_client::PdClient;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 
-// TODO: make it configurable.
-pub const GC_BATCH_SIZE: usize = 512;
-
-/// After the GC scan of a key, output a message to the log if there are at least this many
-/// versions of the key.
-const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
-
-/// After the GC delete versions of a key, output a message to the log if at least this many
-/// versions are deleted.
-const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
-
 pub const GC_MAX_PENDING_TASKS: usize = 2;
-const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
@@ -128,27 +115,27 @@ impl Display for GCTask {
 
 /// Used to perform GC operations on the engine.
 struct GCRunner<E: Engine> {
-    engine: E,
+    _engine: E,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
 
-    ratio_threshold: f64,
+    _ratio_threshold: f64,
 
     stats: Statistics,
 }
 
 impl<E: Engine> GCRunner<E> {
     pub fn new(
-        engine: E,
+        _engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        ratio_threshold: f64,
+        _ratio_threshold: f64,
     ) -> Self {
         Self {
-            engine,
+            _engine,
             local_storage,
             raft_store_router,
-            ratio_threshold,
+            _ratio_threshold,
             stats: Statistics::default(),
         }
     }

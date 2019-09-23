@@ -5,10 +5,9 @@ use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
-use crate::storage::kv::{Modify, ScanMode, Snapshot};
+use crate::storage::kv::{Modify, Snapshot};
 use crate::storage::{
-    is_short_value, Key, Mutation, Options, Statistics, Value, CF_HISTORY, CF_LATEST, CF_LOCK,
-    CF_ROLLBACK,
+    Key, Mutation, Options, Statistics, Value, CF_HISTORY, CF_LATEST, CF_LOCK, CF_ROLLBACK,
 };
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
@@ -23,7 +22,6 @@ pub struct GcInfo {
 
 pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
-    gc_reader: MvccReader<S>,
     start_ts: u64,
     writes: Vec<Modify>,
     write_size: usize,
@@ -49,14 +47,6 @@ impl<S: Snapshot> MvccTxn<S> {
             reader: MvccReader::new(
                 snapshot.clone(),
                 None,
-                fill_cache,
-                None,
-                None,
-                IsolationLevel::Si,
-            ),
-            gc_reader: MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
                 fill_cache,
                 None,
                 None,
@@ -133,12 +123,6 @@ impl<S: Snapshot> MvccTxn<S> {
         let key = key.append_ts(commit_ts);
         self.write_size += CF_ROLLBACK.len() + key.as_encoded().len() + value.len();
         self.writes.push(Modify::Put(CF_ROLLBACK, key, value));
-    }
-
-    fn delete_rollback(&mut self, key: Key, commit_ts: u64) {
-        let key = key.append_ts(commit_ts);
-        self.write_size += CF_ROLLBACK.len() + key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_ROLLBACK, key));
     }
 
     fn prewrite_key_value(
@@ -518,12 +502,10 @@ impl<S: Snapshot> MvccTxn<S> {
         })
     }
 
-    pub fn gc(&mut self, key: Key, safe_point: u64) -> Result<GcInfo> {
-        let mut remove_older = false;
-        let mut ts: u64 = u64::max_value();
-        let mut found_versions = 0;
-        let mut deleted_versions = 0;
-        let mut is_completed = true;
+    pub fn gc(&mut self, _key: Key, _safe_point: u64) -> Result<GcInfo> {
+        let found_versions = 0;
+        let deleted_versions = 0;
+        let is_completed = true;
 
         Ok(GcInfo {
             found_versions,
@@ -535,15 +517,13 @@ impl<S: Snapshot> MvccTxn<S> {
 
 #[cfg(test)]
 mod tests {
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use kvproto::kvrpcpb::Context;
 
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::mvcc::MvccTxn;
     use crate::storage::mvcc::WriteType;
-    use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::{
-        Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
-    };
+    use crate::storage::{Key, Mutation, Options, TestEngineBuilder, SHORT_VALUE_MAX_LEN};
 
     use std::u64;
 
@@ -912,7 +892,7 @@ mod tests {
         test_gc_imp(b"k2", &v1, &v2, &v3, &v4);
     }
 
-    fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8]) {
+    fn test_write_imp(k: &[u8], v: &[u8], _k2: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v, k, 5);

@@ -195,7 +195,7 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
+    use crate::storage::{Engine, Key, Modify, Mutation, Options, Snapshot};
     use engine::CF_WRITE;
 
     use super::*;
