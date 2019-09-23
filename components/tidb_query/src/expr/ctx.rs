@@ -163,7 +163,7 @@ impl EvalConfig {
 }
 
 // Warning details caused in eval computation.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct EvalWarnings {
     // max number of warnings to return.
     max_warning_cnt: usize,
@@ -189,13 +189,6 @@ impl EvalWarnings {
         }
     }
 
-    pub fn append_tipb_err_type_warning(&mut self, err: tipb::Error) {
-        self.warning_cnt += 1;
-        if self.warnings.len() < self.max_warning_cnt {
-            self.warnings.push(err);
-        }
-    }
-
     pub fn merge(&mut self, other: &mut EvalWarnings) {
         self.warning_cnt += other.warning_cnt;
         if self.warnings.len() >= self.max_warning_cnt {
@@ -209,7 +202,7 @@ impl EvalWarnings {
 }
 
 /// Some global variables needed in an evaluation.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EvalContext {
     pub cfg: Arc<EvalConfig>,
     pub warnings: EvalWarnings,
