@@ -82,6 +82,8 @@ pub struct Config {
     pub stats_concurrency: usize,
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
+    // Wait duration before a mini batch is submitted
+    pub minibatch_wait_duration: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -141,6 +143,7 @@ impl Default for Config {
             heavy_load_threshold: 300,
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
+            minibatch_wait_duration: ReadableDuration::millis(0),
         }
     }
 }

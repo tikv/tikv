@@ -6,6 +6,7 @@ use prometheus_static_metric::*;
 use prometheus::exponential_buckets;
 
 use crate::storage::ErrorHeaderKind;
+use crate::storage::MiniBatchHistogramVec;
 
 make_static_metric! {
     pub label_enum GrpcTypeKind {
@@ -51,6 +52,60 @@ make_static_metric! {
 }
 
 lazy_static! {
+    pub static ref MINIBATCH_BATCHABLE_RATIO_HISTOGRAM_VEC: MiniBatchHistogramVec =
+        register_static_histogram_vec!(
+            MiniBatchHistogramVec,
+            "tikv_minibatch_batchable_ratio",
+            "Ratio of batchable commands to all commands",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref MINIBATCH_BATCHED_RATIO_HISTOGRAM_VEC: MiniBatchHistogramVec =
+        register_static_histogram_vec!(
+            MiniBatchHistogramVec,
+            "tikv_minibatch_batched_ratio",
+            "Ratio of batched output to batchable commands",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref MINIBATCH_MAX_BATCHED_RATIO_HISTOGRAM_VEC: MiniBatchHistogramVec =
+        register_static_histogram_vec!(
+            MiniBatchHistogramVec,
+            "tikv_minibatch_max_batched_ratio",
+            "Batch ratio of most compressed mini batch command",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref MINIBATCH_READY_RATIO_HISTOGRAM_VEC: MiniBatchHistogramVec =
+        register_static_histogram_vec!(
+            MiniBatchHistogramVec,
+            "tikv_minibatch_ready_ratio",
+            "Current ratio to flush minibatch",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref MINIBATCH_INPUT_SIZE_HISTOGRAM_VEC: MiniBatchHistogramVec =
+        register_static_histogram_vec!(
+            MiniBatchHistogramVec,
+            "tikv_minibatch_input_size",
+            "Number of batchable commands sent to minibatcher",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
+    pub static ref MINIBATCH_OUTPUT_SIZE_HISTOGRAM_VEC: MiniBatchHistogramVec =
+        register_static_histogram_vec!(
+            MiniBatchHistogramVec,
+            "tikv_minibatch_output_size",
+            "Number of batched commands submitted by minibatcher",
+            &["type"],
+            exponential_buckets(1f64, 5f64, 10).unwrap()
+        )
+        .unwrap();
     pub static ref SEND_SNAP_HISTOGRAM: Histogram = register_histogram!(
         "tikv_server_send_snapshot_duration_seconds",
         "Bucketed histogram of server send snapshots duration",

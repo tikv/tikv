@@ -11,7 +11,9 @@ mod store;
 use std::error;
 use std::io::Error as IoError;
 
-pub use self::process::{execute_callback, ProcessResult, RESOLVE_LOCK_BATCH_SIZE};
+pub use self::process::{
+    execute_batch_callback, execute_callback, MsgScheduler, ProcessResult, RESOLVE_LOCK_BATCH_SIZE,
+};
 pub use self::scheduler::{Msg, Scheduler};
 pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
 pub use self::store::{FixtureStore, FixtureStoreScanner};

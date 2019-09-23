@@ -33,7 +33,9 @@ use tikv_util::{collections::HashMap, time::SlowTimer};
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockMgr};
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
+use crate::storage::txn::process::{
+    execute_batch_callback, execute_callback, Executor, MsgScheduler, ProcessResult, Task,
+};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
@@ -196,6 +198,10 @@ impl<L: LockMgr> SchedulerInner<L> {
         }
     }
 
+    fn peek_task_mutex(&self, cid: u64) -> &Mutex<HashMap<u64, TaskContext>> {
+        &self.task_contexts[id_index(cid)]
+    }
+
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.task_contexts[id_index(cid)]
             .lock()
@@ -330,16 +336,30 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         }
     }
 
-    fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCb) {
+    fn on_receive_new_cmd(&self, cmd: Command, mut callback: StorageCb) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
-            execute_callback(
-                callback,
-                ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
-                },
-            );
+            if let Command::MiniBatch { ids, .. } = cmd {
+                for id in ids {
+                    if id < u64::max_value() {
+                        execute_batch_callback(
+                            &mut callback,
+                            id,
+                            ProcessResult::Failed {
+                                err: StorageError::SchedTooBusy,
+                            },
+                        );
+                    }
+                }
+            } else {
+                execute_callback(
+                    callback,
+                    ProcessResult::Failed {
+                        err: StorageError::SchedTooBusy,
+                    },
+                );
+            }
             return;
         }
         self.schedule_command(cmd, callback);
@@ -352,6 +372,11 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         let tag = task.tag;
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
+        let ids = if let Command::MiniBatch { ids, .. } = task.cmd() {
+            Some(ids.clone())
+        } else {
+            None
+        };
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
@@ -362,7 +387,20 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e.into());
+                if let Some(ids) = ids {
+                    for id in ids {
+                        if id < u64::max_value() {
+                            self.batch_finish_with_err(
+                                cid,
+                                id,
+                                Error::from(e.maybe_clone().unwrap()),
+                            );
+                        }
+                    }
+                    self.batch_all_finished(cid);
+                } else {
+                    self.finish_with_err(cid, e.into());
+                }
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
@@ -439,6 +477,71 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
+    /// Calls the callback with an error.
+    fn batch_finish_with_err(&self, cid: u64, req: u64, err: Error) {
+        debug!("write command finished with error"; "cid" => cid);
+        let mut tasks = self.inner.peek_task_mutex(cid).lock();
+        let tctx = tasks.get_mut(&cid).unwrap();
+
+        SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
+
+        let pr = ProcessResult::Failed {
+            err: StorageError::from(err),
+        };
+        execute_batch_callback(&mut tctx.cb, req, pr);
+    }
+
+    /// Event handler for the success of read.
+    ///
+    /// If a next command is present, continues to execute; otherwise, delivers the result to the
+    /// callback.
+    fn on_batch_read_finished(&self, cid: u64, req: u64, pr: ProcessResult, tag: CommandKind) {
+        SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
+
+        debug!("read command finished"; "cid" => cid);
+        let mut tasks = self.inner.peek_task_mutex(cid).lock();
+        let tctx = tasks.get_mut(&cid).unwrap();
+        // if let ProcessResult::NextCommand { cmd } = pr {
+        // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+        // self.schedule_command(cmd, tctx.cb);
+        // } else {
+        execute_batch_callback(&mut tctx.cb, req, pr);
+        // }
+    }
+
+    /// Event handler for the success of write.
+    fn on_batch_write_finished(
+        &self,
+        cid: u64,
+        req: u64,
+        pr: ProcessResult,
+        result: EngineResult<()>,
+        tag: CommandKind,
+    ) {
+        SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
+
+        debug!("write command finished"; "cid" => cid);
+        let mut tasks = self.inner.peek_task_mutex(cid).lock();
+        let tctx = tasks.get_mut(&cid).unwrap();
+        let pr = match result {
+            Ok(()) => pr,
+            Err(e) => ProcessResult::Failed {
+                err: StorageError::from(e),
+            },
+        };
+        // if let ProcessResult::NextCommand { cmd } = pr {
+        // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+        // self.schedule_command(cmd, tctx.cb);
+        // } else {
+        execute_batch_callback(&mut tctx.cb, req, pr);
+        // }
+    }
+
+    fn batch_all_finished(&self, cid: u64) {
+        let tctx = self.inner.dequeue_task_context(cid);
+        self.release_lock(&tctx.lock, cid);
+    }
+
     /// Event handler for the request of waiting for lock
     fn on_wait_for_lock(
         &self,
@@ -481,6 +584,24 @@ impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
             _ => unreachable!(),
         }
     }
+
+    fn on_batch_msg(&self, req: u64, task: Msg) {
+        match task {
+            Msg::ReadFinished { cid, tag, pr } => self.on_batch_read_finished(cid, req, pr, tag),
+            Msg::WriteFinished {
+                cid,
+                tag,
+                pr,
+                result,
+            } => self.on_batch_write_finished(cid, req, pr, result, tag),
+            Msg::FinishedWithErr { cid, err, .. } => self.batch_finish_with_err(cid, req, err),
+            _ => unreachable!(),
+        }
+    }
+
+    fn on_batch_finished(&self, cid: u64) {
+        self.batch_all_finished(cid);
+    }
 }
 
 fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
@@ -508,6 +629,17 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         Command::TxnHeartBeat {
             ref primary_key, ..
         } => latches.gen_lock(&[primary_key]),
+        Command::MiniBatch { ref commands, .. } => {
+            let mut k: Vec<&Key> = vec![];
+            for cmd in commands {
+                if let Command::Prewrite { ref mutations, .. } = cmd {
+                    k.append(&mut mutations.iter().map(|x| x.key()).collect());
+                } else if let Command::Commit { ref keys, .. } = cmd {
+                    k.append(&mut keys.iter().collect());
+                }
+            }
+            latches.gen_lock(&k)
+        }
 
         // Avoid using wildcard _ here to avoid forgetting add new commands here.
         Command::ScanLock { .. }

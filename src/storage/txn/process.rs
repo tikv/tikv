@@ -7,7 +7,7 @@ use std::{mem, thread, u64};
 use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
-use crate::storage::kv::with_tls_engine;
+use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockMgr};
 use crate::storage::mvcc::{
@@ -73,6 +73,18 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
+        _ => panic!("batch callback called in execute_callback"),
+    }
+}
+
+pub fn execute_batch_callback(callback: &mut StorageCb, req: u64, pr: ProcessResult) {
+    match callback {
+        StorageCb::BatchBooleans(cb) => match pr {
+            ProcessResult::MultiRes { results } => cb(req, Ok(results)),
+            ProcessResult::Failed { err } => cb(req, Err(err)),
+            _ => panic!("process result mismatch"),
+        },
+        _ => panic!("callback called in execute_batch_callback"),
     }
 }
 
@@ -113,6 +125,8 @@ impl Task {
 
 pub trait MsgScheduler: Clone + Send + 'static {
     fn on_msg(&self, task: Msg);
+    fn on_batch_msg(&self, req: u64, task: Msg);
+    fn on_batch_finished(&self, cid: u64);
 }
 
 pub struct Executor<E: Engine, S: MsgScheduler, L: LockMgr> {
@@ -172,14 +186,36 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 self.take_pool()
                     .pool
                     .spawn(move || {
-                        notify_scheduler(
-                            self.take_scheduler(),
-                            Msg::FinishedWithErr {
-                                cid: task.cid,
-                                err: Error::from(err),
-                                tag: task.tag,
-                            },
-                        );
+                        let sched = self.take_scheduler();
+                        if task.cmd().batched() {
+                            let ids = if let Command::MiniBatch { ids, .. } = task.cmd() {
+                                Some(ids)
+                            } else {
+                                None
+                            };
+                            for id in ids.unwrap() {
+                                if *id < u64::max_value() {
+                                    sched.on_batch_msg(
+                                        *id,
+                                        Msg::FinishedWithErr {
+                                            cid: task.cid,
+                                            err: Error::from(err.maybe_clone().unwrap()),
+                                            tag: task.tag,
+                                        },
+                                    );
+                                }
+                            }
+                            sched.on_batch_finished(task.cid);
+                        } else {
+                            notify_scheduler(
+                                sched,
+                                Msg::FinishedWithErr {
+                                    cid: task.cid,
+                                    err: Error::from(err),
+                                    tag: task.tag,
+                                },
+                            );
+                        }
                         future::ok::<_, ()>(())
                     })
                     .unwrap();
@@ -258,82 +294,224 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
         let lock_mgr = self.take_lock_mgr();
-        let msg = match process_write_impl(task.cmd, snapshot, lock_mgr, &mut statistics) {
-            // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
-            // message when it finishes.
-            Ok(WriteResult {
-                ctx,
-                to_be_write,
-                rows,
-                pr,
-                lock_info,
-            }) => {
-                SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
+        match task.cmd {
+            cmd @ Command::MiniBatch { .. } => {
+                if process_batch_write_impl(
+                    cid,
+                    cmd,
+                    snapshot,
+                    engine,
+                    scheduler,
+                    self.take_pool(),
+                    &mut statistics,
+                )
+                .is_err()
+                {
+                    error!("write command failed at batch write");
+                }
+                statistics
+            }
+            cmd => {
+                let msg = match process_write_impl(cmd, snapshot, lock_mgr, &mut statistics) {
+                    // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
+                    // message when it finishes.
+                    Ok(WriteResult {
+                        ctx,
+                        to_be_write,
+                        rows,
+                        pr,
+                        lock_info,
+                    }) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if let Some(lock_info) = lock_info {
-                    let (lock, is_first_lock) = lock_info;
-                    Msg::WaitForLock {
-                        cid,
-                        start_ts: ts,
-                        pr,
-                        lock,
-                        is_first_lock,
+                        if let Some(lock_info) = lock_info {
+                            let (lock, is_first_lock) = lock_info;
+                            Msg::WaitForLock {
+                                cid,
+                                start_ts: ts,
+                                pr,
+                                lock,
+                                is_first_lock,
+                            }
+                        } else if to_be_write.is_empty() {
+                            Msg::WriteFinished {
+                                cid,
+                                pr,
+                                result: Ok(()),
+                                tag,
+                            }
+                        } else {
+                            let sched = scheduler.clone();
+                            let sched_pool = self.take_pool();
+                            // The callback to receive async results of write prepare from the storage engine.
+                            let engine_cb = Box::new(move |(_, result)| {
+                                sched_pool
+                                    .pool
+                                    .spawn(move || {
+                                        notify_scheduler(
+                                            sched,
+                                            Msg::WriteFinished {
+                                                cid,
+                                                pr,
+                                                result,
+                                                tag,
+                                            },
+                                        );
+                                        KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                            .get(tag)
+                                            .observe(rows as f64);
+                                        future::ok::<_, ()>(())
+                                    })
+                                    .unwrap()
+                            });
+
+                            if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
+
+                                info!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                                let err = e.into();
+                                Msg::FinishedWithErr { cid, err, tag }
+                            } else {
+                                return statistics;
+                            }
+                        }
                     }
-                } else if to_be_write.is_empty() {
-                    Msg::WriteFinished {
-                        cid,
-                        pr,
-                        result: Ok(()),
-                        tag,
+                    // Write prepare failure typically means conflicting transactions are detected. Delivers the
+                    // error to the callback, and releases the latches.
+                    Err(err) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
+
+                        debug!("write command failed at prewrite"; "cid" => cid);
+                        Msg::FinishedWithErr { cid, err, tag }
                     }
-                } else {
-                    let sched = scheduler.clone();
-                    let sched_pool = self.take_pool();
-                    // The callback to receive async results of write prepare from the storage engine.
-                    let engine_cb = Box::new(move |(_, result)| {
+                };
+                notify_scheduler(scheduler, msg);
+                statistics
+            }
+        }
+    }
+}
+
+fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
+    cid: u64,
+    cmd: Command,
+    snapshot: En::Snap,
+    engine: &En,
+    scheduler: Sched,
+    sched_pool: SchedPool,
+    statistics: &mut Statistics,
+) -> Result<()> {
+    if !cmd.batched() {
+        return Ok(());
+    }
+    if let Command::MiniBatch {
+        commands,
+        mut ids,
+        tag,
+    } = cmd
+    {
+        let retrieve = match commands[0] {
+            Command::Prewrite {
+                ref ctx, start_ts, ..
+            } => Some((
+                MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?,
+                ctx,
+            )),
+            Command::Commit {
+                ref ctx, lock_ts, ..
+            } => Some((
+                MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?,
+                ctx,
+            )),
+            _ => None,
+        };
+        if let Some((mut txn, ctx)) = retrieve {
+            // check conflict
+            let rows = match tag {
+                CommandKind::prewrite => {
+                    txn.batch_prewrite(cid, &commands, &mut ids, &scheduler)?
+                }
+                CommandKind::commit => {
+                    // assume optimistic txn
+                    txn.batch_commit(cid, &commands, &mut ids, &scheduler)?
+                }
+                _ => 0,
+            };
+            statistics.add(&txn.take_statistics());
+            let modifies = txn.into_modifies();
+            // send all modifies to raftstore
+            SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
+            if modifies.is_empty() {
+                for i in ids {
+                    if i < u64::max_value() {
+                        scheduler.on_batch_msg(
+                            i,
+                            Msg::WriteFinished {
+                                cid,
+                                pr: ProcessResult::MultiRes { results: vec![] },
+                                result: Ok(()),
+                                tag,
+                            },
+                        );
+                    }
+                }
+                scheduler.on_batch_finished(cid);
+            } else {
+                let sched = scheduler.clone();
+                let id_copy = ids.clone();
+                let engine_cb = Box::new(
+                    move |(_, res): (kv::CbContext, std::result::Result<(), kv::Error>)| {
                         sched_pool
                             .pool
                             .spawn(move || {
-                                notify_scheduler(
-                                    sched,
-                                    Msg::WriteFinished {
-                                        cid,
-                                        pr,
-                                        result,
-                                        tag,
-                                    },
-                                );
+                                for i in id_copy {
+                                    if i < u64::max_value() {
+                                        sched.on_batch_msg(
+                                            i,
+                                            Msg::WriteFinished {
+                                                cid,
+                                                pr: ProcessResult::MultiRes { results: vec![] },
+                                                result: if let kv::Result::Err(e) = &res {
+                                                    Err(e.maybe_clone().unwrap())
+                                                } else {
+                                                    Ok(())
+                                                },
+                                                tag,
+                                            },
+                                        );
+                                    }
+                                }
+                                sched.on_batch_finished(cid);
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                                     .get(tag)
                                     .observe(rows as f64);
                                 future::ok::<_, ()>(())
                             })
                             .unwrap()
-                    });
+                    },
+                );
+                if let Err(e) = engine.async_write(ctx, modifies, engine_cb) {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
-                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
-
-                        info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                        let err = e.into();
-                        Msg::FinishedWithErr { cid, err, tag }
-                    } else {
-                        return statistics;
+                    info!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                    for i in ids {
+                        if i < u64::max_value() {
+                            scheduler.on_batch_msg(
+                                i,
+                                Msg::FinishedWithErr {
+                                    cid,
+                                    err: Error::Engine(e.maybe_clone().unwrap()),
+                                    tag,
+                                },
+                            );
+                        }
                     }
+                    scheduler.on_batch_finished(cid);
                 }
             }
-            // Write prepare failure typically means conflicting transactions are detected. Delivers the
-            // error to the callback, and releases the latches.
-            Err(err) => {
-                SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-
-                debug!("write command failed at prewrite"; "cid" => cid);
-                Msg::FinishedWithErr { cid, err, tag }
-            }
-        };
-        notify_scheduler(scheduler, msg);
-        statistics
+        }
     }
+    Ok(())
 }
 
 fn process_read_impl<E: Engine>(
