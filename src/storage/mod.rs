@@ -2724,7 +2724,7 @@ mod tests {
                 .wait(),
         );
     }
-    
+
     #[test]
     fn test_cleanup_check_ttl() {
         let storage = TestStorageBuilder::new().build().unwrap();
