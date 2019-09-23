@@ -268,6 +268,28 @@ impl NumberCodec {
         LittleEndian::read_i16(buf)
     }
 
+    /// Encodes a 32 bit float number `v` to `buf` in little endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn encode_f32_le(buf: &mut [u8], v: f32) {
+        LittleEndian::write_f32(buf, v)
+    }
+
+    /// Dncodes a 32 bit float number `v` to `buf` in little endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn decode_f32_le(buf: &mut [u8]) -> f32 {
+        LittleEndian::read_f32(buf)
+    }
+
     /// Encodes an unsigned 32 bit integer `v` to `buf` in little endian,
     /// which is not memory-comparable.
     ///
@@ -917,6 +939,17 @@ pub trait NumberEncoder: BufferWriter {
     #[inline]
     fn write_i32_le(&mut self, v: i32) -> Result<()> {
         write!(self, v, 4, encode_i32_le)
+    }
+
+    /// Writes a 32 bit float number `v` in little endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn write_f32_le(&mut self, v: f32) -> Result<()> {
+        write!(self, v, 4, encode_f32_le)
     }
 
     /// Writes an unsigned 64 bit integer `v` in little endian,

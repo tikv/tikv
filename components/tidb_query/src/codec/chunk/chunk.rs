@@ -2,9 +2,9 @@
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
+use crate::codec::data_type::VectorValue;
 use crate::codec::Datum;
 use codec::buffer::BufferWriter;
-use std::io::Write;
 use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_datatype::FieldTypeFlag;
 #[cfg(test)]

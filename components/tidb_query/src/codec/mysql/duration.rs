@@ -779,7 +779,7 @@ pub trait DurationEncoder: NumberEncoder {
     }
 
     fn encode_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
-        self.encode_i64_le(v.to_nanos())?;
+        self.write_i64_le(v.to_nanos())?;
         Ok(())
     }
 }

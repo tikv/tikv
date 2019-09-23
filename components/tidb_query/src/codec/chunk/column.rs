@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Write;
-
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 
@@ -205,7 +203,7 @@ impl Column {
 
     /// Append i64 datum to the column.
     pub fn append_i64(&mut self, v: i64) -> Result<()> {
-        self.data.encode_i64_le(v)?;
+        self.data.write_i64_le(v)?;
         self.finish_append_fixed()
     }
 
@@ -219,7 +217,7 @@ impl Column {
 
     /// Append u64 datum to the column.
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
-        self.data.encode_u64_le(v)?;
+        self.data.write_u64_le(v)?;
         self.finish_append_fixed()
     }
 
