@@ -169,7 +169,7 @@ pub struct Progress<R: RegionInfoProvider> {
     next_start: Option<Key>,
     end_key: Option<Key>,
     region_info: R,
-    stopped: bool,
+    finished: bool,
 }
 
 impl<R: RegionInfoProvider> Progress<R> {
@@ -179,15 +179,15 @@ impl<R: RegionInfoProvider> Progress<R> {
             next_start,
             end_key,
             region_info,
-            stopped: Default::default(),
+            finished: Default::default(),
         }
     }
 
-    /// forword the progress by n BackupRanges
+    /// Forward the progress by `ranges` BackupRanges
     ///
-    /// The number of the returned BackupRanges should <= n
-    fn forword(&mut self, n: usize) -> Vec<BackupRange> {
-        if self.stopped {
+    /// The size of the returned BackupRanges should <= `ranges`
+    fn forward(&mut self, ranges: usize) -> Vec<BackupRange> {
+        if self.finished {
             return Vec::new();
         }
         let store_id = self.store_id;
@@ -226,7 +226,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                         };
                         tx.send(Some(backup_range)).unwrap();
                         sended += 1;
-                        if sended >= n {
+                        if sended >= ranges {
                             break;
                         }
                     }
@@ -242,14 +242,14 @@ impl<R: RegionInfoProvider> Progress<R> {
         let branges: Vec<_> = rx.iter().filter_map(|a| a).collect();
         if let Some(b) = branges.last() {
             // The region's end key is empty means it is the last
-            // region, we need to set the stopped flag here in case
-            // we run with next_start set to None
+            // region, we need to set the `finished` flag here in case
+            // we run with `next_start` set to None
             if b.region.get_end_key().is_empty() {
-                self.stopped = true;
+                self.finished = true;
             }
             self.next_start = b.end_key.clone();
         } else {
-            self.stopped = true;
+            self.finished = true;
         }
         branges
     }
@@ -258,7 +258,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
         let workers = ThreadPoolBuilder::new()
-            .name_prefix("backworker")
+            .name_prefix("backup-worker")
             .pool_size(8) // TODO: make it configure.
             .build();
         Endpoint {
@@ -288,7 +288,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let store_id = self.store_id;
         // TODO: make it async.
         self.workers.spawn(lazy(move || loop {
-            let branges = prs.lock().unwrap().forword(WORKER_TAKE_RANGE);
+            let branges = prs.lock().unwrap().forward(WORKER_TAKE_RANGE);
             if branges.is_empty() {
                 return Ok(());
             }
@@ -606,7 +606,7 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forword(n);
+                    let mut r = prs.forward(n);
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
