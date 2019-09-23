@@ -336,17 +336,30 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         }
     }
 
-    fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCb) {
+    fn on_receive_new_cmd(&self, cmd: Command, mut callback: StorageCb) {
         // write flow control
-        // batched command has batch_callback
-        if !cmd.batched() && cmd.need_flow_control() && self.inner.too_busy() {
+        if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
-            execute_callback(
-                callback,
-                ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
-                },
-            );
+            if let Command::MiniBatch { ids, .. } = cmd {
+                for id in ids {
+                    if id < u64::max_value() {
+                        execute_batch_callback(
+                            &mut callback,
+                            id,
+                            ProcessResult::Failed {
+                                err: StorageError::SchedTooBusy,
+                            },
+                        );
+                    }
+                }
+            } else {
+                execute_callback(
+                    callback,
+                    ProcessResult::Failed {
+                        err: StorageError::SchedTooBusy,
+                    },
+                );
+            }
             return;
         }
         self.schedule_command(cmd, callback);

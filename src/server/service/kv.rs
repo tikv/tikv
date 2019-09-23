@@ -47,6 +47,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 const MINIBATCH_INIT_RATIO: f32 = 2.0;
 const MINIBATCH_REPORT_TO_LOG: bool = false;
+// const MINIBATCH_MAX_SIZE: u64 = 0;
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -145,10 +146,12 @@ impl MiniBatcherInner {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) {
-        if self.last_submit.elapsed() > Duration::from_millis(self.timeout) {
+        let now = Instant::now();
+        if now - self.last_submit > Duration::from_millis(self.timeout) {
             if !self.commands.is_empty() && self.ratio > 1.1 {
                 self.ratio -= 0.01;
             }
+            self.last_submit = now;
             self.submit(tx, storage);
         } else if !self.commands.is_empty() && self.ratio < 50.0 {
             self.ratio += 0.01;
@@ -160,12 +163,12 @@ impl MiniBatcherInner {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) {
-        if !self.commands.is_empty() {
+        let commands = self.take_commands();
+        if !commands.is_empty() {
             self.report();
         } else {
             return;
         }
-        let commands = self.take_commands();
         let mut max_ratio = 1;
         match self.tag {
             CommandKind::prewrite => {
@@ -265,7 +268,7 @@ impl MiniBatcherInner {
         self.batchable = 0;
         self.output = 0;
         self.key_conflict = 0;
-        self.last_submit = Instant::now();
+        // self.last_submit = Instant::now();
         std::mem::replace(&mut self.commands, vec![])
     }
 
@@ -386,12 +389,16 @@ impl MiniBatcher {
 
                 match inner.router.get_mut(&ver) {
                     Some(meta) => {
+                        // if MINIBATCH_MAX_SIZE > 0 && meta.size >= MINIBATCH_MAX_SIZE {
+                        //     return false;
+                        // }
                         for m in &mutations {
                             if meta.key_set.contains(m.key().clone().as_encoded()) {
                                 inner.key_conflict += 1;
                                 return false;
                             }
                         }
+                        meta.size += 1;
                         for m in &mutations {
                             meta.key_set.insert(m.key().clone().into_encoded());
                         }
@@ -449,12 +456,16 @@ impl MiniBatcher {
                 };
                 match inner.router.get_mut(&ver) {
                     Some(meta) => {
+                        // if MINIBATCH_MAX_SIZE > 0 && meta.size >= MINIBATCH_MAX_SIZE {
+                        //     return false;
+                        // }
                         for key in &keys {
                             if meta.key_set.contains(key.clone().as_encoded()) {
                                 inner.key_conflict += 1;
                                 return false;
                             }
                         }
+                        meta.size += 1;
                         for key in &keys {
                             meta.key_set.insert(key.clone().into_encoded());
                         }
@@ -489,6 +500,8 @@ impl MiniBatcher {
                 inner.batchable += 1;
                 true
             }
+            Some(batch_commands_request::request::Cmd::Get(_req)) => false,
+            Some(batch_commands_request::request::Cmd::RawGet(_req)) => false,
             _ => false,
         }
     }
