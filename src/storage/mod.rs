@@ -2723,6 +2723,12 @@ mod tests {
                 .async_get(Context::default(), Key::from_raw(b"x"), 105)
                 .wait(),
         );
+    }
+    
+    #[test]
+    fn test_cleanup_check_ttl() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
 
         let mut options = Options::default();
         options.lock_ttl = 100;
