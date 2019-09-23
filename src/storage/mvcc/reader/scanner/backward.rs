@@ -2,7 +2,7 @@
 
 use engine::CF_HISTORY;
 
-use crate::storage::mvcc::write::Write;
+use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
@@ -114,8 +114,10 @@ impl<S: Snapshot> BackwardScanner<S> {
                 let mut latest =
                     Write::parse(self.latest_cursor.value(&mut self.statistics.latest))?;
                 if self.cfg.ts >= latest.commit_ts {
-                    found = true;
-                    value = latest.take_value();
+                    if latest.write_type == WriteType::Put {
+                        found = true;
+                        value = latest.take_value();
+                    }
                 } else if self.history_valid {
                     // seek from history
                     self.ensure_history_cursor()?;
@@ -131,14 +133,16 @@ impl<S: Snapshot> BackwardScanner<S> {
                             .unwrap()
                             .key(&mut self.statistics.history);
                         if Key::is_user_key_eq(history_key, key.as_encoded()) {
-                            found = true;
                             let mut history = Write::parse(
                                 self.history_cursor
                                     .as_ref()
                                     .unwrap()
                                     .value(&mut self.statistics.history),
                             )?;
-                            value = history.take_value();
+                            if history.write_type == WriteType::Put {
+                                found = true;
+                                value = history.take_value();
+                            }
                         }
                     } else {
                         self.history_valid = false;
