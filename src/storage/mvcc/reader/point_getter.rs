@@ -7,7 +7,7 @@ use crate::storage::mvcc::{default_not_found_error, Lock, Result};
 use crate::storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
 
-use super::util::CheckLockResult;
+use super::util::{key_to_key_buf, CheckLockResult};
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -92,6 +92,8 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             write_cursor_valid: true,
 
             drained: false,
+
+            key_buf: None,
         })
     }
 }
@@ -116,6 +118,8 @@ pub struct PointGetter<S: Snapshot> {
     /// when `multi == false`, to protect from producing undefined values when trying to get
     /// multiple values under `multi == false`.
     drained: bool,
+
+    key_buf: Option<Key>,
 }
 
 impl<S: Snapshot> PointGetter<S> {
@@ -186,11 +190,11 @@ impl<S: Snapshot> PointGetter<S> {
             return Ok(None);
         }
 
-        // Seek to `${user_key}_${ts}`. TODO: We can avoid this clone.
-        if !self
-            .write_cursor
-            .near_seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?
-        {
+        // Seek to `${user_key}_${ts}`.
+        if !self.write_cursor.near_seek(
+            &key_to_key_buf(&mut self.key_buf, user_key).append_ts_ref(ts),
+            &mut self.statistics.write,
+        )? {
             // If we seek to nothing, it means no write `key >= ${user_key}_${ts}`.
             // - If later we want to get a key >= current key, due to the above conclusion we can
             //   quit directly.
@@ -257,10 +261,10 @@ impl<S: Snapshot> PointGetter<S> {
     fn load_data_from_default_cf(&mut self, write: Write, user_key: &Key) -> Result<Value> {
         // TODO: Not necessary to receive a `Write`.
         self.statistics.data.get += 1;
-        // TODO: We can avoid this clone.
-        let value = self
-            .snapshot
-            .get_cf(CF_DEFAULT, &user_key.clone().append_ts(write.start_ts))?;
+        let value = self.snapshot.get_cf(
+            CF_DEFAULT,
+            key_to_key_buf(&mut self.key_buf, user_key).append_ts_ref(write.start_ts),
+        )?;
 
         if let Some(value) = value {
             self.statistics.data.processed += 1;
