@@ -1,10 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO: remove it after all code been merged.
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
-use std::cmp;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
@@ -13,24 +8,17 @@ use std::time::*;
 use engine::rocks::util::io_limiter::IOLimiter;
 use engine::DB;
 use external_storage::*;
+use futures::lazy;
 use futures::sync::mpsc::*;
-use futures::{lazy, Future};
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-use tikv::raftstore::coprocessor::RegionInfoAccessor;
 use tikv::raftstore::store::util::find_peer;
-use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::storage::kv::{
-    Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary,
-};
-use tikv::storage::txn::{
-    EntryBatch, Error as TxnError, Msg, Scanner, SnapshotStore, Store, TxnEntryScanner,
-    TxnEntryStore,
-};
+use tikv::storage::kv::{Engine, RegionInfoProvider};
+use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::{Key, Statistics};
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::worker::Runnable;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 
 use crate::metrics::*;
@@ -141,12 +129,14 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
 
 impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
-        let workers = ThreadPoolBuilder::new().name_prefix("backworker").build();
+        let workers = ThreadPoolBuilder::new()
+            .name_prefix("backworker")
+            .pool_size(8) // TODO: make it configure.
+            .build();
         Endpoint {
             store_id,
             engine,
             region_info,
-            // TODO: support more config.
             workers,
             db,
         }
@@ -326,7 +316,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             response.set_end_key(end_key.clone());
             match res {
                 Ok((mut files, stat)) => {
-                    info!("backup region finish";
+                    debug!("backup region finish";
                         "region" => ?brange.region,
                         "start_key" => hex::encode_upper(&start_key),
                         "end_key" => hex::encode_upper(&end_key),
@@ -439,18 +429,14 @@ pub mod tests {
     use external_storage::LocalStorage;
     use futures::{Future, Stream};
     use kvproto::metapb;
-    use std::collections::BTreeMap;
-    use std::sync::mpsc::{channel, Receiver, Sender};
     use tempfile::TempDir;
     use tikv::raftstore::coprocessor::RegionCollector;
-    use tikv::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
+    use tikv::raftstore::coprocessor::SeekRegionCallback;
     use tikv::raftstore::store::util::new_peer;
     use tikv::storage::kv::Result as EngineResult;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::SHORT_VALUE_MAX_LEN;
-    use tikv::storage::{
-        Mutation, Options, RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder,
-    };
+    use tikv::storage::{RocksEngine, TestEngineBuilder};
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
