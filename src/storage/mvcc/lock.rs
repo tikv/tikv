@@ -125,7 +125,7 @@ impl Lock {
         while !b.is_empty() {
             match b.read_u8()? {
                 VALUE_PREFIX => {
-                    let len = b.read_u8()?;
+                    let len = number::decode_var_u64(&mut b)?;
                     if b.len() < len as usize {
                         panic!(
                             "content len [{}] shorter than short value len [{}]",
