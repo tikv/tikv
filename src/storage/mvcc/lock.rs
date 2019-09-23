@@ -93,10 +93,10 @@ impl Lock {
         b.encode_u64(self.ts).unwrap();
         b.encode_var_u64(self.ttl).unwrap();
         // embed value
-        if let Some(v) = self.value {
+        if let Some(v) = &self.value {
             b.push(VALUE_PREFIX);
             b.encode_var_u64(v.len() as u64);
-            b.extend_from_slice(value);
+            b.extend_from_slice(v);
         }
 
         if self.for_update_ts > 0 {

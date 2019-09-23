@@ -8,7 +8,7 @@ use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
-use engine::{CF_HISTORY, CF_LATEST, CF_LOCK};
+use engine::{CF_HISTORY, CF_LATEST, CF_LOCK, CF_ROLLBACK};
 use kvproto::kvrpcpb::IsolationLevel;
 use tikv_util::keybuilder::KeyBuilder;
 
@@ -57,9 +57,9 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    pub fn get_latest(key: &Key) -> Result<Option<Write>> {
+    pub fn get_latest(&self, key: &Key) -> Result<Option<Write>> {
         if let Some(v) = self.snapshot.get_cf(CF_LATEST, key)? {
-            Ok(Some(Write::parse(v)?))
+            Ok(Some(Write::parse(&v)?))
         } else {
             Ok(None)
         }
@@ -118,8 +118,7 @@ impl<S: Snapshot> MvccReader<S> {
     pub fn get_rollback(&mut self, key: &Key, start_ts: u64) -> Result<Option<Write>> {
         let key = key.clone().append_ts(start_ts);
         if let Some(v) = self.snapshot.get_cf(CF_ROLLBACK, &key)? {
-            let rollback = Write::parse(v)?;
-            Ok(Some(Write::parse(v)?))
+            Ok(Some(Write::parse(&v)?))
         } else {
             Ok(None)
         }
@@ -239,7 +238,7 @@ impl<S: Snapshot> MvccReader<S> {
         if let Some(mut write) = self.get_latest(key)? {
             if ts >= write.commit_ts {
                 if write.write_type == WriteType::Put {
-                    return Ok(Some(write.take_value()));
+                    return Ok(Some(write.take_value().unwrap()));
                 } else {
                     return Ok(None);
                 }
@@ -247,9 +246,30 @@ impl<S: Snapshot> MvccReader<S> {
             // seek history
             if let Some(mut history) = self.seek_history(key, ts)? {
                 match history.write_type {
-                    WriteType::Put => return Ok(Some(history.take_value())),
+                    WriteType::Put => return Ok(Some(history.take_value().unwrap())),
                     WriteType::Delete => return Ok(None),
-                    t => panic!("unexpected write type {} in latest cf", t),
+                    t => panic!("unexpected write type {:?} in history cf", t),
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn get_commit(&mut self, key: &Key, mut ts: u64) -> Result<Option<Write>> {
+        if let Some(write) = self.get_latest(key)? {
+            if ts >= write.commit_ts {
+                if write.write_type == WriteType::Put {
+                    return Ok(Some(write));
+                } else {
+                    return Ok(None);
+                }
+            }
+            // seek history
+            if let Some(mut history) = self.seek_history(key, ts)? {
+                match history.write_type {
+                    WriteType::Put => return Ok(Some(history)),
+                    WriteType::Delete => return Ok(None),
+                    t => panic!("unexpected write type {:?} in history cf", t),
                 }
             }
         }
@@ -264,7 +284,7 @@ impl<S: Snapshot> MvccReader<S> {
         // Check latest
         if let Some(latest) = self.get_latest(key)? {
             if latest.start_ts == start_ts {
-                return Ok(Some(latest.commit_ts, latest.write_type));
+                return Ok(Some((latest.commit_ts, latest.write_type)));
             }
         }
 
@@ -280,10 +300,10 @@ impl<S: Snapshot> MvccReader<S> {
             if rollback.start_ts == start_ts {
                 return Ok(Some((rollback.commit_ts, rollback.write_type)));
             }
-            if commit_ts <= start_ts {
+            if rollback.commit_ts <= start_ts {
                 break;
             }
-            seek_ts = commit_ts - 1;
+            seek_ts = rollback.commit_ts - 1;
         }
 
         // check history
@@ -292,10 +312,10 @@ impl<S: Snapshot> MvccReader<S> {
             if history.start_ts == start_ts {
                 return Ok(Some((history.commit_ts, history.write_type)));
             }
-            if commit_ts <= start_ts {
+            if history.commit_ts <= start_ts {
                 break;
             }
-            seek_ts = commit_ts - 1;
+            seek_ts = history.commit_ts - 1;
         }
 
         Ok(None)
@@ -661,9 +681,9 @@ mod tests {
     }
 
     #[test]
-    fn test_get_write() {
+    fn test_get_commit() {
         let path = Builder::new()
-            .prefix("_test_storage_mvcc_reader_get_write")
+            .prefix("_test_storage_mvcc_reader_get_commit")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
@@ -701,29 +721,29 @@ mod tests {
         // is 2.
         // Commit versions: [13_12 PUT, 11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
-        let write = reader.get_write(&key, 2).unwrap().unwrap();
+        let write = reader.get_commit(&key, 2).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1);
 
-        let write = reader.get_write(&key, 5).unwrap().unwrap();
+        let write = reader.get_commit(&key, 5).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1);
 
-        let write = reader.get_write(&key, 7).unwrap().unwrap();
+        let write = reader.get_commit(&key, 7).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1);
 
-        assert!(reader.get_write(&key, 9).unwrap().is_none());
+        assert!(reader.get_commit(&key, 9).unwrap().is_none());
 
-        let write = reader.get_write(&key, 11).unwrap().unwrap();
+        let write = reader.get_commit(&key, 11).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 10);
 
-        let write = reader.get_write(&key, 13).unwrap().unwrap();
+        let write = reader.get_commit(&key, 13).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12);
 
-        let write = reader.get_write(&key, 15).unwrap().unwrap();
+        let write = reader.get_commit(&key, 15).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12);
     }

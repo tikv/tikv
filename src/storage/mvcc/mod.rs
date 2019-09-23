@@ -616,31 +616,6 @@ pub mod tests {
         assert_eq!(write.write_type, tp);
     }
 
-    pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::Si);
-        assert!(reader
-            .seek_write(&Key::from_raw(key), ts)
-            .unwrap()
-            .is_none());
-    }
-
-    pub fn must_seek_write<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        ts: u64,
-        start_ts: u64,
-        commit_ts: u64,
-        write_type: WriteType,
-    ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::Si);
-        let (t, write) = reader.seek_write(&Key::from_raw(key), ts).unwrap().unwrap();
-        assert_eq!(t, commit_ts);
-        assert_eq!(write.start_ts, start_ts);
-        assert_eq!(write.write_type, write_type);
-    }
-
     pub fn must_get_commit_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::Si);
@@ -686,31 +661,5 @@ pub mod tests {
             .get_txn_commit_info(&Key::from_raw(key), start_ts)
             .unwrap();
         assert_eq!(ret, None);
-    }
-
-    pub fn must_scan_keys<E: Engine>(
-        engine: &E,
-        start: Option<&[u8]>,
-        limit: usize,
-        keys: Vec<&[u8]>,
-        next_start: Option<&[u8]>,
-    ) {
-        let expect = (
-            keys.into_iter().map(Key::from_raw).collect(),
-            next_start.map(|x| Key::from_raw(x).append_ts(0)),
-        );
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Mixed),
-            false,
-            None,
-            None,
-            IsolationLevel::Si,
-        );
-        assert_eq!(
-            reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
-            expect
-        );
     }
 }

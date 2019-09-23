@@ -400,6 +400,9 @@ fn test_serde_custom_tikv_config() {
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
         },
+        latestcf: LatestCfConfig::default(),
+        historycf: HistoryCfConfig::default(),
+        rollbackcf: RollbackCfConfig::default(),
         titan: TitanDBConfig {
             enabled: true,
             dirname: "bar".to_owned(),

@@ -112,7 +112,7 @@ impl Write {
         let start_ts = number::decode_u64(&mut b)?;
         let commit_ts = number::decode_u64(&mut b)?;
         if b.is_empty() {
-            return Ok(Write::new(write_type, start_ts, None));
+            return Ok(Write::new(write_type, start_ts, commit_ts, None));
         }
 
         let flag = b.read_u8()?;
@@ -132,6 +132,10 @@ impl Write {
 
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
         WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
+    }
+
+    pub fn take_value(&mut self) -> Option<Value> {
+        self.value.take()
     }
 }
 
@@ -176,8 +180,8 @@ mod tests {
     fn test_write() {
         // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
         let mut writes = vec![
-            Write::new(WriteType::Put, 0, None),
-            Write::new(WriteType::Delete, 0, Some(b"value".to_vec())),
+            Write::new(WriteType::Put, 0, 1, None),
+            Write::new(WriteType::Delete, 0, 1, Some(b"value".to_vec())),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.to_bytes();
@@ -189,7 +193,7 @@ mod tests {
         // Test `Write::parse()` handles incorrect input.
         assert!(Write::parse(b"").is_err());
 
-        let lock = Write::new(WriteType::Lock, 1, Some(b"value".to_vec()));
+        let lock = Write::new(WriteType::Lock, 1, 2, Some(b"value".to_vec()));
         let v = lock.to_bytes();
         assert!(Write::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);

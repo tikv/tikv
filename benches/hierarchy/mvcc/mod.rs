@@ -208,7 +208,7 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
                     None,
                     ctx.get_isolation_level(),
                 );
-                black_box(reader.seek_write(&key, u64::max_value()).unwrap());
+                black_box(reader.get_commit(&key, u64::max_value()).unwrap());
             }
         },
         BatchSize::SmallInput,

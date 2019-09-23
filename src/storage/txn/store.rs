@@ -5,8 +5,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::metrics::*;
 use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::mvcc::PointGetterBuilder;
-use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
+use crate::storage::mvcc::{MvccReader, Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
@@ -151,12 +150,12 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
             None,
-            fill_cache,
+            self.fill_cache,
             None,
             None,
             IsolationLevel::Si,
         );
-        let v = reader.get(key)?;
+        let v = reader.get(key, self.start_ts)?;
         statistics.add(&reader.get_statistics());
         Ok(v)
     }
@@ -178,7 +177,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         for k in keys {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
         }
-        statistics.add(reader.get_statitics());
+        statistics.add(reader.get_statistics());
         Ok(results)
     }
 

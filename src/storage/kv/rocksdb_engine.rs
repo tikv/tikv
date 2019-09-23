@@ -200,7 +200,11 @@ impl TestEngineBuilder {
             .map(|cf| match *cf {
                 CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                CF_LATEST => CFOptions::new(CF_LATEST, cfg_rocksdb.latestcf.build_opt(&cache)),
+                CF_HISTORY => CFOptions::new(CF_HISTORY, cfg_rocksdb.historycf.build_opt(&cache)),
+                CF_ROLLBACK => {
+                    CFOptions::new(CF_ROLLBACK, cfg_rocksdb.rollbackcf.build_opt(&cache))
+                }
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })

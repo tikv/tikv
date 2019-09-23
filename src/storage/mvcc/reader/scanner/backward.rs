@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use engine::CF_DEFAULT;
+use engine::CF_HISTORY;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
@@ -66,8 +66,9 @@ impl<S: Snapshot> BackwardScanner<S> {
 
         loop {
             if self.lock_cursor.valid()? {
-                let current_user_key = self.lock_cursor.key(&mut self.statistics.lock).to_vec();
-                let lock = Lock::parse(self.lock_cursor.valud(&mut self.statistics.lock))?;
+                let current_user_key =
+                    Key::from_encoded_slice(self.lock_cursor.key(&mut self.statistics.lock));
+                let lock = Lock::parse(self.lock_cursor.value(&mut self.statistics.lock))?;
                 if let CheckLockResult::Locked(e) =
                     super::super::util::check_lock(&current_user_key, self.cfg.ts, &lock)?
                 {
@@ -111,7 +112,8 @@ impl<S: Snapshot> BackwardScanner<S> {
         let mut found = false;
         loop {
             if self.latest_cursor.valid()? {
-                let key = self.latest_cursor.key(&mut self.statistics.latest).to_vec();
+                let key =
+                    Key::from_encoded_slice(self.latest_cursor.key(&mut self.statistics.latest));
                 let mut value = None;
                 let mut latest =
                     Write::parse(self.latest_cursor.value(&mut self.statistics.latest))?;
@@ -123,12 +125,24 @@ impl<S: Snapshot> BackwardScanner<S> {
                     self.ensure_history_cursor();
                     let seek_key = key.clone().append_ts(self.cfg.ts);
                     self.history_cursor
-                        .near_seek_for_prev(&seek_key, &mut statistics.history)?;
-                    if self.history_cursor.vliad()? {
-                        let history_key = self.history_cursor.key(&mut self.statistics.history);
-                        if Key::is_user_key_eq(history_key, &key) {
+                        .as_mut()
+                        .unwrap()
+                        .near_seek_for_prev(&seek_key, &mut self.statistics.history)?;
+                    if self.history_cursor.as_ref().unwrap().valid()? {
+                        let history_key = self
+                            .history_cursor
+                            .as_ref()
+                            .unwrap()
+                            .key(&mut self.statistics.history);
+                        if Key::is_user_key_eq(history_key, key.as_encoded()) {
                             found = true;
-                            value = Some(self.history_cursor.value(&mut self.statistics.history));
+                            let mut history = Write::parse(
+                                self.history_cursor
+                                    .as_ref()
+                                    .unwrap()
+                                    .value(&mut self.statistics.history),
+                            )?;
+                            let value = history.take_value();
                         }
                     } else {
                         self.history_valid = false;

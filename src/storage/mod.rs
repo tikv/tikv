@@ -59,7 +59,9 @@ pub const VALUE_PREFIX: u8 = b'v';
 pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 
-use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine::{
+    CfName, ALL_CFS, CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_ROLLBACK, CF_WRITE, DATA_CFS,
+};
 use tikv_util::future_pool::FuturePool;
 
 pub fn is_short_value(value: &[u8]) -> bool {

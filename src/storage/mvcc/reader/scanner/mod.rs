@@ -4,7 +4,7 @@ mod backward;
 mod forward;
 mod txn_entry;
 
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::{CfName, CF_DEFAULT, CF_LATEST, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;

@@ -153,111 +153,6 @@ impl<E: Engine> GCRunner<E> {
         }
     }
 
-    fn get_snapshot(&self, ctx: &mut Context) -> Result<E::Snap> {
-        let timeout = Duration::from_secs(GC_SNAPSHOT_TIMEOUT_SECS);
-        match wait_op!(|cb| self.engine.async_snapshot(ctx, cb), timeout) {
-            Some((cb_ctx, Ok(snapshot))) => {
-                if let Some(term) = cb_ctx.term {
-                    ctx.set_term(term);
-                }
-                Ok(snapshot)
-            }
-            Some((_, Err(e))) => Err(e),
-            None => Err(EngineError::Timeout(timeout)),
-        }
-        .map_err(Error::from)
-    }
-
-    /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
-    fn scan_keys(
-        &mut self,
-        ctx: &mut Context,
-        safe_point: u64,
-        from: Option<Key>,
-        limit: usize,
-    ) -> Result<(Vec<Key>, Option<Key>)> {
-        let snapshot = self.get_snapshot(ctx)?;
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Forward),
-            !ctx.get_not_fill_cache(),
-            None,
-            None,
-            ctx.get_isolation_level(),
-        );
-
-        let is_range_start = from.is_none();
-
-        // range start gc with from == None, and this is an optimization to
-        // skip gc before scanning all data.
-        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.ratio_threshold);
-        let res = if skip_gc {
-            KV_GC_SKIPPED_COUNTER.inc();
-            Ok((vec![], None))
-        } else {
-            reader
-                .scan_keys(from, limit)
-                .map_err(Error::from)
-                .and_then(|(keys, next)| {
-                    if keys.is_empty() {
-                        assert!(next.is_none());
-                        if is_range_start {
-                            KV_GC_EMPTY_RANGE_COUNTER.inc();
-                        }
-                    }
-                    Ok((keys, next))
-                })
-        };
-        self.stats.add(reader.get_statistics());
-        res
-    }
-
-    /// Cleans up outdated data.
-    fn gc_keys(
-        &mut self,
-        ctx: &mut Context,
-        safe_point: u64,
-        keys: Vec<Key>,
-        mut next_scan_key: Option<Key>,
-    ) -> Result<Option<Key>> {
-        let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::new(snapshot, 0, !ctx.get_not_fill_cache()).unwrap();
-        for k in keys {
-            let gc_info = txn.gc(k.clone(), safe_point)?;
-
-            if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                debug!(
-                    "GC found plenty versions for a key";
-                    "region_id" => ctx.get_region_id(),
-                    "versions" => gc_info.found_versions,
-                    "key" => %k
-                );
-            }
-            // TODO: we may delete only part of the versions in a batch, which may not beyond
-            // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
-            if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                debug!(
-                    "GC deleted plenty versions for a key";
-                    "region_id" => ctx.get_region_id(),
-                    "versions" => gc_info.deleted_versions,
-                    "key" => %k
-                );
-            }
-
-            if !gc_info.is_completed {
-                next_scan_key = Some(k);
-                break;
-            }
-        }
-        self.stats.add(&txn.take_statistics());
-
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
-            self.engine.write(ctx, modifies)?;
-        }
-        Ok(next_scan_key)
-    }
-
     fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
         debug!(
             "start doing GC";
@@ -265,28 +160,7 @@ impl<E: Engine> GCRunner<E> {
             "safe_point" => safe_point
         );
 
-        let mut next_key = None;
-        loop {
-            // Scans at most `GC_BATCH_SIZE` keys
-            let (keys, next) = self
-                .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
-                .map_err(|e| {
-                    warn!("gc scan_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
-                    e
-                })?;
-            if keys.is_empty() {
-                break;
-            }
-
-            // Does the GC operation on all scanned keys
-            next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
-                warn!("gc gc_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
-                e
-            })?;
-            if next_key.is_none() {
-                break;
-            }
-        }
+        // TODO: delete history sst files whose largest ts is less than gc safepoint.
 
         debug!(
             "gc has finished";

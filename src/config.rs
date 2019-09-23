@@ -731,6 +731,82 @@ impl RaftCfConfig {
     }
 }
 
+cf_config!(WriteCfConfig);
+
+impl Default for WriteCfConfig {
+    fn default() -> WriteCfConfig {
+        // Setting blob_run_mode=read_only effectively disable Titan.
+        let mut titan = TitanCfConfig::default();
+        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        WriteCfConfig {
+            block_size: ReadableSize::kb(64),
+            block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
+            disable_block_cache: false,
+            cache_index_and_filter_blocks: true,
+            pin_l0_filter_and_index_blocks: true,
+            use_bloom_filter: true,
+            optimize_filters_for_hits: false,
+            whole_key_filtering: false,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
+            compression_per_level: [
+                DBCompressionType::No,
+                DBCompressionType::No,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Lz4,
+                DBCompressionType::Zstd,
+                DBCompressionType::Zstd,
+            ],
+            write_buffer_size: ReadableSize::mb(128),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(512),
+            target_file_size_base: ReadableSize::mb(8),
+            level0_file_num_compaction_trigger: 4,
+            level0_slowdown_writes_trigger: 20,
+            level0_stop_writes_trigger: 36,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::MinOverlappingRatio,
+            dynamic_level_bytes: true,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
+            titan,
+        }
+    }
+}
+
+impl WriteCfConfig {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
+        // Prefix extractor(trim the timestamp at tail) for write cf.
+        let e = Box::new(FixedSuffixSliceTransform::new(8));
+        cf_opts
+            .set_prefix_extractor("FixedSuffixSliceTransform", e)
+            .unwrap();
+        // Create prefix bloom filter for memtable.
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        // Collects user defined properties.
+        let f = Box::new(MvccPropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -808,6 +884,7 @@ pub struct DbConfig {
     pub rollbackcf: RollbackCfConfig,
     pub lockcf: LockCfConfig,
     pub raftcf: RaftCfConfig,
+    pub writecf: WriteCfConfig,
     pub titan: TitanDBConfig,
 }
 
@@ -845,6 +922,7 @@ impl Default for DbConfig {
             rollbackcf: RollbackCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
+            writecf: WriteCfConfig::default(),
             titan: TitanDBConfig::default(),
         }
     }
@@ -914,7 +992,7 @@ impl DbConfig {
             // TODO: rmeove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
             // Deprecated
-            CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
         ]
     }
 
@@ -927,7 +1005,7 @@ impl DbConfig {
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
             // Deprecated
-            CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
         ]
     }
 

@@ -14,7 +14,7 @@ use engine::rocks::{
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
-use engine::{CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT};
+use engine::{CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -1807,7 +1807,7 @@ mod tests {
         for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
             let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let write = Write::new(tp, start_ts, None);
+            let write = Write::new(tp, start_ts, commit_ts, None);
             let value = write.to_bytes();
             engine
                 .put_cf(write_cf, key.as_slice(), value.as_slice())
@@ -2187,7 +2187,7 @@ mod tests {
             } else {
                 None
             };
-            let write = Write::new(tp, start_ts, v);
+            let write = Write::new(tp, start_ts, commit_ts, v);
             kv.push((
                 CF_WRITE,
                 Key::from_raw(key).append_ts(commit_ts),

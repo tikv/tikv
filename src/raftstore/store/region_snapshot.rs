@@ -853,7 +853,7 @@ mod tests {
         // write_cf : a_8, b_8
         let start_ts = 7;
         let commit_ts = 8;
-        let write = Write::new(WriteType::Put, start_ts, None);
+        let write = Write::new(WriteType::Put, start_ts, commit_ts, None);
         let db = &engines.kv;
         let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
         let write_cf = db.cf_handle(CF_WRITE).unwrap();

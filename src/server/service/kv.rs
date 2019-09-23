@@ -2074,7 +2074,7 @@ fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
         lock_info.set_type(op);
         lock_info.set_start_ts(lock.ts);
         lock_info.set_primary(lock.primary);
-        lock_info.set_short_value(lock.short_value.unwrap_or_default());
+        lock_info.set_short_value(lock.value.unwrap_or_default());
         mvcc_info.set_lock(lock_info);
     }
     let vv = extract_2pc_values(mvcc.values);
@@ -2108,7 +2108,7 @@ fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
             write_info.set_type(op);
             write_info.set_start_ts(write.start_ts);
             write_info.set_commit_ts(commit_ts);
-            write_info.set_short_value(write.short_value.unwrap_or_default());
+            write_info.set_short_value(write.value.unwrap_or_default());
             write_info
         })
         .collect()
