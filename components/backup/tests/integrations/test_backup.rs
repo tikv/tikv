@@ -194,9 +194,9 @@ fn test_backup_and_import() {
     let resps1 = rx.collect().wait().unwrap();
     // Only leader can handle backup.
     assert_eq!(resps1.len(), 1);
-    let files1 = resps1[0].get_files().clone();
+    let files1 = resps1[0].files.clone();
     // Short value is piggybacked in write cf, so we get 1 sst at least.
-    assert!(resps1[0].get_files().len() >= 1);
+    assert!(!resps1[0].get_files().is_empty());
 
     // Delete all data, there should be no backup files.
     suite.cluster.must_delete_range_cf(CF_DEFAULT, b"", b"");
@@ -223,7 +223,7 @@ fn test_backup_and_import() {
     sst_meta.set_region_epoch(region.get_region_epoch().clone());
     sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     let mut metas = vec![];
-    for f in files1 {
+    for f in files1.clone().into_iter() {
         let mut reader = storage.read(&f.name).unwrap();
         let mut content = vec![];
         reader.read_to_end(&mut content).unwrap();
@@ -272,7 +272,7 @@ fn test_backup_and_import() {
         ),
     );
     let resps3 = rx.collect().wait().unwrap();
-    assert_eq!(files1, resps3[0].get_files().clone());
+    assert_eq!(files1, resps3[0].files.clone());
 
     suite.stop();
 }
