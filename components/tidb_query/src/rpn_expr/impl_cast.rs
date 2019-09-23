@@ -13,7 +13,7 @@ use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
 use crate::codec::Error;
-use crate::expr::{EvalContext, Flag};
+use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
 use std::num::IntErrorKind;
@@ -228,72 +228,6 @@ fn cast_real_as_uint(
     }
 }
 
-fn cast_string_as_int_or_uint_helper(
-    ctx: &mut EvalContext,
-    val: &str,
-    is_str_neg: bool,
-    is_res_unsigned: bool,
-) -> Result<Option<Int>> {
-    // In TiDB, they only handle overflow using ctx when `sc.InSelectStmt` is true,
-    // However, according to https://github.com/pingcap/tidb/blob/e173c7f5c1041b3c7e67507889d50a7bdbcdfc01/executor/executor.go#L153,
-    // when InSelectStmt, OverflowAsWarning is always true,
-    // and when not InSelectStmt, OverflowAsWarning is always not true.
-    // So we needn't to check `sc.InSelectStmt` and can handle it using ctx directly.
-    //
-    // Be careful that, if this flag(OverflowAsWarning)'s setting had changed,
-    // then here's behavior will change, so it may make some bug different to find.
-
-    let valid_int_prefix = get_valid_int_prefix(ctx, val)?;
-
-    // TODO: TiDB's floatStrToIntStr will append a overflow warning when the intStr is too long.
-    //  So in this case, there will make strconv.ParseUint or strconv.ParseInt return err.
-    //  So in TiDB's impl, there are one overflow warning and one overflow err handled by
-    //  `handle_overflow_for_cast_string_as_int`(TiDB's version).
-    //  Then although its result is same as ours, it may has two overflow warning.
-    //  I think this is TiDB's bug. This comment is just for note.
-    let parse_res = if !is_str_neg {
-        valid_int_prefix.parse::<u64>().map(|x| x as i64)
-    } else {
-        valid_int_prefix.parse::<i64>()
-    };
-    match parse_res {
-        Ok(x) => {
-            if !is_str_neg {
-                let x = x as u64;
-                if !is_res_unsigned && x > std::i64::MAX as u64 {
-                    ctx.warnings
-                        .append_warning(Error::cast_as_signed_overflow())
-                }
-            } else if is_res_unsigned {
-                ctx.warnings
-                    .append_warning(Error::cast_neg_int_as_unsigned());
-            }
-            Ok(Some(x as i64))
-        }
-        Err(e) => {
-            match e.kind() {
-                IntErrorKind::Overflow => {
-                    // FIXME: TiDB here construct err according to is_str_neg,
-                    //  however, it seems that we should according to is_res_unsigned.
-                    //  Fix this after fix TiDB's.
-                    let err = if is_str_neg {
-                        Error::overflow("BIGINT UNSIGNED", valid_int_prefix)
-                    } else {
-                        Error::overflow("BIGINT", valid_int_prefix)
-                    };
-                    handle_overflow_for_cast_string_as_int(
-                        ctx,
-                        err,
-                        is_str_neg,
-                        val,
-                    ).map(Some)
-                }
-                _ => Err(other_err!("in cast_string_as_int_or_uint_helper, parse string failed, the err is: {}, this is a bug", e))
-            }
-        }
-    }
-}
-
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
 fn cast_string_as_int_or_uint(
@@ -309,36 +243,50 @@ fn cast_string_as_int_or_uint(
             let is_unsigned = extra.ret_field_type.is_unsigned();
             let val = get_valid_utf8_prefix(ctx, val.as_slice())?;
             let val = val.trim();
-            let neg = val.starts_with('-');
-            if in_union(extra.implicit_args) && is_unsigned && neg {
+            let is_str_neg = val.starts_with('-');
+            if in_union(extra.implicit_args) && is_unsigned && is_str_neg {
                 Ok(Some(0))
             } else {
-                cast_string_as_int_or_uint_helper(ctx, val, neg, is_unsigned)
+                let valid_int_prefix = get_valid_int_prefix(ctx, val)?;
+                let parse_res = if !is_str_neg {
+                    valid_int_prefix.parse::<u64>().map(|x| x as i64)
+                } else {
+                    valid_int_prefix.parse::<i64>()
+                };
+                match parse_res {
+                    Ok(x) => {
+                        if !is_str_neg {
+                            if !is_unsigned && x as u64 > std::i64::MAX as u64 {
+                                ctx.warnings
+                                    .append_warning(Error::cast_as_signed_overflow())
+                            }
+                        } else if is_unsigned {
+                            ctx.warnings
+                                .append_warning(Error::cast_neg_int_as_unsigned());
+                        }
+                        Ok(Some(x as i64))
+                    }
+                    Err(err) => {
+                        if err.kind() == &IntErrorKind::Overflow {
+                            let err = if is_str_neg {
+                                Error::overflow("BIGINT UNSIGNED", valid_int_prefix)
+                            } else {
+                                Error::overflow("BIGINT", valid_int_prefix)
+                            };
+                            ctx.handle_overflow_err(err)?;
+                            let val = if is_str_neg {
+                                std::i64::MIN
+                            } else {
+                                std::u64::MAX as i64
+                            };
+                            Ok(Some(val))
+                        } else {
+                            Err(other_err!("parse string to int failed: {}", err))
+                        }
+                    }
+                }
             }
         }
-    }
-}
-
-// FIXME: TiDB's this func can return err and res at the same time, however, we can't,
-//  so it may be some inconsistency between this func and TiDB's
-fn handle_overflow_for_cast_string_as_int(
-    ctx: &mut EvalContext,
-    err: Error,
-    is_neg: bool,
-    origin_str: &str,
-) -> Result<i64> {
-    if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT) && err.is_overflow() {
-        let e = ctx.handle_overflow_err(Error::truncated_wrong_val("INTEGER", origin_str));
-        if e.is_err() {
-            return Err(err.into());
-        }
-        if is_neg {
-            Ok(std::i64::MIN)
-        } else {
-            Ok(std::u64::MAX as i64)
-        }
-    } else {
-        Err(err.into())
     }
 }
 
