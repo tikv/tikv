@@ -116,8 +116,8 @@ pub trait NumberEncoder: Write {
     }
 
     /// Writes `f32` numbers in little endian order.
-    fn encode_f32_le(&mut self, v: f64) -> Result<()> {
-        self.write_f32::<LittleEndian>(v as f32).map_err(From::from)
+    fn encode_f32_le(&mut self, v: f32) -> Result<()> {
+        self.write_f32::<LittleEndian>(v).map_err(From::from)
     }
 
     /// Writes `u32` numbers in little endian order.

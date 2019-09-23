@@ -180,12 +180,7 @@ impl LazyBatchColumnVec {
                 let row_idx = *row_idx as usize;
                 let offset = output_offsets[column_idx] as usize;
                 let col = &self.columns[offset];
-                match col {
-                    LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
-                    LazyBatchColumn::Decoded(ref v) => {
-                        chunk.append_vec(row_idx, &schema[offset], v, column_idx)?;
-                    }
-                }
+                chunk.append_vec(row_idx, &schema[offset], col.decoded(), column_idx)?;
             }
         }
 

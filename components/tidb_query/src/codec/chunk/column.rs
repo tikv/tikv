@@ -233,7 +233,7 @@ impl Column {
     /// Append a f64 datum to the column.
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
         if self.fixed_len == 4 {
-            self.data.encode_f32_le(v)?;
+            self.data.encode_f32_le(v as f32)?;
         } else {
             self.data.encode_f64_le(v)?;
         }

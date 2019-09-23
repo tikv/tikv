@@ -910,19 +910,19 @@ pub trait TimeEncoder: NumberEncoder {
             let buf = vec![0; len];
             self.write_all(&buf)?;
         }
+        // Encode an useless u16 to make byte alignment 16 bytes.
         self.encode_u16_le(0 as u16)?;
-        // above 16 bytes
 
         let tp: FieldTypeTp = v.time_type.into();
         self.write_u8(tp.to_u8().unwrap())?;
         self.write_u8(v.fsp)?;
+        // Encode an useless u16 to make byte alignment 20 bytes.
         self.encode_u16_le(0 as u16).map_err(From::from)
-        // above 20 bytes
     }
 }
 
 pub trait TimeDecoder: NumberDecoder {
-    /// `decode` decodes time encoded by `encode_time` for Chunk format.
+    /// Decodes time encoded by `encode_time` for Chunk format.
     fn decode_time(&mut self) -> Result<Time> {
         let hour = self.read_u32_le()?;
         let nanoseconds = 1000 * self.read_u32_le()?;
@@ -940,6 +940,7 @@ pub trait TimeDecoder: NumberDecoder {
             FieldTypeTp::from_u8(buf[0]).unwrap_or(FieldTypeTp::Unspecified),
             buf[1],
         );
+        let _ = self.read_u16();
         let tz = Tz::utc(); // TODO
         if year == 0
             && month == 0
