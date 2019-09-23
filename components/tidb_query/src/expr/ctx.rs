@@ -174,7 +174,7 @@ pub struct EvalWarnings {
 }
 
 impl EvalWarnings {
-    pub fn new(max_warning_cnt: usize) -> EvalWarnings {
+    fn new(max_warning_cnt: usize) -> EvalWarnings {
         EvalWarnings {
             max_warning_cnt,
             warning_cnt: 0,
@@ -201,8 +201,8 @@ impl EvalWarnings {
     }
 }
 
-/// Some global variables needed in an evaluation.
 #[derive(Debug)]
+/// Some global variables needed in an evaluation.
 pub struct EvalContext {
     pub cfg: Arc<EvalConfig>,
     pub warnings: EvalWarnings,
