@@ -1,8 +1,11 @@
 use std::convert::TryFrom;
+use std::sync::Arc;
 
-use crate::codec::{self, mysql};
+use crate::codec;
+use crate::codec::mysql::{self, Tz};
+use crate::codec::TEN_POW;
 use crate::codec::{Error, Result};
-use crate::expr::{EvalContext, SqlMode};
+use crate::expr::{EvalConfig, EvalContext, Flag, SqlMode};
 
 use tidb_query_datatype::FieldTypeTp;
 
@@ -11,12 +14,25 @@ use chrono::prelude::*;
 
 const MIN_TIMESTAMP: i64 = 0;
 const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
+const MICRO_WITDH: usize = 6;
 
-fn str_to_u32(input: &[u8]) -> Result<u32> {
+fn bytes_to_u32(input: &[u8]) -> Result<u32> {
     unsafe {
         std::str::from_utf8_unchecked(input)
-            .parse::<u32>()
+            .parse()
             .map_err(|_| Error::truncated())
+    }
+}
+
+fn is_leap_year(year: u32) -> bool {
+    year & 3 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn last_day_of_month(year: u32, month: u32) -> u32 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 => is_leap_year(year) as u32 + 28,
+        _ => 31,
     }
 }
 
@@ -52,22 +68,57 @@ bitfield! {
 }
 
 #[derive(Debug)]
-struct DateTimeMode {
+struct DateTimeConfig {
     strict_mode: bool,
     no_zero_in_date: bool,
     no_zero_date: bool,
     allow_invalid_date: bool,
+    ignore_truncate: bool,
+    time_zone: Option<Tz>,
 }
 
-impl DateTimeMode {
-    pub fn from_ctx(ctx: &EvalContext) -> DateTimeMode {
+impl DateTimeConfig {
+    pub fn from_ctx(ctx: &EvalContext) -> DateTimeConfig {
         let sql_mode = ctx.cfg.sql_mode;
-        DateTimeMode {
+        let flags = ctx.cfg.flag;
+        DateTimeConfig {
             strict_mode: sql_mode.contains(SqlMode::STRICT_ALL_TABLES),
             no_zero_in_date: sql_mode.contains(SqlMode::NO_ZERO_IN_DATE),
             no_zero_date: sql_mode.contains(SqlMode::NO_ZERO_DATE),
             allow_invalid_date: sql_mode.contains(SqlMode::INVALID_DATES),
+            ignore_truncate: flags.contains(Flag::IGNORE_TRUNCATE),
+            time_zone: Some(ctx.cfg.tz.clone()),
         }
+    }
+}
+
+impl From<DateTimeConfig> for EvalContext {
+    fn from(config: DateTimeConfig) -> EvalContext {
+        let mut eval_config = EvalConfig::new();
+        let mut sql_mode = SqlMode::empty();
+        let mut flags = Flag::empty();
+        eval_config.tz = config.time_zone.unwrap_or_else(Tz::utc);
+
+        if config.strict_mode {
+            sql_mode |= SqlMode::STRICT_ALL_TABLES;
+        }
+        if config.allow_invalid_date {
+            sql_mode |= SqlMode::INVALID_DATES;
+        }
+        if config.no_zero_date {
+            sql_mode |= SqlMode::NO_ZERO_DATE;
+        }
+        if config.no_zero_in_date {
+            sql_mode |= SqlMode::NO_ZERO_IN_DATE;
+        }
+
+        if config.ignore_truncate {
+            flags |= Flag::IGNORE_TRUNCATE;
+        }
+
+        eval_config.set_sql_mode(sql_mode).set_flag(flags);
+
+        EvalContext::new(Arc::new(eval_config))
     }
 }
 
@@ -87,18 +138,6 @@ impl TryFrom<FieldTypeTp> for TimeType {
             FieldTypeTp::Timestamp => TimeType::TimeStamp,
             _ => return Err(box_err!("Time does not support field type {}", time_type)),
         })
-    }
-}
-
-fn is_leap_year(year: u32) -> bool {
-    year & 3 == 0 && (year % 100 != 0 || year % 400 == 0)
-}
-
-fn last_day_of_month(year: u32, month: u32) -> u32 {
-    match month {
-        4 | 6 | 9 | 11 => 30,
-        2 => is_leap_year(year) as u32 + 28,
-        _ => 31,
     }
 }
 
@@ -123,7 +162,7 @@ impl Time {
     }
 
     /// Returns the number of microseconds since the whole second.
-    pub fn microseconds(self) -> u32 {
+    pub fn micro(self) -> u32 {
         self.get_micro()
     }
 
@@ -163,6 +202,10 @@ impl Time {
             .collect::<Vec<_>>()
     }
 
+    fn is_float_date(input: &[u8]) -> bool {
+        input.iter().all(|&x| x == b'.' || x.is_ascii_digit())
+    }
+
     fn round(parts: &mut [u32]) -> Result<()> {
         if parts.len() != 7 {
             return Err(Error::truncated());
@@ -177,7 +220,7 @@ impl Time {
             1_000_000,
         ];
 
-        for i in (1..=6).rev() {
+        for i in (1..7).rev() {
             if parts[i] >= modulus[i] {
                 parts[i] -= modulus[i];
                 parts[i - 1] += 1;
@@ -187,28 +230,35 @@ impl Time {
     }
 
     fn parse_frac(input: &[u8], fsp: u8, round: bool) -> Result<(bool, u32)> {
+        // We assume `fsp` is a valid value.
+        assert!(fsp < 7);
         if input.is_empty() {
             return Ok((false, 0));
         }
 
-        let len = input.len() as u32;
-        let fsp = u32::from(fsp);
+        let len = input.len();
+        let fsp = usize::from(fsp);
 
         let (input, len) = if fsp >= len {
             (input, len)
         } else {
-            (&input[..=fsp as usize], fsp + 1)
+            // Read one more digits, needed in round.
+            (&input[..=fsp], fsp + 1)
         };
 
-        // TODO: use TEN_POW instead.
-        let frac = str_to_u32(input)? * 10u32.pow(6u32.checked_sub(len).unwrap_or(0));
+        let frac = bytes_to_u32(input)? * TEN_POW[MICRO_WITDH.checked_sub(len).unwrap_or(0)];
         Ok(if round {
+            // Amplify the frac to 7 digits, more easy to round.
             let frac = if frac < 1_000_000 { frac * 10 } else { frac };
-            let mask = 10u32.pow((6 - fsp) as u32);
+
+            let mask = TEN_POW[MICRO_WITDH - fsp];
             let frac = (frac / mask + 5) / 10 * mask;
             (frac >= 1_000_000, frac)
         } else {
             // Truncate the result if `round` is not enabled
+            // Example:
+            // 1. fsp = 3, frac = 9999000, result = 999
+            // 2. fsp = 6, frac = 9999999, result = 999999
             let frac = if frac >= 1_000_000 { frac / 10 } else { frac };
             (false, frac)
         })
@@ -237,15 +287,16 @@ impl Time {
         let year_digits = match whole.len() {
             14 | 8 => 4,
             9..=12 | 5..=7 => 2,
-            _ => Err(Error::truncated())?,
+            _ => return Err(Error::truncated()),
         };
 
-        parts[0] = str_to_u32(&whole[..year_digits])?;
+        parts[0] = bytes_to_u32(&whole[..year_digits])?;
+        // If we encounter a two-digit year, translate it to a four-digit year.
         if year_digits == 2 {
             parts[0] = Time::adjust_year(parts[0]);
         }
         for (i, chunk) in whole[year_digits..].chunks(2).enumerate() {
-            parts[i + 1] = str_to_u32(chunk)?;
+            parts[i + 1] = bytes_to_u32(chunk)?;
         }
 
         // If we miss the `second`, the fractional part is meaningless.
@@ -271,7 +322,7 @@ impl Time {
         } else {
             let mut parts = [0u32; 3];
             for (i, value) in date.iter().enumerate() {
-                parts[i] = str_to_u32(value)?;
+                parts[i] = bytes_to_u32(value)?;
             }
             if date[0].len() == 2 {
                 parts[0] = Time::adjust_year(parts[0]);
@@ -280,8 +331,12 @@ impl Time {
         }
     }
 
-    pub fn parse_time(input: &[u8], fsp: u8, round: bool) -> Result<(bool, [u32; 4])> {
-        let (whole, frac) = Self::split_frac(input)?;
+    pub fn parse_time(input: Option<&[u8]>, fsp: u8, round: bool) -> Result<(bool, [u32; 4])> {
+        if input.is_none() {
+            return Ok((false, [0, 0, 0, 0]));
+        }
+
+        let (whole, frac) = Self::split_frac(input.unwrap())?;
 
         let whole = whole
             .split(|x| x.is_ascii_punctuation())
@@ -290,7 +345,7 @@ impl Time {
         let mut parts = [0u32; 4];
 
         for (i, value) in whole.into_iter().enumerate() {
-            parts[i] = str_to_u32(value)?;
+            parts[i] = bytes_to_u32(value)?;
         }
 
         let (carry, frac) = Self::parse_frac(frac.unwrap_or(&[]), fsp, round)?;
@@ -305,8 +360,17 @@ impl Time {
         time_type: TimeType,
         round: bool,
     ) -> Result<Time> {
+        if input.is_empty() {
+            return Err(Error::truncated());
+        }
+
         let input = input.trim().as_bytes();
-        let fsp = mysql::check_fsp(fsp)?;
+
+        let (fsp, round) = if time_type == TimeType::Date {
+            (0, false)
+        } else {
+            (mysql::check_fsp(fsp)?, round)
+        };
 
         if input.is_empty() {
             return Err(Error::truncated());
@@ -315,17 +379,19 @@ impl Time {
         let parts = Self::split_datetime(input);
 
         match parts.len() {
-            // Float fromat
-            1 => Self::parse_float(ctx, input, fsp, time_type, round),
+            // Float string format: yymmddhhmmss[.fraction]
+            1 if Self::is_float_date(parts[0]) => {
+                Self::parse_float(ctx, input, fsp, time_type, round)
+            }
 
-            // Date format
-            2 => {
+            // DateTime format: yyyy-mm-dd hh:mm:ss[.fraction]
+            1 | 2 => {
                 let ymd = Self::parse_date(parts[0])?;
-                let (carry, hms) = Self::parse_time(parts[1], fsp, round)?;
+                let (carry, hms) = Self::parse_time(parts.get(1).copied(), fsp, round)?;
                 let mut parts = ymd
-                    .into_iter()
+                    .iter()
                     .copied()
-                    .chain(hms.into_iter().copied())
+                    .chain(hms.iter().copied())
                     .collect::<Vec<_>>();
 
                 if carry {
@@ -339,69 +405,77 @@ impl Time {
 }
 
 macro_rules! handle_zero_date {
-    ($datetime:expr, $ctx:expr) => {
+    ($datetime:expr, $ctx:expr) => {{
         let ctx: &mut EvalContext = $ctx;
-        let DateTimeMode {
+        let DateTimeConfig {
             strict_mode,
             no_zero_date,
+            ignore_truncate,
             ..
-        } = DateTimeMode::from_ctx(ctx);
+        } = DateTimeConfig::from_ctx(ctx);
         let datetime: TimeValidator = $datetime;
-        assert!(datetime.is_zero());
+        assert!(datetime.is_zero_date());
         if no_zero_date {
-            if strict_mode {
+            if strict_mode && !ignore_truncate {
                 return Err(Error::truncated());
             } else {
                 ctx.warnings.append_warning(Error::truncated());
                 return Ok(datetime);
             }
         }
-    };
+        datetime
+    }};
 }
 
 macro_rules! handle_zero_in_date {
-    ($datetime:expr, $ctx:expr) => {
+    ($datetime:expr, $ctx:expr) => {{
         let ctx: &mut EvalContext = $ctx;
-        let DateTimeMode {
+        let DateTimeConfig {
             strict_mode,
             no_zero_in_date,
+            ignore_truncate,
             ..
-        } = DateTimeMode::from_ctx(ctx);
-        let datetime: TimeValidator = $datetime;
-        assert!(datetime.month == 0 || datetime.year == 0);
+        } = DateTimeConfig::from_ctx(ctx);
+        let mut datetime: TimeValidator = $datetime;
+        assert!(datetime.month == 0 || datetime.day == 0);
         if no_zero_in_date {
             // If we are in NO_ZERO_IN_DATE + STRICT_ALL_TABLES, zero-in-date produces and error.
             // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
-            if strict_mode {
+            if strict_mode && !ignore_truncate {
                 return Err(Error::truncated());
             } else {
                 ctx.warnings.append_warning(Error::truncated());
-                let cleared = datetime.clear();
-                handle_zero_date!(cleared, ctx);
-                return Ok(cleared);
+                datetime.clear();
+                return Ok(handle_zero_date!(datetime, ctx));
             }
         }
-    };
+        datetime
+    }};
 }
 
 macro_rules! handle_invalid_date {
-    ($datetime:expr, $ctx:expr) => {
+    ($datetime:expr, $ctx:expr) => {{
         let ctx: &mut EvalContext = $ctx;
-        let DateTimeMode {
+        let DateTimeConfig {
             allow_invalid_date, ..
-        } = DateTimeMode::from_ctx(ctx);
-        let datetime: TimeValidator = $datetime;
+        } = DateTimeConfig::from_ctx(ctx);
+        let mut datetime: TimeValidator = $datetime;
         if allow_invalid_date {
-            let cleared = datetime.clear();
-            handle_zero_date!(cleared, ctx);
-            return Ok(cleared);
+            datetime.clear();
+            return Ok(handle_zero_date!(datetime, ctx));
         } else {
             return Err(Error::truncated());
         }
-    };
+    }};
 }
 
-#[derive(Copy, Clone, Debug)]
+/// A validator that verify each field for the `Time`
+/// NOTE: It's inappropriate to construct `Time` first and then verify it.
+/// Because `Time` uses `bitfield`, the range of each field is quite narrow.
+/// For example, the size of `month` field is 5 bits. If we get a value 16 for
+/// `month` and set it, we will got 0 (16 % 16 == 0) instead 16 which is definitly
+/// an invalid value. So we need a larger range for validation.
+#[derive(Debug)]
 struct TimeValidator {
     year: u32,
     month: u32,
@@ -447,44 +521,35 @@ impl TimeValidator {
         }
     }
 
-    pub fn clear(self) -> TimeValidator {
-        TimeValidator {
-            year: 0,
-            month: 0,
-            day: 0,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            micro: 0,
-            ..self
-        }
+    pub fn clear(&mut self) {
+        self.year = 0;
+        self.month = 0;
+        self.day = 0;
+        self.hour = 0;
+        self.minute = 0;
+        self.second = 0;
+        self.micro = 0;
     }
 
-    pub fn is_zero(self) -> bool {
-        self.year == 0
-            && self.month == 0
-            && self.day == 0
-            && self.hour == 0
-            && self.minute == 0
-            && self.second == 0
-            && self.micro == 0
+    pub fn is_zero_date(&self) -> bool {
+        self.year == 0 && self.month == 0 && self.day == 0
     }
 
-    fn check_date(self, ctx: &mut EvalContext) -> Result<Self> {
+    fn check_date(mut self, ctx: &mut EvalContext) -> Result<Self> {
         let Self {
             year, month, day, ..
         } = self;
-        let DateTimeMode {
+        let DateTimeConfig {
             allow_invalid_date: is_relaxed,
             ..
-        } = DateTimeMode::from_ctx(ctx);
+        } = DateTimeConfig::from_ctx(ctx);
 
-        if self.is_zero() {
-            handle_zero_date!(self, ctx);
+        if self.is_zero_date() {
+            self = handle_zero_date!(self, ctx);
         }
 
         if month == 0 || day == 0 {
-            handle_zero_in_date!(self, ctx);
+            self = handle_zero_in_date!(self, ctx);
         }
 
         if year > 9999 {
@@ -509,18 +574,18 @@ impl TimeValidator {
             second,
             micro,
             ..
-        } = self;
+        } = datetime;
 
         if hour > 23 || minute > 59 || second > 59 || micro > 999999 {
-            handle_invalid_date!(self, ctx);
+            handle_invalid_date!(datetime, ctx);
         }
 
         Ok(datetime)
     }
 
-    fn check_timestamp(self, ctx: &mut EvalContext) -> Result<Self> {
-        if self.is_zero() {
-            handle_zero_date!(self, ctx);
+    fn check_timestamp(mut self, ctx: &mut EvalContext) -> Result<Self> {
+        if self.is_zero_date() {
+            self = handle_zero_date!(self, ctx);
             return Ok(self);
         }
 
@@ -532,7 +597,7 @@ impl TimeValidator {
 
         let datetime =
             date.unwrap()
-            .and_hms_micro_opt(self.hour, self.minute, self.second, self.micro);
+                .and_hms_micro_opt(self.hour, self.minute, self.second, self.micro);
 
         if datetime.is_none() {
             handle_invalid_date!(self, ctx);
@@ -557,71 +622,52 @@ impl TimeValidator {
 
 impl From<TimeValidator> for Time {
     fn from(validator: TimeValidator) -> Time {
-        Time::new(
-            validator.year,
-            validator.month,
-            validator.day,
-            validator.hour,
-            validator.minute,
-            validator.second,
-            validator.micro,
-            validator.fsp,
-            validator.time_type,
-        )
+        // If the type of validator is `Date`, ignore the hms[.fraction] part.
+        if validator.time_type == TimeType::Date {
+            Time::new(
+                validator.year,
+                validator.month,
+                validator.day,
+                0,
+                0,
+                0,
+                0,
+                0,
+                validator.time_type,
+            )
+        } else {
+            Time::new(
+                validator.year,
+                validator.month,
+                validator.day,
+                validator.hour,
+                validator.minute,
+                validator.second,
+                validator.micro,
+                validator.fsp,
+                validator.time_type,
+            )
+        }
     }
 }
 
 // Utility
 impl Time {
-    #[inline]
-    pub fn get_time_type(self) -> TimeType {
-        let ft = self.get_fsp_tt();
-
-        if ft >> 1 == 0b111 {
-            TimeType::Date
-        } else if ft & 1 == 0 {
-            TimeType::DateTime
-        } else {
-            TimeType::TimeStamp
-        }
-    }
-
     fn from_slice(
         ctx: &mut EvalContext,
         parts: &[u32],
         fsp: u8,
         time_type: TimeType,
     ) -> Result<Self> {
-        if let &[year, month, day, hour, minute, second, micro] = parts {
+        if let [year, month, day, hour, minute, second, micro] = *parts {
             TimeValidator::new(
                 year, month, day, hour, minute, second, micro, fsp, time_type,
             )
-                .check(ctx)
-                .map(Time::from)
+            .check(ctx)
+            .map(Time::from)
         } else {
             Err(Error::truncated())
         }
-    }
-
-    fn check_month_and_day(
-        year: u32,
-        month: u32,
-        day: u32,
-        allow_invalid_date: bool,
-    ) -> Result<()> {
-        if month > 12 || day > 31 {
-            return Err(Error::truncated());
-        }
-
-        if allow_invalid_date {
-            return Ok(());
-        }
-
-        if day > last_day_of_month(year, month) {
-            return Err(Error::truncated());
-        }
-
-        Ok(())
     }
 
     fn new(
@@ -646,6 +692,27 @@ impl Time {
         time.set_fsp(fsp);
         time.set_time_type(time_type);
         time
+    }
+
+    fn check_month_and_day(
+        year: u32,
+        month: u32,
+        day: u32,
+        allow_invalid_date: bool,
+    ) -> Result<()> {
+        if month > 12 || day > 31 {
+            return Err(Error::truncated());
+        }
+
+        if allow_invalid_date {
+            return Ok(());
+        }
+
+        if day > last_day_of_month(year, month) {
+            return Err(Error::truncated());
+        }
+
+        Ok(())
     }
 
     pub fn zero() -> Self {
@@ -682,12 +749,25 @@ impl Time {
     }
 
     #[inline]
-    fn set_time_type(mut self, time_type: TimeType) {
+    pub fn get_time_type(self) -> TimeType {
+        let ft = self.get_fsp_tt();
+
+        if ft >> 1 == 0b111 {
+            TimeType::Date
+        } else if ft & 1 == 0 {
+            TimeType::DateTime
+        } else {
+            TimeType::TimeStamp
+        }
+    }
+
+    #[inline]
+    fn set_time_type(&mut self, time_type: TimeType) {
         let ft = self.get_fsp_tt();
         let mask = match time_type {
             // Set `fsp_tt` to 0b111x
-            TimeType::Date => ft | !1,
-            TimeType::DateTime => ft & !1,
+            TimeType::Date => ft | 0b1110,
+            TimeType::DateTime => ft & 0b1110,
             TimeType::TimeStamp => ft | 1,
         };
         self.set_fsp_tt(mask);
@@ -698,23 +778,30 @@ impl std::fmt::Display for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            "{:04}-{:02}-{:02}",
             self.year(),
             self.month(),
-            self.day(),
-            self.hour(),
-            self.minute(),
-            self.second(),
+            self.day()
         )?;
-        let fsp = usize::from(self.fsp());
-        if fsp > 0 {
+
+        if self.get_time_type() != TimeType::Date {
+            write!(f, " ")?;
             write!(
                 f,
-                ".{:0width$}",
-                // TODO: use TEN_POW instead.
-                self.microseconds() / 10u32.pow((6 - fsp) as u32),
-                width = fsp
+                "{:02}:{:02}:{:02}",
+                self.hour(),
+                self.minute(),
+                self.second()
             )?;
+            let fsp = usize::from(self.fsp());
+            if fsp > 0 {
+                write!(
+                    f,
+                    ".{:0width$}",
+                    self.micro() / TEN_POW[MICRO_WITDH - fsp],
+                    width = fsp
+                )?;
+            }
         }
         Ok(())
     }
@@ -724,16 +811,17 @@ impl std::fmt::Debug for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}({:?}: {})",
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}({:?}: {})({:b})",
             self.year(),
             self.month(),
             self.day(),
             self.hour(),
             self.minute(),
             self.second(),
-            self.microseconds(),
+            self.micro(),
             self.get_time_type(),
-            self.fsp()
+            self.fsp(),
+            self.0
         )
     }
 }
@@ -741,6 +829,48 @@ impl std::fmt::Debug for Time {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_valid_date() -> Result<()> {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            ("2019-09-16", "20190916101112"),
+            ("2019-09-16", "190916101112"),
+            ("2019-09-16", "19091610111"),
+            ("2019-09-16", "1909161011"),
+            ("2019-09-16", "190916101"),
+            ("1909-12-10", "19091210"),
+            ("2019-09-16", "1909161"),
+            ("2019-09-16", "190916"),
+            ("2019-09-01", "19091"),
+            ("2019-09-16", "190916101112.111"),
+            ("2019-09-16", "20190916101112.111"),
+            ("2019-09-16", "20190916101112.666"),
+            ("2019-09-16", "20190916101112.999"),
+            ("2019-12-31", "2019-12-31"),
+            ("2019-09-16", "2019-09-16 10:11:12"),
+            ("2019-09-16", "2019-09-16T10:11:12"),
+            ("2019-09-16", "2019-09-16T10:11:12.66"),
+            ("2019-09-16", "2019-09-16T10:11:12.99"),
+            ("2019-12-31", "2019-12-31 23:59:59.99"),
+            ("2019-12-31", "2019-12-31 23:59:59.9999999"),
+            ("2019-12-31", "2019-12-31 23:59:59.9999999"),
+            ("2019-12-31", "2019-12-31 23:59:59.999999"),
+            ("2019-12-31", "2019*12&31T23(59)59.999999"),
+        ];
+
+        for (expected, actual) in cases {
+            let date = Time::parse(&mut ctx, actual, 0, TimeType::Date, false)?;
+            assert_eq!(date.hour(), 0);
+            assert_eq!(date.minute(), 0);
+            assert_eq!(date.second(), 0);
+            assert_eq!(date.micro(), 0);
+            assert_eq!(date.fsp(), 0);
+            assert_eq!(expected, date.to_string());
+        }
+        Ok(())
+    }
+
     #[test]
     fn test_parse_valid_datetime() -> Result<()> {
         let mut ctx = EvalContext::default();
@@ -758,6 +888,7 @@ mod tests {
             ("2019-09-16 10:11:12.111", "20190916101112.111", 3, false),
             ("2019-09-16 10:11:12.67", "20190916101112.666", 2, true),
             ("2019-09-16 10:11:13.0", "20190916101112.999", 1, true),
+            ("2019-09-16 00:00:00", "2019-09-16", 0, false),
             ("2019-09-16 10:11:12", "2019-09-16 10:11:12", 0, false),
             ("2019-09-16 10:11:12", "2019-09-16T10:11:12", 0, false),
             ("2019-09-16 10:11:12.7", "2019-09-16T10:11:12.66", 1, true),
@@ -787,13 +918,326 @@ mod tests {
                 3,
                 false,
             ),
-            ];
+        ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
                 expected,
                 Time::parse(&mut ctx, actual, fsp, TimeType::DateTime, round)?.to_string()
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_valid_timestamp() -> Result<()> {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            ("2019-09-16 10:11:12", "20190916101112", 0, false),
+            ("2019-09-16 10:11:12", "190916101112", 0, false),
+            ("2019-09-16 10:11:01", "19091610111", 0, false),
+            ("2019-09-16 10:11:00", "1909161011", 0, false),
+            ("2019-09-16 10:01:00", "190916101", 0, false),
+            ("2019-12-10 00:00:00", "20191210", 0, false),
+            ("2019-09-16 01:00:00", "1909161", 0, false),
+            ("2019-09-16 00:00:00", "190916", 0, false),
+            ("2019-09-01 00:00:00", "19091", 0, false),
+            ("2019-09-16 10:11:12.111", "190916101112.111", 3, false),
+            ("2019-09-16 10:11:12.111", "20190916101112.111", 3, false),
+            ("2019-09-16 10:11:12.67", "20190916101112.666", 2, true),
+            ("2019-09-16 10:11:13.0", "20190916101112.999", 1, true),
+            ("2019-09-16 00:00:00", "2019-09-16", 0, false),
+            ("2019-09-16 10:11:12", "2019-09-16 10:11:12", 0, false),
+            ("2019-09-16 10:11:12", "2019-09-16T10:11:12", 0, false),
+            ("2019-09-16 10:11:12.7", "2019-09-16T10:11:12.66", 1, true),
+            ("2019-09-16 10:11:13.0", "2019-09-16T10:11:12.99", 1, true),
+            ("2020-01-01 00:00:00.0", "2019-12-31 23:59:59.99", 1, true),
+            ("1970-01-01 00:00:00", "1970-01-01 00:00:00", 0, false),
+            ("1970-01-01 00:00:00", "1970-1-1 00:00:00", 0, false),
+            ("1970-01-01 12:13:09", "1970-1-1 12:13:9", 0, false),
+            ("1970-01-01 09:08:09", "1970-1-1 9:8:9", 0, false),
+            (
+                "2020-01-01 00:00:00.000000",
+                "2019-12-31 23:59:59.9999999",
+                6,
+                true,
+            ),
+            (
+                "2019-12-31 23:59:59.999999",
+                "2019-12-31 23:59:59.9999999",
+                6,
+                false,
+            ),
+            (
+                "2019-12-31 23:59:59.999",
+                "2019-12-31 23:59:59.999999",
+                3,
+                false,
+            ),
+            (
+                "2019-12-31 23:59:59.999",
+                "2019*12&31T23(59)59.999999",
+                3,
+                false,
+            ),
+        ];
+        for (expected, actual, fsp, round) in cases {
+            assert_eq!(
+                expected,
+                Time::parse(&mut ctx, actual, fsp, TimeType::TimeStamp, round)?.to_string()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_allow_invalid_date() -> Result<()> {
+        let cases = vec![
+            ("2019-02-31", "2019-2-31"),
+            ("2019-02-29", "2019-2-29"),
+            ("2019-04-31", "2019-4-31"),
+            ("0000-00-00", "2019-1-32"),
+            ("0000-00-00", "2019-13-1"),
+            ("2019-02-11", "2019-02-11"),
+            ("2019-02-00", "2019-02-00"),
+        ];
+
+        for (expected, actual) in cases {
+            let mut ctx = EvalContext::from(DateTimeConfig {
+                strict_mode: false,
+                no_zero_in_date: false,
+                no_zero_date: false,
+                allow_invalid_date: true,
+                ignore_truncate: false,
+                time_zone: None,
+            });
+            assert_eq!(
+                expected,
+                Time::parse(&mut ctx, actual, 0, TimeType::Date, false)?.to_string()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_datetimte() -> Result<()> {
+        let mut ctx = EvalContext::from(DateTimeConfig {
+            strict_mode: false,
+            no_zero_in_date: false,
+            no_zero_date: false,
+            allow_invalid_date: true,
+            ignore_truncate: false,
+            time_zone: None,
+        });
+
+        let cases = vec![
+            "2019-12-31 24:23:22",
+            "2019-12-31 23:60:22",
+            "2019-12-31 23:24:60",
+        ];
+
+        for case in cases {
+            assert_eq!(
+                "0000-00-00 00:00:00",
+                Time::parse(&mut ctx, case, 0, TimeType::DateTime, false)?.to_string()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_allow_invalid_timestamp() -> Result<()> {
+        let mut ctx = EvalContext::from(DateTimeConfig {
+            strict_mode: false,
+            no_zero_in_date: false,
+            no_zero_date: false,
+            allow_invalid_date: true,
+            ignore_truncate: false,
+            time_zone: None,
+        });
+
+        let ok_cases = vec![
+            "2019-9-31 11:11:11",
+            "2019-0-1 11:11:11",
+            "2013-2-29 11:11:11",
+        ];
+        for case in ok_cases {
+            assert_eq!(
+                "0000-00-00 00:00:00",
+                Time::parse(&mut ctx, case, 0, TimeType::TimeStamp, false)?.to_string()
+            );
+        }
+
+        let dsts = vec![
+            ("2019-03-10 02:00:00", "America/New_York"),
+            ("2018-04-01 02:00:00", "America/Monterrey"),
+        ];
+        for (timestamp, time_zone) in dsts {
+            let mut ctx = EvalContext::from(DateTimeConfig {
+                strict_mode: false,
+                no_zero_in_date: false,
+                no_zero_date: false,
+                ignore_truncate: false,
+                allow_invalid_date: true,
+                time_zone: Tz::from_tz_name(time_zone),
+            });
+            assert_eq!(
+                "0000-00-00 00:00:00",
+                Time::parse(&mut ctx, timestamp, 0, TimeType::TimeStamp, false)?.to_string()
+            )
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_zero_date() -> Result<()> {
+        // Enable NO_ZERO_DATE only. If zero-date is encountered, a warning is produced.
+        let mut ctx = EvalContext::from(DateTimeConfig {
+            no_zero_date: true,
+            no_zero_in_date: false,
+            ignore_truncate: false,
+            allow_invalid_date: false,
+            strict_mode: false,
+            time_zone: None,
+        });
+
+        let _ = Time::parse(
+            &mut ctx,
+            "0000-00-00 00:00:00",
+            0,
+            TimeType::DateTime,
+            false,
+        )?;
+
+        assert!(ctx.warnings.warning_cnt > 0);
+
+        // Enable both NO_ZERO_DATE and STRICT_ALL_TABLES.
+        // If zero-date is encountered, an error is returned.
+        let mut ctx = EvalContext::from(DateTimeConfig {
+            no_zero_date: true,
+            strict_mode: true,
+            no_zero_in_date: false,
+            ignore_truncate: false,
+            allow_invalid_date: false,
+            time_zone: None,
+        });
+
+        assert!(Time::parse(
+            &mut ctx,
+            "0000-00-00 00:00:00",
+            0,
+            TimeType::DateTime,
+            false,
+        )
+        .is_err());
+
+        // Enable NO_ZERO_DATE, STRICT_ALL_TABLES and IGNORE_TRUNCATE.
+        // If zero-date is encountered, an error is returned.
+        let mut ctx = EvalContext::from(DateTimeConfig {
+            no_zero_date: true,
+            strict_mode: true,
+            ignore_truncate: true,
+            no_zero_in_date: false,
+            allow_invalid_date: false,
+            time_zone: None,
+        });
+
+        assert_eq!(
+            "0000-00-00 00:00:00",
+            Time::parse(
+                &mut ctx,
+                "0000-00-00 00:00:00",
+                0,
+                TimeType::DateTime,
+                false,
+            )?
+            .to_string()
+        );
+
+        assert!(ctx.warnings.warning_cnt > 0);
+
+        let cases = vec![
+            "2019-12-31 24:23:22",
+            "2019-12-31 23:60:22",
+            "2019-12-31 23:24:60",
+        ];
+
+        for case in cases {
+            // Enable NO_ZERO_DATE, STRICT_ALL_TABLES and ALLOW_INVALID_DATE.
+            // If an invalid date (converted to zero-date) is encountered, an error is returned.
+            let mut ctx = EvalContext::from(DateTimeConfig {
+                no_zero_date: true,
+                strict_mode: true,
+                ignore_truncate: false,
+                allow_invalid_date: true,
+                no_zero_in_date: false,
+                time_zone: None,
+            });
+            assert!(Time::parse(&mut ctx, case, 0, TimeType::DateTime, false).is_err());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_zero_in_date() -> Result<()> {
+        let cases = vec!["2019-01-00", "2019-00-01"];
+
+        for &case in cases.iter() {
+            // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is produced.
+            let mut ctx = EvalContext::from(DateTimeConfig {
+                no_zero_in_date: true,
+                no_zero_date: false,
+                ignore_truncate: false,
+                allow_invalid_date: false,
+                strict_mode: false,
+                time_zone: None,
+            });
+
+            let _ = Time::parse(&mut ctx, case, 0, TimeType::DateTime, false)?;
+
+            assert!(ctx.warnings.warning_cnt > 0);
+        }
+
+        // Enable NO_ZERO_IN_DATE, STRICT_ALL_TABLES and IGNORE_TRUNCATE.
+        // If zero-date is encountered, an error is returned.
+        let mut ctx = EvalContext::from(DateTimeConfig {
+            no_zero_in_date: true,
+            strict_mode: true,
+            ignore_truncate: true,
+            no_zero_date: false,
+            allow_invalid_date: false,
+            time_zone: None,
+        });
+
+        assert_eq!(
+            "0000-00-00 00:00:00",
+            Time::parse(
+                &mut ctx,
+                "0000-00-00 00:00:00",
+                0,
+                TimeType::DateTime,
+                false,
+            )?
+            .to_string()
+        );
+
+        assert!(ctx.warnings.warning_cnt > 0);
+
+        for &case in cases.iter() {
+            // Enable both NO_ZERO_IN_DATE and STRICT_ALL_TABLES.
+            // If zero-date is encountered, an error is returned.
+            let mut ctx = EvalContext::from(DateTimeConfig {
+                no_zero_in_date: true,
+                strict_mode: true,
+                no_zero_date: false,
+                ignore_truncate: false,
+                allow_invalid_date: false,
+                time_zone: None,
+            });
+            assert!(Time::parse(&mut ctx, case, 0, TimeType::DateTime, false).is_err());
+        }
+
         Ok(())
     }
 }
