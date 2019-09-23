@@ -995,25 +995,30 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
                             );
-                            let kv_pairs: Vec<_> = snap_store
+                            let result = snap_store
                                 .batch_get(&keys, &mut statistics)
-                                .into_iter()
-                                .zip(keys)
-                                .filter(|&(ref v, ref _k)| {
-                                    !(v.is_ok() && v.as_ref().unwrap().is_none())
-                                })
-                                .map(|(v, k)| match v {
-                                    Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                    Err(e) => Err(Error::from(e)),
-                                    _ => unreachable!(),
-                                })
-                                .collect();
+                                .map_err(Error::from)
+                                .map(|v| {
+                                    let kv_pairs: Vec<_> = v
+                                        .into_iter()
+                                        .zip(keys)
+                                        .filter(|&(ref v, ref _k)| {
+                                            !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                        })
+                                        .map(|(v, k)| match v {
+                                            Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                            Err(e) => Err(Error::from(e)),
+                                            _ => unreachable!(),
+                                        })
+                                        .collect();
+                                    tls_collect_key_reads(CMD, kv_pairs.len());
+                                    kv_pairs
+                                });
 
-                            tls_collect_key_reads(CMD, kv_pairs.len());
                             tls_collect_scan_details(CMD, &statistics);
                             tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                            Ok(kv_pairs)
+                            result
                         })
                     })
                     .then(move |r| {
@@ -2294,7 +2299,7 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Other(..)))) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -2317,8 +2322,11 @@ mod tests {
                 )
                 .wait(),
         );
-        expect_multi_values(
-            vec![None, None],
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
             storage
                 .async_batch_get(
                     Context::default(),

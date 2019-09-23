@@ -52,6 +52,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 tikv_util = { path = "../components/tikv_util" }
 engine = { path = "../components/engine" }
 pd_client = { path = "../components/pd_client" }
+backup = { path = "../components/backup" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
