@@ -179,6 +179,9 @@ pub enum Command {
         key: Key,
         /// The transaction timestamp.
         start_ts: u64,
+        /// The approximate current ts when cleanup request is invoked, which is used to check the
+        /// lock's TTL. 0 means do not check TTL.
+        current_ts: u64,
     },
     /// Rollback from the transaction that was started at `start_ts`.
     ///
@@ -1307,9 +1310,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         ctx: Context,
         key: Key,
         start_ts: u64,
+        current_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Cleanup { ctx, key, start_ts };
+        let cmd = Command::Cleanup {
+            ctx,
+            key,
+            start_ts,
+            current_ts,
+        };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
         Ok(())
@@ -2780,6 +2789,7 @@ mod tests {
                 Context::default(),
                 Key::from_raw(b"x"),
                 100,
+                0,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2787,6 +2797,59 @@ mod tests {
         expect_none(
             storage
                 .async_get(Context::default(), Key::from_raw(b"x"), 105)
+                .wait(),
+        );
+    }
+
+    #[test]
+    fn test_cleanup_check_ttl() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        let ts = mvcc::compose_ts;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec()))],
+                b"x".to_vec(),
+                ts(110, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                Key::from_raw(b"x"),
+                ts(110, 0),
+                ts(120, 0),
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info))) => {
+                        assert_eq!(info.get_lock_ttl(), 100)
+                    }
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                Key::from_raw(b"x"),
+                ts(110, 0),
+                ts(220, 0),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            storage
+                .async_get(Context::default(), Key::from_raw(b"x"), ts(230, 0))
                 .wait(),
         );
     }

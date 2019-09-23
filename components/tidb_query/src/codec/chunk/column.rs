@@ -8,8 +8,8 @@ use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use super::{Error, Result};
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
-    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationEncoder, Json, JsonDecoder,
-    JsonEncoder, Time, TimeEncoder,
+    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
+    JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
 };
 use crate::codec::Datum;
 
@@ -277,7 +277,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        Time::decode(&mut data)
+        data.decode_time()
     }
 
     /// Append a duration datum to the column.
@@ -291,7 +291,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        Duration::decode(&mut data)
+        data.decode_duration()
     }
 
     /// Append a decimal datum to the column.
