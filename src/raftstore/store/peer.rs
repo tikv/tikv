@@ -457,8 +457,12 @@ impl Peer {
     pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
-            self.raft_group.raft.raft_log.commit_to(merge.get_commit());
-            return Some(merge.get_commit());
+            if merge.get_commit() > self.raft_group.raft.raft_log.committed {
+                self.raft_group.raft.raft_log.commit_to(merge.get_commit());
+                return Some(merge.get_commit());
+            } else {
+                return None;
+            }
         }
         let first = entries.first().unwrap();
         // make sure message should be with index not smaller than committed
