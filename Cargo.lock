@@ -1253,7 +1253,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#b0bb4bf587f41045b5b97a543a3f9510381f551e"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#af7ee1b29e24d1f3452853cde58fbeaaf470adde"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1270,7 +1270,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#b0bb4bf587f41045b5b97a543a3f9510381f551e"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#af7ee1b29e24d1f3452853cde58fbeaaf470adde"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2186,7 +2186,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#b0bb4bf587f41045b5b97a543a3f9510381f551e"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=multi_thread_memtable#af7ee1b29e24d1f3452853cde58fbeaaf470adde"
 dependencies = [
  "crc",
  "libc",
