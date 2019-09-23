@@ -140,13 +140,12 @@ rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 "raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
 "protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
-"criterion:0.3.0" = { git = "https://github.com/YangKeao/criterion.rs.git", branch = "quantile_regression" }
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
 criterion = "0.3"
-criterion-cpu-time = "0.1"
+criterion-cycles-per-byte = "0.1"
 arrow = "0.10.0"
 rand_xorshift = "0.1"
 

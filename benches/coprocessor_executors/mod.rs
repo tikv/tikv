@@ -19,7 +19,7 @@ fn main() {
     nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set).unwrap();
 
     let mut c = criterion::Criterion::default()
-        .with_measurement(criterion_cpu_time::PosixTime::UserAndSystemTime)
+        .with_measurement(criterion_cycles_per_byte::CyclesPerByte)
         .configure_from_args();
 
     util::fixture::bench(&mut c);
