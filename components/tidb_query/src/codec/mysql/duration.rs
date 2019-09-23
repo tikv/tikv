@@ -2,11 +2,9 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::{i64, u64};
 
 use codec::prelude::*;
-use tikv_util::codec::number::NumberEncoder;
 
 use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
@@ -772,12 +770,12 @@ impl Ord for Duration {
     }
 }
 
-impl<T: Write> DurationEncoder for T {}
+impl<T: BufferWriter> DurationEncoder for T {}
 
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: Duration) -> Result<()> {
-        self.encode_i64(v.to_nanos())?;
-        self.encode_i64(i64::from(v.get_fsp())).map_err(From::from)
+        self.write_i64(v.to_nanos())?;
+        self.write_i64(i64::from(v.get_fsp())).map_err(From::from)
     }
 
     fn encode_duration_to_chunk(&mut self, v: Duration) -> Result<()> {

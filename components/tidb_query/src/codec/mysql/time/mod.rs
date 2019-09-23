@@ -10,12 +10,10 @@ use std::fmt::Write;
 use std::fmt::{self, Display, Formatter};
 use std::{mem, str};
 
-use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use codec::prelude::*;
 use tidb_query_datatype::FieldTypeTp;
-use tikv_util::codec::number::NumberEncoder;
 
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
@@ -892,15 +890,15 @@ impl Display for Time {
     }
 }
 
-impl<T: std::io::Write> TimeEncoder for T {}
+impl<T: BufferWriter> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
     fn encode_time(&mut self, v: &Time) -> Result<()> {
         if !v.is_zero() {
-            self.encode_u32_le(v.time.hour() as u32)?;
-            self.encode_u32_le(v.time.nanosecond() / 1000)?;
-            self.encode_u16_le(v.time.year() as u16)?;
+            self.write_u32_le(v.time.hour() as u32)?;
+            self.write_u32_le(v.time.nanosecond() / 1000)?;
+            self.write_u16_le(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
             self.write_u8(v.time.day() as u8)?;
             self.write_u8(v.time.minute() as u8)?;
@@ -908,16 +906,16 @@ pub trait TimeEncoder: NumberEncoder {
         } else {
             let len = mem::size_of::<u16>() + 2 * mem::size_of::<u32>() + 4;
             let buf = vec![0; len];
-            self.write_all(&buf)?;
+            self.write_bytes(&buf)?;
         }
         // Encode an useless u16 to make byte alignment 16 bytes.
-        self.encode_u16_le(0 as u16)?;
+        self.write_u16_le(0 as u16)?;
 
         let tp: FieldTypeTp = v.time_type.into();
         self.write_u8(tp.to_u8().unwrap())?;
         self.write_u8(v.fsp)?;
         // Encode an useless u16 to make byte alignment 20 bytes.
-        self.encode_u16_le(0 as u16).map_err(From::from)
+        self.write_u16_le(0 as u16).map_err(From::from)
     }
 }
 

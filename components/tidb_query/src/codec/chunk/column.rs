@@ -13,7 +13,8 @@ use crate::codec::mysql::{
 };
 use crate::codec::Datum;
 
-use tikv_util::codec::number::{self, NumberEncoder};
+use codec::prelude::*;
+use tikv_util::codec::number;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 
@@ -233,9 +234,9 @@ impl Column {
     /// Append a f64 datum to the column.
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
         if self.fixed_len == 4 {
-            self.data.encode_f32_le(v as f32)?;
+            self.data.write_f32_le(v as f32)?;
         } else {
-            self.data.encode_f64_le(v)?;
+            self.data.write_f64_le(v)?;
         }
         self.finish_append_fixed()
     }
@@ -371,28 +372,28 @@ impl Column {
 pub trait ColumnEncoder: NumberEncoder {
     fn encode_column(&mut self, col: &Column) -> Result<()> {
         // length
-        self.encode_u32_le(col.length as u32)?;
+        self.write_u32_le(col.length as u32)?;
         // null_cnt
-        self.encode_u32_le(col.null_cnt as u32)?;
+        self.write_u32_le(col.null_cnt as u32)?;
         // bitmap
         if col.null_cnt > 0 {
             let length = (col.length + 7) / 8;
-            self.write_all(&col.null_bitmap[0..length])?;
+            self.write_bytes(&col.null_bitmap[0..length])?;
         }
         // offsets
         if !col.is_fixed() {
             //let length = (col.length+1)*4;
             for v in &col.var_offsets {
-                self.encode_i64_le(*v as i64)?;
+                self.write_i64_le(*v as i64)?;
             }
         }
         // data
-        self.write_all(&col.data)?;
+        self.write_bytes(&col.data)?;
         Ok(())
     }
 }
 
-impl<T: Write> ColumnEncoder for T {}
+impl<T: BufferWriter> ColumnEncoder for T {}
 
 #[cfg(test)]
 mod tests {
