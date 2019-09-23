@@ -519,7 +519,9 @@ impl<S: Snapshot> MvccTxn<S> {
         let (lower, lower_idx) = map.iter().next().unwrap();
         let (upper, _) = map.iter().next_back().unwrap();
         let mut min_key = Key::from_encoded(lower.to_vec());
-        let mut max_key = Key::from_encoded(upper.to_vec());
+        let mut upper = upper.to_vec();
+        *upper.last_mut().unwrap() += 1;
+        let max_key = Key::from_encoded(upper);
         let mut min_idx = lower_idx;
         let mut min_ts = if let Command::Prewrite { start_ts, .. } = commands[min_idx.0] {
             start_ts
@@ -536,25 +538,27 @@ impl<S: Snapshot> MvccTxn<S> {
             self.reader.mut_write_statistics(),
         )?;
         if write_iter.valid()? {
-            if let Some(msg) = self.check_write(
-                cid,
-                tag,
-                min_key,
-                min_ts,
-                if let Command::Prewrite { mutations, .. } = &commands[min_idx.0] {
-                    mutations[min_idx.1].is_insert()
-                } else {
-                    false
-                },
-                if let Command::Prewrite { primary, .. } = &commands[min_idx.0] {
-                    primary.clone()
-                } else {
-                    vec![]
-                },
-                &mut write_iter,
-            )? {
-                scheduler.on_batch_msg(ids[min_idx.0], msg);
-                ids[min_idx.0] = u64::max_value();
+            if ids[min_idx.0] < u64::max_value() {
+                if let Some(msg) = self.check_write(
+                    cid,
+                    tag,
+                    min_key,
+                    min_ts,
+                    if let Command::Prewrite { mutations, .. } = &commands[min_idx.0] {
+                        mutations[min_idx.1].is_insert()
+                    } else {
+                        false
+                    },
+                    if let Command::Prewrite { primary, .. } = &commands[min_idx.0] {
+                        primary.clone()
+                    } else {
+                        vec![]
+                    },
+                    &mut write_iter,
+                )? {
+                    scheduler.on_batch_msg(ids[min_idx.0], msg);
+                    ids[min_idx.0] = u64::max_value();
+                }
             }
             'out: loop {
                 let mut range = map.range::<Vec<u8>, _>(
@@ -609,7 +613,6 @@ impl<S: Snapshot> MvccTxn<S> {
         }
 
         min_key = Key::from_encoded(lower.to_vec());
-        max_key = Key::from_encoded(upper.to_vec());
         min_idx = lower_idx;
         lock_iter.seek(&min_key, self.reader.mut_lock_statistics())?;
         if lock_iter.valid()? {
@@ -731,6 +734,15 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(is_pessimistic_txn)
     }
 
+    fn checkpoint(&mut self) -> (usize, usize) {
+        (self.write_size, self.writes.len())
+    }
+
+    fn reset(&mut self, checkpoint: (usize, usize)) {
+        self.write_size = checkpoint.0;
+        self.writes.truncate(checkpoint.1);
+    }
+
     pub fn batch_commit<Sched: MsgScheduler>(
         &mut self,
         cid: u64,
@@ -764,9 +776,23 @@ impl<S: Snapshot> MvccTxn<S> {
                     ids[i] = u64::max_value();
                 } else {
                     self.start_ts = *lock_ts;
-                    rows += keys.len();
+                    let checkpoint = (self.checkpoint(), rows);
                     for k in keys {
-                        self.commit(k.clone(), *commit_ts)?;
+                        if let Err(e) = self.commit(k.clone(), *commit_ts) {
+                            scheduler.on_batch_msg(
+                                ids[i],
+                                Msg::FinishedWithErr {
+                                    cid,
+                                    err: txn::Error::Mvcc(e),
+                                    tag,
+                                },
+                            );
+                            ids[i] = u64::max_value();
+                            self.reset(checkpoint.0);
+                            rows = checkpoint.1;
+                            break;
+                        }
+                        rows += 1;
                     }
                 }
             }
