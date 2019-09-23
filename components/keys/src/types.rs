@@ -129,7 +129,7 @@ impl Key {
 
     #[inline]
     pub fn copy_from_encoded_key(&mut self, key: &Key) {
-        self.0.clear();
+        self.0.truncate(0);
         self.0.extend_from_slice(&key.0);
     }
 

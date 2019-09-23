@@ -197,7 +197,7 @@ fn data_buf_key<'a>(buf_key: &'a mut Option<Vec<u8>>, key: &[u8]) -> &'a Vec<u8>
             *buf_key = Some(keys::data_key(key));
         }
         Some(ref mut buf) => {
-            buf.clear();
+            buf.truncate(0);
             keys::data_key_ref(key, buf);
         }
     };
