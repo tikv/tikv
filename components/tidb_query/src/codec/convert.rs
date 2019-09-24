@@ -150,10 +150,9 @@ pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
 /// `truncate_f64` (`TruncateFloat` in TiDB) tries to truncate f.
 /// If the result exceeds the max/min float that flen/decimal
 /// allowed, returns the max/min float allowed.
-pub fn truncate_f64(ctx: &mut EvalContext, mut f: f64, flen: u8, decimal: u8) -> Result<f64> {
+pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
     if f.is_nan() {
-        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
-        return Ok(0f64);
+        return Res::Overflow(0f64);
     }
     let shift = 10f64.powi(i32::from(decimal));
     let max_f = 10f64.powi(i32::from(flen - decimal)) - 1.0 / shift;
@@ -172,7 +171,7 @@ pub fn truncate_f64(ctx: &mut EvalContext, mut f: f64, flen: u8, decimal: u8) ->
     if f < -max_f {
         return Res::Overflow(-max_f);
     }
-    Ok(f)
+    Res::Ok(f)
 }
 
 /// Returns an overflowed error.
@@ -1039,7 +1038,7 @@ mod tests {
     use std::{f64, i64, isize, u64};
 
     use crate::codec::error::{
-        ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
+        ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
     };
     use crate::codec::mysql::Res;
     use crate::expr::Flag;
@@ -1951,21 +1950,9 @@ mod tests {
             (1.36, 10, 2, Res::Ok(1.36)),
             (f64::NAN, 10, 1, Res::Overflow(0f64)),
         ];
-
         for (f, flen, decimal, exp) in cases {
-            let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
-            let mut ctx = EvalContext::new(Arc::new(cfg));
-            let res = truncate_f64(&mut ctx, f, flen, decimal);
-            match exp {
-                Res::Overflow(d) => {
-                    assert_eq!(ctx.warnings.warning_cnt, 1);
-                    assert_eq!(res.unwrap(), d);
-                }
-                Res::Ok(d) => {
-                    assert_eq!(res.unwrap(), d);
-                }
-                _ => panic!(),
-            }
+            let res = truncate_f64(f, flen, decimal);
+            assert_eq!(res, exp);
         }
     }
 
@@ -2572,9 +2559,9 @@ mod tests {
             // check origin_flen and origin_decimal
             let (f, d) = input.prec_and_frac();
             let log = format!(
-                "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
-                input, origin_flen, origin_decimal, f, d
-            );
+                    "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
+                    input, origin_flen, origin_decimal, f, d
+                );
             assert_eq!(f, origin_flen, "{}", log);
             assert_eq!(d, origin_decimal, "{}", log);
 
@@ -2612,13 +2599,13 @@ mod tests {
                 let expect_str = expect.as_ref().map(|x| x.to_string());
                 let log =
                     format!(
-                    "input: {}, origin_flen: {}, origin_decimal: {}, \
+                            "input: {}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \
                      in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
                      expect: {:?}, expect: {:?}",
-                    input, origin_flen, origin_decimal, res_flen, res_decimal,
-                    is_unsigned, in_dml, in_dml_flag, expect_str, rs
-                );
+                            input, origin_flen, origin_decimal, res_flen, res_decimal,
+                            is_unsigned, in_dml, in_dml_flag, expect_str, rs
+                        );
 
                 // check result
                 match expect {
