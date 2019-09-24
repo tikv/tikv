@@ -155,8 +155,22 @@ pub trait Iterator: Send {
 pub trait RegionInfoProvider: Send + Clone + 'static {
     /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
     /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
+    fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> RipResult<()>;
 }
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum RipError {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("unknown error {:?}", err)
+        }
+    }
+}
+
+pub type RipResult<T> = std::result::Result<T, RipError>;
 
 macro_rules! near_loop {
     ($cond:expr, $fallback:expr, $st:expr) => {{

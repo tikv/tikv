@@ -1166,7 +1166,7 @@ mod tests {
     use super::*;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::kv::Result as EngineResult;
+    use crate::storage::kv::RipResult;
     use crate::storage::lock_manager::DummyLockMgr;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
@@ -1193,7 +1193,7 @@ mod tests {
     }
 
     impl RegionInfoProvider for MockRegionInfoProvider {
-        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> RipResult<()> {
             let from = from.to_vec();
             callback(&mut self.regions.range(from..).map(|(_, v)| v));
             Ok(())

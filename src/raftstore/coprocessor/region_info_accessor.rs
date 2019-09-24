@@ -12,7 +12,7 @@ use super::{
     RoleObserver,
 };
 use crate::raftstore::store::keys::{data_end_key, data_key};
-use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
+use crate::storage::kv::{RegionInfoProvider, RipResult};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::collections::HashMap;
@@ -479,7 +479,7 @@ impl RegionInfoAccessor {
 }
 
 impl RegionInfoProvider for RegionInfoAccessor {
-    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> RipResult<()> {
         let msg = RegionInfoQuery::SeekRegion {
             from: from.to_vec(),
             callback,

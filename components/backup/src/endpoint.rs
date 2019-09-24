@@ -433,7 +433,7 @@ pub mod tests {
     use tikv::raftstore::coprocessor::RegionCollector;
     use tikv::raftstore::coprocessor::SeekRegionCallback;
     use tikv::raftstore::store::util::new_peer;
-    use tikv::storage::kv::Result as EngineResult;
+    use tikv::storage::kv::RipResult;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::SHORT_VALUE_MAX_LEN;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
@@ -472,7 +472,7 @@ pub mod tests {
         }
     }
     impl RegionInfoProvider for MockRegionInfoProvider {
-        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> RipResult<()> {
             let from = from.to_vec();
             let regions = self.regions.lock().unwrap();
             if let Some(c) = self.cancel.as_ref() {
