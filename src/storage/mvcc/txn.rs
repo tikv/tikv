@@ -609,7 +609,7 @@ impl<S: Snapshot> MvccTxn<S> {
     /// When transaction T1 meets T2's lock, it may invoke this on T2's primary key. In this
     /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
     /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
-    /// accurate.
+    /// accurate. If `current_ts` is 0, the lock will always be rolled back.
     ///
     /// Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
     /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
@@ -625,8 +625,10 @@ impl<S: Snapshot> MvccTxn<S> {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 let is_pessimistic_txn = lock.for_update_ts != 0;
 
-                if extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts) {
-                    // Expired. Clean it up.
+                if current_ts == 0
+                    || extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts)
+                {
+                    // When current_ts == 0 or the lock is expired, clean it up.
                     if lock.lock_type == LockType::Pessimistic {
                         self.unlock_key(primary_key);
                     } else {

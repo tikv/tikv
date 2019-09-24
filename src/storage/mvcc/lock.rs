@@ -297,6 +297,5 @@ mod tests {
         );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
-        // TODO: Test min_commit_ts
     }
 }
