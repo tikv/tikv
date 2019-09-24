@@ -744,7 +744,6 @@ fn test_node_merge_catch_up_logs_empty_entries() {
             .direction(Direction::Recv),
     ));
     pd_client.must_merge(left.get_id(), right.get_id());
-    thread::sleep(Duration::from_millis(100));
     cluster.shutdown();
     cluster.clear_send_filters();
 
