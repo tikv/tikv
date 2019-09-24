@@ -200,6 +200,7 @@ mod tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::Error as MvccError;
     use crate::storage::txn::Error as TxnError;
+    use crate::storage::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use kvproto::kvrpcpb::Context;
 
@@ -223,6 +224,89 @@ mod tests {
         }
 
         assert_eq!(scan_result, expected);
+    }
+
+    fn test_scan_with_lock_and_write_impl(desc: bool) {
+        const SCAN_TS: u64 = 10;
+        const PREV_TS: u64 = 4;
+        const POST_TS: u64 = 5;
+
+        let new_engine = || TestEngineBuilder::new().build().unwrap();
+        let add_write_at_ts = |commit_ts, engine, key, value| {
+            must_prewrite_put(engine, key, value, key, commit_ts);
+            must_commit(engine, key, commit_ts, commit_ts);
+        };
+
+        let add_lock_at_ts = |lock_ts, engine, key| {
+            must_prewrite_put(engine, key, b"lock", key, lock_ts);
+            must_locked(engine, key, lock_ts);
+        };
+
+        let test_scanner_result =
+            move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
+                let snapshot = engine.snapshot(&Context::default()).unwrap();
+
+                let scanner = ScannerBuilder::new(snapshot.clone(), SCAN_TS, desc)
+                    .build()
+                    .unwrap();
+                check_scan_result(scanner, &expected_result);
+            };
+
+        let desc_map = move |result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
+            if desc {
+                result.into_iter().rev().collect()
+            } else {
+                result
+            }
+        };
+
+        // Lock after write
+        let engine = new_engine();
+
+        add_write_at_ts(POST_TS, &engine, b"a", b"a_value");
+        add_lock_at_ts(PREV_TS, &engine, b"b");
+
+        let expected_result = desc_map(vec![
+            (b"a".to_vec(), Some(b"a_value".to_vec())),
+            (b"b".to_vec(), None),
+        ]);
+
+        test_scanner_result(&engine, expected_result);
+
+        // Lock before write for same key
+        let engine = new_engine();
+        add_write_at_ts(PREV_TS, &engine, b"a", b"a_value");
+        add_lock_at_ts(POST_TS, &engine, b"a");
+
+        let expected_result = vec![(b"a".to_vec(), None)];
+
+        test_scanner_result(&engine, expected_result);
+
+        // Lock before write in different keys
+        let engine = new_engine();
+        add_lock_at_ts(POST_TS, &engine, b"a");
+        add_write_at_ts(PREV_TS, &engine, b"b", b"b_value");
+
+        let expected_result = desc_map(vec![
+            (b"a".to_vec(), None),
+            (b"b".to_vec(), Some(b"b_value".to_vec())),
+        ]);
+        test_scanner_result(&engine, expected_result);
+
+        // Only a lock here
+        let engine = new_engine();
+        add_lock_at_ts(PREV_TS, &engine, b"a");
+
+        let expected_result = desc_map(vec![(b"a".to_vec(), None)]);
+
+        test_scanner_result(&engine, expected_result);
+
+        // Write Only
+        let engine = new_engine();
+        add_write_at_ts(PREV_TS, &engine, b"a", b"a_value");
+
+        let expected_result = desc_map(vec![(b"a".to_vec(), Some(b"a_value".to_vec()))]);
+        test_scanner_result(&engine, expected_result);
     }
 
     fn test_scan_with_lock_impl(desc: bool) {
@@ -277,6 +361,12 @@ mod tests {
         }
         let scanner = ScannerBuilder::new(snapshot, 106, desc).build().unwrap();
         check_scan_result(scanner, &expected_result);
+    }
+
+    #[test]
+    fn test_scan_with_lock_and_write() {
+        test_scan_with_lock_and_write_impl(true);
+        test_scan_with_lock_and_write_impl(false);
     }
 
     #[test]
