@@ -30,19 +30,19 @@ This document introduces the following features of Raftstore and their configura
 
 You can specify the following items in the TiKV configuration file to configure multi-thread Raftstore:
 
-**`raftstore.store_max_batch_size`**
+**`raftstore.store-max-batch-size`**
 
 Determines the maximum number of peers that a single thread can obtain in a batch. The value must be a positive integer. A smaller value provides better load balancing for CPU, but may cause more frequent writes.
 
-**`raftstore.store_pool_size`**
+**`raftstore.store-pool-size`**
 
 Determines the number of threads to process peers in batch. The value must be a positive integer. For better performance, it is recommended that you set a value less than or equal to the number of CPU cores on your machine.
  
-**`raftstore.apply_max_batch_size`**
+**`raftstore.apply-max-batch-size`**
 
 Determines the maximum number of ApplyDelegates requests that a single thread can resolve in a batch. The value must be a positive integer. A smaller value provides better load balancing for CPU, but may cause more frequent writes.
 
-**`raftstore.apply_pool_size`**
+**`raftstore.apply-pool-size`**
 
 Determines the number of threads. The value must be a positive integer. For better performance, it is recommended that you set a value less than or equal to the number of CPU cores on your machine.
 
