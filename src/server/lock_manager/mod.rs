@@ -17,7 +17,7 @@ use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{lock_manager::Lock, txn::ProcessResult, LockMgr, StorageCb};
 use pd_client::RpcClient;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use tikv_util::security::SecurityManager;
@@ -33,7 +33,7 @@ pub struct LockManager {
     waiter_mgr_scheduler: WaiterMgrScheduler,
     detector_scheduler: DetectorScheduler,
 
-    waiter_count: Arc<AtomicU64>,
+    waiter_count: Arc<AtomicUsize>,
 }
 
 impl Clone for LockManager {
@@ -58,7 +58,7 @@ impl LockManager {
             waiter_mgr_worker: Some(waiter_mgr_worker),
             detector_scheduler: DetectorScheduler::new(detector_worker.scheduler()),
             detector_worker: Some(detector_worker),
-            waiter_count: Arc::new(AtomicU64::new(0)),
+            waiter_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -72,37 +72,14 @@ impl LockManager {
         cfg: &Config,
     ) -> Result<()> {
         self.start_waiter_manager(cfg)?;
-
-        let detector_runner = Detector::new(
-            store_id,
-            pd_client,
-            resolver,
-            security_mgr,
-            self.waiter_mgr_scheduler.clone(),
-            cfg,
-        );
-        self.detector_worker
-            .as_mut()
-            .expect("worker should be some")
-            .start(detector_runner)?;
+        self.start_deadlock_detector(store_id, pd_client, resolver, security_mgr, cfg)?;
         Ok(())
     }
 
     /// Stops `WaiterManager` and `Detector`.
     pub fn stop(&mut self) {
         self.stop_waiter_manager();
-
-        if let Some(Err(e)) = self
-            .detector_worker
-            .take()
-            .and_then(|mut w| w.stop())
-            .map(JoinHandle::join)
-        {
-            info!(
-                "ignore failure when stopping deadlock detector worker";
-                "err" => ?e
-            );
-        }
+        self.stop_deadlock_detector();
     }
 
     fn start_waiter_manager(&mut self, cfg: &Config) -> Result<()> {
@@ -127,6 +104,43 @@ impl LockManager {
         {
             info!(
                 "ignore failure when stopping waiter manager worker";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn start_deadlock_detector<S: StoreAddrResolver + 'static>(
+        &mut self,
+        store_id: u64,
+        pd_client: Arc<RpcClient>,
+        resolver: S,
+        security_mgr: Arc<SecurityManager>,
+        cfg: &Config,
+    ) -> Result<()> {
+        let detector_runner = Detector::new(
+            store_id,
+            pd_client,
+            resolver,
+            security_mgr,
+            self.waiter_mgr_scheduler.clone(),
+            cfg,
+        );
+        self.detector_worker
+            .as_mut()
+            .expect("worker should be some")
+            .start(detector_runner)?;
+        Ok(())
+    }
+
+    fn stop_deadlock_detector(&mut self) {
+        if let Some(Err(e)) = self
+            .detector_worker
+            .take()
+            .and_then(|mut w| w.stop())
+            .map(JoinHandle::join)
+        {
+            info!(
+                "ignore failure when stopping deadlock detector worker";
                 "err" => ?e
             );
         }
