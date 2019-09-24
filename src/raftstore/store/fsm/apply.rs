@@ -1074,6 +1074,10 @@ impl ApplyDelegate {
         ctx: &ApplyContext,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
+        fail_point!("on_apply_write_cmd", self.id() == 3, |_| {
+            unimplemented!();
+        });
+
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 

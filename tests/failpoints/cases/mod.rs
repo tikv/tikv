@@ -5,6 +5,7 @@ mod test_conf_change;
 mod test_coprocessor;
 mod test_merge;
 mod test_pending_peers;
+mod test_replica_read;
 mod test_snap;
 mod test_split_region;
 mod test_stale_peer;
