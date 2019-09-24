@@ -457,6 +457,8 @@ impl Peer {
     pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
+            // Other source peers may be already destroyed, so the raft group will not make any progress.
+            // Here update the commit index even if entries is empty.
             if merge.get_commit() > self.raft_group.raft.raft_log.committed {
                 self.raft_group.raft.raft_log.commit_to(merge.get_commit());
                 return Some(merge.get_commit());
