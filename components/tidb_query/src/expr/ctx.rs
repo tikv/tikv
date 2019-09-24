@@ -7,7 +7,7 @@ use std::{i64, mem, u64};
 use super::{Error, Result};
 use crate::codec::mysql::Tz;
 use tipb;
-use tipb::{DagRequest, EncodeType};
+use tipb::DagRequest;
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
@@ -71,8 +71,6 @@ pub struct EvalConfig {
     // warning is a executor stuff instead of a evaluation stuff.
     pub max_warning_cnt: usize,
     pub sql_mode: SqlMode,
-
-    pub encode_type: EncodeType,
 }
 
 impl Default for EvalConfig {
@@ -99,9 +97,6 @@ impl EvalConfig {
         if req.has_sql_mode() {
             eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
         }
-        if req.has_encode_type() {
-            eval_cfg.set_encode_type(req.get_encode_type());
-        }
         Ok(eval_cfg)
     }
 
@@ -111,7 +106,6 @@ impl EvalConfig {
             flag: Flag::empty(),
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),
-            encode_type: EncodeType::TypeDefault,
         }
     }
 
@@ -128,11 +122,6 @@ impl EvalConfig {
 
     pub fn set_sql_mode(&mut self, new_value: SqlMode) -> &mut Self {
         self.sql_mode = new_value;
-        self
-    }
-
-    pub fn set_encode_type(&mut self, new_value: EncodeType) -> &mut Self {
-        self.encode_type = new_value;
         self
     }
 

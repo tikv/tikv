@@ -46,6 +46,12 @@ pub struct BatchExecutorsRunner<SS> {
     collect_exec_summary: bool,
 
     exec_stats: ExecuteStats,
+
+    /// The encoding method for the response.
+    /// Possible encoding methods are:
+    /// 1. default: result is encoded row by row.
+    /// 2. arrow: result is encoded using the apache arrow format.
+    encode_type: EncodeType,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -304,6 +310,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
+        let encode_type = if req.has_encode_type() {
+            req.get_encode_type()
+        } else {
+            EncodeType::TypeDefault
+        };
 
         let out_most_executor = if collect_exec_summary {
             build_executors::<_, ExecSummaryCollectorEnabled>(
@@ -347,6 +358,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             config,
             collect_exec_summary,
             exec_stats,
+            encode_type,
         })
     }
 
@@ -385,7 +397,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     let data = chunk.mut_rows_data();
                     // Although `schema()` can be deeply nested, it is ok since we process data in
                     // batch.
-                    match self.config.encode_type {
+                    match self.encode_type {
                         EncodeType::TypeDefault => {
                             data.reserve(result.physical_columns.maximum_encoded_size(
                                 &result.logical_rows,
@@ -422,7 +434,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     .collect_exec_stats(&mut self.exec_stats);
 
                 let mut sel_resp = SelectResponse::default();
-                match self.config.encode_type {
+                match self.encode_type {
                     EncodeType::TypeDefault => {
                         sel_resp.set_chunks(chunks.into());
                     }
