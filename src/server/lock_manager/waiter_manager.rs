@@ -488,20 +488,13 @@ mod tests {
     fn test_wait_table_is_empty() {
         let waiter_count = Arc::new(AtomicU64::new(0));
         let mut wait_table = WaitTable::new(Arc::clone(&waiter_count));
-        assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
         wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
-        assert_eq!(waiter_count.load(Ordering::SeqCst), 1);
+        // Increase waiter_count manually and assert the previous value is zero
+        assert_eq!(waiter_count.fetch_add(1, Ordering::SeqCst), 0);
         assert!(wait_table
             .remove_waiter(1, Lock { ts: 2, hash: 2 })
             .is_some());
         assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
-        wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
-        wait_table.add_waiter(3, dummy_waiter(2, 3, 3));
-        assert_eq!(waiter_count.load(Ordering::SeqCst), 1);
-        wait_table.get_ready_waiters(2, vec![2]);
-        assert_eq!(waiter_count.load(Ordering::SeqCst), 2);
-        wait_table.get_ready_waiters(3, vec![3]);
-        assert_eq!(waiter_count.load(Ordering::SeqCst), 3);
     }
 
     #[test]

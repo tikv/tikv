@@ -71,15 +71,7 @@ impl LockManager {
         security_mgr: Arc<SecurityManager>,
         cfg: &Config,
     ) -> Result<()> {
-        let waiter_mgr_runner = WaiterManager::new(
-            Arc::clone(&self.waiter_count),
-            self.detector_scheduler.clone(),
-            cfg,
-        );
-        self.waiter_mgr_worker
-            .as_mut()
-            .expect("worker should be some")
-            .start(waiter_mgr_runner)?;
+        self.start_waiter_manager(cfg)?;
 
         let detector_runner = Detector::new(
             store_id,
@@ -98,17 +90,7 @@ impl LockManager {
 
     /// Stops `WaiterManager` and `Detector`.
     pub fn stop(&mut self) {
-        if let Some(Err(e)) = self
-            .waiter_mgr_worker
-            .take()
-            .and_then(|mut w| w.stop())
-            .map(JoinHandle::join)
-        {
-            info!(
-                "ignore failure when stopping waiter manager worker";
-                "err" => ?e
-            );
-        }
+        self.stop_waiter_manager();
 
         if let Some(Err(e)) = self
             .detector_worker
@@ -118,6 +100,33 @@ impl LockManager {
         {
             info!(
                 "ignore failure when stopping deadlock detector worker";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn start_waiter_manager(&mut self, cfg: &Config) -> Result<()> {
+        let waiter_mgr_runner = WaiterManager::new(
+            Arc::clone(&self.waiter_count),
+            self.detector_scheduler.clone(),
+            cfg,
+        );
+        self.waiter_mgr_worker
+            .as_mut()
+            .expect("worker should be some")
+            .start(waiter_mgr_runner)?;
+        Ok(())
+    }
+
+    fn stop_waiter_manager(&mut self) {
+        if let Some(Err(e)) = self
+            .waiter_mgr_worker
+            .take()
+            .and_then(|mut w| w.stop())
+            .map(JoinHandle::join)
+        {
+            info!(
+                "ignore failure when stopping waiter manager worker";
                 "err" => ?e
             );
         }
@@ -189,6 +198,31 @@ impl LockMgr for LockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn test_has_waiter() {
+        let mut lock_mgr = LockManager::new();
+        lock_mgr
+            .start_waiter_manager(&Config::default())
+            .expect("could not start waiter manager");
+        assert!(!lock_mgr.has_waiter());
+        let (lock_ts, hash) = (10, 1);
+        lock_mgr.wait_for(
+            20,
+            StorageCb::Boolean(Box::new(|_| ())),
+            ProcessResult::Res,
+            Lock { ts: lock_ts, hash },
+            true,
+        );
+        // new waiters should be sensed immediately
+        assert!(lock_mgr.has_waiter());
+        lock_mgr.wake_up(lock_ts, Some(vec![hash]), 15, false);
+        thread::sleep(Duration::from_secs(1));
+        assert!(!lock_mgr.has_waiter());
+        lock_mgr.stop_waiter_manager();
+    }
 
     #[bench]
     fn bench_lock_mgr_clone(b: &mut test::Bencher) {
