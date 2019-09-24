@@ -248,6 +248,7 @@ fn test_node_merge_catch_up_logs_restart() {
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
 
+/// Test if merge is working properly when merge entries is empty but commit index is not updated.
 #[test]
 fn test_node_merge_catch_up_logs_empty_entries() {
     let _guard = crate::setup();
