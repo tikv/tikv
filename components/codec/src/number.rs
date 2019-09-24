@@ -279,14 +279,14 @@ impl NumberCodec {
         LittleEndian::write_f32(buf, v)
     }
 
-    /// Dncodes a 32 bit float number `v` to `buf` in little endian,
+    /// Decodes a 32 bit float number `v` to `buf` in little endian,
     /// which is not memory-comparable.
     ///
     /// # Panics
     ///
     /// Panics when `buf.len() < 4`.
     #[inline]
-    pub fn decode_f32_le(buf: &mut [u8]) -> f32 {
+    pub fn decode_f32_le(buf: &[u8]) -> f32 {
         LittleEndian::read_f32(buf)
     }
 
@@ -708,6 +708,17 @@ pub trait NumberDecoder: BufferReader {
     #[inline]
     fn read_i32_le(&mut self) -> Result<i32> {
         read!(self, 4, decode_i32_le)
+    }
+
+    /// Reads a 32 bit float  in little endian,
+    /// which is previously wrote via `write_f32_le`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn read_f32_le(&mut self) -> Result<f32> {
+        read!(self, 4, decode_f32_le)
     }
 
     /// Reads an unsigned 64 bit integer in little endian,

@@ -249,7 +249,6 @@ impl VectorValue {
                 }
                 Ok(size)
             }
-
             VectorValue::Json(vec) => {
                 let mut size = (logical_rows.len() / 8 + 1) + 16;
                 for idx in logical_rows {

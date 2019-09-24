@@ -49,8 +49,8 @@ pub struct BatchExecutorsRunner<SS> {
 
     /// The encoding method for the response.
     /// Possible encoding methods are:
-    /// 1. default: result is encoded row by row.
-    /// 2. arrow: result is encoded using the apache arrow format.
+    /// 1. default: result is encoded row by row using datum format.
+    /// 2. arrow: result is encoded column by column using arrow format.
     encode_type: EncodeType,
 }
 
@@ -310,11 +310,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
-        let encode_type = if req.has_encode_type() {
-            req.get_encode_type()
-        } else {
-            EncodeType::TypeDefault
-        };
+        let encode_type = req.get_encode_type();
 
         let out_most_executor = if collect_exec_summary {
             build_executors::<_, ExecSummaryCollectorEnabled>(
