@@ -173,16 +173,16 @@ impl<S: Snapshot> MvccReader<S> {
         }
 
         let cursor = self.history_cursor.as_mut().unwrap();
-        let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.rollback)?;
+        let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.history)?;
         if !ok {
             return Ok(None);
         }
-        let rollback_key = cursor.key(&mut self.statistics.rollback);
+        let rollback_key = cursor.key(&mut self.statistics.history);
         if !Key::is_user_key_eq(rollback_key, key.as_encoded()) {
             return Ok(None);
         }
-        let write = Write::parse(cursor.value(&mut self.statistics.rollback))?;
-        self.statistics.rollback.processed += 1;
+        let write = Write::parse(cursor.value(&mut self.statistics.history))?;
+        self.statistics.history.processed += 1;
         Ok(Some(write))
     }
 
@@ -276,7 +276,9 @@ impl<S: Snapshot> MvccReader<S> {
         start_ts: u64,
     ) -> Result<Option<(u64, WriteType)>> {
         // Check latest
+        let mut has_latest = false;
         if let Some(latest) = self.get_latest(key)? {
+            has_latest = true;
             if latest.start_ts == start_ts {
                 return Ok(Some((latest.commit_ts, latest.write_type)));
             }
@@ -300,16 +302,18 @@ impl<S: Snapshot> MvccReader<S> {
             seek_ts = rollback.commit_ts - 1;
         }
 
-        // check history
-        let mut seek_ts = u64::max_value();
-        while let Some(history) = self.seek_history(key, seek_ts)? {
-            if history.start_ts == start_ts {
-                return Ok(Some((history.commit_ts, history.write_type)));
+        // check history only when latest exists
+        if has_latest {
+            let mut seek_ts = u64::max_value();
+            while let Some(history) = self.seek_history(key, seek_ts)? {
+                if history.start_ts == start_ts {
+                    return Ok(Some((history.commit_ts, history.write_type)));
+                }
+                if history.commit_ts <= start_ts {
+                    break;
+                }
+                seek_ts = history.commit_ts - 1;
             }
-            if history.commit_ts <= start_ts {
-                break;
-            }
-            seek_ts = history.commit_ts - 1;
         }
 
         Ok(None)

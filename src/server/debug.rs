@@ -14,7 +14,7 @@ use engine::rocks::{
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
-use engine::{CF_DEFAULT, CF_HISTORY, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -136,6 +136,48 @@ pub struct Debugger {
 impl Debugger {
     pub fn new(engines: Engines) -> Debugger {
         Debugger { engines }
+    }
+
+    fn dump_key_mvcc_cf(&self, key: &[u8], cf: &str) {
+        let readopts = IterOption::new(None, None, false).build_read_opts();
+        let handle = get_cf_handle(&self.engines.kv, cf).unwrap();
+        let mut iter = DBIterator::new_cf(&self.engines.kv, handle, readopts);
+        iter.seek(SeekKey::from(key));
+        if cf == CF_LATEST {
+            if iter.valid() && iter.key() == key {
+                let latest = Write::parse(iter.value()).unwrap();
+                info!("latest {:?}", latest);
+            } else {
+                info!("None");
+            }
+        } else if cf == CF_LOCK {
+            if iter.valid() && iter.key() == key {
+                let lock = Lock::parse(iter.value()).unwrap();
+                info!("latest {:?}", lock);
+            } else {
+                info!("None");
+            }
+        } else if cf == CF_HISTORY {
+            while iter.valid() {
+                if !Key::is_user_key_eq(iter.key(), key) {
+                    break;
+                }
+                let history = Write::parse(iter.value()).unwrap();
+                info!("history {:?}", history);
+                iter.next();
+            }
+        } else if cf == CF_ROLLBACK {
+            while iter.valid() {
+                if !Key::is_user_key_eq(iter.key(), key) {
+                    break;
+                }
+                let rollback = Write::parse(iter.value()).unwrap();
+                info!("rollback {:?}", rollback);
+                iter.next();
+            }
+        } else {
+            //
+        }
     }
 
     pub fn get_engine(&self) -> &Engines {

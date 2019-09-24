@@ -21,4 +21,4 @@ pub const ALL_CFS: &[CfName] = &[
     CF_RAFT,
     CF_WRITE,
 ];
-pub const DATA_CFS: &[CfName] = &[CF_LOCK, CF_LATEST, CF_HISTORY, CF_ROLLBACK];
+pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_LATEST, CF_HISTORY, CF_ROLLBACK];

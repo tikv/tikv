@@ -261,6 +261,8 @@ trait DebugExecutor {
         }
     }
 
+    fn dump_key_mvcc(&self, key: &[u8], cfs: Vec<&str>);
+
     fn raw_scan(&self, from_key: &[u8], to_key: &[u8], limit: usize, cf: &str) {
         if !ALL_CFS.contains(&cf) {
             eprintln!("CF \"{}\" doesn't exist.", cf);
@@ -711,6 +713,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
+    fn dump_key_mvcc(&self) {
+        unimplemented!("only available for local mode");
+    }
+
     fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
         self.check_local_mode();
     }
@@ -771,6 +777,21 @@ impl DebugExecutor for Debugger {
     fn get_all_meta_regions(&self) -> Vec<u64> {
         self.get_all_meta_regions()
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_meta_regions", e))
+    }
+
+    fn dump_key_mvcc(&self, key: Vec<u8>, cfs: Vec<&str>) {
+        if cfs.contains(CF_HISTORY) {
+            self.dump_key_mvcc_cf(&key, CF_HISTORY);
+        }
+        if cfs.contains(CF_LOCK) {
+            self.dump_key_mvcc_cf(&key, CF_LOCK);
+        }
+        if cfs.contains(CF_LATEST) {
+            self.dump_key_mvcc_cf(&key, CF_LATEST);
+        }
+        if cfs.contains(CF_ROLLBACK) {
+            self.dump_key_mvcc_cf(&key, CF_ROLLBACK);
+        }
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
@@ -1289,6 +1310,28 @@ fn main() {
                         .takes_value(true)
                         .help("Set commit_ts as filter"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("mvccprint")
+                .about("Print the mvcc value for specified key")
+                .arg(
+                    Arg::with_name("key")
+                        .required(true)
+                        .short("k")
+                        .takes_value(true)
+                        .help(raw_key_hint)
+                )
+                .arg(
+                    Arg::with_name("show-cf")
+                        .long("show-cf")
+                        .takes_value(true)
+                        .multiple(true)
+                        .use_delimiter(true)
+                        .require_delimiter(true)
+                        .value_delimiter(",")
+                        .default_value(CF_LATEST)
+                        .help("Column family names, combined from lock/latest/history/rollback"),
+                )
         )
         .subcommand(
             SubCommand::with_name("diff")
@@ -1883,6 +1926,9 @@ fn main() {
         let limit: usize = matches.value_of("limit").unwrap().parse().unwrap();
         let cf = matches.value_of("cf").unwrap();
         debug_executor.raw_scan(&from, &to, limit, cf);
+    } else if let Some(matches) = matches.subcommand_matches("mvccprint") {
+        let key = unescape(matches.value_of("key").unwrap());
+        debug_executor.dump_key_mvcc(key, cfs);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let from = unescape(matches.value_of("key").unwrap());
         let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
