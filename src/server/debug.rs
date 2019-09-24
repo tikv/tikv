@@ -138,24 +138,25 @@ impl Debugger {
         Debugger { engines }
     }
 
-    pub fn dump_key_mvcc_cf(&self, key: &[u8], cf: &str) {
+    pub fn dump_key_mvcc_cf(&self, key: &[u8], cf: &str) -> Vec<String> {
         let readopts = IterOption::new(None, None, false).build_read_opts();
         let handle = get_cf_handle(&self.engines.kv, cf).unwrap();
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
         iter.seek(SeekKey::from(key));
+        let mut vec = vec![];
         if cf == CF_LATEST {
             if iter.valid() && iter.key() == key {
                 let latest = Write::parse(iter.value()).unwrap();
-                info!("latest {:?}", latest);
+                vec.push(format!("latest {:?}", latest));
             } else {
-                info!("None");
+                vec.push(String::from("lock None"));
             }
         } else if cf == CF_LOCK {
             if iter.valid() && iter.key() == key {
                 let lock = Lock::parse(iter.value()).unwrap();
                 info!("latest {:?}", lock);
             } else {
-                info!("None");
+                vec.push(String::from("lock None"));
             }
         } else if cf == CF_HISTORY {
             while iter.valid() {
@@ -163,7 +164,7 @@ impl Debugger {
                     break;
                 }
                 let history = Write::parse(iter.value()).unwrap();
-                info!("history {:?}", history);
+                vec.push(format!("history {:?}", history));
                 iter.next();
             }
         } else if cf == CF_ROLLBACK {
@@ -172,12 +173,14 @@ impl Debugger {
                     break;
                 }
                 let rollback = Write::parse(iter.value()).unwrap();
-                info!("rollback {:?}", rollback);
+                vec.push(format!("rollback {:?}", rollback));
                 iter.next();
             }
         } else {
             //
         }
+
+        vec
     }
 
     pub fn get_engine(&self) -> &Engines {

@@ -781,16 +781,24 @@ impl DebugExecutor for Debugger {
 
     fn dump_key_mvcc(&self, key: &[u8], cfs: Vec<&str>) {
         if cfs.contains(&CF_HISTORY) {
-            self.dump_key_mvcc_cf(key, CF_HISTORY);
+            for s in &self.dump_key_mvcc_cf(key, CF_HISTORY) {
+                v1!("{}", s);
+            }
         }
         if cfs.contains(&CF_LOCK) {
-            self.dump_key_mvcc_cf(key, CF_LOCK);
+            for s in &self.dump_key_mvcc_cf(key, CF_LOCK) {
+                v1!("{}", s);
+            }
         }
         if cfs.contains(&CF_LATEST) {
-            self.dump_key_mvcc_cf(key, CF_LATEST);
+            for s in &self.dump_key_mvcc_cf(key, CF_LATEST) {
+                v1!("{}", s);
+            }
         }
         if cfs.contains(&CF_ROLLBACK) {
-            self.dump_key_mvcc_cf(key, CF_ROLLBACK);
+            for s in &self.dump_key_mvcc_cf(key, CF_ROLLBACK) {
+                v1!("{}", s);
+            }
         }
     }
 
