@@ -138,7 +138,7 @@ impl Debugger {
         Debugger { engines }
     }
 
-    pub fn dump_key_mvcc_cf(&self, key: &[u8], cf: str) {
+    pub fn dump_key_mvcc_cf(&self, key: &[u8], cf: &str) {
         let readopts = IterOption::new(None, None, false).build_read_opts();
         let handle = get_cf_handle(&self.engines.kv, cf).unwrap();
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);

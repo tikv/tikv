@@ -25,7 +25,7 @@ use protobuf::Message;
 use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::{ALL_CFS, CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_ROLLBACK, CF_WRITE};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
@@ -713,7 +713,7 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only available for local mode");
     }
 
-    fn dump_key_mvcc(&self) {
+    fn dump_key_mvcc(&self, _: &[u8], _: Vec<&str>) {
         unimplemented!("only available for local mode");
     }
 
@@ -779,18 +779,18 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::get_all_meta_regions", e))
     }
 
-    fn dump_key_mvcc(&self, key: Vec<u8>, cfs: Vec<&str>) {
-        if cfs.contains(CF_HISTORY) {
-            self.dump_key_mvcc_cf(&key, CF_HISTORY);
+    fn dump_key_mvcc(&self, key: &[u8], cfs: Vec<&str>) {
+        if cfs.contains(&CF_HISTORY) {
+            self.dump_key_mvcc_cf(key, CF_HISTORY);
         }
-        if cfs.contains(CF_LOCK) {
-            self.dump_key_mvcc_cf(&key, CF_LOCK);
+        if cfs.contains(&CF_LOCK) {
+            self.dump_key_mvcc_cf(key, CF_LOCK);
         }
-        if cfs.contains(CF_LATEST) {
-            self.dump_key_mvcc_cf(&key, CF_LATEST);
+        if cfs.contains(&CF_LATEST) {
+            self.dump_key_mvcc_cf(key, CF_LATEST);
         }
-        if cfs.contains(CF_ROLLBACK) {
-            self.dump_key_mvcc_cf(&key, CF_ROLLBACK);
+        if cfs.contains(&CF_ROLLBACK) {
+            self.dump_key_mvcc_cf(key, CF_ROLLBACK);
         }
     }
 
@@ -1928,7 +1928,8 @@ fn main() {
         debug_executor.raw_scan(&from, &to, limit, cf);
     } else if let Some(matches) = matches.subcommand_matches("mvccprint") {
         let key = unescape(matches.value_of("key").unwrap());
-        debug_executor.dump_key_mvcc(key, cfs);
+        let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
+        debug_executor.dump_key_mvcc(&key, cfs);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let from = unescape(matches.value_of("key").unwrap());
         let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
