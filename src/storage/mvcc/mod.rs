@@ -579,6 +579,21 @@ pub mod tests {
         assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
 
+    pub fn must_cleanup<E: Engine>(engine: &E, key: &[u8], start_ts: u64, current_ts: u64) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.cleanup(Key::from_raw(key), current_ts).unwrap();
+        write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_cleanup_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64, current_ts: u64) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        assert!(txn.cleanup(Key::from_raw(key), current_ts).is_err());
+    }
+
     pub fn must_txn_heart_beat<E: Engine>(
         engine: &E,
         primary_key: &[u8],
@@ -797,5 +812,16 @@ pub mod tests {
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect
         );
+    }
+
+    #[test]
+    fn test_ts() {
+        let physical = 1568700549751;
+        let logical = 108;
+        let ts = compose_ts(physical, logical);
+        assert_eq!(ts, 411225436913926252);
+
+        let extracted_physical = extract_physical(ts);
+        assert_eq!(extracted_physical, physical);
     }
 }

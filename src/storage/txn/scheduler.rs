@@ -580,6 +580,7 @@ mod tests {
                 ctx: Context::default(),
                 key: Key::from_raw(b"k"),
                 start_ts: 10,
+                current_ts: 20,
             },
             Command::Rollback {
                 ctx: Context::default(),

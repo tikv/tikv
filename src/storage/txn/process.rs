@@ -636,13 +636,17 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::Cleanup {
-            ctx, key, start_ts, ..
+            ctx,
+            key,
+            start_ts,
+            current_ts,
+            ..
         } => {
             let mut keys = vec![key];
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
-            let is_pessimistic_txn = txn.rollback(keys.pop().unwrap())?;
+            let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
 
             wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
