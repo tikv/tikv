@@ -619,10 +619,10 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::rocks::{
-        ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
+        ColumnFamilyOptions, DBOptions, IngestExternalFileOptions, SstWriterBuilder,
         TitanDBOptions, Writable, DB,
     };
-    use crate::CF_DEFAULT;
+    use crate::{CfName, CF_DEFAULT};
     use tempdir::TempDir;
 
     #[test]
@@ -733,10 +733,12 @@ mod tests {
         // Just do nothing
     }
 
-    fn gen_sst_with_kvs(db: &DB, cf: &CFHandle, path: &str, kvs: &[(&str, &str)]) {
-        let opts = db.get_options_cf(cf).clone();
-        let mut writer = SstFileWriter::new(EnvOptions::new(), opts);
-        writer.open(path).unwrap();
+    fn gen_sst_with_kvs(db: Arc<DB>, cf: CfName, path: &str, kvs: &[(&str, &str)]) {
+        let mut writer = SstWriterBuilder::new()
+            .set_db(db)
+            .set_cf(cf)
+            .build(path)
+            .unwrap();
         for &(k, v) in kvs {
             writer.put(k.as_bytes(), v.as_bytes()).unwrap();
         }
@@ -763,12 +765,14 @@ mod tests {
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
         let cf_name = "default";
-        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
+        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts)
+            .map(Arc::new)
+            .unwrap();
         let cf = db.cf_handle(cf_name).unwrap();
         let mut ingest_opts = IngestExternalFileOptions::new();
         ingest_opts.move_files(true);
 
-        gen_sst_with_kvs(&db, cf, sst_path.to_str().unwrap(), &kvs);
+        gen_sst_with_kvs(db.clone(), cf_name, sst_path.to_str().unwrap(), &kvs);
         let size = fs::metadata(&sst_path).unwrap().len();
         let checksum = calc_crc32(&sst_path).unwrap();
 
