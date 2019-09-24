@@ -195,6 +195,7 @@ members = [
   "components/tipb_helper",
   "components/log_wrappers",
   "components/tikv_util",
+  "components/external_storage",
 ]
 
 [profile.dev]
