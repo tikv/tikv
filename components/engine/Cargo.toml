@@ -33,8 +33,7 @@ rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 features = ["nightly", "push", "process"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/yiwu-arbug/rust-rocksdb.git"
-branch = "consistency"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 package = "rocksdb"
 
 [dev-dependencies]
