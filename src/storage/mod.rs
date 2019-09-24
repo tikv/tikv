@@ -84,6 +84,7 @@ pub enum StorageCb {
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
+    TxnStatus(Callback<(u64, u64)>),
 }
 
 pub enum Command {
@@ -122,6 +123,12 @@ pub enum Command {
         keys: Vec<Key>,
         start_ts: u64,
         for_update_ts: u64,
+    },
+    TxnHeartBeat {
+        ctx: Context,
+        primary_key: Key,
+        start_ts: u64,
+        advise_ttl: u64,
     },
     ScanLock {
         ctx: Context,
@@ -236,6 +243,16 @@ impl Display for Command {
                 for_update_ts,
                 ctx
             ),
+            Command::TxnHeartBeat {
+                ref ctx,
+                ref primary_key,
+                start_ts,
+                advise_ttl,
+            } => write!(
+                f,
+                "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
+                primary_key, start_ts, advise_ttl, ctx
+            ),
             Command::ScanLock {
                 ref ctx,
                 max_ts,
@@ -337,6 +354,7 @@ impl Command {
             Command::Cleanup { .. } => "cleanup",
             Command::Rollback { .. } => "rollback",
             Command::PessimisticRollback { .. } => "pessimistic_rollback",
+            Command::TxnHeartBeat { .. } => "txn_heart_beat",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::ResolveLockLite { .. } => "resolve_lock_lite",
@@ -354,7 +372,8 @@ impl Command {
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
             | Command::PessimisticRollback { start_ts, .. }
-            | Command::MvccByStartTs { start_ts, .. } => start_ts,
+            | Command::MvccByStartTs { start_ts, .. }
+            | Command::TxnHeartBeat { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::ResolveLockLite { start_ts, .. } => start_ts,
@@ -373,6 +392,7 @@ impl Command {
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
             | Command::PessimisticRollback { ref ctx, .. }
+            | Command::TxnHeartBeat { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::ResolveLockLite { ref ctx, .. }
@@ -391,6 +411,7 @@ impl Command {
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
             | Command::PessimisticRollback { ref mut ctx, .. }
+            | Command::TxnHeartBeat { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::ResolveLockLite { ref mut ctx, .. }
@@ -445,6 +466,11 @@ impl Command {
             }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
+            }
+            Command::TxnHeartBeat {
+                ref primary_key, ..
+            } => {
+                bytes += primary_key.as_encoded().len();
             }
             _ => {}
         }
@@ -1101,6 +1127,28 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
+        Ok(())
+    }
+
+    /// Check the specified primary key and enlarge it's TTL if necessary. Returns the new TTL.
+    ///
+    /// Schedules a [`Command::TxnHeartBeat`]
+    pub fn async_txn_heart_beat(
+        &self,
+        ctx: Context,
+        primary_key: Key,
+        start_ts: u64,
+        advise_ttl: u64,
+        callback: Callback<(u64, u64)>,
+    ) -> Result<()> {
+        let cmd = Command::TxnHeartBeat {
+            ctx,
+            primary_key,
+            start_ts,
+            advise_ttl,
+        };
+        self.schedule(cmd, StorageCb::TxnStatus(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
         Ok(())
     }
 
@@ -4058,6 +4106,84 @@ mod tests {
                 vec![],
                 0,
                 expect_value_callback(tx.clone(), 0, vec![lock_a]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_txn_heart_beat() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let k = Key::from_raw(b"k");
+        let v = b"v".to_vec();
+
+        // No lock.
+        storage
+            .async_txn_heart_beat(
+                Context::default(),
+                k.clone(),
+                10,
+                100,
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v))],
+                k.as_encoded().to_vec(),
+                10,
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // `advise_ttl` = 90, which is less than current ttl 100. The lock's ttl will remains 100.
+        storage
+            .async_txn_heart_beat(
+                Context::default(),
+                k.clone(),
+                10,
+                90,
+                expect_value_callback(tx.clone(), 0, (100, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // `advise_ttl` = 110, which is greater than current ttl. The lock's ttl will be updated to
+        // 110.
+        storage
+            .async_txn_heart_beat(
+                Context::default(),
+                k.clone(),
+                10,
+                110,
+                expect_value_callback(tx.clone(), 0, (110, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Lock not match. Nothing happens except throwing an error.
+        storage
+            .async_txn_heart_beat(
+                Context::default(),
+                k.clone(),
+                11,
+                150,
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
             )
             .unwrap();
         rx.recv().unwrap();
