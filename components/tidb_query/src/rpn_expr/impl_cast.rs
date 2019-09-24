@@ -1473,6 +1473,7 @@ mod tests {
     /// vector of (T, T to bytes(without any other handle do by cast_as_string_helper),
     /// T to string for debug output),
     /// the object should not be zero len.
+    #[allow(clippy::type_complexity)]
     fn test_as_string_helper<T: Clone, FnCast>(
         base_cs: Vec<(T, Vec<u8>, String)>,
         cast_func: FnCast,
@@ -2011,12 +2012,12 @@ mod tests {
             (Json::Double(f64::MIN), format!("{:e}", f64::MIN)),
             (Json::Double(f64::MAX), format!("{:e}", f64::MAX)),
             (
-                Json::Double(f32::MIN as f64),
-                format!("{:e}", f32::MIN as f64),
+                Json::Double(f64::from(f32::MIN)),
+                format!("{:e}", f64::from(f32::MIN)),
             ),
             (
-                Json::Double(f32::MAX as f64),
-                format!("{:e}", f32::MAX as f64),
+                Json::Double(f64::from(f32::MAX)),
+                format!("{:e}", f64::from(f32::MAX)),
             ),
             (
                 Json::Double(i64::MIN as f64),
