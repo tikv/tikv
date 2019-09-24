@@ -644,9 +644,8 @@ mod tests {
             }
         }
 
-        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
-            a.clone()
+            *a
         }
     }
 
@@ -734,10 +733,7 @@ mod tests {
         assert_eq!(unescape(r"a\\023"), b"a\\023");
         // Escaped three digit octal
         assert_eq!(unescape(r"a\000"), b"a\0");
-        assert_eq!(
-            unescape(r"\342\235\244\360\237\220\267"),
-            "❤🐷".as_bytes()
-        );
+        assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
         // Whitespace
         assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
         // Hex Octals

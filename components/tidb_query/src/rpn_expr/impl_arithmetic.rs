@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 
 use super::super::expr::EvalContext;
@@ -115,7 +116,7 @@ impl ArithmeticOp for RealPlus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs + *rhs;
         if res.is_infinite() {
-            Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)))?;
+            return Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -159,7 +160,7 @@ impl ArithmeticOp for IntUintMinus {
                 .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
                 .map(|v| Some(v as i64))
         } else {
-            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)))?
+            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
         }
     }
 }
@@ -206,7 +207,7 @@ impl ArithmeticOp for RealMinus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs - *rhs;
         if res.is_infinite() {
-            Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)))?;
+            return Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -300,25 +301,20 @@ impl ArithmeticOp for RealMod {
 #[derive(Debug)]
 pub struct DecimalMod;
 
-impl ArithmeticOp for DecimalMod {
+impl ArithmeticOpWithCtx for DecimalMod {
     type T = Decimal;
 
-    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        use crate::codec::mysql::Res;
-
-        if rhs.is_zero() {
-            return Ok(None);
-        }
-        match lhs % rhs {
-            Some(v) => match v {
-                Res::Ok(v) => Ok(Some(v)),
-                Res::Truncated(_) => Err(Error::truncated())?,
-                Res::Overflow(_) => {
-                    Err(Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs)))?
-                }
-            },
-            None => Ok(None),
-        }
+    fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        Ok(if let Some(value) = lhs % rhs {
+            value
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("DECIMAL", format!("({} % {})", lhs, rhs)),
+                )
+                .map(Some)
+        } else {
+            ctx.handle_division_by_zero().map(|_| None)
+        }?)
     }
 }
 
@@ -465,28 +461,21 @@ fn int_divide_decimal(
     lhs: &Option<Decimal>,
     rhs: &Option<Decimal>,
 ) -> Result<Option<Int>> {
-    use crate::codec::mysql::Res;
+    let result = try_opt!(arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)).as_i64();
 
-    if lhs.is_none() || rhs.is_none() {
-        return Ok(None);
-    }
-    let lhs = lhs.as_ref().unwrap();
-    let rhs = rhs.as_ref().unwrap();
-
-    match lhs / rhs {
-        Some(v) => match v {
-            Res::Ok(v) => match v.as_i64() {
-                Res::Ok(v_i64) => Ok(Some(v_i64)),
-                Res::Truncated(v_i64) => Ok(Some(v_i64)),
-                Res::Overflow(_) => {
-                    Err(Error::overflow("BIGINT", &format!("({} / {})", lhs, rhs)))?
-                }
-            },
-            Res::Truncated(_) => Err(Error::truncated())?,
-            Res::Overflow(_) => Err(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))?,
-        },
-        None => Ok(ctx.handle_division_by_zero().map(|()| None)?),
-    }
+    Ok(if result.is_truncated() {
+        Some(result.unwrap())
+    } else {
+        result
+            .into_result_with_overflow_err(
+                ctx,
+                Error::overflow(
+                    "BIGINT",
+                    format!("({} / {})", lhs.as_ref().unwrap(), rhs.as_ref().unwrap()),
+                ),
+            )
+            .map(Some)?
+    })
 }
 
 pub struct DecimalDivide;
@@ -495,17 +484,36 @@ impl ArithmeticOpWithCtx for DecimalDivide {
     type T = Decimal;
 
     fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        use crate::codec::mysql::Res;
+        Ok(if let Some(value) = lhs / rhs {
+            value
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("DECIMAL", format!("({} / {})", lhs, rhs)),
+                )
+                .map(Some)
+        } else {
+            // TODO: handle RpnFuncExtra's field_type, round the result if is needed.
+            ctx.handle_division_by_zero().map(|_| None)
+        }?)
+    }
+}
 
-        Ok(match lhs / rhs {
-            Some(value) => match value {
-                Res::Ok(value) => Some(value),
-                Res::Truncated(_) => ctx.handle_truncate(true).map(|_| None)?,
-                Res::Overflow(_) => ctx
-                    .handle_overflow(Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs)))
-                    .map(|_| None)?,
-            },
-            None => ctx.handle_division_by_zero().map(|_| None)?,
+pub struct RealDivide;
+
+impl ArithmeticOpWithCtx for RealDivide {
+    type T = Real;
+
+    fn calc(ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+        Ok(if rhs.is_zero() {
+            ctx.handle_division_by_zero().map(|_| None)?
+        } else {
+            let result = *lhs / *rhs;
+            if result.is_infinite() {
+                ctx.handle_overflow_err(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
+                    .map(|_| None)?
+            } else {
+                Some(result)
+            }
         })
     }
 }
@@ -518,7 +526,7 @@ mod tests {
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::codec::error::ERR_DIVISION_BY_ZERO;
     use crate::expr::{EvalConfig, Flag, SqlMode};
@@ -1194,6 +1202,36 @@ mod tests {
     }
 
     #[test]
+    fn test_real_divide() {
+        let normal = vec![
+            (Some(2.2), Some(1.1), Real::new(2.0).ok()),
+            (Some(2.33), Some(-0.01), Real::new(-233.0).ok()),
+            (Some(2.33), Some(0.01), Real::new(233.0).ok()),
+            (None, Some(2.0), None),
+            (Some(123.0), None, None),
+        ];
+
+        for (lhs, rhs, expected) in normal {
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::DivideReal)
+                .unwrap();
+
+            assert_eq!(actual, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+
+        let overflow = vec![(std::f64::MAX, 0.0001)];
+        for (lhs, rhs) in overflow {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::DivideReal)
+                .is_err())
+        }
+    }
+
+    #[test]
     fn test_divide_by_zero() {
         let cases: Vec<(ScalarFuncSig, FieldTypeTp, ScalarValue, ScalarValue)> = vec![
             (
@@ -1207,6 +1245,12 @@ mod tests {
                 FieldTypeTp::NewDecimal,
                 Decimal::from_str("2.33").unwrap().into(),
                 Decimal::from_str("-0.0").unwrap().into(),
+            ),
+            (
+                ScalarFuncSig::DivideReal,
+                FieldTypeTp::Double,
+                2.33.into(),
+                0.0.into(),
             ),
         ];
 

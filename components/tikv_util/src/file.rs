@@ -55,7 +55,7 @@ pub fn sync_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
 
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
-/// Calculates the given file's CRC32 checksum.
+/// Calculates the given file's Crc32 checksum.
 pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
     let mut digest = Digest::new(crc32::IEEE);
     let mut f = OpenOptions::new().read(true).open(path)?;
@@ -72,6 +72,13 @@ pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
             Err(err) => return Err(err),
         }
     }
+}
+
+/// Calculates the given content's CRC32 checksum.
+pub fn calc_crc32_bytes(contents: &[u8]) -> u32 {
+    let mut digest = Digest::new(crc32::IEEE);
+    digest.write(contents);
+    digest.sum32()
 }
 
 #[cfg(test)]
@@ -169,9 +176,7 @@ mod tests {
             .take(size)
             .collect();
         fs::write(path, s.as_bytes()).unwrap();
-        let mut digest = Digest::new(crc32::IEEE);
-        digest.write(s.as_bytes());
-        digest.sum32()
+        calc_crc32_bytes(s.as_bytes())
     }
 
     #[test]

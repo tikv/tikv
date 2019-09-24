@@ -15,7 +15,7 @@ use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
-use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
+use pd_client::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
@@ -207,6 +207,8 @@ struct Cluster {
     region_id_keys: HashMap<u64, Key>,
     region_approximate_size: HashMap<u64, u64>,
     region_approximate_keys: HashMap<u64, u64>,
+    region_last_report_ts: HashMap<u64, u64>,
+    region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
@@ -238,6 +240,8 @@ impl Cluster {
             region_id_keys: HashMap::default(),
             region_approximate_size: HashMap::default(),
             region_approximate_keys: HashMap::default(),
+            region_last_report_ts: HashMap::default(),
+            region_last_report_term: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
             split_count: 0,
@@ -314,6 +318,14 @@ impl Cluster {
 
     fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
         self.region_approximate_keys.get(&region_id).cloned()
+    }
+
+    fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+        self.region_last_report_ts.get(&region_id).cloned()
+    }
+
+    fn get_region_last_report_term(&self, region_id: u64) -> Option<u64> {
+        self.region_last_report_term.get(&region_id).cloned()
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -556,6 +568,7 @@ impl Cluster {
 
     fn region_heartbeat(
         &mut self,
+        term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
@@ -576,6 +589,9 @@ impl Cluster {
             .insert(region.get_id(), region_stat.approximate_size);
         self.region_approximate_keys
             .insert(region.get_id(), region_stat.approximate_keys);
+        self.region_last_report_ts
+            .insert(region.get_id(), region_stat.last_report_ts);
+        self.region_last_report_term.insert(region.get_id(), term);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -835,7 +851,7 @@ impl TestPdClient {
         self.must_none_peer(region_id, peer);
     }
 
-    pub fn must_merge(&self, from: u64, target: u64) {
+    pub fn merge_region(&self, from: u64, target: u64) {
         let op = Operator::MergeRegion {
             source_region_id: from,
             target_region_id: target,
@@ -843,6 +859,10 @@ impl TestPdClient {
         };
         self.schedule_operator(from, op.clone());
         self.schedule_operator(target, op);
+    }
+
+    pub fn must_merge(&self, from: u64, target: u64) {
+        self.merge_region(from, target);
 
         for _ in 1..500 {
             sleep_ms(10);
@@ -857,6 +877,10 @@ impl TestPdClient {
             return;
         }
         panic!("region {:?} is still not merged.", region.unwrap());
+    }
+
+    pub fn check_merged(&self, from: u64) -> bool {
+        self.get_region_by_id(from).wait().unwrap().is_none()
     }
 
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
@@ -925,6 +949,14 @@ impl TestPdClient {
 
     pub fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_approximate_keys(region_id)
+    }
+
+    pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_last_report_ts(region_id)
+    }
+
+    pub fn get_region_last_report_term(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_last_report_term(region_id)
     }
 
     pub fn set_gc_safe_point(&self, safe_point: u64) {
@@ -997,6 +1029,7 @@ impl PdClient for TestPdClient {
 
     fn region_heartbeat(
         &self,
+        term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
@@ -1007,7 +1040,7 @@ impl PdClient for TestPdClient {
         let resp = self
             .cluster
             .wl()
-            .region_heartbeat(region, leader.clone(), region_stat);
+            .region_heartbeat(term, region, leader.clone(), region_stat);
         match resp {
             Ok(resp) => {
                 let store_id = leader.get_store_id();
@@ -1105,7 +1138,7 @@ impl PdClient for TestPdClient {
 
         let mut resp = pdpb::AskBatchSplitResponse::default();
         for _ in 0..count {
-            let mut id = pdpb::SplitID::new();
+            let mut id = pdpb::SplitId::default();
             id.set_new_region_id(self.alloc_id().unwrap());
             for _ in region.get_peers() {
                 id.mut_new_peer_ids().push(self.alloc_id().unwrap());

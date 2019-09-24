@@ -2,7 +2,7 @@
 
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
-use tipb::select::SelectResponse;
+use tipb::SelectResponse;
 
 use test_coprocessor::*;
 use test_storage::*;
@@ -114,7 +114,7 @@ fn test_readpool_full() {
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
 
-    fail::cfg("read_pool_spawn_full", "return()").unwrap();
+    fail::cfg("future_pool_spawn_full", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
 
     assert!(resp.get_region_error().has_server_is_busy());
@@ -177,7 +177,7 @@ fn test_region_error_in_scan() {
 
     let product = ProductTable::new();
     let (_cluster, raft_engine, mut ctx) = new_raft_engine(1, "");
-    ctx.set_isolation_level(IsolationLevel::SI);
+    ctx.set_isolation_level(IsolationLevel::Si);
 
     let (_, endpoint) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);

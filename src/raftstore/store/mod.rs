@@ -3,7 +3,7 @@
 pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
-pub mod keys;
+pub use ::keys;
 pub mod msg;
 pub mod transport;
 pub mod util;
@@ -42,8 +42,8 @@ pub use self::snap::{
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
+pub use self::worker::PdTask;
 pub use self::worker::{KeyEntry, LocalReader, RegionTask};
-
 // Only used in tests
 #[cfg(test)]
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};

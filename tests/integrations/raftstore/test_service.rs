@@ -4,13 +4,13 @@ use std::path::Path;
 use std::sync::*;
 
 use futures::{future, Future, Stream};
-use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode::*};
+use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use kvproto::coprocessor::*;
-use kvproto::debugpb_grpc::DebugClient;
+use kvproto::debugpb::DebugClient;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
@@ -414,7 +414,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     // GC `k` at the latest ts.
     ts += 1;
     let gc_safe_ponit = ts;
-    let mut gc_req = GCRequest::default();
+    let mut gc_req = GcRequest::default();
     gc_req.set_context(ctx.clone());
     gc_req.safe_point = gc_safe_ponit;
     let gc_resp = client.kv_gc(&gc_req).unwrap();
@@ -476,7 +476,7 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
 
     // Split region commands
     let key = b"b";
@@ -486,9 +486,8 @@ fn test_split_region() {
     let resp = client.split_region(&req).unwrap();
     assert_eq!(
         Key::from_encoded(resp.get_left().get_end_key().to_vec())
-            .truncate_ts()
+            .into_raw()
             .unwrap()
-            .as_encoded()
             .as_slice(),
         key
     );
@@ -496,6 +495,30 @@ fn test_split_region() {
         resp.get_left().get_end_key(),
         resp.get_right().get_start_key()
     );
+
+    // Batch split region
+    let region_id = resp.get_right().get_id();
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader);
+    ctx.set_region_epoch(resp.get_right().get_region_epoch().to_owned());
+    let mut req = SplitRegionRequest::default();
+    req.set_context(ctx);
+    let mut split_keys = vec![b"c".to_vec(), b"d".to_vec(), b"e".to_vec()];
+    req.set_split_keys(split_keys.clone().into());
+    let resp = client.split_region(&req).unwrap();
+    let result_split_keys: Vec<_> = resp
+        .get_regions()
+        .iter()
+        .map(|x| {
+            Key::from_encoded(x.get_start_key().to_vec())
+                .into_raw()
+                .unwrap()
+        })
+        .collect();
+    split_keys.insert(0, b"b".to_vec());
+    assert_eq!(result_split_keys, split_keys);
 }
 
 #[test]
@@ -549,7 +572,7 @@ fn test_debug_get() {
     // Debug get
     let mut req = debugpb::GetRequest::default();
     req.set_cf(CF_DEFAULT.to_owned());
-    req.set_db(debugpb::DB::KV);
+    req.set_db(debugpb::Db::Kv);
     req.set_key(key);
     let mut resp = debug_client.get(&req.clone()).unwrap();
     assert_eq!(resp.take_value(), v);
@@ -557,7 +580,7 @@ fn test_debug_get() {
     req.set_key(b"foo".to_vec());
     match debug_client.get(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, GRPC_STATUS_NOT_FOUND);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -594,7 +617,7 @@ fn test_debug_raft_log() {
     req.set_log_index(region_id + 1);
     match debug_client.raft_log(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, GRPC_STATUS_NOT_FOUND);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -660,7 +683,7 @@ fn test_debug_region_info() {
     req.set_region_id(region_id + 1);
     match debug_client.region_info(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, GRPC_STATUS_NOT_FOUND);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }
@@ -710,7 +733,7 @@ fn test_debug_region_size() {
     req.set_region_id(region_id + 1);
     match debug_client.region_size(&req).unwrap_err() {
         Error::RpcFailure(status) => {
-            assert_eq!(status.status, GRPC_STATUS_NOT_FOUND);
+            assert_eq!(status.status, RpcStatusCode::NOT_FOUND);
         }
         _ => panic!("expect NotFound"),
     }

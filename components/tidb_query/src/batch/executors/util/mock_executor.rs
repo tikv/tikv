@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use crate::batch::interface::*;
+use crate::storage::IntervalRange;
 
 /// A simple mock executor that will return batch data according to a fixture without any
 /// modification.
@@ -40,5 +41,10 @@ impl BatchExecutor for MockExecutor {
 
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
         // Do nothing
+    }
+
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        // Do nothing
+        unreachable!()
     }
 }

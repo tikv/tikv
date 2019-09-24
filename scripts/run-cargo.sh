@@ -60,12 +60,19 @@ if [[ -n "$X_DEBUG" ]]; then
     export CARGO_PROFILE_RELEASE_DEBUG="true"
 fi
 
+# Default package is tikv
+package="tikv"
+
+if [[ -n "$X_PACKAGE" ]]; then
+    package=$X_PACKAGE
+fi
+
 # Turn off error -> exit
 set +e
 
 # Print commands
 set -x
-cargo $args --features="$features" $X_CARGO_ARGS
+cargo $args --package="$package" --features="$features" $X_CARGO_ARGS
 
 # Store the exit code
 r=$?

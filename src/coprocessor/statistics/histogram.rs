@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
-use tipb::analyze;
+use tipb;
 
 /// Bucket is an element of histogram.
 struct Bucket {
@@ -28,7 +28,6 @@ impl Bucket {
     fn count_repeated(&mut self) {
         self.count += 1;
         self.repeats += 1;
-        return;
     }
 
     // insert a item bigger than current upper_bound,
@@ -39,8 +38,8 @@ impl Bucket {
         self.repeats = 1;
     }
 
-    fn into_proto(self) -> analyze::Bucket {
-        let mut bucket = analyze::Bucket::default();
+    fn into_proto(self) -> tipb::Bucket {
+        let mut bucket = tipb::Bucket::default();
         bucket.set_repeats(self.repeats as i64);
         bucket.set_count(self.count as i64);
         bucket.set_lower_bound(self.lower_bound);
@@ -71,10 +70,10 @@ impl Histogram {
         }
     }
 
-    pub fn into_proto(self) -> analyze::Histogram {
-        let mut hist = analyze::Histogram::default();
+    pub fn into_proto(self) -> tipb::Histogram {
+        let mut hist = tipb::Histogram::default();
         hist.set_ndv(self.ndv as i64);
-        let buckets: Vec<analyze::Bucket> = self
+        let buckets: Vec<tipb::Bucket> = self
             .buckets
             .into_iter()
             .map(|bucket| bucket.into_proto())

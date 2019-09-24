@@ -1,15 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::fmt::Display;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
-use tidb_query_datatype::{self, FieldTypeTp};
+use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
+use tipb::FieldType;
 
-use super::mysql::{Res, RoundMode, DEFAULT_FSP};
+use super::mysql::{RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
 use crate::codec::data_type::*;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
+use crate::codec::mysql::charset;
+use crate::codec::mysql::decimal::max_or_min_dec;
 use crate::expr::EvalContext;
+use crate::expr::Flag;
 
 /// A trait for converting a value to an `Int`.
 pub trait ToInt {
@@ -52,7 +58,6 @@ where
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Real> {
         let val = self.convert(ctx)?;
-        // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
         let val = box_try!(Real::new(val));
         Ok(val)
     }
@@ -75,7 +80,6 @@ where
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
         Ok(self.to_string().into_bytes())
     }
 }
@@ -143,40 +147,43 @@ pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
     }
 }
 
-/// `truncate_f64` (`TruncateFloat` in tidb) tries to truncate f.
+/// `truncate_f64` (`TruncateFloat` in TiDB) tries to truncate f.
 /// If the result exceeds the max/min float that flen/decimal
 /// allowed, returns the max/min float allowed.
-pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
+pub fn truncate_f64(ctx: &mut EvalContext, mut f: f64, flen: u8, decimal: u8) -> Result<f64> {
     if f.is_nan() {
-        return Res::Overflow(0f64);
+        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
+        return Ok(0f64);
     }
-    let shift = 10u64.pow(u32::from(decimal)) as f64;
-    let maxf = 10u64.pow(u32::from(flen - decimal)) as f64 - 1.0 / shift;
-    if f.is_finite() {
+    let shift = 10f64.powi(i32::from(decimal));
+    let max_f = 10f64.powi(i32::from(flen - decimal)) - 1.0 / shift;
+
+    if !f.is_infinite() {
         let tmp = f * shift;
         if tmp.is_finite() {
             f = tmp.round() / shift
         }
-    };
-
-    if f > maxf {
-        return Res::Overflow(maxf);
     }
 
-    if f < -maxf {
-        return Res::Overflow(-maxf);
+    if f > max_f {
+        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
+        return Ok(max_f);
     }
-    Res::Ok(f)
+
+    if f < -max_f {
+        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
+        return Ok(-max_f);
+    }
+    Ok(f)
 }
 
 /// Returns an overflowed error.
-macro_rules! overflow {
-    ($val:ident, $bound:tt) => {{
-        Error::Eval(
-            format!("constant {} overflows {}", $val, $bound),
-            ERR_DATA_OUT_OF_RANGE,
-        )
-    }};
+#[inline]
+fn overflow(val: impl Display, bound: FieldTypeTp) -> Error {
+    Error::Eval(
+        format!("constant {} overflows {}", val, bound),
+        ERR_DATA_OUT_OF_RANGE,
+    )
 }
 
 impl ToInt for i64 {
@@ -184,12 +191,12 @@ impl ToInt for i64 {
         let lower_bound = integer_signed_lower_bound(tp);
         // https://dev.mysql.com/doc/refman/8.0/en/out-of-range-and-overflow.html
         if *self < lower_bound {
-            ctx.handle_overflow(overflow!(self, lower_bound))?;
+            ctx.handle_overflow_err(overflow(self, tp))?;
             return Ok(lower_bound);
         }
         let upper_bound = integer_signed_upper_bound(tp);
         if *self > upper_bound {
-            ctx.handle_overflow(overflow!(self, upper_bound))?;
+            ctx.handle_overflow_err(overflow(self, tp))?;
             return Ok(upper_bound);
         }
         Ok(*self)
@@ -197,13 +204,13 @@ impl ToInt for i64 {
 
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         if *self < 0 && ctx.should_clip_to_zero() {
-            ctx.handle_overflow(overflow!(self, 0))?;
+            ctx.handle_overflow_err(overflow(self, tp))?;
             return Ok(0);
         }
 
         let upper_bound = integer_unsigned_upper_bound(tp);
         if *self as u64 > upper_bound {
-            ctx.handle_overflow(overflow!(self, upper_bound))?;
+            ctx.handle_overflow_err(overflow(self, tp))?;
             return Ok(upper_bound);
         }
         Ok(*self as u64)
@@ -214,7 +221,7 @@ impl ToInt for u64 {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let upper_bound = integer_signed_upper_bound(tp);
         if *self > upper_bound as u64 {
-            ctx.handle_overflow(overflow!(self, upper_bound))?;
+            ctx.handle_overflow_err(overflow(self, tp))?;
             return Ok(upper_bound);
         }
         Ok(*self as i64)
@@ -223,7 +230,7 @@ impl ToInt for u64 {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let upper_bound = integer_unsigned_upper_bound(tp);
         if *self > upper_bound {
-            ctx.handle_overflow(overflow!(self, upper_bound))?;
+            ctx.handle_overflow_err(overflow(self, tp))?;
             return Ok(upper_bound);
         }
         Ok(*self)
@@ -231,39 +238,64 @@ impl ToInt for u64 {
 }
 
 impl ToInt for f64 {
+    /// This function is ported from TiDB's types.ConvertFloatToInt,
+    /// which checks whether the number overflows the signed lower and upper boundaries of `tp`
+    ///
+    /// # Notes
+    ///
+    /// It handles overflows using `ctx` so that the caller would not handle it anymore.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
+        #![allow(clippy::float_cmp)]
         let val = (*self).round();
         let lower_bound = integer_signed_lower_bound(tp);
         if val < lower_bound as f64 {
-            ctx.handle_overflow(overflow!(val, lower_bound))?;
+            ctx.handle_overflow_err(overflow(val, tp))?;
             return Ok(lower_bound);
         }
 
         let upper_bound = integer_signed_upper_bound(tp);
-        if val > upper_bound as f64 {
-            ctx.handle_overflow(overflow!(val, upper_bound))?;
-            return Ok(upper_bound);
+        let ub_f64 = upper_bound as f64;
+        // according to https://github.com/pingcap/tidb/pull/5247
+        if val >= ub_f64 {
+            if val == ub_f64 {
+                return Ok(upper_bound);
+            } else {
+                ctx.handle_overflow_err(overflow(val, tp))?;
+                return Ok(upper_bound);
+            }
         }
         Ok(val as i64)
     }
 
+    /// This function is ported from TiDB's types.ConvertFloatToUint,
+    /// which checks whether the number overflows the unsigned upper boundaries of `tp`
+    ///
+    /// # Notes
+    ///
+    /// It handles overflows using `ctx` so that the caller would not handle it anymore.
+    #[allow(clippy::float_cmp)]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = (*self).round();
         if val < 0f64 {
-            ctx.handle_overflow(overflow!(val, 0))?;
+            ctx.handle_overflow_err(overflow(val, tp))?;
             if ctx.should_clip_to_zero() {
                 return Ok(0);
             } else {
+                // recall that, `f64 as u64` is different from `f64 as i64 as u64`
                 return Ok(val as i64 as u64);
             }
         }
-
         let upper_bound = integer_unsigned_upper_bound(tp);
         if val > upper_bound as f64 {
-            ctx.handle_overflow(overflow!(val, upper_bound))?;
-            return Ok(upper_bound);
+            ctx.handle_overflow_err(overflow(val, tp))?;
+            Ok(upper_bound)
+        } else if val == upper_bound as f64 {
+            // because in rustc, `let a = upper_bound as f64; a as u64` seems has bug,
+            // it don't return upper_bound
+            Ok(upper_bound)
+        } else {
+            Ok(val as u64)
         }
-        Ok(val as u64)
     }
 }
 
@@ -280,6 +312,7 @@ impl ToInt for Real {
 }
 
 impl ToInt for &[u8] {
+    /// Port from TiDB's types.StrToInt
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
         let s = s.trim();
@@ -288,7 +321,10 @@ impl ToInt for &[u8] {
         match val {
             Ok(val) => val.to_int(ctx, tp),
             Err(_) => {
-                ctx.handle_overflow(Error::overflow("BIGINT", &vs))?;
+                ctx.handle_overflow_err(Error::overflow("BIGINT", &vs))?;
+                // To make compatible with TiDB,
+                // return signed upper bound or lower bound when overflow.
+                // see TiDB's `types.StrToInt` and [strconv.ParseInt](https://golang.org/pkg/strconv/#ParseInt)
                 let val = if vs.starts_with('-') {
                     integer_signed_lower_bound(tp)
                 } else {
@@ -299,14 +335,25 @@ impl ToInt for &[u8] {
         }
     }
 
+    /// Port from TiDB's types.StrToUint
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let s = get_valid_utf8_prefix(ctx, self)?;
-        let vs = get_valid_int_prefix(ctx, s)?;
-        let val = vs.parse::<u64>();
+        let s = s.trim();
+        let s = get_valid_int_prefix(ctx, s)?;
+        // in TiDB, it use strconv.ParseUint here,
+        // strconv.ParseUint will return 0 and a err if the str is neg
+        if s.starts_with('-') {
+            ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &s))?;
+            return Ok(0);
+        }
+        let val = s.parse::<u64>();
         match val {
             Ok(val) => val.to_uint(ctx, tp),
             Err(_) => {
-                ctx.handle_overflow(Error::overflow("BIGINT UNSIGNED", &vs))?;
+                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &s))?;
+                // To make compatible with TiDB,
+                // return `integer_unsigned_upper_bound(tp);` when overflow.
+                // see TiDB's `types.StrToUint` and [strconv.ParseUint](https://golang.org/pkg/strconv/#ParseUint)
                 let val = integer_unsigned_upper_bound(tp);
                 Ok(val)
             }
@@ -339,26 +386,43 @@ impl ToInt for Decimal {
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // TODO: avoid this clone
         let dec = round_decimal_with_ctx(ctx, self.clone())?;
-        let val = dec.as_i64_with_ctx(ctx)?;
-        val.to_int(ctx, tp)
+        let val = dec.as_i64();
+        let err = Error::truncated_wrong_val("DECIMAL", &dec);
+        let r = val.into_result_with_overflow_err(ctx, err)?;
+        if tp == FieldTypeTp::LongLong {
+            Ok(r)
+        } else {
+            r.to_int(ctx, tp)
+        }
     }
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         // TODO: avoid this clone
         let dec = round_decimal_with_ctx(ctx, self.clone())?;
-        decimal_as_u64(ctx, dec, tp)
+        let val = dec.as_u64();
+        let err = Error::truncated_wrong_val("DECIMAL", &dec);
+        let r = val.into_result_with_overflow_err(ctx, err)?;
+        if tp == FieldTypeTp::LongLong {
+            Ok(r)
+        } else {
+            r.to_uint(ctx, tp)
+        }
     }
 }
 
 impl ToInt for DateTime {
+    // FiXME
+    //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap().round_frac(DEFAULT_FSP)
+    //  will get 2000-01-01T12:13:14, this is a bug
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // TODO: avoid this clone after refactor the `Time`
         let mut t = self.clone();
         t.round_frac(DEFAULT_FSP)?;
         let dec: Decimal = t.convert(ctx)?;
-        let val = dec.as_i64_with_ctx(ctx)?;
+        let val = dec.as_i64();
+        let val = val.into_result(ctx)?;
         val.to_int(ctx, tp)
     }
 
@@ -390,6 +454,7 @@ impl ToInt for Duration {
 }
 
 impl ToInt for Json {
+    // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // Casts json to int has different behavior in TiDB/MySQL when the json
@@ -401,9 +466,9 @@ impl ToInt for Json {
             Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => Ok(0),
             Json::Boolean(true) => Ok(1),
             Json::I64(d) => Ok(d),
-            Json::U64(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Json::Double(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Json::String(ref s) => s.as_bytes().to_int(ctx, FieldTypeTp::LongLong),
+            Json::U64(d) => Ok(d as i64),
+            Json::Double(d) => d.to_int(ctx, tp),
+            Json::String(ref s) => s.as_bytes().to_int(ctx, tp),
         }?;
         if tp == FieldTypeTp::LongLong {
             Ok(val)
@@ -412,15 +477,16 @@ impl ToInt for Json {
         }
     }
 
+    // Port from TiDB's types.ConvertJSONToInt
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = match *self {
             Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => Ok(0u64),
             Json::Boolean(true) => Ok(1u64),
-            Json::I64(d) => d.to_uint(ctx, FieldTypeTp::LongLong),
+            Json::I64(d) => Ok(d as u64),
             Json::U64(d) => Ok(d),
-            Json::Double(d) => d.to_uint(ctx, FieldTypeTp::LongLong),
-            Json::String(ref s) => s.as_bytes().to_uint(ctx, FieldTypeTp::LongLong),
+            Json::Double(d) => d.to_uint(ctx, tp),
+            Json::String(ref s) => s.as_bytes().to_uint(ctx, tp),
         }?;
         if tp == FieldTypeTp::LongLong {
             Ok(val)
@@ -431,7 +497,7 @@ impl ToInt for Json {
 }
 
 #[inline]
-fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&'a str> {
+pub fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&'a str> {
     let valid = match str::from_utf8(bytes) {
         Ok(s) => s,
         Err(err) => {
@@ -444,34 +510,15 @@ fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&
 }
 
 fn round_decimal_with_ctx(ctx: &mut EvalContext, dec: Decimal) -> Result<Decimal> {
-    let dec = match dec.round(0, RoundMode::HalfEven) {
-        Res::Ok(d) => d,
-        Res::Overflow(d) => {
-            ctx.handle_overflow(Error::overflow("DECIMAL", ""))?;
-            d
-        }
-        Res::Truncated(d) => {
-            ctx.handle_truncate(true)?;
-            d
-        }
-    };
-    Ok(dec)
+    dec.round(0, RoundMode::HalfEven)
+        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", ""))
 }
 
 #[inline]
 fn decimal_as_u64(ctx: &mut EvalContext, dec: Decimal, tp: FieldTypeTp) -> Result<u64> {
-    let val = match dec.as_u64() {
-        Res::Ok(val) => val,
-        Res::Overflow(val) => {
-            ctx.handle_overflow(Error::overflow("DECIMAL", &dec.to_string()))?;
-            val
-        }
-        Res::Truncated(val) => {
-            ctx.handle_truncate(true)?;
-            val
-        }
-    };
-    val.to_uint(ctx, tp)
+    dec.as_u64()
+        .into_result_with_overflow_err(ctx, Error::overflow("DECIMAL", dec))?
+        .to_uint(ctx, tp)
 }
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
@@ -533,6 +580,158 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     r.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", ""))
 }
 
+pub fn produce_dec_with_specified_tp(
+    ctx: &mut EvalContext,
+    mut dec: Decimal,
+    ft: &FieldType,
+) -> Result<Decimal> {
+    let (flen, decimal) = (ft.as_accessor().flen(), ft.as_accessor().decimal());
+    if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
+        if flen < decimal {
+            return Err(Error::m_bigger_than_d(""));
+        }
+        let (prec, frac) = dec.prec_and_frac();
+        let (prec, frac) = (prec as isize, frac as isize);
+        if !dec.is_zero() && prec - frac > flen - decimal {
+            // select (cast 111 as decimal(1)) causes a warning in MySQL.
+            ctx.handle_overflow_err(Error::overflow(
+                "Decimal",
+                &format!("({}, {})", flen, decimal),
+            ))?;
+            dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
+        } else if frac != decimal {
+            let old = dec.clone();
+            let rounded = dec
+                .round(decimal as i8, RoundMode::HalfEven)
+                .into_result_with_overflow_err(
+                    ctx,
+                    Error::overflow("Decimal", &format!("({}, {})", flen, decimal)),
+                )?;
+            if !rounded.is_zero() && frac > decimal && rounded != old {
+                if ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
+                    || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
+                {
+                    ctx.warnings.append_warning(Error::truncated());
+                } else {
+                    // although according to tidb,
+                    // we should handler overflow after handle_truncate,
+                    // however, no overflow err will return by handle_truncate
+                    ctx.handle_truncate(true)?;
+                }
+            }
+            dec = rounded
+        }
+    };
+    if ft.is_unsigned() && dec.is_negative() {
+        Ok(Decimal::zero())
+    } else {
+        Ok(dec)
+    }
+}
+
+/// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in TiDB) produces
+/// a new float64 according to `flen` and `decimal` in `self.tp`.
+/// TODO port tests from TiDB(TiDB haven't implemented now)
+pub fn produce_float_with_specified_tp(
+    ctx: &mut EvalContext,
+    tp: &FieldType,
+    num: f64,
+) -> Result<f64> {
+    let flen = tp.flen();
+    let decimal = tp.decimal();
+    let ul = tidb_query_datatype::UNSPECIFIED_LENGTH;
+
+    let res = if flen != ul && decimal != ul {
+        assert!(flen < std::u8::MAX as isize && decimal < std::u8::MAX as isize);
+        truncate_f64(ctx, num, flen as u8, decimal as u8)?
+    } else {
+        num
+    };
+
+    if tp.is_unsigned() && res < 0f64 {
+        ctx.handle_overflow_err(overflow(res, tp.tp()))?;
+        return Ok(0f64);
+    }
+
+    Ok(res)
+}
+
+/// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in TiDB) produces
+/// a new string according to `flen` and `chs`.
+///
+/// # Panics
+///
+/// The s must represent a valid str, otherwise, panic!
+pub fn produce_str_with_specified_tp<'a>(
+    ctx: &mut EvalContext,
+    s: Cow<'a, [u8]>,
+    ft: &FieldType,
+    pad_zero: bool,
+) -> Result<Cow<'a, [u8]>> {
+    let (flen, chs) = (ft.flen(), ft.get_charset());
+    if flen < 0 {
+        return Ok(s);
+    }
+    let flen = flen as usize;
+    // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
+    // char count and truncate to flen chars if it is too long.
+    if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
+        let truncate_info = {
+            // In TiDB's version, the param `s` is a string,
+            // so we can unwrap directly here because we need the `s` represent a valid str
+            let s: &str = std::str::from_utf8(s.as_ref()).unwrap();
+            let mut indices = s.char_indices().skip(flen);
+            indices.next().map(|(truncate_pos, _)| {
+                let char_count = flen + 1 + indices.count();
+                (char_count, truncate_pos)
+            })
+        };
+        if truncate_info.is_none() {
+            return Ok(s);
+        }
+        let (char_count, truncate_pos) = truncate_info.unwrap();
+        ctx.handle_truncate_err(Error::data_too_long(format!(
+            "Data Too Long, field len {}, data len {}",
+            flen, char_count
+        )))?;
+
+        let mut res = s.into_owned();
+        truncate_binary(&mut res, truncate_pos as isize);
+        Ok(Cow::Owned(res))
+    } else if s.len() > flen {
+        ctx.handle_truncate_err(Error::data_too_long(format!(
+            "Data Too Long, field len {}, data len {}",
+            flen,
+            s.len()
+        )))?;
+        let mut res = s.into_owned();
+        truncate_binary(&mut res, flen as isize);
+        Ok(Cow::Owned(res))
+    } else if ft.as_accessor().tp() == FieldTypeTp::String
+        && s.len() < flen
+        && ft.is_binary_string_like()
+        && pad_zero
+    {
+        let mut s = s.into_owned();
+        s.resize(flen, 0);
+        Ok(Cow::Owned(s))
+    } else {
+        Ok(s)
+    }
+}
+
+pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
+    let flen = ft.flen();
+    if flen < 0 {
+        return;
+    }
+    let flen = flen as usize;
+    if ft.tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
+        // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
+        s.resize(flen, 0);
+    }
+}
+
 impl ConvertTo<f64> for i64 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
@@ -548,13 +747,21 @@ impl ConvertTo<f64> for u64 {
 }
 
 impl ConvertTo<f64> for &[u8] {
+    /// This function parse the str to float,
+    /// if the num represent by the str is too large,
+    /// it will handle truncated using ctx,
+    /// and return f64::MIN or f64::MAX according to whether isNeg of the str
+    ///
+    /// Port from TiDB's types.StrToFloat
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let s = str::from_utf8(self)?.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
         match vs.parse::<f64>() {
             Ok(val) => {
+                // In rust's parse, if the number is out of range,
+                // it will return Ok but the res is inf
                 if val.is_infinite() {
-                    ctx.handle_overflow(Error::overflow("DOUBLE", &vs))?;
+                    ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
                     if val.is_sign_negative() {
                         return Ok(std::f64::MIN);
                     } else {
@@ -563,7 +770,8 @@ impl ConvertTo<f64> for &[u8] {
                 }
                 Ok(val)
             }
-            Err(err) => Err(box_err!("parse float err: {}", err)),
+            // if reaches here, it means our code has bug
+            Err(err) => Err(box_err!("parse float err: {}, this is a bug", err)),
         }
     }
 }
@@ -625,7 +833,9 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
             valid_len = i + 1;
         }
     }
-    ctx.handle_truncate(valid_len == 0 || valid_len < s.len())?;
+    if valid_len == 0 || valid_len < s.len() {
+        ctx.handle_truncate_err(Error::truncated_wrong_val("INTEGER", s))?;
+    }
     if valid_len == 0 {
         Ok("0")
     } else {
@@ -633,6 +843,7 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
     }
 }
 
+/// the `s` must be a valid int_str
 fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
     if num_next_dot < '5' {
         return Cow::Borrowed(s);
@@ -642,11 +853,14 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
     match s.rfind(|c| c != '9' && c != '+' && c != '-') {
         Some(idx) => {
             int_str.push_str(&s[..idx]);
-            let next_char = char::from_u32(s.chars().nth(idx).unwrap() as u32 + 1).unwrap();
+            // because the `s` must be valid int_str, so it is ok to do this.
+            let next_char = (s.as_bytes()[idx] + 1) as char;
             int_str.push(next_char);
             let zero_count = s.len() - (idx + 1);
             if zero_count > 0 {
-                int_str.extend((0..zero_count).map(|_| '0'));
+                for _i in 0..zero_count {
+                    int_str.push('0');
+                }
             }
         }
         None => {
@@ -668,116 +882,164 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
 /// because precision will be lost.
 ///
 /// When the float string indicating a value that is overflowing the i64,
-/// the original float string is returned and an overflow warning is attached
+/// the original float string is returned and an overflow warning is attached.
+///
+/// This func will find serious overflow such as the len of result > 20 (without prefix `+/-`)
+/// however, it will not check whether the result overflow BIGINT.
 fn float_str_to_int_string<'a>(
     ctx: &mut EvalContext,
     valid_float: &'a str,
 ) -> Result<Cow<'a, str>> {
+    // this func is complex, to make it same as TiDB's version,
+    // we impl it like TiDB's version(https://github.com/pingcap/tidb/blob/9b521342bf/types/convert.go#L400)
     let mut dot_idx = None;
     let mut e_idx = None;
-    let mut int_cnt: i64 = 0;
-    let mut digits_cnt: i64 = 0;
 
     for (i, c) in valid_float.chars().enumerate() {
         match c {
             '.' => dot_idx = Some(i),
             'e' | 'E' => e_idx = Some(i),
-            '0'..='9' => {
-                if e_idx.is_none() {
-                    if dot_idx.is_none() {
-                        int_cnt += 1;
-                    }
-                    digits_cnt += 1;
-                }
-            }
             _ => (),
         }
     }
 
-    if dot_idx.is_none() && e_idx.is_none() {
-        return Ok(Cow::Borrowed(valid_float));
+    match (dot_idx, e_idx) {
+        (None, None) => Ok(Cow::Borrowed(valid_float)),
+        (Some(di), None) => no_exp_float_str_to_int_str(valid_float, di),
+        (_, Some(ei)) => exp_float_str_to_int_str(ctx, valid_float, ei, dot_idx),
     }
-
-    if e_idx.is_none() {
-        let dot_idx = dot_idx.unwrap();
-        // NOTE: to make compatible with TiDB, +0.5 -> 1, -0.5 -> -1
-        let int_str = if int_cnt == 0 && valid_float.starts_with('-') {
-            &"-0"
-        } else if int_cnt == 0 {
-            &"0"
-        } else {
-            &valid_float[..dot_idx]
-        };
-        if digits_cnt - int_cnt > 0 {
-            // It's OK to unwrap here because the `dot_idx + 1` will less than the length of `valid_float`
-            let digit_char = valid_float.chars().nth(dot_idx + 1).unwrap();
-            return Ok(round_int_str(digit_char, int_str));
-        }
-        return Ok(Cow::Borrowed(int_str));
-    }
-
-    let e_idx = e_idx.unwrap();
-    let exp = box_try!((&valid_float[e_idx + 1..]).parse::<i64>());
-    if exp > 0 && int_cnt > (i64::MAX - exp) {
-        // (exp + int_cnt) overflows MaxInt64. Add warning and return original float string
-        ctx.warnings
-            .append_warning(Error::overflow("BIGINT", &valid_float));
-        return Ok(Cow::Owned(valid_float.to_owned()));
-    }
-    if int_cnt + exp <= 0 {
-        if int_cnt == 0 && digits_cnt > 0 {
-            // NOTE: to make compatible with TiDB (different with +0.5 -> 1), +0.5e0 -> +1, -0.5e0 -> -1
-            let int_str = if valid_float.starts_with('+') {
-                &"+0"
-            } else if valid_float.starts_with('-') {
-                &"-0"
-            } else {
-                &"0"
-            };
-            let digit_char = valid_float.chars().nth(dot_idx.unwrap() + 1).unwrap();
-            return Ok(round_int_str(digit_char, int_str));
-        }
-        return Ok(Cow::Borrowed("0"));
-    }
-
-    let mut valid_int = String::from(&valid_float[..e_idx]);
-    if let Some(idx) = dot_idx {
-        valid_int.remove(idx);
-    }
-
-    let extra_zero_count = exp + int_cnt - digits_cnt;
-    if extra_zero_count > MAX_ZERO_COUNT {
-        // Overflows MaxInt64. Add warning and return original float string
-        ctx.warnings
-            .append_warning(Error::overflow("BIGINT", &valid_float));
-        return Ok(Cow::Owned(valid_float.to_owned()));
-    }
-
-    if extra_zero_count >= 0 {
-        valid_int.extend((0..extra_zero_count).map(|_| '0'));
-    } else {
-        let len = valid_int.len();
-        if extra_zero_count >= len as i64 {
-            return Ok(Cow::Borrowed("0"));
-        }
-        let require = if valid_float.starts_with('-') || valid_float.starts_with('+') {
-            (int_cnt + exp) as usize + 1
-        } else {
-            (int_cnt + exp) as usize
-        };
-        if require < valid_int.len() {
-            let digit_char = valid_float.chars().nth(require + 1).unwrap();
-            if digit_char >= '5' {
-                valid_int = round_int_str(digit_char, &valid_int[..require]).into_owned();
-            }
-        }
-        valid_int.truncate((exp + int_cnt) as usize);
-    }
-
-    Ok(Cow::Owned(valid_int))
 }
 
-const MAX_ZERO_COUNT: i64 = 20;
+fn exp_float_str_to_int_str<'a>(
+    ctx: &mut EvalContext,
+    valid_float: &'a str,
+    e_idx: usize,
+    dot_idx: Option<usize>,
+) -> Result<Cow<'a, str>> {
+    // int_cnt and digits contain the prefix `+/-` if valid_float[0] is `+/-`
+    let mut digits: Vec<u8> = Vec::with_capacity(valid_float.len());
+    let int_cnt: i64;
+    match dot_idx {
+        None => {
+            digits.extend_from_slice(&valid_float[..e_idx].as_bytes());
+            // if digits.len() > i64::MAX,
+            // then the input str has at least 9223372036854775808 chars,
+            // which make the str >= 8388608.0 TB,
+            // so cast it to i64 is safe.
+            int_cnt = digits.len() as i64;
+        }
+        Some(dot_idx) => {
+            digits.extend_from_slice(&valid_float[..dot_idx].as_bytes());
+            int_cnt = digits.len() as i64;
+            digits.extend_from_slice(&valid_float[(dot_idx + 1)..e_idx].as_bytes());
+        }
+    }
+    // make `digits` immutable
+    let digits = digits;
+    let exp: i64 = box_try!((&valid_float[(e_idx + 1)..]).parse::<i64>());
+    let (int_cnt, is_overflow): (i64, bool) = int_cnt.overflowing_add(exp);
+    if int_cnt > 21 || is_overflow {
+        // MaxInt64 has 19 decimal digits.
+        // MaxUint64 has 20 decimal digits.
+        // And the intCnt may contain the len of `+/-`,
+        // so here we use 21 here as the early detection.
+        ctx.warnings
+            .append_warning(Error::overflow("BIGINT", &valid_float));
+        return Ok(Cow::Borrowed(valid_float));
+    }
+    if int_cnt <= 0 {
+        let int_str = "0";
+        if int_cnt == 0 && !digits.is_empty() && digits[0].is_ascii_digit() {
+            return Ok(round_int_str(digits[0] as char, int_str));
+        } else {
+            return Ok(Cow::Borrowed(int_str));
+        }
+    }
+    if int_cnt == 1 && (digits[0] == b'-' || digits[0] == b'+') {
+        let int_str = match digits[0] {
+            b'+' => "+0",
+            b'-' => "-0",
+            _ => "0",
+        };
+
+        let res = if digits.len() > 1 {
+            round_int_str(digits[1] as char, int_str)
+        } else {
+            Cow::Borrowed(int_str)
+        };
+        let tmp = &res.as_bytes()[0..2];
+        if tmp == b"+0" || tmp == b"-0" {
+            return Ok(Cow::Borrowed("0"));
+        } else {
+            return Ok(res);
+        }
+    }
+    let int_cnt = int_cnt as usize;
+    if int_cnt <= digits.len() {
+        let int_str = String::from_utf8_lossy(&digits[..int_cnt]);
+        if int_cnt < digits.len() {
+            Ok(Cow::Owned(
+                round_int_str(digits[int_cnt] as char, &int_str).into_owned(),
+            ))
+        } else {
+            Ok(Cow::Owned(int_str.into_owned()))
+        }
+    } else {
+        let mut res = String::with_capacity(int_cnt);
+        for d in digits.iter() {
+            res.push(*d as char);
+        }
+        for _ in digits.len()..int_cnt {
+            res.push('0');
+        }
+        Ok(Cow::Owned(res))
+    }
+}
+
+fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<Cow<'_, str>> {
+    // According to TiDB's impl
+    // 1. If there is digit after dot, round.
+    // 2. Only when the final result <0, add '-' in the front of it.
+    // 3. The result has no '+'.
+
+    let digits = if valid_float.starts_with('+') || valid_float.starts_with('-') {
+        dot_idx -= 1;
+        &valid_float[1..]
+    } else {
+        valid_float
+    };
+    // TODO, may here we can use Cow to avoid some copy below
+    let int_str = if valid_float.starts_with('-') {
+        if dot_idx == 0 {
+            "-0"
+        } else {
+            // the valid_float[0] is '-', so there is `dot_idx-=1` above,
+            // so we need valid_float[..(dot_idx+1)] here.
+            &valid_float[..=dot_idx]
+        }
+    } else {
+        if dot_idx == 0 {
+            "0"
+        } else {
+            &digits[..dot_idx]
+        }
+    };
+
+    let res = if digits.len() > dot_idx + 1 {
+        round_int_str(digits.as_bytes()[dot_idx + 1] as char, int_str)
+    } else {
+        Cow::Borrowed(int_str)
+    };
+    // in the TiDB version, after round, except '0',
+    // others(even if `00`) will be prefix with `-` if valid_float[0]=='-'.
+    // so we need to remove `-` of `-0`.
+    let res_bytes = res.as_bytes();
+    if res_bytes == b"-0" {
+        Ok(Cow::Owned(String::from(&res[1..])))
+    } else {
+        Ok(res)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -787,9 +1049,13 @@ mod tests {
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
-    use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+    use crate::codec::error::{
+        ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
+    };
+    use crate::codec::mysql::Res;
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
+    use tidb_query_datatype::{Collation, FieldTypeFlag};
 
     use super::*;
 
@@ -1057,7 +1323,7 @@ mod tests {
         let bs = b"123bb".to_vec();
         let val = bs.to_int(&mut ctx, FieldTypeTp::LongLong);
         assert!(val.is_err());
-        assert_eq!(val.unwrap_err().code(), WARN_DATA_TRUNCATED);
+        assert_eq!(val.unwrap_err().code(), ERR_TRUNCATE_WRONG_VALUE);
 
         // Invalid UTF8 chars
         let mut ctx = EvalContext::default();
@@ -1427,7 +1693,7 @@ mod tests {
         match val {
             Err(e) => assert_eq!(
                 e.code(),
-                WARN_DATA_TRUNCATED,
+                ERR_TRUNCATE_WRONG_VALUE,
                 "expect data truncated, but got {:?}",
                 e
             ),
@@ -1511,8 +1777,8 @@ mod tests {
         let val: Result<f64> = f64::NEG_INFINITY.to_string().as_bytes().convert(&mut ctx);
         assert!(val.is_err());
 
-        // OVERFLOW_AS_WARNING
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+        // TRUNCATE_AS_WARNING
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val: f64 = (0..309)
             .map(|_| '9')
             .collect::<String>()
@@ -1521,9 +1787,12 @@ mod tests {
             .unwrap();
         assert_eq!(val, f64::MAX);
         assert_eq!(ctx.warnings.warning_cnt, 1);
-        assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            ERR_TRUNCATE_WRONG_VALUE
+        );
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val: f64 = (0..310)
             .map(|i| if i == 0 { '-' } else { '9' })
             .collect::<String>()
@@ -1532,9 +1801,11 @@ mod tests {
             .unwrap();
         assert_eq!(val, f64::MIN);
         assert_eq!(ctx.warnings.warning_cnt, 1);
-        assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            ERR_TRUNCATE_WRONG_VALUE
+        );
 
-        // TRUNCATE_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val: Result<f64> = b"".to_vec().convert(&mut ctx);
         assert!(val.is_ok());
@@ -1629,6 +1900,10 @@ mod tests {
     fn test_valid_get_valid_int_prefix() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
+            ("+0.0", "0"),
+            ("+000.0", "000"),
+            ("-0.0", "0"),
+            ("-000.0", "-000"),
             (".1", "0"),
             (".0", "0"),
             (".5", "1"),
@@ -1637,6 +1912,7 @@ mod tests {
             (".5e0", "1"),
             ("+.5e0", "+1"),
             ("-.5e0", "-1"),
+            ("6.01e-1", "1"),
             ("123", "123"),
             ("255.5", "256"),
             ("123e1", "1230"),
@@ -1651,8 +1927,7 @@ mod tests {
             ("123.456999e5", "12345700"),
             ("-123.45678e5", "-12345678"),
             ("+123.45678e5", "+12345678"),
-            ("9e20", "900000000000000000000"), // TODO: check code validity again on function float_str_to_int_string(),
-                                               // as "900000000000000000000" is already larger than i64::MAX
+            ("9e20", "900000000000000000000"),
         ];
 
         for (i, e) in cases {
@@ -1687,9 +1962,702 @@ mod tests {
             (1.36, 10, 2, Res::Ok(1.36)),
             (f64::NAN, 10, 1, Res::Overflow(0f64)),
         ];
+
         for (f, flen, decimal, exp) in cases {
-            let res = truncate_f64(f, flen, decimal);
-            assert_eq!(res, exp);
+            let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
+            let mut ctx = EvalContext::new(Arc::new(cfg));
+            let res = truncate_f64(&mut ctx, f, flen, decimal);
+            match exp {
+                Res::Overflow(d) => {
+                    assert_eq!(ctx.warnings.warning_cnt, 1);
+                    assert_eq!(res.unwrap(), d);
+                }
+                Res::Ok(d) => {
+                    assert_eq!(res.unwrap(), d);
+                }
+                _ => panic!(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_produce_str_with_specified_tp() {
+        let cases = vec![
+            // branch 1
+            ("世界，中国", 1, charset::CHARSET_UTF8),
+            ("世界，中国", 2, charset::CHARSET_UTF8),
+            ("世界，中国", 3, charset::CHARSET_UTF8),
+            ("世界，中国", 4, charset::CHARSET_UTF8),
+            ("世界，中国", 5, charset::CHARSET_UTF8),
+            ("世界，中国", 6, charset::CHARSET_UTF8),
+            // branch 2
+            ("世界，中国", 1, charset::CHARSET_ASCII),
+            ("世界，中国", 2, charset::CHARSET_ASCII),
+            ("世界，中国", 3, charset::CHARSET_ASCII),
+            ("世界，中国", 4, charset::CHARSET_ASCII),
+            ("世界，中国", 5, charset::CHARSET_ASCII),
+            ("世界，中国", 6, charset::CHARSET_ASCII),
+        ];
+
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::default();
+
+        for (s, char_num, cs) in cases {
+            ft.set_charset(cs.to_string());
+            ft.set_flen(char_num);
+            let bs = s.as_bytes();
+            let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, false);
+            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+            let p = r.unwrap();
+
+            if cs == charset::CHARSET_UTF8MB4 || cs == charset::CHARSET_UTF8 {
+                let ns: String = s.chars().take(char_num as usize).collect();
+                assert_eq!(p.as_ref(), ns.as_bytes(), "{}, {}, {}", s, char_num, cs);
+            } else {
+                assert_eq!(
+                    p.as_ref(),
+                    &bs[..(char_num as usize)],
+                    "{}, {}, {}",
+                    s,
+                    char_num,
+                    cs
+                );
+            }
+        }
+
+        let cases = vec![
+            // branch 3
+            ("世界，中国", 20, charset::CHARSET_ASCII),
+            ("世界，中国", 30, charset::CHARSET_ASCII),
+            ("世界，中国", 50, charset::CHARSET_ASCII),
+        ];
+
+        use tidb_query_datatype::FieldTypeAccessor;
+
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::default();
+        let fta = ft.as_mut_accessor();
+        fta.set_tp(FieldTypeTp::String);
+        fta.set_collation(Collation::Binary);
+
+        for (s, char_num, cs) in cases {
+            ft.set_charset(cs.to_string());
+            ft.set_flen(char_num);
+            let bs = s.as_bytes();
+            let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, true);
+            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+
+            let p = r.unwrap();
+            assert_eq!(p.len(), char_num as usize, "{}, {}, {}", s, char_num, cs);
+        }
+    }
+
+    #[test]
+    fn test_produce_dec_with_specified_tp() {
+        use std::str::FromStr;
+
+        let cases = vec![
+            // branch 1
+            (
+                Decimal::from_str("11.1").unwrap(),
+                2,
+                2,
+                max_or_min_dec(false, 2u8, 2u8),
+            ),
+            (
+                Decimal::from_str("-111.1").unwrap(),
+                2,
+                2,
+                max_or_min_dec(true, 2u8, 2u8),
+            ),
+            // branch 2
+            (
+                Decimal::from_str("-1111.1").unwrap(),
+                5,
+                1,
+                Decimal::from_str("-1111.1").unwrap(),
+            ),
+            (
+                Decimal::from_str("-111.111").unwrap(),
+                5,
+                2,
+                Decimal::from_str("-111.11").unwrap(),
+            ),
+        ];
+
+        let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING | Flag::OVERFLOW_AS_WARNING);
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ft = FieldType::default();
+
+        for (dec, flen, decimal, want) in cases {
+            ft.set_flen(flen);
+            ft.set_decimal(decimal);
+            let nd = produce_dec_with_specified_tp(&mut ctx, dec.clone(), &ft);
+            assert!(nd.is_ok());
+            let nd = nd.unwrap();
+            assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
+        }
+    }
+
+    #[test]
+    fn test_produce_dec_with_specified_tp_2() {
+        let ul = UNSPECIFIED_LENGTH;
+        let cs = vec![
+            // (
+            // origin, origin_flen, origin_decimal, res_flen, res_decimal, is_unsigned,
+            // expect, warning_err_code,
+            // (InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning, truncate_as_warning
+            // )
+            //
+            // why there is origin_flen, origin_decimal here?
+            // to make let the programmer clearly know what the flen and decimal of the decimal is.
+
+            // res_flen and res_decimal isn't UNSPECIFIED_LENGTH
+            // flen < decimal
+            (
+                Decimal::zero(),
+                1,
+                0,
+                1,
+                2,
+                false,
+                Err(Error::m_bigger_than_d("")),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from(0),
+                1,
+                0,
+                1,
+                2,
+                false,
+                Err(Error::m_bigger_than_d("")),
+                None,
+                false,
+                false,
+                false,
+            ),
+            // origin not zero, but res's int part len < origin's int part
+            (
+                Decimal::from(1024),
+                4,
+                0,
+                3,
+                0,
+                false,
+                Ok(Decimal::from(999)),
+                Some(ERR_DATA_OUT_OF_RANGE),
+                false,
+                true,
+                false,
+            ),
+            (
+                Decimal::from(-1024),
+                4,
+                0,
+                3,
+                0,
+                false,
+                Ok(Decimal::from(-999)),
+                Some(ERR_DATA_OUT_OF_RANGE),
+                false,
+                true,
+                false,
+            ),
+            (
+                Decimal::from_f64(10240.01).unwrap(),
+                7,
+                2,
+                5,
+                1,
+                false,
+                Ok(Decimal::from_f64(9999.9).unwrap()),
+                Some(ERR_DATA_OUT_OF_RANGE),
+                false,
+                true,
+                false,
+            ),
+            (
+                Decimal::from_f64(-10240.01).unwrap(),
+                7,
+                2,
+                5,
+                1,
+                false,
+                Ok(Decimal::from_f64(-9999.9).unwrap()),
+                Some(ERR_DATA_OUT_OF_RANGE),
+                false,
+                true,
+                false,
+            ),
+            // origin_decimal < res_decimal
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                6,
+                4,
+                7,
+                5,
+                false,
+                Ok(Decimal::from_f64(10.12340).unwrap()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                6,
+                4,
+                7,
+                5,
+                false,
+                Ok(Decimal::from_f64(10.12340).unwrap()),
+                None,
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                6,
+                4,
+                7,
+                5,
+                false,
+                Ok(Decimal::from_f64(-10.12340).unwrap()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                6,
+                4,
+                7,
+                5,
+                false,
+                Ok(Decimal::from_f64(-10.12340).unwrap()),
+                None,
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                6,
+                4,
+                7,
+                5,
+                true,
+                Ok(Decimal::from_f64(10.12340).unwrap()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                6,
+                4,
+                7,
+                5,
+                true,
+                Ok(Decimal::from_f64(10.12340).unwrap()),
+                None,
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                6,
+                4,
+                7,
+                5,
+                true,
+                Ok(Decimal::zero()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                6,
+                4,
+                7,
+                5,
+                true,
+                Ok(Decimal::zero()),
+                None,
+                true,
+                false,
+                false,
+            ),
+            // origin_decimal > res_decimal
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                6,
+                4,
+                5,
+                3,
+                false,
+                Ok(Decimal::from_f64(10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                false,
+                false,
+                true,
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                6,
+                4,
+                5,
+                3,
+                false,
+                Ok(Decimal::from_f64(10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                6,
+                4,
+                5,
+                3,
+                false,
+                Ok(Decimal::from_f64(-10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                false,
+                false,
+                true,
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                6,
+                4,
+                5,
+                3,
+                false,
+                Ok(Decimal::from_f64(-10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                6,
+                4,
+                5,
+                3,
+                true,
+                Ok(Decimal::from_f64(10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                false,
+                false,
+                true,
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                6,
+                4,
+                5,
+                3,
+                true,
+                Ok(Decimal::from_f64(10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                6,
+                4,
+                5,
+                3,
+                true,
+                Ok(Decimal::zero()),
+                Some(WARN_DATA_TRUNCATED),
+                false,
+                false,
+                true,
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                6,
+                4,
+                5,
+                3,
+                true,
+                Ok(Decimal::zero()),
+                Some(WARN_DATA_TRUNCATED),
+                true,
+                false,
+                false,
+            ),
+            // if after round, the dec is zero, then there is no err or warning
+            (
+                Decimal::from_f64(0.00001).unwrap(),
+                5,
+                5,
+                4,
+                4,
+                false,
+                Ok(Decimal::zero()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(0.00001).unwrap(),
+                5,
+                5,
+                4,
+                4,
+                false,
+                Ok(Decimal::zero()),
+                None,
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-0.00001).unwrap(),
+                5,
+                5,
+                4,
+                4,
+                false,
+                Ok(Decimal::zero()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-0.00001).unwrap(),
+                5,
+                5,
+                4,
+                4,
+                false,
+                Ok(Decimal::zero()),
+                None,
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(0.00001).unwrap(),
+                5,
+                5,
+                4,
+                4,
+                true,
+                Ok(Decimal::zero()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(0.00001).unwrap(),
+                5,
+                5,
+                4,
+                4,
+                true,
+                Ok(Decimal::zero()),
+                None,
+                true,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-0.00001).unwrap(),
+                5,
+                5,
+                4,
+                4,
+                true,
+                Ok(Decimal::zero()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_f64(-0.00001).unwrap(),
+                5,
+                5,
+                4,
+                4,
+                true,
+                Ok(Decimal::zero()),
+                None,
+                true,
+                false,
+                false,
+            ),
+            // TODO, add test case for Decimal::round failure
+
+            // zero
+            // FIXME
+            //  according to Decimal::prec_and_frac,
+            //  the decimals' prec(the number of all digits) and frac(the number of digit after number point) are
+            //  Decimal::zero()'s is (1, 0)
+            //  Decimal::from_bytes(b"00.00")'s is (2, 2)
+            //  Decimal::from_bytes(b"000.00")'s is (2, 2)
+            //  Decimal::from_bytes(b"000.00")'s is (2, 2)
+            //  Decimal::from_bytes(b"00.000")'s is (3, 3)
+            //  Decimal::from_bytes(b"00.0000")'s is (4, 4)
+            //  Decimal::from_bytes(b"00.00000")'s is (5, 5)
+            //  This may be a bug.
+            //  However, the case below are based on these expect.
+            (
+                Decimal::from_bytes(b"0.00").unwrap().unwrap(),
+                2,
+                2,
+                ul,
+                ul,
+                false,
+                Ok(Decimal::zero()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::zero(),
+                1,
+                0,
+                0,
+                0,
+                false,
+                Ok(Decimal::zero()),
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_bytes(b"0.0000").unwrap().unwrap(),
+                4,
+                4,
+                4,
+                1,
+                false,
+                Ok(Decimal::zero()),
+                None,
+                false,
+                false,
+                false,
+            ),
+        ];
+
+        for (
+            input,
+            origin_flen,
+            origin_decimal,
+            res_flen,
+            res_decimal,
+            is_unsigned,
+            expect,
+            warning_err_code,
+            in_dml,
+            overflow_as_warning,
+            truncate_as_warning,
+        ) in cs
+        {
+            // check origin_flen and origin_decimal
+            let (f, d) = input.prec_and_frac();
+            let log = format!(
+                "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
+                input, origin_flen, origin_decimal, f, d
+            );
+            assert_eq!(f, origin_flen, "{}", log);
+            assert_eq!(d, origin_decimal, "{}", log);
+
+            // run test case
+            let ctx_in_dml_flag = vec![Flag::IN_INSERT_STMT, Flag::IN_UPDATE_OR_DELETE_STMT];
+            for in_dml_flag in ctx_in_dml_flag {
+                // make ctx
+                let mut flag: Flag = Flag::default();
+                if overflow_as_warning {
+                    flag |= Flag::OVERFLOW_AS_WARNING;
+                }
+                if truncate_as_warning {
+                    flag |= Flag::TRUNCATE_AS_WARNING;
+                }
+                if in_dml {
+                    flag |= in_dml_flag;
+                }
+                let cfg = Arc::new(EvalConfig::from_flag(flag));
+                let mut ctx = EvalContext::new(cfg);
+
+                // make field_type
+                let mut rft = FieldType::default();
+                let fta = rft.as_mut_accessor();
+                fta.set_flen(res_flen);
+                fta.set_decimal(res_decimal);
+                if is_unsigned {
+                    fta.set_flag(FieldTypeFlag::UNSIGNED);
+                }
+
+                // call produce_dec_with_specified_tp
+                let r = produce_dec_with_specified_tp(&mut ctx, input.clone(), &rft);
+
+                // make log
+                let rs = r.as_ref().map(|x| x.to_string());
+                let expect_str = expect.as_ref().map(|x| x.to_string());
+                let log =
+                    format!(
+                    "input: {}, origin_flen: {}, origin_decimal: {}, \
+                     res_flen: {}, res_decimal: {}, is_unsigned: {}, \
+                     in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
+                     expect: {:?}, expect: {:?}",
+                    input, origin_flen, origin_decimal, res_flen, res_decimal,
+                    is_unsigned, in_dml, in_dml_flag, expect_str, rs
+                );
+
+                // check result
+                match expect {
+                    Ok(ref d) => {
+                        assert!(r.is_ok(), "{}", log);
+                        assert_eq!(&r.unwrap(), d, "{}", log);
+                    }
+                    Err(ref e) => match e {
+                        Error::Eval(_, _) => {
+                            if let Error::Eval(_, d) = r.err().unwrap() {
+                                assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
+                            } else {
+                                panic!("unreachable path, {}", log);
+                            }
+                        }
+                        _ => panic!("unreachable path, {}", log),
+                    },
+                }
+
+                // check warning
+                match warning_err_code {
+                    Some(code) => {
+                        assert_eq!(ctx.warnings.warning_cnt, 1, "{}", log);
+                        assert_eq!(ctx.warnings.warnings[0].get_code(), code, "{}", log);
+                    }
+                    None => assert_eq!(ctx.warnings.warning_cnt, 0, "{}", log),
+                }
+            }
         }
     }
 }

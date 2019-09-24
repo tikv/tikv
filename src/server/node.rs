@@ -8,23 +8,24 @@ use super::transport::RaftStoreRouter;
 use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
-use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
 use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
 };
-use crate::server::readpool::ReadPool;
+use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
-use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::{Config as StorageConfig, Storage};
 use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
+use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use tikv_util::future_pool::FuturePool;
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -35,23 +36,21 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pool: ReadPool,
+    read_pools: Vec<FuturePool>,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
-    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-    detector_scheduler: Option<DetectorScheduler>,
-) -> Result<Storage<RaftKv<S>>>
+    lock_mgr: Option<LockManager>,
+) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
     let store = Storage::from_engine(
         engine,
         cfg,
-        read_pool,
+        read_pools,
         local_storage,
         raft_store_router,
-        waiter_mgr_scheduler,
-        detector_scheduler,
+        lock_mgr,
     )?;
     Ok(store)
 }
@@ -145,9 +144,6 @@ where
             self.bootstrap_cluster(&engines, first_region)?;
         }
 
-        // Put store only if the cluster is bootstrapped.
-        self.pd_client.put_store(self.store.clone())?;
-
         self.start_store(
             store_id,
             engines,
@@ -158,6 +154,11 @@ where
             coprocessor_host,
             importer,
         )?;
+
+        // Put store only if the cluster is bootstrapped.
+        info!("put store to PD"; "store" => ?&self.store);
+        self.pd_client.put_store(self.store.clone())?;
+
         Ok(())
     }
 
@@ -285,9 +286,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
-                }
+                Err(e) => error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e),
             }
             retry += 1;
             thread::sleep(Duration::from_secs(

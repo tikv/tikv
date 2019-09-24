@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::IndexScan;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::IndexScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::codec::table;
@@ -114,11 +114,11 @@ impl<S: Storage> IndexScanExecutor<S> {
 #[cfg(test)]
 pub mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
-    use std::collections::HashMap;
     use std::i64;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::schema::ColumnInfo;
+    use tikv_util::collections::HashMap;
+    use tipb::ColumnInfo;
 
     use super::super::tests::*;
     use super::super::Executor;

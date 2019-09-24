@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use crate::batch::interface::*;
+use crate::storage::IntervalRange;
 use crate::Result;
 
 /// Executor that retrieves rows from the source executor
@@ -52,6 +53,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.src.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.src.take_scanned_range()
     }
 }
 

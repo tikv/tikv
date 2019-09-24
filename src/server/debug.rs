@@ -15,11 +15,11 @@ use engine::rocks::{
 };
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use kvproto::debugpb::{self, DB as DBType, *};
+use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
-use protobuf::{self, Message};
+use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
@@ -162,8 +162,8 @@ impl Debugger {
 
     fn get_db_from_type(&self, db: DBType) -> Result<&DB> {
         match db {
-            DBType::KV => Ok(&self.engines.kv),
-            DBType::RAFT => Ok(&self.engines.raft),
+            DBType::Kv => Ok(&self.engines.kv),
+            DBType::Raft => Ok(&self.engines.raft),
             _ => Err(box_err!("invalid DBType type")),
         }
     }
@@ -701,6 +701,16 @@ impl Debugger {
             })
     }
 
+    pub fn get_cluster_id(&self) -> Result<u64> {
+        let db = &self.engines.kv;
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+            .map_err(|e| box_err!(e))
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(ident.get_cluster_id()),
+                None => Err(Error::NotFound("No cluster ident key".to_owned())),
+            })
+    }
+
     fn modify_block_cache_size(&self, db: DBType, cf_name: &str, config_value: &str) -> Result<()> {
         use super::CONFIG_ROCKSDB_GAUGE;
         let rocksdb = self.get_db_from_type(db)?;
@@ -723,13 +733,14 @@ impl Debugger {
 
     pub fn modify_tikv_config(
         &self,
-        module: MODULE,
+        module: Module,
         config_name: &str,
         config_value: &str,
     ) -> Result<()> {
         use super::CONFIG_ROCKSDB_GAUGE;
+
         match module {
-            MODULE::STORAGE => {
+            Module::Storage => {
                 if config_name != "block_cache.capacity" {
                     return Err(Error::InvalidArgument(format!(
                         "bad argument: {}",
@@ -745,13 +756,13 @@ impl Debugger {
                 // the size through any of them. Here we change it through default CF in kvdb.
                 // A better way to do it is to hold the cache reference somewhere, and use it to
                 // change cache size.
-                self.modify_block_cache_size(DBType::KV, CF_DEFAULT, config_value)
+                self.modify_block_cache_size(DBType::Kv, CF_DEFAULT, config_value)
             }
-            MODULE::KVDB | MODULE::RAFTDB => {
-                let db = if module == MODULE::KVDB {
-                    DBType::KV
+            Module::Kvdb | Module::Raftdb => {
+                let db = if module == Module::Kvdb {
+                    DBType::Kv
                 } else {
-                    DBType::RAFT
+                    DBType::Raft
                 };
                 let rocksdb = self.get_db_from_type(db)?;
                 let vec: Vec<&str> = config_name.split('.').collect();
@@ -1204,10 +1215,10 @@ impl MvccInfoIterator {
             let lock = box_try!(Lock::parse(&value));
             let mut lock_info = MvccLock::default();
             match lock.lock_type {
-                LockType::Put => lock_info.set_field_type(Op::Put),
-                LockType::Delete => lock_info.set_field_type(Op::Del),
-                LockType::Lock => lock_info.set_field_type(Op::Lock),
-                LockType::Pessimistic => lock_info.set_field_type(Op::PessimisticLock),
+                LockType::Put => lock_info.set_type(Op::Put),
+                LockType::Delete => lock_info.set_type(Op::Del),
+                LockType::Lock => lock_info.set_type(Op::Lock),
+                LockType::Pessimistic => lock_info.set_type(Op::PessimisticLock),
             }
             lock_info.set_start_ts(lock.ts);
             lock_info.set_primary(lock.primary);
@@ -1239,10 +1250,10 @@ impl MvccInfoIterator {
                 let write = box_try!(Write::parse(&value));
                 let mut write_info = MvccWrite::default();
                 match write.write_type {
-                    WriteType::Put => write_info.set_field_type(Op::Put),
-                    WriteType::Delete => write_info.set_field_type(Op::Del),
-                    WriteType::Lock => write_info.set_field_type(Op::Lock),
-                    WriteType::Rollback => write_info.set_field_type(Op::Rollback),
+                    WriteType::Put => write_info.set_type(Op::Put),
+                    WriteType::Delete => write_info.set_type(Op::Del),
+                    WriteType::Lock => write_info.set_type(Op::Lock),
+                    WriteType::Rollback => write_info.set_type(Op::Rollback),
                 }
                 write_info.set_start_ts(write.start_ts);
                 let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
@@ -1338,11 +1349,11 @@ impl Iterator for MvccInfoIterator {
 
 fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
-        (DBType::KV, CF_DEFAULT)
-        | (DBType::KV, CF_WRITE)
-        | (DBType::KV, CF_LOCK)
-        | (DBType::KV, CF_RAFT)
-        | (DBType::RAFT, CF_DEFAULT) => Ok(()),
+        (DBType::Kv, CF_DEFAULT)
+        | (DBType::Kv, CF_WRITE)
+        | (DBType::Kv, CF_LOCK)
+        | (DBType::Kv, CF_RAFT)
+        | (DBType::Raft, CF_DEFAULT) => Ok(()),
         _ => Err(Error::InvalidArgument(format!(
             "invalid cf {:?} for db {:?}",
             cf, db
@@ -1557,22 +1568,22 @@ mod tests {
     #[test]
     fn test_validate_db_and_cf() {
         let valid_cases = vec![
-            (DBType::KV, CF_DEFAULT),
-            (DBType::KV, CF_WRITE),
-            (DBType::KV, CF_LOCK),
-            (DBType::KV, CF_RAFT),
-            (DBType::RAFT, CF_DEFAULT),
+            (DBType::Kv, CF_DEFAULT),
+            (DBType::Kv, CF_WRITE),
+            (DBType::Kv, CF_LOCK),
+            (DBType::Kv, CF_RAFT),
+            (DBType::Raft, CF_DEFAULT),
         ];
         for (db, cf) in valid_cases {
             validate_db_and_cf(db, cf).unwrap();
         }
 
         let invalid_cases = vec![
-            (DBType::RAFT, CF_WRITE),
-            (DBType::RAFT, CF_LOCK),
-            (DBType::RAFT, CF_RAFT),
-            (DBType::INVALID, CF_DEFAULT),
-            (DBType::INVALID, "BAD_CF"),
+            (DBType::Raft, CF_WRITE),
+            (DBType::Raft, CF_LOCK),
+            (DBType::Raft, CF_RAFT),
+            (DBType::Invalid, CF_DEFAULT),
+            (DBType::Invalid, "BAD_CF"),
         ];
         for (db, cf) in invalid_cases {
             validate_db_and_cf(db, cf).unwrap_err();
@@ -1602,11 +1613,30 @@ mod tests {
     }
 
     impl Debugger {
-        fn set_store_id(&self, store_id: u64) {
-            let mut ident = StoreIdent::default();
-            ident.set_store_id(store_id);
+        fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
-            db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+            db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+                .map_err(|e| box_err!(e))
+                .and_then(|ident| match ident {
+                    Some(ident) => Ok(ident),
+                    None => Ok(StoreIdent::default()),
+                })
+        }
+
+        fn set_store_id(&self, store_id: u64) {
+            if let Ok(mut ident) = self.get_store_ident() {
+                ident.set_store_id(store_id);
+                let db = &self.engines.kv;
+                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+            }
+        }
+
+        fn set_cluster_id(&self, cluster_id: u64) {
+            if let Ok(mut ident) = self.get_store_ident() {
+                ident.set_cluster_id(cluster_id);
+                let db = &self.engines.kv;
+                db.put_msg(keys::STORE_IDENT_KEY, &ident).unwrap();
+            }
         }
     }
 
@@ -1618,10 +1648,10 @@ mod tests {
         engine.put(k, v).unwrap();
         assert_eq!(&*engine.get(k).unwrap().unwrap(), v);
 
-        let got = debugger.get(DBType::KV, CF_DEFAULT, k).unwrap();
+        let got = debugger.get(DBType::Kv, CF_DEFAULT, k).unwrap();
         assert_eq!(&got, v);
 
-        match debugger.get(DBType::KV, CF_DEFAULT, b"foo") {
+        match debugger.get(DBType::Kv, CF_DEFAULT, b"foo") {
             Err(Error::NotFound(_)) => (),
             _ => panic!("expect Error::NotFound(_)"),
         }
@@ -1998,7 +2028,7 @@ mod tests {
         let db_opts = engine.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 2);
         debugger
-            .modify_tikv_config(MODULE::KVDB, "max_background_jobs", "8")
+            .modify_tikv_config(Module::Kvdb, "max_background_jobs", "8")
             .unwrap();
         let db_opts = engine.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 8);
@@ -2007,7 +2037,7 @@ mod tests {
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
         debugger
-            .modify_tikv_config(MODULE::KVDB, "default.disable_auto_compactions", "true")
+            .modify_tikv_config(Module::Kvdb, "default.disable_auto_compactions", "true")
             .unwrap();
         let cf_opts = engine.get_options_cf(cf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
@@ -2267,6 +2297,20 @@ mod tests {
         check(
             debugger.raw_scan(b"za1", b"zb2\x00\x00", 8, CF_DEFAULT),
             &keys[1..9],
+        );
+    }
+
+    #[test]
+    fn test_store_region() {
+        let debugger = new_debugger();
+        let store_id: u64 = 42;
+        let cluster_id: u64 = 4242;
+        debugger.set_store_id(store_id);
+        debugger.set_cluster_id(cluster_id);
+        assert_eq!(store_id, debugger.get_store_id().expect("get store id"));
+        assert_eq!(
+            cluster_id,
+            debugger.get_cluster_id().expect("get cluster id")
         );
     }
 }

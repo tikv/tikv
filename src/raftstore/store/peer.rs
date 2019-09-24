@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, slice, u64};
+use std::{cmp, mem, u64};
 
 use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
 use engine::{Engines, Peekable};
@@ -20,15 +20,15 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
-use protobuf::{self, Message};
+use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
 use time::Timespec;
+use uuid::Uuid;
 
-use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
@@ -36,8 +36,10 @@ use crate::raftstore::store::fsm::{
 };
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
+use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
+use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
@@ -54,7 +56,7 @@ use super::DestroyPeerJob;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
-    id: u64,
+    id: Uuid,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
@@ -63,10 +65,7 @@ struct ReadIndexRequest {
 impl ReadIndexRequest {
     // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     fn binary_id(&self) -> &[u8] {
-        unsafe {
-            let id = &self.id as *const u64 as *const u8;
-            slice::from_raw_parts(id, 8)
-        }
+        self.id.as_bytes()
     }
 
     fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
@@ -75,7 +74,7 @@ impl ReadIndexRequest {
     }
 
     fn with_command(
-        id: u64,
+        id: Uuid,
         req: RaftCmdRequest,
         cb: Callback,
         renew_lease_time: Timespec,
@@ -103,17 +102,11 @@ impl Drop for ReadIndexRequest {
 
 #[derive(Default)]
 struct ReadIndexQueue {
-    id_allocator: u64,
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
 }
 
 impl ReadIndexQueue {
-    fn next_id(&mut self) -> u64 {
-        self.id_allocator += 1;
-        self.id_allocator
-    }
-
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
@@ -383,7 +376,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = RawNode::new(&raft_cfg, ps)?;
+        let raft_group = RawNode::with_logger(&raft_cfg, ps, &slog_global::get_global())?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -461,16 +454,21 @@ impl Peer {
     }
 
     #[inline]
-    pub fn maybe_append_merge_entries(&mut self, merge: CommitMergeRequest) -> Option<u64> {
+    pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
             return None;
         }
         let first = entries.first().unwrap();
-
         // make sure message should be with index not smaller than committed
         let mut log_idx = first.get_index() - 1;
         if log_idx < self.raft_group.raft.raft_log.committed {
+            // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
+            // so the commit index may exceed the last index of the entires from CommitMergeRequest.
+            // If that, no need to append
+            if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
+                return None;
+            }
             entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
             log_idx = self.raft_group.raft.raft_log.committed;
         }
@@ -1397,11 +1395,21 @@ impl Peer {
 
                 let term = self.term();
                 if is_read_index_request {
+                    debug!("handle reads with a read index";
+                        "request_id" => ?read.binary_id(),
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                     }
                     self.pending_reads.ready_cnt -= 1;
                 } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+                    debug!("handle reads with a read index";
+                        "request_id" => ?read.binary_id(),
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
                     for (req, cb) in read.cmds.drain(..) {
                         if req.get_header().get_replica_read() {
                             cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
@@ -1436,6 +1444,11 @@ impl Peer {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+                debug!("handle reads with a read index";
+                    "request_id" => ?read.binary_id(),
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
                 for (req, cb) in read.cmds.drain(..) {
                     cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
                 }
@@ -1504,6 +1517,11 @@ impl Peer {
             if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
                 for _ in 0..self.pending_reads.ready_cnt {
                     let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    debug!("handle reads with a read index";
+                        "request_id" => ?read.binary_id(),
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
                     RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
@@ -1788,9 +1806,7 @@ impl Peer {
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
-                unimplemented!()
-            }
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
         }
         let healthy = self.count_healthy_node(progress.voters());
         let quorum_after_change = raft::majority(progress.voter_ids().len());
@@ -1921,8 +1937,6 @@ impl Peer {
             return false;
         }
 
-        poll_ctx.raft_metrics.propose.read_index += 1;
-
         let renew_lease_time = monotonic_raw_now();
         if self.is_leader() {
             match self.inspect_lease() {
@@ -1947,13 +1961,32 @@ impl Peer {
             }
         }
 
+        // When a replica cannot detect any leader, `MsgReadIndex` will be dropped, which would
+        // cause a long time waiting for a read response. Then we should return an error directly
+        // in this situation.
+        if !self.is_leader() && self.leader_id() == INVALID_ID {
+            cmd_resp::bind_error(
+                &mut err_resp,
+                box_err!("can not read index due to no leader"),
+            );
+            poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
+            cb.invoke_with_response(err_resp);
+            return false;
+        }
+
         // Should we call pre_propose here?
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        let id = self.pending_reads.next_id();
-        let ctx = id.to_ne_bytes();
-        self.raft_group.read_index(ctx.to_vec());
+        poll_ctx.raft_metrics.propose.read_index += 1;
+
+        let id = Uuid::new_v4();
+        self.raft_group.read_index(id.as_bytes().to_vec());
+        debug!("request to get a read index";
+            "request_id" => ?id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -2221,7 +2254,7 @@ impl Peer {
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = apply::get_change_peer_cmd(req).unwrap();
-        let mut cc = eraftpb::ConfChange::new();
+        let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
         cc.set_context(data);
@@ -2308,6 +2341,7 @@ impl Peer {
 
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
+            term: self.term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
@@ -2437,7 +2471,7 @@ pub trait RequestInspector {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap | CmdType::ReadIndex => has_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSst => {
                     has_write = true
                 }
                 CmdType::Prewrite | CmdType::Invalid => {
@@ -2645,7 +2679,7 @@ impl ReadExecutor {
                 | CmdType::Put
                 | CmdType::Delete
                 | CmdType::DeleteRange
-                | CmdType::IngestSST
+                | CmdType::IngestSst
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
@@ -2803,7 +2837,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::useless_vec)]
     #[test]
     fn test_request_inspector() {
         struct DummyInspector {
@@ -2845,7 +2878,7 @@ mod tests {
             (CmdType::Put, RequestPolicy::ProposeNormal),
             (CmdType::Delete, RequestPolicy::ProposeNormal),
             (CmdType::DeleteRange, RequestPolicy::ProposeNormal),
-            (CmdType::IngestSST, RequestPolicy::ProposeNormal),
+            (CmdType::IngestSst, RequestPolicy::ProposeNormal),
         ] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
@@ -2853,8 +2886,8 @@ mod tests {
             table.push((req.clone(), policy));
         }
 
-        for applied_to_index_term in vec![true, false] {
-            for lease_state in vec![LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
+        for &applied_to_index_term in &[true, false] {
+            for &lease_state in &[LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
                 for (req, mut policy) in table.clone() {
                     let mut inspector = DummyInspector {
                         applied_to_index_term,
@@ -2886,7 +2919,7 @@ mod tests {
 
         // Err(_)
         let mut err_table = vec![];
-        for op in vec![CmdType::Prewrite, CmdType::Invalid] {
+        for &op in &[CmdType::Prewrite, CmdType::Invalid] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
             req.set_requests(vec![request].into());

@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::EvalType;
-use tipb::executor::IndexScan;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
+use tipb::IndexScan;
 
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::expr::{EvalConfig, EvalContext};
-use crate::storage::Storage;
+use crate::storage::{IntervalRange, Storage};
 use crate::Result;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
@@ -99,6 +99,11 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.0.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.0.take_scanned_range()
     }
 }
 
@@ -224,7 +229,7 @@ mod tests {
 
     use kvproto::coprocessor::KeyRange;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use tipb::schema::ColumnInfo;
+    use tipb::ColumnInfo;
 
     use crate::codec::data_type::*;
     use crate::codec::mysql::Tz;

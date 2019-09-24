@@ -6,8 +6,7 @@ use std::ptr::NonNull;
 
 use servo_arc::Arc;
 
-use tipb::executor::TopN;
-use tipb::expression::{Expr, FieldType};
+use tipb::{Expr, FieldType, TopN};
 
 use crate::batch::executors::util::*;
 use crate::batch::interface::*;
@@ -17,6 +16,7 @@ use crate::expr::EvalWarnings;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::RpnStackNode;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::storage::IntervalRange;
 use crate::Result;
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
@@ -320,6 +320,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.src.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.src.take_scanned_range()
     }
 }
 

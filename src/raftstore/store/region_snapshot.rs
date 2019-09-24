@@ -364,7 +364,7 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{EnvOptions, IngestExternalFileOptions, Snapshot, SstFileWriter, Writable};
+    use engine::rocks::{IngestExternalFileOptions, Snapshot, SstWriterBuilder, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
     use engine::Engines;
     use engine::*;
@@ -598,7 +598,6 @@ mod tests {
         check_seek_result(&snap, Some(b"a00"), Some(b"a15"), &seek_table);
     }
 
-    #[allow(clippy::type_complexity)]
     #[test]
     fn test_iterate() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
@@ -894,8 +893,9 @@ mod tests {
         // Delete one mvcc kvs we have written above.
         // Here we make the kvs on the L5 by ingesting SST.
         let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
-        let mut writer = SstFileWriter::new(EnvOptions::new(), db.get_options());
-        writer.open(&sst_file_path.to_str().unwrap()).unwrap();
+        let mut writer = SstWriterBuilder::new()
+            .build(&sst_file_path.to_str().unwrap())
+            .unwrap();
         writer
             .delete(&data_key(
                 Key::from_raw(b"a").append_ts(start_ts).as_encoded(),

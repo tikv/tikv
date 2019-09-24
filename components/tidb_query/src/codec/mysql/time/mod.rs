@@ -496,15 +496,6 @@ impl Time {
         }
     }
 
-    pub fn to_duration(&self) -> Result<MyDuration> {
-        if self.is_zero() {
-            return Ok(MyDuration::zero());
-        }
-        let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC
-            + i64::from(self.time.nanosecond());
-        MyDuration::from_nanos(nanos, self.fsp as i8)
-    }
-
     /// Serialize time to a u64.
     ///
     /// If `tp` is TIMESTAMP, it will be converted to a UTC time first.
@@ -804,16 +795,19 @@ impl Time {
 }
 
 impl ConvertTo<f64> for Time {
+    /// This function should not return err,
+    /// if it return err, then the err is because of bug.
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         if self.is_zero() {
             return Ok(0f64);
         }
-        let f: f64 = box_try!(self.to_numeric_string().parse());
-        Ok(f)
+        Ok(self.to_numeric_string().parse()?)
     }
 }
 
 impl ConvertTo<Decimal> for Time {
+    // Port from TiDB's Time::ToNumber
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         if self.is_zero() {
@@ -821,6 +815,22 @@ impl ConvertTo<Decimal> for Time {
         }
 
         self.to_numeric_string().parse()
+    }
+}
+
+impl ConvertTo<MyDuration> for Time {
+    /// Port from TiDB's Time::ConvertToDuration
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<MyDuration> {
+        if self.is_zero() {
+            return Ok(MyDuration::zero());
+        }
+        let a = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC;
+        // `nanosecond` returns the number of nanoseconds since the whole non-leap second.
+        // Such as for 2019-09-22 07:21:22.670936103 UTC,
+        // it will return 670936103.
+        let b = i64::from(self.time.nanosecond());
+        MyDuration::from_nanos(a + b, self.fsp as i8)
     }
 }
 
@@ -1599,9 +1609,10 @@ mod tests {
             ("2017-01-05 23:59:59.575601", 0, "00:00:00"),
             ("0000-00-00 00:00:00", 6, "00:00:00"),
         ];
+        let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
-            let du = t.to_duration().unwrap();
+            let du: MyDuration = t.convert(&mut ctx).unwrap();
             let get = du.to_string();
             assert_eq!(get, expect);
         }

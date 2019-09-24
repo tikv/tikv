@@ -2,6 +2,7 @@
 
 mod backward;
 mod forward;
+mod txn_entry;
 mod util;
 
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -15,6 +16,7 @@ use crate::storage::{
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
+pub use self::txn_entry::Scanner as EntryScanner;
 
 /// `Scanner` factory.
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
@@ -61,7 +63,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
 
     /// Set the isolation level.
     ///
-    /// Defaults to `IsolationLevel::SI`.
+    /// Defaults to `IsolationLevel::Si`.
     #[inline]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.isolation_level = isolation_level;
@@ -96,6 +98,22 @@ impl<S: Snapshot> ScannerBuilder<S> {
                 write_cursor,
             )))
         }
+    }
+
+    pub fn build_entry_scanner(mut self) -> Result<EntryScanner<S>> {
+        let lower_bound = self.lower_bound.clone();
+        let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
+        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
+        // Note: Create a default cf cursor will take key range, so we need to
+        //       ensure the default cursor is created after lock and write.
+        let default_cursor = self.create_cf_cursor(CF_DEFAULT)?;
+        Ok(EntryScanner::new(
+            self.0,
+            lock_cursor,
+            write_cursor,
+            default_cursor,
+            lower_bound,
+        )?)
     }
 }
 
@@ -142,7 +160,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             snapshot,
             fill_cache: true,
             omit_value: false,
-            isolation_level: IsolationLevel::SI,
+            isolation_level: IsolationLevel::Si,
             lower_bound: None,
             upper_bound: None,
             ts,

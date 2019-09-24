@@ -19,7 +19,7 @@ use engine::rocks::DB;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
-use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
+use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
 use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -227,7 +227,7 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
             ));
         }
 
-        let mut cf_file_meta = SnapshotCFFile::new();
+        let mut cf_file_meta = SnapshotCfFile::new();
         cf_file_meta.set_cf(cf_file.cf.to_owned());
         cf_file_meta.set_size(cf_file.size);
         cf_file_meta.set_checksum(cf_file.checksum);

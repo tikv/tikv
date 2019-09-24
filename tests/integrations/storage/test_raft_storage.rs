@@ -4,7 +4,6 @@ use std::thread;
 use std::time::Duration;
 
 use kvproto::kvrpcpb::Context;
-use std::collections::HashMap;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use test_raftstore::*;
@@ -12,6 +11,7 @@ use test_storage::*;
 use tikv::storage::config::Config;
 use tikv::storage::{self, AutoGCConfig, Engine, Key, Mutation};
 use tikv::storage::{kv, mvcc, txn};
+use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
 fn new_raft_storage() -> (
@@ -288,9 +288,6 @@ fn test_auto_gc() {
 
     assert_eq!(storages.len(), count);
 
-    // Initialize gc workers
-    pd_client.set_gc_safe_point(1);
-
     // test_data will be wrote with ts < 50
     let test_data: Vec<_> = [
         (b"k1", b"v1"),
@@ -349,4 +346,9 @@ fn test_auto_gc() {
     check_data(&mut cluster, &storages, &test_data, 50, false);
     check_data(&mut cluster, &storages, &test_data2, 150, true);
     check_data(&mut cluster, &storages, &test_data3, 250, true);
+
+    // No more signals.
+    finish_signal_rx
+        .recv_timeout(Duration::from_millis(300))
+        .unwrap_err();
 }

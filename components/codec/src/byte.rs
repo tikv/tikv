@@ -382,7 +382,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size is not enough.
-    fn write_bytes(&mut self, bs: &[u8]) -> Result<()> {
+    fn write_comparable_bytes(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
         if unsafe { unlikely(buf.len() < len) } {
@@ -400,7 +400,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size is not enough.
-    fn write_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
+    fn write_comparable_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
         if unsafe { unlikely(buf.len() < len) } {
@@ -417,7 +417,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
 impl<T: NumberEncoder> MemComparableByteEncoder for T {}
 
 pub trait MemComparableByteDecoder: BufferReader {
-    fn read_bytes(&mut self) -> Result<Vec<u8>> {
+    fn read_comparable_bytes(&mut self) -> Result<Vec<u8>> {
         let mut buf = vec![0; self.bytes().len()];
         let (read, written) = MemComparableByteCodec::try_decode_first(self.bytes(), &mut buf)?;
         self.advance(read);
@@ -456,7 +456,7 @@ impl<T: NumberEncoder> CompactByteEncoder for T {
     #[inline]
     fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         self.write_var_i64(data.len() as i64)?;
-        self.write_all_bytes(data)
+        self.write_bytes(data)
     }
 }
 
@@ -510,7 +510,7 @@ impl<T: Read> CompactByteDecoder for std::io::BufReader<T> {
 
 #[cfg(test)]
 mod tests {
-    use rand;
+    use rand::prelude::*;
 
     use super::*;
     use crate::number;
@@ -619,7 +619,7 @@ mod tests {
             ),
         ];
         for (src, encoded) in cases {
-            assert_eq!(encoded.as_slice().read_bytes().unwrap(), src);
+            assert_eq!(encoded.as_slice().read_comparable_bytes().unwrap(), src);
         }
     }
 
@@ -905,10 +905,8 @@ mod tests {
             let encoded_len = MemComparableByteCodec::encoded_len(payload_len);
             let mut payload_encoded: Vec<u8> =
                 vec![0; encoded_prefix_len + encoded_len + encoded_suffix_len];
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..encoded_prefix_len {
-                payload_encoded[i] = rand::random();
-            }
+            let mut rng = thread_rng();
+            rng.fill_bytes(&mut payload_encoded[..encoded_prefix_len]);
             {
                 let src = payload_raw.as_slice();
                 let dest = &mut payload_encoded.as_mut_slice()[encoded_prefix_len..];
@@ -918,16 +916,11 @@ mod tests {
                     MemComparableByteCodec::encode_all(src, dest);
                 }
             }
-            #[allow(clippy::needless_range_loop)]
-            for i in encoded_prefix_len + encoded_len..encoded_suffix_len {
-                payload_encoded[i] = rand::random();
-            }
+            rng.fill_bytes(&mut payload_encoded[encoded_prefix_len + encoded_len..]);
 
             let mut base_buffer: Vec<u8> =
-                Vec::with_capacity(prefix_len + encoded_len + suffix_len);
-            for _ in 0..prefix_len + encoded_len + encoded_suffix_len + suffix_len {
-                base_buffer.push(rand::random());
-            }
+                vec![0; prefix_len + encoded_len + encoded_suffix_len + suffix_len];
+            rng.fill_bytes(&mut base_buffer[..]);
 
             // Test `dest` doesn't overlap `src`
             let mut output_buffer = base_buffer.clone();

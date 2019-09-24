@@ -563,7 +563,7 @@ impl ScalarFunc {
             Ok(dur) => Ok(Some(dur)),
             Err(e) => {
                 if e.is_overflow() {
-                    ctx.handle_overflow(e)?;
+                    ctx.handle_overflow_err(e)?;
                     Ok(None)
                 } else {
                     Err(e)
@@ -610,10 +610,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Duration>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let res = val
-            .to_duration()?
-            .round_frac(self.field_type.decimal() as i8)?;
+        let val: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let dur: Duration = val.convert(ctx)?;
+        let res = dur.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(res))
     }
 
@@ -888,7 +887,7 @@ mod tests {
     use std::{i64, u64};
 
     use tidb_query_datatype::{self, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
-    use tipb::expression::{Expr, FieldType, ScalarFuncSig};
+    use tipb::{Expr, FieldType, ScalarFuncSig};
 
     use chrono::Utc;
 

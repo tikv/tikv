@@ -4,8 +4,8 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::executor::Aggregation;
-use tipb::expression::{Expr, FieldType};
+use tipb::Aggregation;
+use tipb::{Expr, FieldType};
 
 use crate::aggr_fn::*;
 use crate::batch::executors::util::aggr_executor::*;
@@ -16,6 +16,7 @@ use crate::codec::data_type::*;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::RpnStackNode;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::storage::IntervalRange;
 use crate::Result;
 
 pub struct BatchStreamAggregationExecutor<Src: BatchExecutor>(
@@ -43,6 +44,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.0.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.0.take_scanned_range()
     }
 }
 
@@ -406,7 +412,7 @@ mod tests {
     use super::*;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::expr::EvalWarnings;
@@ -415,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
-        use tipb::expression::ExprType;
+        use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
         // This test creates a stream aggregation executor with the following aggregate functions:

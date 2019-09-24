@@ -6,11 +6,14 @@ use std::time::Duration;
 use std::{error, ptr, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
+use crate::raftstore::store::PdTask;
 use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv_util::collections::HashMap;
 use tikv_util::metrics::CRITICAL_ERROR;
+use tikv_util::worker::FutureScheduler;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 use kvproto::errorpb::Error as ErrorHeader;
@@ -196,6 +199,22 @@ pub struct FlowStatistics {
     pub read_bytes: usize,
 }
 
+// Reports flow statistics to outside.
+pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
+    // Reports read flow statistics, the argument `read_stats` is a hash map
+    // saves the flow statistics of different region.
+    // TODO: maybe we need to return a Result later?
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+}
+
+impl FlowStatsReporter for FutureScheduler<PdTask> {
+    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
+        if let Err(e) = self.schedule(PdTask::ReadStats { read_stats }) {
+            error!("Failed to send read flow statistics"; "err" => ?e);
+        }
+    }
+}
+
 impl FlowStatistics {
     pub fn add(&mut self, other: &Self) {
         self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
@@ -209,8 +228,8 @@ impl CFStatistics {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
-    pub fn details(&self) -> Vec<(&str, usize)> {
-        vec![
+    pub fn details(&self) -> [(&'static str, usize); 8] {
+        [
             (STAT_TOTAL, self.total_op_count()),
             (STAT_PROCESSED, self.processed),
             (STAT_GET, self.get),
@@ -257,8 +276,8 @@ impl Statistics {
         self.lock.processed + self.write.processed + self.data.processed
     }
 
-    pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
-        vec![
+    pub fn details(&self) -> [(&'static str, [(&'static str, usize); 8]); 3] {
+        [
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
             (CF_WRITE, self.write.details()),

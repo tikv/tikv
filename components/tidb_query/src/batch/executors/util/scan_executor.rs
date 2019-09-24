@@ -1,14 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor::KeyRange;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
 use crate::batch::interface::*;
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::expr::EvalContext;
 use crate::storage::scanner::{RangesScanner, RangesScannerOptions};
-use crate::storage::{Range, Storage};
+use crate::storage::{IntervalRange, Range, Storage};
 use crate::Result;
 
 /// Common interfaces for table scan and index scan implementations.
@@ -130,7 +130,7 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     let mut field_type = FieldType::default();
     field_type.set_tp(ci.get_tp());
     field_type.set_flag(ci.get_flag() as u32); // FIXME: This `as u32` is really awful.
-    field_type.set_flen(ci.get_columnLen());
+    field_type.set_flen(ci.get_column_len());
     field_type.set_decimal(ci.get_decimal());
     field_type.set_collate(ci.get_collation());
     // Note: Charset is not provided in column info.
@@ -198,5 +198,11 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.scanner.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        // TODO: check if there is a better way to reuse this method impl.
+        self.scanner.take_scanned_range()
     }
 }

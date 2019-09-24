@@ -2,15 +2,16 @@
 
 use std::sync::Arc;
 
-use tipb::executor::Selection;
-use tipb::expression::Expr;
-use tipb::expression::FieldType;
+use tipb::Expr;
+use tipb::FieldType;
+use tipb::Selection;
 
 use super::super::interface::*;
 use crate::codec::data_type::*;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::RpnStackNode;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::storage::IntervalRange;
 use crate::Result;
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
@@ -191,6 +192,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     #[inline]
     fn collect_storage_stats(&mut self, dest: &mut Self::StorageStats) {
         self.src.collect_storage_stats(dest);
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        self.src.take_scanned_range()
     }
 }
 

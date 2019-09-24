@@ -10,8 +10,8 @@ use rand_xorshift::XorShiftRng;
 use test_coprocessor::*;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::collections::HashMap;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
 use tidb_query::batch::interface::*;
 use tidb_query::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
@@ -360,6 +360,11 @@ impl BatchExecutor for BatchFixtureExecutor {
     #[inline]
     fn collect_storage_stats(&mut self, _dest: &mut Self::StorageStats) {
         // Do nothing
+    }
+
+    #[inline]
+    fn take_scanned_range(&mut self) -> IntervalRange {
+        unreachable!()
     }
 }
 
