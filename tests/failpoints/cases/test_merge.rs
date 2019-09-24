@@ -248,6 +248,48 @@ fn test_node_merge_catch_up_logs_restart() {
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
 
+#[test]
+fn test_node_merge_catch_up_logs_empty_entries() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // make sure the peer of left region on engine 3 has caught up logs.
+    cluster.must_put(b"k0", b"v0");
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    // let the source peer not apply the latest log
+    fail::cfg("before_set_applied_index_1000_1003", "return()").unwrap();
+    fail::cfg("apply_before_prepare_merge_1000_1003", "return()").unwrap();
+    pd_client.must_merge(left.get_id(), right.get_id());
+    thread::sleep(Duration::from_millis(100));
+    cluster.shutdown();
+    fail::remove("apply_before_prepare_merge_1000_1003");
+    fail::remove("before_set_applied_index_1000_1003");
+
+    // reset commit index to applied index
+    // as expected, merge process will update the commit index
+    let applied_index = cluster.applied_index(left.get_id(), 3);
+    let mut state = cluster.raft_state(left.get_id(), 3);
+    state.mut_hard_state().set_commit(applied_index);
+    cluster.set_raft_state(left.get_id(), 3, state);
+
+    cluster.start().unwrap();
+    cluster.must_region_not_exist(left.get_id(), 3);
+}
+
 /// Test if leader election is working properly when catching up logs for merge.
 #[test]
 fn test_node_merge_catch_up_logs_leader_election() {
@@ -376,8 +418,7 @@ fn test_node_merge_catch_up_logs_no_need() {
     // the source region should be merged and the peer should be destroyed.
     assert!(pd_client.check_merged(left.get_id()));
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
-    let router = cluster.sim.wl().get_router(3).unwrap();
-    assert!(router.mailbox(left.get_id()).is_none());
+    cluster.must_region_not_exist(left.get_id(), 3);
 }
 
 /// Test if merging state will be removed after accepting a snapshot.

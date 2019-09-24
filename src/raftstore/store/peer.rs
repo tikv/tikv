@@ -457,11 +457,22 @@ impl Peer {
     pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
-            return None;
+            if merge.get_commit() > self.raft_group.raft.raft_log.committed {
+                self.raft_group.raft.raft_log.commit_to(merge.get_commit());
+                return Some(merge.get_commit());
+            } else {
+                return None;
+            }
         }
         let first = entries.first().unwrap();
         // make sure message should be with index not smaller than committed
         let mut log_idx = first.get_index() - 1;
+        debug!(
+            "append merge entries";
+            "log_index" => log_idx,
+            "merge_commit" => merge.get_commit(),
+            "commit_index" => self.raft_group.raft.raft_log.committed,
+        );
         if log_idx < self.raft_group.raft.raft_log.committed {
             // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
             // so the commit index may exceed the last index of the entires from CommitMergeRequest.

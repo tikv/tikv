@@ -952,6 +952,12 @@ impl ApplyDelegate {
             return (resp, exec_result);
         }
 
+        fail_point!(
+            "before_set_applied_index_1000_1003",
+            self.region_id() == 1000 && self.id() == 1003,
+            |_| { return (resp.clone(), ApplyResult::None) }
+        );
+
         let mut exec_ctx = ctx.exec_ctx.take().unwrap();
         exec_ctx.apply_state.set_applied_index(index);
 
@@ -1688,6 +1694,11 @@ impl ApplyDelegate {
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         fail_point!("apply_before_prepare_merge");
+        fail_point!(
+            "apply_before_prepare_merge_1000_1003",
+            self.region_id() == 1000 && self.id == 1003,
+            |_| { Ok((AdminResponse::default(), ApplyResult::None)) }
+        );
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "all"])
@@ -2532,6 +2543,13 @@ impl ApplyFsm {
 
         // if it is already up to date, no need to catch up anymore
         let apply_index = self.delegate.apply_state.get_applied_index();
+        debug!(
+            "check catch up logs for merge";
+            "apply_index" => apply_index,
+            "commit" => catch_up_logs.merge.get_commit(),
+            "region_id" => self.delegate.region_id(),
+            "peer_id" => self.delegate.id(),
+        );
         if apply_index < catch_up_logs.merge.get_commit() {
             fail_point!("on_handle_catch_up_logs_for_merge");
             let mut res = VecDeque::new();
