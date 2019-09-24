@@ -12,8 +12,8 @@ use super::mysql::{RoundMode, DEFAULT_FSP};
 use super::{Error, Result};
 use crate::codec::data_type::*;
 use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
-use crate::codec::mysql::charset;
 use crate::codec::mysql::decimal::max_or_min_dec;
+use crate::codec::mysql::{charset, Res};
 use crate::expr::EvalContext;
 use crate::expr::Flag;
 
@@ -158,7 +158,7 @@ pub fn truncate_f64(ctx: &mut EvalContext, mut f: f64, flen: u8, decimal: u8) ->
     let shift = 10f64.powi(i32::from(decimal));
     let max_f = 10f64.powi(i32::from(flen - decimal)) - 1.0 / shift;
 
-    if !f.is_infinite() {
+    if f.is_finite() {
         let tmp = f * shift;
         if tmp.is_finite() {
             f = tmp.round() / shift
@@ -166,13 +166,11 @@ pub fn truncate_f64(ctx: &mut EvalContext, mut f: f64, flen: u8, decimal: u8) ->
     }
 
     if f > max_f {
-        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
-        return Ok(max_f);
+        return Res::Overflow(max_f);
     }
 
     if f < -max_f {
-        ctx.handle_overflow_err(Error::overflow(f, "DOUBLE"))?;
-        return Ok(-max_f);
+        return Res::Overflow(-max_f);
     }
     Ok(f)
 }
@@ -290,8 +288,10 @@ impl ToInt for f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
             Ok(upper_bound)
         } else if val == upper_bound as f64 {
-            // because in rustc, `let a = upper_bound as f64; a as u64` seems has bug,
-            // it don't return upper_bound
+            // Because u64::MAX can not be represented precisely in iee754(64bit),
+            // so u64::MAX as f64 will make a num bigger than u64::MAX,
+            // which can not be represented by 64bit integer.
+            // So (u64::MAX as f64) as u64 is undefined behavior.
             Ok(upper_bound)
         } else {
             Ok(val as u64)
@@ -343,14 +343,14 @@ impl ToInt for &[u8] {
         // in TiDB, it use strconv.ParseUint here,
         // strconv.ParseUint will return 0 and a err if the str is neg
         if s.starts_with('-') {
-            ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &s))?;
+            ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", s))?;
             return Ok(0);
         }
         let val = s.parse::<u64>();
         match val {
             Ok(val) => val.to_uint(ctx, tp),
             Err(_) => {
-                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", &s))?;
+                ctx.handle_overflow_err(Error::overflow("BIGINT UNSIGNED", s))?;
                 // To make compatible with TiDB,
                 // return `integer_unsigned_upper_bound(tp);` when overflow.
                 // see TiDB's `types.StrToUint` and [strconv.ParseUint](https://golang.org/pkg/strconv/#ParseUint)
@@ -389,11 +389,7 @@ impl ToInt for Decimal {
         let val = dec.as_i64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(r)
-        } else {
-            r.to_int(ctx, tp)
-        }
+        r.to_int(ctx, tp)
     }
 
     #[inline]
@@ -403,11 +399,7 @@ impl ToInt for Decimal {
         let val = dec.as_u64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(r)
-        } else {
-            r.to_uint(ctx, tp)
-        }
+        r.to_uint(ctx, tp)
     }
 }
 
@@ -470,11 +462,7 @@ impl ToInt for Json {
             Json::Double(d) => d.to_int(ctx, tp),
             Json::String(ref s) => s.as_bytes().to_int(ctx, tp),
         }?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(val)
-        } else {
-            val.to_int(ctx, tp)
-        }
+        val.to_int(ctx, tp)
     }
 
     // Port from TiDB's types.ConvertJSONToInt
@@ -488,11 +476,7 @@ impl ToInt for Json {
             Json::Double(d) => d.to_uint(ctx, tp),
             Json::String(ref s) => s.as_bytes().to_uint(ctx, tp),
         }?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(val)
-        } else {
-            val.to_uint(ctx, tp)
-        }
+        val.to_uint(ctx, tp)
     }
 }
 
@@ -644,7 +628,8 @@ pub fn produce_float_with_specified_tp(
 
     let res = if flen != ul && decimal != ul {
         assert!(flen < std::u8::MAX as isize && decimal < std::u8::MAX as isize);
-        truncate_f64(ctx, num, flen as u8, decimal as u8)?
+        let r = truncate_f64(num, flen as u8, decimal as u8);
+        r.into_result_with_overflow_err(ctx, Error::overflow(num, "DOUBLE"))?
     } else {
         num
     };
@@ -772,7 +757,10 @@ impl ConvertTo<f64> for &[u8] {
                 Ok(val)
             }
             // if reaches here, it means our code has bug
-            Err(err) => Err(box_err!("parse float err: {}, this is a bug", err)),
+            Err(err) => {
+                debug_assert!(false);
+                Err(box_err!("parse float err: {}, this is a bug", err))
+            }
         }
     }
 }
@@ -791,12 +779,12 @@ impl ConvertTo<f64> for Bytes {
     }
 }
 
-fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
+pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
     let vs = get_valid_float_prefix(ctx, s)?;
     float_str_to_int_string(ctx, vs)
 }
 
-fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
+pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
     let mut saw_dot = false;
     let mut saw_digit = false;
     let mut valid_len = 0;
@@ -1051,7 +1039,7 @@ mod tests {
     use std::{f64, i64, isize, u64};
 
     use crate::codec::error::{
-        ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
+        ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
     };
     use crate::codec::mysql::Res;
     use crate::expr::Flag;

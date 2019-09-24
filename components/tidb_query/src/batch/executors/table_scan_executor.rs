@@ -847,7 +847,7 @@ mod tests {
             let value: std::result::Result<
                 _,
                 Box<dyn Send + Sync + Fn() -> crate::error::StorageError>,
-            > = Err(Box::new(|| format_err!("locked").into()));
+            > = Err(Box::new(|| failure::format_err!("locked").into()));
             kv.push((key, value));
         }
         {

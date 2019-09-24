@@ -18,7 +18,7 @@
 #[macro_export]
 macro_rules! count_args {
     () => { 0 };
-    ($head:expr $(, $tail:expr)*) => { 1 + count_args!($($tail),*) };
+    ($head:expr $(, $tail:expr)*) => { 1 + $crate::count_args!($($tail),*) };
 }
 
 /// Initializes a `HashMap` with specified key-value pairs.
@@ -55,7 +55,7 @@ macro_rules! map {
         {
             let mut temp_map =
                 $crate::collections::HashMap::with_capacity_and_hasher(
-                    count_args!($(($k, $v)),+),
+                    $crate::count_args!($(($k, $v)),+),
                     Default::default()
                 );
             $(
@@ -64,17 +64,6 @@ macro_rules! map {
             temp_map
         }
     };
-}
-
-/// Boxes error first, and then does the same thing as `try!`.
-#[macro_export]
-macro_rules! box_try {
-    ($expr:expr) => {{
-        match $expr {
-            Ok(r) => r,
-            Err(e) => return Err(box_err!(e)),
-        }
-    }};
 }
 
 /// A shortcut to box an error.
@@ -88,6 +77,17 @@ macro_rules! box_err {
     ($f:tt, $($arg:expr),+) => ({
         box_err!(format!($f, $($arg),+))
     });
+}
+
+/// Boxes error first, and then does the same thing as `try!`.
+#[macro_export]
+macro_rules! box_try {
+    ($expr:expr) => {{
+        match $expr {
+            Ok(r) => r,
+            Err(e) => return Err($crate::box_err!(e)),
+        }
+    }};
 }
 
 /// Logs slow operations with `warn!`.
