@@ -952,12 +952,6 @@ impl ApplyDelegate {
             return (resp, exec_result);
         }
 
-        fail_point!(
-            "before_set_applied_index_1000_1003",
-            self.region_id() == 1000 && self.id() == 1003,
-            |_| { return (resp.clone(), ApplyResult::None) }
-        );
-
         let mut exec_ctx = ctx.exec_ctx.take().unwrap();
         exec_ctx.apply_state.set_applied_index(index);
 
@@ -1694,11 +1688,6 @@ impl ApplyDelegate {
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         fail_point!("apply_before_prepare_merge");
-        fail_point!(
-            "apply_before_prepare_merge_1000_1003",
-            self.region_id() == 1000 && self.id == 1003,
-            |_| { Ok((AdminResponse::default(), ApplyResult::None)) }
-        );
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "all"])

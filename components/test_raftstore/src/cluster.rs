@@ -782,27 +782,6 @@ impl<T: Simulator> Cluster<T> {
             .take_truncated_state()
     }
 
-    pub fn applied_index(&self, region_id: u64, store_id: u64) -> u64 {
-        self.get_engine(store_id)
-            .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &keys::apply_state_key(region_id))
-            .unwrap()
-            .unwrap()
-            .get_applied_index()
-    }
-
-    pub fn raft_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
-        self.get_raft_engine(store_id)
-            .get_msg::<RaftLocalState>(&keys::raft_state_key(region_id))
-            .unwrap()
-            .unwrap()
-    }
-
-    pub fn set_raft_state(&mut self, region_id: u64, store_id: u64, state: RaftLocalState) {
-        self.get_raft_engine(store_id)
-            .put_msg(&keys::raft_state_key(region_id), &state)
-            .unwrap();
-    }
-
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
