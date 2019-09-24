@@ -171,6 +171,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             header.set_term(ctx.get_term());
         }
         header.set_sync_log(ctx.get_sync_log());
+        header.set_replica_read(ctx.get_replica_read());
         header
     }
 

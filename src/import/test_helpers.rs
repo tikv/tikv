@@ -9,16 +9,15 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
+use tikv_util::collections::HashMap;
 use uuid::Uuid;
 
+use super::Result;
+use crate::import::client::ImportClient;
+use crate::import::common::inside_region;
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
-use engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
-use tikv_util::collections::HashMap;
-
-use super::client::*;
-use super::common::*;
-use super::Result;
+use engine::rocks::{SstWriterBuilder, DB};
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);
@@ -34,11 +33,9 @@ pub fn check_db_range(db: &DB, range: (u8, u8)) {
 }
 
 pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u8>) {
-    let env_opt = EnvOptions::new();
-    let cf_opt = ColumnFamilyOptions::new();
-    let mut w = SstFileWriter::new(env_opt, cf_opt);
-
-    w.open(path.as_ref().to_str().unwrap()).unwrap();
+    let mut w = SstWriterBuilder::new()
+        .build(path.as_ref().to_str().unwrap())
+        .unwrap();
     for i in range.0..range.1 {
         let k = keys::data_key(&[i]);
         w.put(&k, &[i]).unwrap();
