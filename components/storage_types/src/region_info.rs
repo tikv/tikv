@@ -37,4 +37,3 @@ quick_error! {
 }
 
 pub type RipResult<T> = std::result::Result<T, RipError>;
-

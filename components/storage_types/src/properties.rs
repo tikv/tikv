@@ -8,11 +8,11 @@ use std::ops::{Deref, DerefMut};
 use std::u64;
 
 use crate::mvcc::write::{Write, WriteType};
-use keys::Key;
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
     TitanBlobIndex, UserCollectedProperties, DB,
 };
+use keys::Key;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
 
@@ -729,10 +729,10 @@ mod tests {
 
     use super::MvccPropertiesCollectorFactory;
     use crate::mvcc::write::{Write, WriteType};
-    use keys::Key;
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::{CF_WRITE, LARGE_CFS};
+    use keys::Key;
 
     use super::*;
 

@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use keys::Value;
 use super::lock::LockType;
 use crate::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use byteorder::ReadBytesExt;
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use keys::Value;
 use std::io;
+use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {

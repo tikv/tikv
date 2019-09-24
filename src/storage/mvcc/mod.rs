@@ -8,10 +8,10 @@ mod reader;
 mod txn;
 use storage_types::mvcc::write;
 
-pub use self::lock::{Lock, LockType, Error as LockError};
+pub use self::lock::{Error as LockError, Lock, LockType};
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
-pub use self::write::{Write, WriteType, Error as WriteError};
+pub use self::write::{Error as WriteError, Write, WriteType};
 
 use std::error;
 use std::io;

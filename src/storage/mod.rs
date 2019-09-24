@@ -53,9 +53,9 @@ pub use self::types::{Key, KvPair, MvccInfo, Value};
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
+pub use storage_types::FOR_UPDATE_TS_PREFIX;
 pub use storage_types::SHORT_VALUE_MAX_LEN;
 pub use storage_types::SHORT_VALUE_PREFIX;
-pub use storage_types::FOR_UPDATE_TS_PREFIX;
 pub use storage_types::TXN_SIZE_PREFIX;
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};

@@ -1,13 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use keys::Value;
 use crate::{
     Mutation, FOR_UPDATE_TS_PREFIX, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
 };
 use byteorder::ReadBytesExt;
+use keys::Value;
+use std::io;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
-use std::io;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
