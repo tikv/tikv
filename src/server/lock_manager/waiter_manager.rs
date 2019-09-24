@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU64, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant};
@@ -83,14 +83,14 @@ type Waiters = Vec<Waiter>;
 
 struct WaitTable {
     wait_table: HashMap<u64, Waiters>,
-    has_waiter: Arc<AtomicBool>,
+    waiter_count: Arc<AtomicU64>,
 }
 
 impl WaitTable {
-    fn new(has_waiter: Arc<AtomicBool>) -> Self {
+    fn new(waiter_count: Arc<AtomicU64>) -> Self {
         Self {
             wait_table: HashMap::default(),
-            has_waiter,
+            waiter_count,
         }
     }
 
@@ -101,14 +101,12 @@ impl WaitTable {
 
     fn remove(&mut self, ts: u64) {
         self.wait_table.remove(&ts);
-        if self.wait_table.is_empty() {
-            self.has_waiter.store(false, Ordering::Relaxed);
-        }
+        self.waiter_count.fetch_sub(1, Ordering::SeqCst);
     }
 
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
         self.wait_table.entry(ts).or_default().push(waiter);
-        self.has_waiter.store(true, Ordering::Relaxed);
+        // Here we don't update waiter_count because its already updated in LockManager::wait_for()
         true
     }
 
@@ -226,12 +224,12 @@ unsafe impl Send for WaiterManager {}
 
 impl WaiterManager {
     pub fn new(
-        has_waiter: Arc<AtomicBool>,
+        waiter_count: Arc<AtomicU64>,
         detector_scheduler: DetectorScheduler,
         cfg: &Config,
     ) -> Self {
         Self {
-            wait_table: Rc::new(RefCell::new(WaitTable::new(has_waiter))),
+            wait_table: Rc::new(RefCell::new(WaitTable::new(waiter_count))),
             detector_scheduler,
             wait_for_lock_timeout: cfg.wait_for_lock_timeout,
             wake_up_delay_duration: cfg.wake_up_delay_duration,
@@ -413,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_wait_table_add_and_remove() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicBool::new(false)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicU64::new(0)));
         for i in 0..10 {
             let n = i as u64;
             wait_table.add_waiter(n, dummy_waiter(0, n, n));
@@ -433,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_wait_table_get_ready_waiters() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicBool::new(false)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicU64::new(0)));
         let ts = 100;
         let mut hashes: Vec<u64> = KvGenerator::new(64, 0)
             .generate(10)
@@ -463,7 +461,7 @@ mod tests {
 
     #[test]
     fn test_wait_table_to_wait_for_entries() {
-        let mut wait_table = WaitTable::new(Arc::new(AtomicBool::new(false)));
+        let mut wait_table = WaitTable::new(Arc::new(AtomicU64::new(0)));
         assert!(wait_table.to_wait_for_entries().is_empty());
 
         for i in 1..5 {
@@ -488,22 +486,22 @@ mod tests {
 
     #[test]
     fn test_wait_table_is_empty() {
-        let has_waiter = Arc::new(AtomicBool::new(false));
-        let mut wait_table = WaitTable::new(Arc::clone(&has_waiter));
-        assert_eq!(has_waiter.load(Ordering::Relaxed), false);
+        let waiter_count = Arc::new(AtomicU64::new(0));
+        let mut wait_table = WaitTable::new(Arc::clone(&waiter_count));
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
         wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
-        assert_eq!(has_waiter.load(Ordering::Relaxed), true);
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 1);
         assert!(wait_table
             .remove_waiter(1, Lock { ts: 2, hash: 2 })
             .is_some());
-        assert_eq!(has_waiter.load(Ordering::Relaxed), false);
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
         wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
         wait_table.add_waiter(3, dummy_waiter(2, 3, 3));
-        assert_eq!(has_waiter.load(Ordering::Relaxed), true);
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 1);
         wait_table.get_ready_waiters(2, vec![2]);
-        assert_eq!(has_waiter.load(Ordering::Relaxed), true);
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 2);
         wait_table.get_ready_waiters(3, vec![3]);
-        assert_eq!(has_waiter.load(Ordering::Relaxed), false);
+        assert_eq!(waiter_count.load(Ordering::SeqCst), 3);
     }
 
     #[test]
@@ -519,7 +517,7 @@ mod tests {
         cfg.wait_for_lock_timeout = 1000;
         cfg.wake_up_delay_duration = 1;
         let waiter_mgr_runner =
-            WaiterManager::new(Arc::new(AtomicBool::new(false)), detector_scheduler, &cfg);
+            WaiterManager::new(Arc::new(AtomicU64::new(0)), detector_scheduler, &cfg);
         let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 

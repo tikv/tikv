@@ -17,7 +17,7 @@ use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{lock_manager::Lock, txn::ProcessResult, LockMgr, StorageCb};
 use pd_client::RpcClient;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use tikv_util::security::SecurityManager;
@@ -33,7 +33,7 @@ pub struct LockManager {
     waiter_mgr_scheduler: WaiterMgrScheduler,
     detector_scheduler: DetectorScheduler,
 
-    has_waiter: Arc<AtomicBool>,
+    waiter_count: Arc<AtomicU64>,
 }
 
 impl Clone for LockManager {
@@ -43,7 +43,7 @@ impl Clone for LockManager {
             detector_worker: None,
             waiter_mgr_scheduler: self.waiter_mgr_scheduler.clone(),
             detector_scheduler: self.detector_scheduler.clone(),
-            has_waiter: self.has_waiter.clone(),
+            waiter_count: self.waiter_count.clone(),
         }
     }
 }
@@ -58,7 +58,7 @@ impl LockManager {
             waiter_mgr_worker: Some(waiter_mgr_worker),
             detector_scheduler: DetectorScheduler::new(detector_worker.scheduler()),
             detector_worker: Some(detector_worker),
-            has_waiter: Arc::new(AtomicBool::new(false)),
+            waiter_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -72,7 +72,7 @@ impl LockManager {
         cfg: &Config,
     ) -> Result<()> {
         let waiter_mgr_runner = WaiterManager::new(
-            Arc::clone(&self.has_waiter),
+            Arc::clone(&self.waiter_count),
             self.detector_scheduler.clone(),
             cfg,
         );
@@ -148,12 +148,9 @@ impl LockMgr for LockManager {
         lock: Lock,
         is_first_lock: bool,
     ) {
-        // Set `has_waiter` here to prevent there is an on-the-fly WaitFor msg
+        // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
-        //
-        // But it's still possible that the waiter_mgr removes some waiters and set
-        // `has_waiter` to false just after we set it to true here.
-        self.has_waiter.store(true, Ordering::Relaxed);
+        self.waiter_count.fetch_add(1, Ordering::SeqCst);
         self.waiter_mgr_scheduler.wait_for(start_ts, cb, pr, lock);
 
         // If it is the first lock the transaction waits for, it won't cause deadlock.
@@ -185,7 +182,7 @@ impl LockMgr for LockManager {
     }
 
     fn has_waiter(&self) -> bool {
-        self.has_waiter.load(Ordering::Relaxed)
+        self.waiter_count.load(Ordering::SeqCst) > 0
     }
 }
 
