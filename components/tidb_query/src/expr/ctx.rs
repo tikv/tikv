@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use bitflags::bitflags;
 use std::sync::Arc;
 use std::{i64, mem, u64};
 
@@ -49,12 +50,6 @@ bitflags! {
         const DIVIDED_BY_ZERO_AS_WARNING = 1 << 8;
         /// `IN_LOAD_DATA_STMT` indicates if this is a LOAD DATA statement.
         const IN_LOAD_DATA_STMT = 1 << 10;
-    }
-}
-
-impl Default for Flag {
-    fn default() -> Self {
-        Flag { bits: 0 }
     }
 }
 

@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use derive_more::{Add, AddAssign};
+
 /// Execution summaries to support `EXPLAIN ANALYZE` statements. We don't use
 /// `ExecutorExecutionSummary` directly since it is less efficient.
 #[derive(Debug, Default, Copy, Clone, Add, AddAssign, PartialEq, Eq)]

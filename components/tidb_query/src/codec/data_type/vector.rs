@@ -219,7 +219,6 @@ impl VectorValue {
     }
 
     /// Encodes a single element into binary format.
-    // FIXME: Use BufferWriter.
     pub fn encode(
         &self,
         row_index: usize,
@@ -228,8 +227,7 @@ impl VectorValue {
     ) -> Result<()> {
         use crate::codec::mysql::DecimalEncoder;
         use crate::codec::mysql::JsonEncoder;
-        use tikv_util::codec::bytes::BytesEncoder;
-        use tikv_util::codec::number::NumberEncoder;
+        use codec::prelude::{CompactByteEncoder, NumberEncoder};
 
         match self {
             VectorValue::Int(ref vec) => {
@@ -245,10 +243,10 @@ impl VectorValue {
                             .contains(FieldTypeFlag::UNSIGNED)
                         {
                             output.push(datum::UINT_FLAG);
-                            output.encode_u64(val as u64)?;
+                            output.write_u64(val as u64)?;
                         } else {
                             output.push(datum::INT_FLAG);
-                            output.encode_i64(val)?;
+                            output.write_i64(val)?;
                         }
                     }
                 }
@@ -261,7 +259,7 @@ impl VectorValue {
                     }
                     Some(val) => {
                         output.push(datum::FLOAT_FLAG);
-                        output.encode_f64(val.into_inner())?;
+                        output.write_f64(val.into_inner())?;
                     }
                 }
                 Ok(())
@@ -286,7 +284,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::COMPACT_BYTES_FLAG);
-                        output.encode_compact_bytes(val)?;
+                        output.write_compact_bytes(val)?;
                     }
                 }
                 Ok(())
@@ -298,7 +296,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::UINT_FLAG);
-                        output.encode_u64(val.to_packed_u64())?;
+                        output.write_u64(val.to_packed_u64())?;
                     }
                 }
                 Ok(())
@@ -310,7 +308,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::DURATION_FLAG);
-                        output.encode_i64(val.to_nanos())?;
+                        output.write_i64(val.to_nanos())?;
                     }
                 }
                 Ok(())
@@ -406,8 +404,8 @@ macro_rules! impl_ext {
                 match self {
                     VectorValue::$ty(ref mut vec) => vec.push(v),
                     other => panic!(
-                        "Cannot call `{}` over to a {} column",
-                        stringify!($name),
+                        "Cannot call `{}` over a {} column",
+                        stringify!($push_name),
                         other.eval_type()
                     ),
                 };

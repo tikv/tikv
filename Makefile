@@ -103,10 +103,10 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build:
-	cargo build --no-default-features --features "${ENABLE_FEATURES}" -p cmd
+	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
 run:
-	cargo run --no-default-features --features  "${ENABLE_FEATURES}" -p cmd --bin tikv-server
+	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
 
 
 ## Release builds (optimized dev builds)
@@ -120,7 +120,7 @@ run:
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
 release:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -p cmd
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -181,10 +181,10 @@ test:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} -p cmd --bin tikv-server -- --nocapture --ignored; \
+		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
@@ -215,7 +215,6 @@ clippy: pre-clippy
 		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
 		-A clippy::needless_range_loop -A clippy::redundant_closure \
 		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call
-
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
 	$(eval CURRENT_AUDIT_VERSION = $(strip $(shell (cargo audit --version 2> /dev/null || echo "noop 0") | awk '{ print $$2 }')))
@@ -234,7 +233,7 @@ audit: pre-audit
 # A special target for building just the tikv-ctl binary and release mode and copying it
 # into BIN_PATH. It's not clear who uses this for what. If you know please document it.
 ctl:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" -p cmd --bin tikv-ctl
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 

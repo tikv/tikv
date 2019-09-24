@@ -18,10 +18,11 @@ use crate::expr::EvalConfig;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::storage::IntervalRange;
 use crate::Result;
+use tikv_util::box_try;
 
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {
-        match_template! {
+        match_template::match_template! {
             $t = [Int, Real, Bytes, Duration],
             $($tail)*
         }
