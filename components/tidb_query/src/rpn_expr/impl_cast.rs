@@ -12,12 +12,12 @@ use tipb::{Expr, FieldType};
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
 use std::num::IntErrorKind;
-use crate::codec::mysql::Time;
 
 fn get_cast_fn_rpn_meta(
     from_field_type: &FieldType,
@@ -679,6 +679,7 @@ mod tests {
     use super::Result;
     use crate::codec::data_type::{Bytes, Decimal, Int, Real, ScalarValue};
     use crate::codec::error::*;
+    use crate::codec::mysql::charset::*;
     use crate::codec::mysql::{Duration, Json, Time};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
@@ -689,7 +690,6 @@ mod tests {
     use std::sync::Arc;
     use std::{f32, f64, i64, u64};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
-    use crate::codec::mysql::charset::*;
 
     #[test]
     fn test_in_union() {
