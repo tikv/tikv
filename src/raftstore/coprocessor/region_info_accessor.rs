@@ -54,22 +54,10 @@ impl RaftStoreEvent {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RegionInfo {
-    pub region: Region,
-    pub role: StateRole,
-}
-
-impl RegionInfo {
-    pub fn new(region: Region, role: StateRole) -> Self {
-        Self { region, role }
-    }
-}
+pub use storage_types::region_info::{RegionInfo, SeekRegionCallback};
 
 type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
-
-pub type SeekRegionCallback = Box<dyn Fn(&mut dyn Iterator<Item = &RegionInfo>) + Send>;
 
 /// `RegionInfoAccessor` has its own thread. Queries and updates are done by sending commands to the
 /// thread.

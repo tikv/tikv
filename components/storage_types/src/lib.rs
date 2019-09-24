@@ -10,6 +10,7 @@ extern crate test;
 pub mod compacted_event;
 pub mod mvcc;
 pub mod properties;
+pub mod region_info;
 
 use keys::{Key, Value};
 
