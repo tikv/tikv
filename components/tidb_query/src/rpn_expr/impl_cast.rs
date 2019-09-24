@@ -698,7 +698,7 @@ mod tests {
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
     ) -> EvalContext {
-        let mut flag: Flag = Flag::default();
+        let mut flag: Flag = Flag::empty();
         if overflow_as_warning {
             flag |= Flag::OVERFLOW_AS_WARNING;
         }
