@@ -159,7 +159,7 @@ fn cast_int_as_duration(
     match val {
         None => Ok(None),
         Some(val) => {
-            let fsp = extra.ret_field_type.get_decimal() as u8;
+            let fsp = extra.ret_field_type.get_decimal() as i8;
             let (dur, err) = Duration::from_i64_without_ctx(*val, fsp);
             match err {
                 // in TiDB, if there is overflow err and overflow as warning,

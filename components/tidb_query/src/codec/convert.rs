@@ -388,12 +388,9 @@ impl ToInt for Decimal {
         let dec = round_decimal_with_ctx(ctx, self.clone())?;
         let val = dec.as_i64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
-        let r = val.into_result_with_overflow_err(ctx, err)?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(r)
-        } else {
-            r.to_int(ctx, tp)
-        }
+        let r = val.into_result_with_overflow_err(ctx, err);
+        let r = r.map_err(|_| Error::overflow("DECIMAL", &dec))?;
+        r.to_int(ctx, tp)
     }
 
     #[inline]
@@ -402,12 +399,9 @@ impl ToInt for Decimal {
         let dec = round_decimal_with_ctx(ctx, self.clone())?;
         let val = dec.as_u64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
-        let r = val.into_result_with_overflow_err(ctx, err)?;
-        if tp == FieldTypeTp::LongLong {
-            Ok(r)
-        } else {
-            r.to_uint(ctx, tp)
-        }
+        let r = val.into_result_with_overflow_err(ctx, err);
+        let r = r.map_err(|_| Error::overflow("DECIMAL", &dec))?;
+        r.to_uint(ctx, tp)
     }
 }
 
@@ -2583,9 +2577,9 @@ mod tests {
             // check origin_flen and origin_decimal
             let (f, d) = input.prec_and_frac();
             let log = format!(
-                "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
-                input, origin_flen, origin_decimal, f, d
-            );
+                    "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
+                    input, origin_flen, origin_decimal, f, d
+                );
             assert_eq!(f, origin_flen, "{}", log);
             assert_eq!(d, origin_decimal, "{}", log);
 
@@ -2623,13 +2617,13 @@ mod tests {
                 let expect_str = expect.as_ref().map(|x| x.to_string());
                 let log =
                     format!(
-                    "input: {}, origin_flen: {}, origin_decimal: {}, \
+                            "input: {}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \
                      in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
                      expect: {:?}, expect: {:?}",
-                    input, origin_flen, origin_decimal, res_flen, res_decimal,
-                    is_unsigned, in_dml, in_dml_flag, expect_str, rs
-                );
+                            input, origin_flen, origin_decimal, res_flen, res_decimal,
+                            is_unsigned, in_dml, in_dml_flag, expect_str, rs
+                        );
 
                 // check result
                 match expect {
