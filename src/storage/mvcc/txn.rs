@@ -14,6 +14,7 @@ use crate::storage::{
 use kvproto::kvrpcpb::IsolationLevel;
 use std::collections::BTreeMap;
 use std::fmt;
+use tidb_query::util::convert_to_prefix_next;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -480,24 +481,24 @@ impl<S: Snapshot> MvccTxn<S> {
                     }),
                     tag,
                 }));
-            }
-        } else if is_insert {
-            // check data constraint using existing cursor
-            while iter.prev(statistics) {
-                let write_key = iter.key(statistics);
-                if Key::is_user_key_eq(write_key, key.as_encoded()) {
-                    let write = Write::parse(iter.value(statistics))?;
-                    if write.write_type == WriteType::Delete {
+            } else if is_insert {
+                // check data constraint using existing cursor
+                while iter.next(statistics) {
+                    let write_key = iter.key(statistics);
+                    if Key::is_user_key_eq(write_key, key.as_encoded()) {
+                        let write = Write::parse(iter.value(statistics))?;
+                        if write.write_type == WriteType::Delete {
+                            break;
+                        } else if write.write_type == WriteType::Put {
+                            return Ok(Some(Msg::FinishedWithErr {
+                                cid,
+                                err: txn::Error::Mvcc(Error::AlreadyExist { key: key.to_raw()? }),
+                                tag,
+                            }));
+                        }
+                    } else {
                         break;
-                    } else if write.write_type == WriteType::Put {
-                        return Ok(Some(Msg::FinishedWithErr {
-                            cid,
-                            err: txn::Error::Mvcc(Error::AlreadyExist { key: key.to_raw()? }),
-                            tag,
-                        }));
                     }
-                } else {
-                    break;
                 }
             }
         }
@@ -526,9 +527,9 @@ impl<S: Snapshot> MvccTxn<S> {
         }
         let (lower, lower_idx) = map.iter().next().unwrap();
         let (upper, _) = map.iter().next_back().unwrap();
-        let mut min_key = Key::from_encoded(lower.to_vec());
         let mut upper = upper.to_vec();
-        *upper.last_mut().unwrap() += 1;
+        let mut min_key = Key::from_encoded(lower.to_vec());
+        convert_to_prefix_next(&mut upper);
         let max_key = Key::from_encoded(upper);
         let mut min_idx = lower_idx;
         let mut min_ts = if let Command::Prewrite { start_ts, .. } = commands[min_idx.0] {
@@ -538,14 +539,13 @@ impl<S: Snapshot> MvccTxn<S> {
         };
         let mut write_iter = self
             .reader
-            .new_write_cursor(&min_key, min_ts, &max_key, u64::max_value())
+            .new_write_cursor(&min_key, u64::max_value(), &max_key, 0)
             .unwrap();
         let mut lock_iter = self.reader.new_lock_cursor(&min_key, &max_key).unwrap();
         write_iter.seek(
-            &min_key.clone().append_ts(min_ts),
+            &min_key.clone().append_ts(u64::max_value()),
             self.reader.mut_write_statistics(),
         )?;
-        let mut cur_key = write_iter.key(self.reader.mut_write_statistics()).to_vec();
         if write_iter.valid()? {
             if ids[min_idx.0] < u64::max_value() {
                 if let Some(msg) = self.check_write(
@@ -570,7 +570,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             'out: loop {
-                let mut range = map.range::<Vec<u8>, _>(&cur_key..max_key.as_encoded());
+                let mut range = map.range::<Vec<u8>, _>(
+                    &write_iter.key(self.reader.mut_write_statistics()).to_vec()
+                        ..max_key.as_encoded(),
+                );
                 loop {
                     if let Some(tuple) = range.next() {
                         min_key = Key::from_encoded(tuple.0.to_vec());
@@ -582,16 +585,15 @@ impl<S: Snapshot> MvccTxn<S> {
                         min_ts = if let Command::Prewrite { start_ts, .. } = commands[min_idx.0] {
                             start_ts
                         } else {
-                            0
+                            u64::max_value()
                         };
                         break;
                     }
                 }
                 write_iter.seek(
-                    &min_key.clone().append_ts(min_ts),
+                    &min_key.clone().append_ts(u64::max_value()),
                     self.reader.mut_write_statistics(),
                 )?;
-                cur_key = write_iter.key(self.reader.mut_write_statistics()).to_vec();
                 if write_iter.valid()? {
                     if let Some(msg) = self.check_write(
                         cid,
@@ -622,7 +624,6 @@ impl<S: Snapshot> MvccTxn<S> {
         min_key = Key::from_encoded(lower.to_vec());
         min_idx = lower_idx;
         lock_iter.seek(&min_key, self.reader.mut_lock_statistics())?;
-        cur_key = lock_iter.key(self.reader.mut_lock_statistics()).to_vec();
         if lock_iter.valid()? {
             if ids[min_idx.0] < u64::max_value() {
                 if let Some(msg) = self.check_lock(cid, tag, min_key, &mut lock_iter)? {
@@ -631,7 +632,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             'out2: loop {
-                let mut range = map.range::<Vec<u8>, _>(&cur_key..max_key.as_encoded());
+                let mut range = map.range::<Vec<u8>, _>(
+                    &lock_iter.key(self.reader.mut_lock_statistics()).to_vec()
+                        ..max_key.as_encoded(),
+                );
                 loop {
                     if let Some(tuple) = range.next() {
                         min_key = Key::from_encoded(tuple.0.to_vec());
@@ -644,7 +648,6 @@ impl<S: Snapshot> MvccTxn<S> {
                     }
                 }
                 lock_iter.seek(&min_key, self.reader.mut_lock_statistics())?;
-                cur_key = lock_iter.key(self.reader.mut_lock_statistics()).to_vec();
                 if lock_iter.valid()? {
                     if let Some(msg) = self.check_lock(cid, tag, min_key, &mut lock_iter)? {
                         scheduler.on_batch_msg(ids[min_idx.0], msg);
