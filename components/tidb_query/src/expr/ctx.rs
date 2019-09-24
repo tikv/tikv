@@ -244,7 +244,7 @@ impl EvalContext {
         if !is_overflow {
             Ok(())
         } else {
-            self.handle_overflow_err(Error::overflow("DECIMAL", ""))
+            self.handle_overflow_err(Error::overflow("", ""))
         }
     }
 
