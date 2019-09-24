@@ -10,13 +10,12 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState};
+use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
 use tempfile::{Builder, TempDir};
 
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
-use engine::Mutable;
 use engine::Peekable;
 use engine::CF_DEFAULT;
 use pd_client::PdClient;
