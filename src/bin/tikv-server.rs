@@ -5,7 +5,7 @@
 
 use std::process;
 
-use clap::{crate_authors, crate_version, App, Arg};
+use clap::{crate_authors, App, Arg};
 use tikv::binutil::{self, server, setup};
 use tikv::config::TiKvConfig;
 
@@ -13,7 +13,7 @@ fn main() {
     let matches = App::new("TiKV")
         .about("A distributed transactional key-value database powered by Rust and Raft")
         .author(crate_authors!())
-        .version(crate_version!())
+        .version(binutil::tikv_version_info().as_ref())
         .long_version(binutil::tikv_version_info().as_ref())
         .arg(
             Arg::with_name("config")
