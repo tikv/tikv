@@ -360,7 +360,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     pub fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut chunks = vec![];
-        let mut batchdata: Vec<u8> = vec![];
+        let mut batch_data: Vec<u8> = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
@@ -419,7 +419,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 data,
                                 &self.config.tz,
                             )?;
-                            batchdata.extend_from_slice(data);
+                            batch_data.extend_from_slice(data);
                         }
                     }
                 }
@@ -435,7 +435,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         sel_resp.set_chunks(chunks.into());
                     }
                     EncodeType::TypeArrow => {
-                        sel_resp.set_row_batch_data(batchdata);
+                        sel_resp.set_row_batch_data(batch_data);
                     }
                 }
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
