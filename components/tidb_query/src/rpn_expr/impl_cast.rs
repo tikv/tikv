@@ -803,13 +803,7 @@ mod tests {
     }
 
     fn make_ret_field_type_2(unsigned: bool, flen: isize, decimal: isize) -> FieldType {
-        let mut ft = if unsigned {
-            let mut ft = FieldType::default();
-            ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
-            ft
-        } else {
-            FieldType::default()
-        };
+        let mut ft = make_ret_field_type(unsigned);
         let fta = ft.as_mut_accessor();
         fta.set_flen(flen);
         fta.set_decimal(decimal);
