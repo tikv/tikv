@@ -5,7 +5,6 @@ use std::cmp::Ordering;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use crate::raftstore::coprocessor::SeekRegionCallback;
 use crate::raftstore::store::PdTask;
 use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
@@ -152,25 +151,7 @@ pub trait Iterator: Send {
     fn value(&self) -> &[u8];
 }
 
-pub trait RegionInfoProvider: Send + Clone + 'static {
-    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
-    /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> RipResult<()>;
-}
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum RipError {
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
-    }
-}
-
-pub type RipResult<T> = std::result::Result<T, RipError>;
+pub use storage_types::region_info::{RegionInfoProvider, RipError, RipResult};
 
 macro_rules! near_loop {
     ($cond:expr, $fallback:expr, $st:expr) => {{
