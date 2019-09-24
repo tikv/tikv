@@ -749,7 +749,7 @@ fn test_node_merge_catch_up_logs_empty_entries() {
     cluster.clear_send_filters();
 
     // as expected, merge process will forward the commit index
-    // and the source peer can be res
+    // and the source peer will be destroyed.
     cluster.start().unwrap();
     cluster.must_region_not_exist(left.get_id(), 3);
 }
