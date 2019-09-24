@@ -138,10 +138,10 @@ impl Debugger {
         Debugger { engines }
     }
 
-    fn dump_key_mvcc_cf(&self, key: &[u8], cf: &str) {
+    pub fn dump_key_mvcc_cf(&self, key: &[u8], cf: str) {
         let readopts = IterOption::new(None, None, false).build_read_opts();
         let handle = get_cf_handle(&self.engines.kv, cf).unwrap();
-        let mut iter = DBIterator::new_cf(&self.engines.kv, handle, readopts);
+        let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
         iter.seek(SeekKey::from(key));
         if cf == CF_LATEST {
             if iter.valid() && iter.key() == key {
