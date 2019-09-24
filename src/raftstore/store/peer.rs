@@ -457,8 +457,10 @@ impl Peer {
     pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
-            // Other source peers may be already destroyed, so the raft group will not make any progress.
-            // Here update the commit index even if entries is empty.
+            // Though the entries is empty, it is possible that one source peer has caught up the logs
+            // but commit index is not updated. If Other source peers are already destroyed, so the raft
+            // group will not make any progress, namely the source peer can not get the latest commit index anymore.
+            // Here update the commit index to let source apply rest uncommitted entires.
             if merge.get_commit() > self.raft_group.raft.raft_log.committed {
                 self.raft_group.raft.raft_log.commit_to(merge.get_commit());
                 return Some(merge.get_commit());
