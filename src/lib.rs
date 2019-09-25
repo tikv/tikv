@@ -24,6 +24,7 @@
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(mem_take)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate bitflags;
@@ -53,6 +54,8 @@ extern crate vlog;
 extern crate tikv_util;
 #[macro_use]
 extern crate failure;
+#[macro_use]
+extern crate likely;
 
 #[cfg(test)]
 extern crate test;

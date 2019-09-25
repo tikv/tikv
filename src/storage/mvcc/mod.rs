@@ -7,11 +7,12 @@ mod metrics;
 mod reader;
 mod txn;
 mod write;
+mod write2;
 
 pub use self::lock::{Lock, LockType};
 pub use self::reader::EntryScanner;
 pub use self::reader::MvccReader;
-pub use self::reader::{Scanner, ScannerBuilder};
+pub use self::reader::{RangeForwardScanner, Scanner, ScannerBuilder, ScannerConfig};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
 

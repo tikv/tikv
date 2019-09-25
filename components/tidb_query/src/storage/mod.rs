@@ -5,11 +5,13 @@ pub mod fixture;
 mod range;
 pub mod ranges_iter;
 pub mod scanner;
+pub mod scanner2;
+
+use tikv_util::buffer_vec::BufferVec;
 
 pub use self::range::*;
 
 pub type Result<T> = std::result::Result<T, crate::error::StorageError>;
-
 pub type OwnedKvPair = (Vec<u8>, Vec<u8>);
 
 /// The abstract storage interface. The table scan and index scan executor relies on a `Storage`
@@ -27,6 +29,19 @@ pub trait Storage: Send {
     ) -> Result<()>;
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>>;
+
+    fn begin_range_scan(&mut self, _is_key_only: bool, _range: IntervalRange) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn range_scan_next_batch(
+        &mut self,
+        _n: usize,
+        _out_keys: &mut BufferVec,
+        _out_values: &mut BufferVec,
+    ) -> Result<usize> {
+        unimplemented!()
+    }
 
     // TODO: Use const generics.
     // TODO: Use reference is better.
@@ -49,6 +64,19 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
         (**self).scan_next()
+    }
+
+    fn begin_range_scan(&mut self, is_key_only: bool, range: IntervalRange) -> Result<()> {
+        (**self).begin_range_scan(is_key_only, range)
+    }
+
+    fn range_scan_next_batch(
+        &mut self,
+        n: usize,
+        out_keys: &mut BufferVec,
+        out_values: &mut BufferVec,
+    ) -> Result<usize> {
+        (**self).range_scan_next_batch(n, out_keys, out_values)
     }
 
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {

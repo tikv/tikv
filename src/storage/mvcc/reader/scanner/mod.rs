@@ -2,6 +2,7 @@
 
 mod backward;
 mod forward;
+mod range_forward;
 mod txn_entry;
 mod util;
 
@@ -16,6 +17,7 @@ use crate::storage::{
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
+pub use self::range_forward::RangeForwardScanner;
 pub use self::txn_entry::Scanner as EntryScanner;
 
 /// `Scanner` factory.
@@ -100,6 +102,13 @@ impl<S: Snapshot> ScannerBuilder<S> {
         }
     }
 
+    pub fn build_forward_range_scanner(mut self) -> failure::Fallible<RangeForwardScanner<S>> {
+        assert!(!self.desc);
+        let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
+        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
+        RangeForwardScanner::new(self.0, lock_cursor, write_cursor)
+    }
+
     pub fn build_entry_scanner(mut self) -> Result<EntryScanner<S>> {
         let lower_bound = self.lower_bound.clone();
         let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
@@ -155,7 +164,7 @@ pub struct ScannerConfig<S: Snapshot> {
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
-    fn new(snapshot: S, ts: u64, desc: bool) -> Self {
+    pub fn new(snapshot: S, ts: u64, desc: bool) -> Self {
         Self {
             snapshot,
             fill_cache: true,
@@ -179,7 +188,7 @@ impl<S: Snapshot> ScannerConfig<S> {
 
     /// Create the cursor.
     #[inline]
-    fn create_cf_cursor(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
+    pub fn create_cf_cursor(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
         let (lower, upper) = if cf == CF_DEFAULT {
             (self.lower_bound.take(), self.upper_bound.take())
         } else {

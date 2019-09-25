@@ -2,7 +2,7 @@
 
 use std::intrinsics::unlikely;
 
-use crate::{Error, Result};
+use crate::{ErrorInner, Result};
 
 /// A trait to provide sequential read over a memory buffer.
 ///
@@ -55,7 +55,7 @@ impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
         let pos = self.position() as usize;
         let slice = self.get_ref().as_ref();
         if unsafe { unlikely(pos + count >= slice.len()) } {
-            return Err(Error::eof());
+            return Err(ErrorInner::eof().into());
         }
         let new_pos = pos + count;
         self.set_position(new_pos as u64);
@@ -76,7 +76,7 @@ impl<'a> BufferReader for &'a [u8] {
 
     fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
         if unsafe { unlikely(self.len() < count) } {
-            return Err(Error::eof());
+            return Err(ErrorInner::eof().into());
         }
         let (left, right) = self.split_at(count);
         *self = right;
@@ -187,7 +187,7 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
         let pos = self.position() as usize;
         let slice = self.get_mut().as_mut();
         if unsafe { unlikely(pos + write_len >= slice.len()) } {
-            return Err(Error::eof());
+            return Err(ErrorInner::eof().into());
         }
         let new_pos = pos + write_len;
         slice[pos..new_pos].copy_from_slice(values);
@@ -211,7 +211,7 @@ impl<'a> BufferWriter for &'a mut [u8] {
     fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
         let write_len = values.len();
         if unsafe { unlikely(self.len() < write_len) } {
-            return Err(Error::eof());
+            return Err(ErrorInner::eof().into());
         }
         let original_self = std::mem::replace(self, &mut []);
         original_self[..write_len].copy_from_slice(values);

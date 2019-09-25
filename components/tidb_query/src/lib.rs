@@ -10,6 +10,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(const_fn)]
+#![feature(core_intrinsics)]
 #![feature(test)]
 // FIXME: rustc says there are redundant semicolons here but isn't
 // saying where as of nightly-2019-09-05
@@ -18,6 +19,8 @@
 // FIXME: ditto. probably a result of the above
 #![allow(clippy::no_effect)]
 
+#[macro_use]
+extern crate likely;
 #[macro_use(slog_error, slog_warn, slog_debug)]
 extern crate slog;
 #[macro_use(error, debug, warn)]

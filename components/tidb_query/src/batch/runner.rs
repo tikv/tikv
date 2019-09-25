@@ -110,6 +110,14 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
+    let mut has_limit_executor = false;
+    for ed in &executor_descriptors {
+        if ed.get_tp() == ExecType::TypeLimit {
+            has_limit_executor = true;
+            break;
+        }
+    }
+
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
         .next()
@@ -127,16 +135,35 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
 
             let mut descriptor = first_ed.take_tbl_scan();
             let columns_info = descriptor.take_columns().into();
-            executor = Box::new(
-                BatchTableScanExecutor::new(
-                    storage,
-                    config.clone(),
-                    columns_info,
-                    ranges,
+
+            if descriptor.get_desc() || has_limit_executor {
+                executor = Box::new(
+                    BatchTableScanExecutor::new(
+                        storage,
+                        config.clone(),
+                        columns_info,
+                        ranges,
+                        descriptor.get_desc(),
+                    )?
+                    .with_summary_collector(C::new(summary_slot_index)),
+                );
+                warn!(
+                    "Use Non Range Table Scan because desc = {:?}, has limit = {:?}",
                     descriptor.get_desc(),
-                )?
-                .with_summary_collector(C::new(summary_slot_index)),
-            );
+                    has_limit_executor
+                );
+            } else {
+                executor = Box::new(
+                    BatchTableRangeScanExecutor::new(
+                        storage,
+                        config.clone(),
+                        columns_info,
+                        ranges,
+                    )?
+                    .with_summary_collector(C::new(summary_slot_index)),
+                );
+                warn!("Use Range Table Scan");
+            }
         }
         ExecType::TypeIndexScan => {
             COPR_EXECUTOR_COUNT
@@ -156,6 +183,8 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )?
                 .with_summary_collector(C::new(summary_slot_index)),
             );
+
+            warn!("Use Non Range Index Scan");
         }
         _ => {
             return Err(other_err!(

@@ -47,8 +47,8 @@ pub use self::lock_manager::{DummyLockMgr, LockMgr};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 use self::txn::scheduler::Scheduler as TxnScheduler;
-pub use self::txn::{FixtureStore, FixtureStoreScanner};
-pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
+pub use self::txn::{FixtureStore, FixtureStoreRangeScanner, FixtureStoreScanner};
+pub use self::txn::{Msg, RangeScanner, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;

@@ -99,7 +99,7 @@ clean:
 
 all: format build test
 
-dev: format clippy
+dev: format
 	@env FAIL_POINT=1 make test
 
 build:

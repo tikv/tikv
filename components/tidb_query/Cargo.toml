@@ -34,6 +34,7 @@ quick-error = "1.2.2"
 bitflags = "1.0.1"
 derive_more = "0.15.0"
 smallvec = "0.6"
+likely = "0.1"
 indexmap = { version = "1.0", features = ["serde-1"] }
 safemem = { version = "0.3", default-features = false }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }

@@ -115,6 +115,7 @@ vlog = "0.1.4"
 mime = "0.3.13"
 farmhash = "1.1.5"
 failure = "0.1"
+likely = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
@@ -125,6 +126,7 @@ engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
 keys = { path = "components/keys" }
+codec = { path = "components/codec" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -234,7 +236,7 @@ rpath = false
 # The benchmark profile is identical to release, except that lto = false
 [profile.bench]
 opt-level = 3
-debug = false
+debug = 2
 codegen-units = 1
 lto = 'thin'
 incremental = false

@@ -1,9 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::IsolationLevel;
+use tikv_util::buffer_vec::BufferVec;
 
 use crate::storage::metrics::*;
-use crate::storage::mvcc::EntryScanner;
+use crate::storage::mvcc::{EntryScanner, RangeForwardScanner};
 use crate::storage::mvcc::{Error as MvccError, MvccReader};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
@@ -13,6 +14,8 @@ use super::{Error, Result};
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
     type Scanner: Scanner;
+
+    type RangeScanner: RangeScanner;
 
     /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
@@ -28,6 +31,15 @@ pub trait Store: Send {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner>;
+
+    fn build_range_scanner_forward(
+        &self,
+        _key_only: bool,
+        _lower_bound: Option<Key>,
+        _upper_bound: Option<Key>,
+    ) -> failure::Fallible<Self::RangeScanner> {
+        unimplemented!()
+    }
 }
 
 /// [`Scanner`]s allow retrieving items or batches from a scan result.
@@ -56,6 +68,19 @@ pub trait Scanner: Send {
     }
 
     /// Take statistics.
+    fn take_statistics(&mut self) -> Statistics;
+}
+
+pub trait RangeScanner: Send {
+    fn scan_first_lock(&mut self) -> failure::Fallible<()>;
+
+    fn next(
+        &mut self,
+        n: usize,
+        out_keys: &mut BufferVec,
+        out_values: &mut BufferVec,
+    ) -> failure::Fallible<usize>;
+
     fn take_statistics(&mut self) -> Statistics;
 }
 
@@ -142,6 +167,8 @@ pub struct SnapshotStore<S: Snapshot> {
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
+    type RangeScanner = RangeForwardScanner<S>;
+
     #[inline]
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut reader = MvccReader::new(
@@ -194,6 +221,21 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .build()?;
 
         Ok(scanner)
+    }
+
+    fn build_range_scanner_forward(
+        &self,
+        key_only: bool,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
+    ) -> failure::Fallible<Self::RangeScanner> {
+        self.verify_range(&lower_bound, &upper_bound)?;
+        ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false)
+            .range(lower_bound, upper_bound)
+            .omit_value(key_only)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .build_forward_range_scanner()
     }
 }
 
@@ -297,6 +339,8 @@ impl FixtureStore {
 impl Store for FixtureStore {
     type Scanner = FixtureStoreScanner;
 
+    type RangeScanner = FixtureStoreRangeScanner;
+
     #[inline]
     fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>> {
         let r = self.data.get(key);
@@ -365,6 +409,27 @@ impl Store for FixtureStore {
             // TODO: Remove clone when GATs is available. See rust-lang/rfcs#1598.
             data: vec.into_iter(),
         })
+    }
+}
+
+pub struct FixtureStoreRangeScanner;
+
+impl RangeScanner for FixtureStoreRangeScanner {
+    fn scan_first_lock(&mut self) -> failure::Fallible<()> {
+        unimplemented!()
+    }
+
+    fn next(
+        &mut self,
+        _n: usize,
+        _out_keys: &mut BufferVec,
+        _out_values: &mut BufferVec,
+    ) -> failure::Fallible<usize> {
+        unimplemented!()
+    }
+
+    fn take_statistics(&mut self) -> Statistics {
+        unimplemented!()
     }
 }
 

@@ -4,4 +4,5 @@ mod reader;
 mod scanner;
 pub use self::reader::MvccReader;
 pub use self::scanner::EntryScanner;
-pub use self::scanner::{Scanner, ScannerBuilder};
+pub use self::scanner::RangeForwardScanner;
+pub use self::scanner::{Scanner, ScannerBuilder, ScannerConfig};

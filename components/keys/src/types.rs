@@ -26,7 +26,7 @@ pub type KvPair = (Vec<u8>, Value);
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Key(Vec<u8>);
+pub struct Key(pub Vec<u8>);
 
 /// Core functions for `Key`.
 impl Key {

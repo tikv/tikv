@@ -86,6 +86,18 @@ impl BufferVec {
         self.data.extend_from_slice(buffer.as_ref());
     }
 
+    /// Returns a mutable reference to the underlying data storage.
+    #[inline]
+    pub unsafe fn mut_data(&mut self) -> &mut Vec<u8> {
+        &mut self.data
+    }
+
+    /// Returns a mutable reference to the underlying offset storage.
+    #[inline]
+    pub unsafe fn mut_offsets(&mut self) -> &mut Vec<usize> {
+        &mut self.offsets
+    }
+
     /// Removes the last buffer if there is any.
     #[inline]
     pub fn pop(&mut self) {
@@ -150,6 +162,13 @@ impl BufferVec {
     pub fn clear(&mut self) {
         self.data.clear();
         self.offsets.clear();
+    }
+
+    /// Reserves capacity to be inserted in. The `BufferVec` may reserve more space.
+    #[inline]
+    pub fn reserve(&mut self, elements_addition: usize, data_addition: usize) {
+        self.data.reserve(data_addition);
+        self.offsets.reserve(elements_addition);
     }
 
     /// Copies all buffers from `other` to `self`.
