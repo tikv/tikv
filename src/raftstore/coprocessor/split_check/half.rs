@@ -142,11 +142,35 @@ fn get_region_approximate_middle_cf(
 
     let mut keys = Vec::new();
     for (_, v) in &*collection {
-        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+        let mut props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+        let start_offset = match props
+            .offsets
+            .binary_search_by_key(&start_key.as_slice(), |&(ref a, ref b)| a)
+        {
+            Ok(idx) => {
+                if idx == props.offsets.len() - 1 {
+                    continue;
+                } else {
+                    idx + 1
+                }
+            }
+            Err(next_idx) => next_idx,
+        };
+
+        let end_offset = match props.offsets.binary_search_by_key(&end_key.as_slice(), |&(ref a, ref b)| a) {
+            Ok(idx) => {
+                if idx == 0 {
+                    continue;
+                } else {
+                    idx - 1
+                }
+            }
+            Err(next_idx) => next_idx - 1,
+        };
         keys.extend(
             props
                 .offsets
-                .range::<[u8], _>((Excluded(start_key.as_slice()), Excluded(end_key.as_slice())))
+                .drain(start_offset..=end_offset)
                 .map(|(k, _)| k.to_owned()),
         );
     }

@@ -492,7 +492,7 @@ impl RangeOffsets {
 
 #[derive(Debug, Default)]
 pub struct RangeProperties {
-    pub offsets: BTreeMap<Vec<u8>, RangeOffsets>,
+    pub offsets: Vec<(Vec<u8>, RangeOffsets)>,
 }
 
 impl RangeProperties {
@@ -527,7 +527,7 @@ impl RangeProperties {
             let mut offsets = RangeOffsets::default();
             offsets.size = number::decode_u64(&mut buf)?;
             offsets.keys = number::decode_u64(&mut buf)?;
-            res.offsets.insert(k, offsets);
+            res.offsets.push((k, offsets));
         }
         Ok(res)
     }
@@ -551,16 +551,28 @@ impl RangeProperties {
             return 0;
         }
 
-        let range = self.offsets.range::<[u8], _>((Unbounded, Included(start)));
-        let start_offset = match range.last() {
-            Some((_, v)) => v.get(kind),
-            None => 0,
+        let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref a, ref b)| a) {
+            Ok(idx) => self.offsets[idx].1.get(kind),
+            Err(next_idx) => {
+                if next_idx == 0 {
+                    0
+                } else {
+                    self.offsets[next_idx - 1].1.get(kind)
+                }
+            }
         };
-        let range = self.offsets.range::<[u8], _>((Unbounded, Included(end)));
-        let end_offset = match range.last() {
-            Some((_, v)) => v.get(kind),
-            None => 0,
+
+        let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref a, ref b)| a) {
+            Ok(idx) => self.offsets[idx].1.get(kind),
+            Err(next_idx) => {
+                if next_idx == 0 {
+                    0
+                } else {
+                    self.offsets[next_idx - 1].1.get(kind)
+                }
+            }
         };
+
         if end_offset < start_offset {
             panic!(
                 "start {:?} end {:?} start_offset {} end_offset {}",
@@ -571,11 +583,11 @@ impl RangeProperties {
     }
 
     pub fn smallest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.iter().next().map(|(key, _)| key.clone())
+        self.offsets.first().map(|(a, b)| a.to_owned())
     }
 
     pub fn largest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.iter().last().map(|(key, _)| key.clone())
+        self.offsets.last().map(|(a, b)| a.to_owned())
     }
 }
 
@@ -585,7 +597,7 @@ impl From<SizeProperties> for RangeProperties {
         for (key, size_handle) in p.index_handles.0 {
             let mut range = RangeOffsets::default();
             range.size = size_handle.offset;
-            res.offsets.insert(key, range);
+            res.offsets.push((key, range));
         }
         res
     }
@@ -632,7 +644,7 @@ impl RangePropertiesCollector {
 
     fn insert_new_point(&mut self, key: Vec<u8>) {
         self.last_offsets = self.cur_offsets.clone();
-        self.props.offsets.insert(key, self.cur_offsets.clone());
+        self.props.offsets.push((key, self.cur_offsets.clone()));
     }
 }
 

@@ -266,12 +266,36 @@ fn get_approximate_split_keys_cf(
     let mut keys = vec![];
     let mut total_size = 0;
     for (_, v) in &*collection {
-        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+        let mut props = box_try!(RangeProperties::decode(v.user_collected_properties()));
         total_size += props.get_approximate_size_in_range(&start, &end);
+        let start_offset = match props
+            .offsets
+            .binary_search_by_key(&start.as_slice(), |&(ref a, ref b)| a)
+        {
+            Ok(idx) => {
+                if idx == props.offsets.len() - 1 {
+                    continue;
+                } else {
+                    idx + 1
+                }
+            }
+            Err(next_idx) => next_idx,
+        };
+
+        let end_offset = match props.offsets.binary_search_by_key(&end.as_slice(), |&(ref a, ref b)| a) {
+            Ok(idx) => {
+                if idx == 0 {
+                    continue;
+                } else {
+                    idx - 1
+                }
+            }
+            Err(next_idx) => next_idx - 1,
+        };
         keys.extend(
             props
                 .offsets
-                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
+                .drain(start_offset..=end_offset)
                 .map(|(k, _)| k.to_owned()),
         );
     }

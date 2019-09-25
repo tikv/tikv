@@ -818,10 +818,40 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 approximate_keys,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
-                    get_region_approximate_size(&self.db, &region).unwrap_or_default()
+                    if let Ok(size) = get_region_approximate_size(&self.db, &region) {
+                        // send it to raftstore to update region approximate size
+                        let res = CasualMessage::RegionApproximateSize { size };
+                        if let Err(e) = self
+                            .router
+                            .send(region.get_id(), PeerMsg::CasualMessage(res))
+                        {
+                            warn!(
+                                "failed to send approximate region size";
+                                "region_id" => region.get_id(),
+                                "err" => %e,
+                            );
+                        }
+                        return size;
+                    }
+                    return 0;
                 });
                 let approximate_keys = approximate_keys.unwrap_or_else(|| {
-                    get_region_approximate_keys(&self.db, &region).unwrap_or_default()
+                    if let Ok(keys) = get_region_approximate_keys(&self.db, &region) {
+                        // send it to raftstore to update region approximate size
+                        let res = CasualMessage::RegionApproximateKeys { keys };
+                        if let Err(e) = self
+                            .router
+                            .send(region.get_id(), PeerMsg::CasualMessage(res))
+                        {
+                            warn!(
+                                "failed to send approximate region size";
+                                "region_id" => region.get_id(),
+                                "err" => %e,
+                            );
+                        }
+                        return keys;
+                    }
+                    return 0;
                 });
                 let (
                     read_bytes_delta,
