@@ -2532,6 +2532,13 @@ impl ApplyFsm {
 
         // if it is already up to date, no need to catch up anymore
         let apply_index = self.delegate.apply_state.get_applied_index();
+        debug!(
+            "check catch up logs for merge";
+            "apply_index" => apply_index,
+            "commit" => catch_up_logs.merge.get_commit(),
+            "region_id" => self.delegate.region_id(),
+            "peer_id" => self.delegate.id(),
+        );
         if apply_index < catch_up_logs.merge.get_commit() {
             fail_point!("on_handle_catch_up_logs_for_merge");
             let mut res = VecDeque::new();
