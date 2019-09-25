@@ -662,16 +662,9 @@ mod tests {
         inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
         inspect_test(&lease, None, LeaseState::Expired);
 
-        // An expired remote lease can never renew.
+        // The remote lease should be renewed since the lease is renewed.
         lease.renew(monotonic_raw_now() + TimeDuration::minutes(1));
-        assert_eq!(
-            remote.inspect(Some(monotonic_raw_now())),
-            LeaseState::Expired
-        );
-
-        // A new remote lease.
-        let m1 = lease.remote_lease();
-        assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+        assert_eq!(remote.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
     }
 
     #[test]
