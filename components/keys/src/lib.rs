@@ -196,6 +196,7 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
     v
 }
 
+#[inline]
 pub fn data_key_ref(key: &[u8], cleared_key_buf: &mut Vec<u8>) {
     cleared_key_buf.extend_from_slice(DATA_PREFIX_KEY);
     cleared_key_buf.extend_from_slice(key);
