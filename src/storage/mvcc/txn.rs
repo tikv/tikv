@@ -6,10 +6,10 @@ use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{extract_physical, Error, Result};
 use crate::storage::kv::{Cursor, Modify, ScanMode, Snapshot};
-use crate::storage::txn::{self, scheduler::Msg, MsgScheduler};
+use crate::storage::txn::{self, scheduler::Msg, MsgScheduler, ProcessResult};
 use crate::storage::{
-    is_short_value, Command, CommandKind, Key, Mutation, Options, Statistics, Value, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
+    is_short_value, Command, CommandKind, Error as StorageError, Key, Mutation, Options,
+    Result as StorageResult, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use kvproto::kvrpcpb::IsolationLevel;
 use std::collections::BTreeMap;
@@ -444,9 +444,14 @@ impl<S: Snapshot> MvccTxn<S> {
             info.set_key(key.into_raw()?);
             info.set_lock_ttl(lock.ttl);
             info.set_txn_size(lock.txn_size);
-            Ok(Some(Msg::FinishedWithErr {
+            Ok(Some(Msg::WriteFinished {
                 cid,
-                err: txn::Error::Mvcc(Error::KeyIsLocked(info)),
+                pr: ProcessResult::MultiRes {
+                    results: vec![StorageResult::Err(StorageError::Txn(txn::Error::Mvcc(
+                        Error::KeyIsLocked(info),
+                    )))],
+                },
+                result: Ok(()),
                 tag,
             }))
         } else {
