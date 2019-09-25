@@ -700,6 +700,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_traits"
+version = "0.0.1"
+dependencies = [
+ "hex",
+ "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quick-error",
+ "tikv_alloc",
+ "tikv_util",
+]
+
+[[package]]
 name = "error-chain"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2939,6 +2950,7 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "engine",
+ "engine_traits",
  "fail",
  "failure",
  "farmhash",
