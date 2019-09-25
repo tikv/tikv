@@ -600,6 +600,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 scheduler.on_batch_msg(ids[min_idx.0], msg);
                 ids[min_idx.0] = u64::max_value();
             }
+            if !write_iter.valid()? {
+                break;
+            }
             // update range w.r.t. latest cursor value
             range = map.range::<Vec<u8>, _>(
                 &write_iter.key(self.reader.mut_write_statistics()).to_vec()..max_key.as_encoded(),
@@ -630,6 +633,9 @@ impl<S: Snapshot> MvccTxn<S> {
             if let Some(msg) = self.check_lock(cid, tag, min_key, &mut lock_iter)? {
                 scheduler.on_batch_msg(ids[min_idx.0], msg);
                 ids[min_idx.0] = u64::max_value();
+            }
+            if !lock_iter.valid()? {
+                break;
             }
             range = map.range::<Vec<u8>, _>(
                 &lock_iter.key(self.reader.mut_lock_statistics()).to_vec()..max_key.as_encoded(),
