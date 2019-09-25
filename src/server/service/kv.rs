@@ -1171,7 +1171,7 @@ fn handle_batch_commands_request<E: Engine, L: LockMgr>(
         }
         Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC
-                .kv_check_txn_status
+                .kv_txn_heart_beat
                 .start_coarse_timer();
             let resp = future_txn_heart_beat(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::TxnHeartBeat))
@@ -1528,6 +1528,7 @@ fn future_cleanup<E: Engine, L: LockMgr>(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_start_version(),
+        req.get_current_ts(),
         cb,
     );
 

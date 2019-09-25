@@ -833,7 +833,7 @@ pub mod tests {
         let commit = alloc_ts();
         must_commit(&engine, key.as_bytes(), start, commit);
 
-        // Test whether it can correctly convert not leader to regoin error.
+        // Test whether it can correctly convert not leader to region error.
         engine.trigger_not_leader();
         let now = alloc_ts();
         req.set_start_version(now);
