@@ -315,7 +315,19 @@ impl<S: Snapshot> MvccTxn<S> {
                 return Err(Error::AlreadyExist { key: key.to_raw()? });
             }
         }
-        // TODO: get latest rollback and check conflicts
+        // Get latest rollback/lock and check conflicts
+        if let Some(rollback) = self.reader.seek_rollback(&key, u64::max_value())? {
+            if rollback.commit_ts >= self.start_ts {
+                MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                return Err(Error::WriteConflict {
+                    start_ts: self.start_ts,
+                    conflict_start_ts: rollback.start_ts,
+                    conflict_commit_ts: rollback.commit_ts,
+                    key: key.into_raw()?,
+                    primary: primary.to_vec(),
+                });
+            }
+        }
 
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
