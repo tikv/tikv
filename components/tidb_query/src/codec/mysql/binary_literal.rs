@@ -15,27 +15,28 @@ use crate::expr::EvalContext;
 pub struct BinaryLiteral(Vec<u8>);
 
 fn trim_leading_zero_bytes(bytes: &[u8]) -> &[u8] {
-    if bytes.len() == 0 {
+    if bytes.is_empty() {
         return bytes;
     }
-    let (mut pos, pos_max) = (0, bytes.len() - 1);
-    while pos < pos_max {
-        if bytes[pos] != 0 {
-            break;
-        }
-        pos += 1;
-    }
+    let (pos, _) = bytes
+        .iter()
+        .enumerate()
+        .find(|(_, &x)| x != 0)
+        .unwrap_or((bytes.len() - 1, &0));
     &bytes[pos..]
 }
 
 /// Returns the int value for the literal.
-pub fn to_uint(ctx: &mut EvalContext, lit: &BinaryLiteral) -> Result<u64> {
-    let bytes = trim_leading_zero_bytes(&lit.0);
-    if bytes.len() == 0 {
+pub fn to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
+    let bytes = trim_leading_zero_bytes(bytes);
+    if bytes.is_empty() {
         return Ok(0);
     }
     if bytes.len() > 8 {
-        ctx.handle_truncate_err(Error::truncated_wrong_val("BINARY", lit.to_string()))?;
+        ctx.handle_truncate_err(Error::truncated_wrong_val(
+            "BINARY",
+            BinaryLiteral(bytes.to_owned()).to_string(),
+        ))?;
         return Ok(std::u64::MAX);
     }
     let mut val = bytes[0] as u64;
@@ -67,7 +68,7 @@ impl BinaryLiteral {
     /// Parses hexadecimal string literal.
     /// See https://dev.mysql.com/doc/refman/5.7/en/hexadecimal-literals.html
     pub fn from_hex_str(s: &str) -> Result<Self> {
-        if s.len() == 0 {
+        if s.is_empty() {
             return Err(box_err!(
                 "invalid empty string for parsing hexadecimal literal"
             ));
@@ -90,7 +91,7 @@ impl BinaryLiteral {
             // here means format is not x'val', X'val' or 0xval.
             return Err(box_err!("invalid hexadecimal format: {}", s));
         };
-        if trimed.len() == 0 {
+        if trimed.is_empty() {
             return Ok(BinaryLiteral(vec![]));
         }
         let v = if trimed.len() % 2 != 0 {
@@ -107,7 +108,7 @@ impl BinaryLiteral {
     /// The string format can be b'val', B'val' or 0bval, val must be 0 or 1.
     /// See https://dev.mysql.com/doc/refman/5.7/en/bit-value-literals.html
     pub fn from_bit_str(s: &str) -> Result<Self> {
-        if s.len() == 0 {
+        if s.is_empty() {
             return Err(box_err!("invalid empty string for parsing bit type"));
         }
         let trimed = if s.starts_with('b') || s.starts_with('B') {
@@ -120,7 +121,7 @@ impl BinaryLiteral {
             // here means format is not b'val', B'val' or 0bval.
             return Err(box_err!("invalid hexadecimal format: {}", s));
         };
-        if trimed.len() == 0 {
+        if trimed.is_empty() {
             return Ok(BinaryLiteral(vec![]));
         }
 
@@ -143,7 +144,7 @@ impl BinaryLiteral {
 
     /// Returns the bit literal representation for the literal.
     pub fn to_bit_string(&self, trim_zero: bool) -> String {
-        if self.0.len() == 0 {
+        if self.0.is_empty() {
             return "b''".to_string();
         }
         let mut s = String::with_capacity(self.0.len() * 2 + 1);
@@ -152,7 +153,7 @@ impl BinaryLiteral {
         }
         if trim_zero {
             let trimed = s.trim_start_matches('0');
-            if trimed.len() == 0 {
+            if trimed.is_empty() {
                 s.clear();
                 s.push_str("b'0'");
                 return s;
@@ -167,13 +168,13 @@ impl BinaryLiteral {
 
     /// Returns the int value for the literal.
     pub fn to_uint(&self, ctx: &mut EvalContext) -> Result<u64> {
-        to_uint(ctx, self)
+        to_uint(ctx, &self.0)
     }
 }
 
 impl ToString for BinaryLiteral {
     fn to_string(&self) -> String {
-        if self.0.len() == 0 {
+        if self.0.is_empty() {
             return "".to_string();
         }
         format!("0x{}", hex::encode(self.0.as_slice()))
