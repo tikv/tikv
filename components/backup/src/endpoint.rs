@@ -24,7 +24,7 @@ use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use crate::metrics::*;
 use crate::*;
 
-const WORKER_TAKE_RANGE: usize = 5;
+const WORKER_TAKE_RANGE: usize = 6;
 const WORKER_NUM: usize = 8;
 
 /// Backup task.
@@ -110,12 +110,33 @@ pub struct BackupRange {
 
 impl BackupRange {
     /// Get entries from the scanner and save them to storage
-    fn backup(
+    fn backup<E: Engine>(
         &self,
-        mut scanner: Box<dyn TxnEntryScanner>,
-        mut writer: BackupWriter,
-        storage: &LimitedStorage,
-    ) -> Result<BackupRes> {
+        writer: &mut BackupWriter,
+        engine: &E,
+        backup_ts: u64,
+    ) -> Result<Statistics> {
+        let mut ctx = Context::new();
+        ctx.set_region_id(self.region.get_id());
+        ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
+        ctx.set_peer(self.leader.clone());
+        let snapshot = match engine.snapshot(&ctx) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("backup snapshot failed"; "error" => ?e);
+                return Err(e.into());
+            }
+        };
+        let snap_store = SnapshotStore::new(
+            snapshot,
+            backup_ts,
+            IsolationLevel::Si,
+            false, /* fill_cache */
+        );
+        let start_key = self.start_key.clone();
+        let end_key = self.end_key.clone();
+        let mut scanner = snap_store.entry_scanner(start_key, end_key).unwrap();
+
         let start = Instant::now();
         let mut batch = EntryBatch::with_capacity(1024);
         loop {
@@ -136,16 +157,8 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
             .observe(start.elapsed().as_secs_f64());
-        // Save sst files to storage.
-        let files = match writer.save(&storage.storage) {
-            Ok(files) => files,
-            Err(e) => {
-                error!("backup save file failed"; "error" => ?e);
-                return Err(e);
-            }
-        };
         let stat = scanner.take_statistics();
-        Ok((files, stat))
+        Ok(stat)
     }
 }
 
@@ -186,7 +199,7 @@ impl<R: RegionInfoProvider> Progress<R> {
     /// Forward the progress by `ranges` BackupRanges
     ///
     /// The size of the returned BackupRanges should <= `ranges`
-    fn forward(&mut self, ranges: usize) -> Vec<BackupRange> {
+    fn forward(&mut self, limit: usize) -> Vec<BackupRange> {
         if self.finished {
             return Vec::new();
         }
@@ -224,14 +237,13 @@ impl<R: RegionInfoProvider> Progress<R> {
                             region: region.clone(),
                             leader,
                         };
-                        tx.send(Some(backup_range)).unwrap();
+                        tx.send(backup_range).unwrap();
                         sended += 1;
-                        if sended >= ranges {
+                        if sended >= limit {
                             break;
                         }
                     }
                 }
-                tx.send(None).unwrap();
             }),
         );
         if let Err(e) = res {
@@ -239,7 +251,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             error!("backup seek region failed"; "error" => ?e);
         }
 
-        let branges: Vec<_> = rx.iter().filter_map(|a| a).collect();
+        let branges: Vec<_> = rx.iter().collect();
         if let Some(b) = branges.last() {
             // The region's end key is empty means it is the last
             // region, we need to set the `finished` flag here in case
@@ -297,38 +309,28 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     warn!("backup task has canceled"; "range" => ?brange);
                     return Ok(());
                 }
-                let mut ctx = Context::new();
-                ctx.set_region_id(brange.region.get_id());
-                ctx.set_region_epoch(brange.region.get_region_epoch().to_owned());
-                ctx.set_peer(brange.leader.clone());
-                let snapshot = match engine.snapshot(&ctx) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("backup snapshot failed"; "error" => ?e);
-                        return tx.send((brange, Err(e.into()))).map_err(|_| ());
-                    }
-                };
-                let snap_store = SnapshotStore::new(
-                    snapshot,
-                    backup_ts,
-                    IsolationLevel::Si,
-                    false, /* fill_cache */
-                );
-                let start_key = brange.start_key.clone();
-                let end_key = brange.end_key.clone();
-                let scanner = snap_store
-                    .entry_scanner(start_key.clone(), end_key.clone())
-                    .unwrap();
                 let name = backup_file_name(store_id, &brange.region);
-                let writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone()) {
+                let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
+                {
                     Ok(w) => w,
                     Err(e) => {
                         error!("backup writer failed"; "error" => ?e);
                         return tx.send((brange, Err(e))).map_err(|_| ());
                     }
                 };
-                let res = brange.backup(Box::new(scanner), writer, &storage);
-                let _ = tx.send((brange, res)).map_err(|_| ());
+                let stat = match brange.backup(&mut writer, &engine, backup_ts) {
+                    Ok(s) => s,
+                    Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
+                };
+                // Save sst files to storage.
+                let files = match writer.save(&storage.storage) {
+                    Ok(files) => files,
+                    Err(e) => {
+                        error!("backup save file failed"; "error" => ?e);
+                        return tx.send((brange, Err(e))).map_err(|_| ());
+                    }
+                };
+                let _ = tx.send((brange, Ok((files, stat)))).map_err(|_| ());
             }
         }));
     }
@@ -376,8 +378,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 .end_key
                 .map_or_else(|| vec![], |k| k.into_raw().unwrap());
             let mut response = BackupResponse::new();
-            response.set_start_key(start_key.clone());
-            response.set_end_key(end_key.clone());
             match res {
                 Ok((mut files, stat)) => {
                     debug!("backup region finish";
@@ -404,6 +404,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     response.set_error(e.into());
                 }
             }
+            response.set_start_key(start_key);
+            response.set_end_key(end_key);
             if let Err(e) = resp.unbounded_send(response) {
                 error!("backup failed to send response"; "error" => ?e);
                 break;
