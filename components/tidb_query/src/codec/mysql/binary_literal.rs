@@ -39,10 +39,7 @@ pub fn to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
         ))?;
         return Ok(std::u64::MAX);
     }
-    let mut val = bytes[0] as u64;
-    for v in &bytes[1..] {
-        val = (val << 8) | (*v as u64);
-    }
+    let val = bytes.iter().fold(0, |acc, x| acc << 8 | (u64::from(*x)));
     Ok(val)
 }
 
@@ -76,8 +73,8 @@ impl BinaryLiteral {
 
         let trimed = if s.starts_with('x') || s.starts_with('X') {
             // format is x'val' or X'val'
-            let trimed = s[1..].trim_start_matches("'");
-            let trimed = trimed.trim_end_matches("'");
+            let trimed = s[1..].trim_start_matches('\'');
+            let trimed = trimed.trim_end_matches('\'');
             if trimed.len() % 2 != 0 {
                 return Err(box_err!(
                     "invalid hexadecimal format, must even numbers, but {}",
@@ -113,8 +110,8 @@ impl BinaryLiteral {
         }
         let trimed = if s.starts_with('b') || s.starts_with('B') {
             // format is b'val' or B'val'
-            let trimed = s[1..].trim_start_matches("'");
-            trimed.trim_end_matches("'")
+            let trimed = s[1..].trim_start_matches('\'');
+            trimed.trim_end_matches('\'')
         } else if s.starts_with("0b") {
             s.trim_start_matches("0b")
         } else {
