@@ -2,7 +2,6 @@
 
 mod metrics;
 mod raft_client;
-mod service;
 
 pub mod config;
 pub mod debug;
@@ -12,6 +11,7 @@ pub mod node;
 pub mod readpool;
 pub mod resolve;
 pub mod server;
+pub mod service;
 pub mod snap;
 pub mod status_server;
 pub mod transport;
