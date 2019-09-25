@@ -26,36 +26,36 @@ pub type KvPair = (Vec<u8>, Value);
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Key(pub(crate) Vec<u8>);
+pub struct Key(Vec<u8>);
 
-pub struct KeyBuilder(Key);
+pub struct KeyBuilder(Vec<u8>);
+
+const DEFAULT_BUILDER_SZ: usize = 20;
 
 impl AsRef<Key> for KeyBuilder {
     fn as_ref(&self) -> &Key {
-        &self.0
+        unsafe { &*(&self.0 as *const Vec<u8> as *const Key) }
     }
 }
-
-const DEFAULT_BUILDER_SZ: usize = 20;
 
 impl KeyBuilder {
     #[inline]
     pub fn append_ts(&mut self, ts: u64) {
         let encoded = &mut self.0;
-        encoded.0.encode_u64_desc(ts).unwrap();
+        encoded.encode_u64_desc(ts).unwrap();
     }
 
     #[inline]
     pub fn copy_from_encoded_key(&mut self, key: &Key) {
         let buf = &mut self.0;
-        buf.0.truncate(0);
-        buf.0.extend_from_slice(&key.0);
+        buf.truncate(0);
+        buf.extend_from_slice(&key.0);
     }
 }
 
 impl Default for KeyBuilder {
     fn default() -> Self {
-        KeyBuilder(Key(Vec::with_capacity(DEFAULT_BUILDER_SZ)))
+        KeyBuilder(Vec::with_capacity(DEFAULT_BUILDER_SZ))
     }
 }
 
@@ -249,16 +249,6 @@ mod tests {
         let enc = Key::from_encoded_slice(k).append_ts(ts);
         let res = Key::split_on_ts_for(enc.as_encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
-    }
-
-    #[test]
-    fn test_key_builder() {
-        let mut builder = KeyBuilder::default();
-        let k = Key::from_raw(b"keybuilder");
-
-        builder.copy_from_encoded_key(&k);
-        println!("{:}", &k);
-        println!("{:}", builder.as_ref());
     }
 
     #[test]
