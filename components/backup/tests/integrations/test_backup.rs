@@ -55,14 +55,15 @@ impl TestSuite {
 
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
+        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
+
         let epoch = cluster.get_region_epoch(region_id);
         let mut context = Context::default();
         context.set_region_id(region_id);
-        context.set_peer(leader.clone());
+        context.set_peer(leader);
         context.set_region_epoch(epoch);
 
         let env = Arc::new(Environment::new(1));
-        let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
         let channel = ChannelBuilder::new(env.clone()).connect(&leader_addr);
         let tikv_cli = TikvClient::new(channel);
 
@@ -135,7 +136,7 @@ impl TestSuite {
         req.set_end_key(end_key);
         req.start_version = backup_ts;
         req.end_version = backup_ts;
-        req.set_path(path.clone());
+        req.set_path(path);
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
@@ -247,7 +248,7 @@ fn test_backup_and_import() {
         ingest.mut_ingest_sst().set_sst(m.clone());
         let mut header = RaftRequestHeader::default();
         let leader = suite.context.get_peer().clone();
-        header.set_peer(leader.clone());
+        header.set_peer(leader);
         header.set_region_id(suite.context.get_region_id());
         header.set_region_epoch(suite.context.get_region_epoch().clone());
         let mut cmd = RaftCmdRequest::default();
@@ -272,7 +273,7 @@ fn test_backup_and_import() {
         ),
     );
     let resps3 = rx.collect().wait().unwrap();
-    assert_eq!(files1, resps3[0].files.clone());
+    assert_eq!(files1, resps3[0].files);
 
     suite.stop();
 }
