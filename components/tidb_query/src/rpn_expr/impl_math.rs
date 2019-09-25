@@ -28,6 +28,7 @@ impl Ceil for CeilReal {
     type Input = Real;
     type Output = Real;
 
+    #[inline]
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
         Ok(Some(Real::from(arg.ceil())))
     }
@@ -39,6 +40,7 @@ impl Ceil for CeilDecToDec {
     type Input = Decimal;
     type Output = Decimal;
 
+    #[inline]
     fn ceil(ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
         Ok(arg.ceil().into_result(ctx).map(Some)?)
     }
@@ -50,6 +52,7 @@ impl Ceil for CeilDecToInt {
     type Input = Decimal;
     type Output = Int;
 
+    #[inline]
     fn ceil(ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
         Ok(arg
             .ceil()
@@ -64,6 +67,8 @@ pub struct CeilIntToInt;
 impl Ceil for CeilIntToInt {
     type Input = Int;
     type Output = Int;
+
+    #[inline]
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
         Ok(Some(*arg))
     }
