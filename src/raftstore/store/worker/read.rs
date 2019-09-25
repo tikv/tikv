@@ -87,26 +87,20 @@ impl ReadDelegate {
         metrics: &mut ReadMetrics,
     ) -> Option<ReadResponse> {
         if let Some(ref lease) = self.leader_lease {
-            let term = lease.term();
-            if term == self.term {
-                let snapshot_time = executor.snapshot_time().unwrap();
-                let mut last_valid_ts = self.last_valid_ts.borrow_mut();
-                if *last_valid_ts == snapshot_time /* quick path for lease checking. */
+            let snapshot_time = executor.snapshot_time().unwrap();
+            let mut last_valid_ts = self.last_valid_ts.borrow_mut();
+            if *last_valid_ts == snapshot_time /* quick path for lease checking. */
                     || lease.inspect(Some(snapshot_time)) == LeaseState::Valid
-                {
-                    // Cache snapshot_time for remaining requests in the same batch.
-                    *last_valid_ts = snapshot_time;
-                    let mut resp = executor.execute(req, &self.region, None);
-                    // Leader can read local if and only if it is in lease.
-                    cmd_resp::bind_term(&mut resp.response, term);
-                    return Some(resp);
-                } else {
-                    metrics.rejected_by_lease_expire += 1;
-                    debug!("rejected by lease expire"; "tag" => &self.tag);
-                }
+            {
+                // Cache snapshot_time for remaining requests in the same batch.
+                *last_valid_ts = snapshot_time;
+                let mut resp = executor.execute(req, &self.region, None);
+                // Leader can read local if and only if it is in lease.
+                cmd_resp::bind_term(&mut resp.response, req.get_header().get_term());
+                return Some(resp);
             } else {
-                metrics.rejected_by_term_mismatch += 1;
-                debug!("rejected by term mismatch"; "tag" => &self.tag);
+                metrics.rejected_by_lease_expire += 1;
+                debug!("rejected by lease expire"; "tag" => &self.tag);
             }
         }
 
@@ -664,7 +658,7 @@ mod tests {
 
         // Register region 1
         lease.renew(monotonic_raw_now());
-        let remote = lease.maybe_new_remote_lease(term6).unwrap();
+        let remote = lease.remote_lease().unwrap();
         // But the applied_index_term is stale.
         {
             let mut meta = store_meta.lock().unwrap();

@@ -1581,9 +1581,7 @@ impl Peer {
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
-        let read_progress = if !self.is_leader() {
-            None
-        } else if self.is_splitting() {
+        if self.is_splitting() {
             // A splitting leader should not renew its lease.
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
@@ -1592,7 +1590,6 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            None
         } else if self.is_merging() {
             // A merging leader should not renew its lease.
             // Because we merge regions asynchronous, the leader may read stale results
@@ -1602,22 +1599,10 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            None
-        } else {
+        } else if !self.is_leader() {
             self.leader_lease.renew(ts);
-            let term = self.term();
-            if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
-                Some(ReadProgress::leader_lease(remote_lease))
-            } else {
-                None
-            }
         };
         if let Some(progress) = progress {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
-        }
-        if let Some(progress) = read_progress {
             let mut meta = ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id).unwrap();
             self.maybe_update_read_progress(reader, progress);
