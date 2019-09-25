@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::i32;
+use std::{i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
@@ -63,6 +63,7 @@ pub struct Config {
     pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: i32,
+    pub grpc_memory_pool_quota: ReadableSize,
     pub grpc_raft_conn_num: usize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
@@ -114,6 +115,7 @@ impl Default for Config {
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
+            grpc_memory_pool_quota: ReadableSize(isize::MAX as u64),
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
             // There will be a heartbeat every secs, it's weird a connection will be idle for more
