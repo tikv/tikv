@@ -157,7 +157,10 @@ fn get_region_approximate_middle_cf(
             Err(next_idx) => next_idx,
         };
 
-        let end_offset = match props.offsets.binary_search_by_key(&end_key.as_slice(), |&(ref a, ref b)| a) {
+        let end_offset = match props
+            .offsets
+            .binary_search_by_key(&end_key.as_slice(), |&(ref a, ref b)| a)
+        {
             Ok(idx) => {
                 if idx == 0 {
                     continue;

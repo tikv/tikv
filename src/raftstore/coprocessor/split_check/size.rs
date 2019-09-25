@@ -282,7 +282,10 @@ fn get_approximate_split_keys_cf(
             Err(next_idx) => next_idx,
         };
 
-        let end_offset = match props.offsets.binary_search_by_key(&end.as_slice(), |&(ref a, ref b)| a) {
+        let end_offset = match props
+            .offsets
+            .binary_search_by_key(&end.as_slice(), |&(ref a, ref b)| a)
+        {
             Ok(idx) => {
                 if idx == 0 {
                     continue;
