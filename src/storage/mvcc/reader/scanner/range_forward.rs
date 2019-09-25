@@ -7,7 +7,7 @@ use tikv_util::buffer_vec::BufferVec;
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::reader::scanner::util::CheckLockResult;
+use crate::storage::mvcc::reader::util::CheckLockResult;
 use crate::storage::mvcc::write2::Write2;
 use crate::storage::mvcc::{Lock, WriteType};
 use crate::storage::{Cursor, RangeScanner, Snapshot, Statistics};
@@ -105,7 +105,8 @@ impl<S: Snapshot> RangeForwardScanner<S> {
                 let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                 Lock::parse(lock_value)?
             };
-            match super::util::check_lock(
+            // TODO: Avoid allocation
+            match super::super::util::check_lock(
                 &Key::from_encoded_slice(self.lock_cursor.key(&mut self.statistics.lock)),
                 self.cfg.ts,
                 &lock,
@@ -419,7 +420,7 @@ mod tests {
             .unwrap();
 
         assert!(scanner.scan_first_lock().is_ok());
-        assert!(
+        assert_eq!(
             scanner
                 .next(10, &mut keys_buffer, &mut values_buffer)
                 .unwrap(),
@@ -431,17 +432,17 @@ mod tests {
         for ts in 0..5 {
             must_rollback(&engine, b"b", ts);
         }
-        must_prewrite_put(&engine, b"c", b"value_b", b"c", 3);
+        must_prewrite_put(&engine, b"c", b"value_c", b"c", 3);
         must_commit(&engine, b"c", 3, 3);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
             .range(None, None)
             .build_forward_range_scanner()
             .unwrap();
 
         assert!(scanner.scan_first_lock().is_ok());
-        assert!(
+        assert_eq!(
             scanner
                 .next(10, &mut keys_buffer, &mut values_buffer)
                 .unwrap(),
@@ -451,18 +452,18 @@ mod tests {
         assert_eq!(values_buffer.len(), 2);
         assert_eq!(&keys_buffer[0], b"a");
         assert_eq!(&values_buffer[0], b"value_a");
-        assert_eq!(&keys_buffer[1], b"b");
-        assert_eq!(&values_buffer[1], b"value_b");
+        assert_eq!(&keys_buffer[1], b"c");
+        assert_eq!(&values_buffer[1], b"value_c");
 
         keys_buffer.clear();
         values_buffer.clear();
-        let mut scanner = ScannerBuilder::new(snapshot, 1, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 5, false)
             .range(None, None)
             .build_forward_range_scanner()
             .unwrap();
 
         assert!(scanner.scan_first_lock().is_ok());
-        assert!(
+        assert_eq!(
             scanner
                 .next(10, &mut keys_buffer, &mut values_buffer)
                 .unwrap(),
@@ -470,7 +471,7 @@ mod tests {
         );
         assert_eq!(keys_buffer.len(), 1);
         assert_eq!(values_buffer.len(), 1);
-        assert_eq!(&keys_buffer[0], b"a");
-        assert_eq!(&values_buffer[0], b"value_a");
+        assert_eq!(&keys_buffer[0], b"c");
+        assert_eq!(&values_buffer[0], b"value_c");
     }
 }
