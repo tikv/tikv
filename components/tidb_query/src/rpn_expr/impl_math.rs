@@ -5,6 +5,7 @@ use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
 
+#[inline]
 #[rpn_fn(capture = [ctx])]
 pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: &Option<C::Input>) -> Result<Option<C::Output>> {
     if let Some(arg) = arg {
@@ -203,6 +204,7 @@ mod tests {
     fn test_ceil_dec_to_dec() {
         let cases = vec![
             ("9223372036854775808", "9223372036854775808"),
+            ("124", "123.456"),
             ("-123", "-123.456"),
         ];
 

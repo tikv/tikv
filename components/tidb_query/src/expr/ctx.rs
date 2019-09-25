@@ -240,11 +240,11 @@ impl EvalContext {
         Err(err)
     }
 
-    pub fn handle_overflow(&mut self, is_overflow: bool) -> Result<()> {
+    pub fn handle_decimal_overflow(&mut self, is_overflow: bool) -> Result<()> {
         if !is_overflow {
             Ok(())
         } else {
-            self.handle_overflow_err(Error::overflow("", ""))
+            self.handle_overflow_err(Error::overflow("DECIMAL", ""))
         }
     }
 
