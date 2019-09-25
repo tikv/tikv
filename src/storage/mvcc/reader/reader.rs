@@ -905,6 +905,9 @@ mod tests {
         engine.prewrite(m, k, 23);
         engine.commit(k, 23, 25);
 
+        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
+        // is 2.
+        // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3 Rollback].
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
 
@@ -985,24 +988,38 @@ mod tests {
         engine.delete(k, 8, 9);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 10);
-        engine.commit(k, 10, 11);
+        engine.prewrite(m, k, 12);
+        engine.commit(k, 12, 14);
+
+        let m = Mutation::Lock(Key::from_raw(k));
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 13, 15);
+        engine.prewrite_pessimistic_lock(m, k, 13);
+        engine.commit(k, 13, 15);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 12, 12);
-        engine.prewrite_pessimistic_lock(m, k, 12);
-        engine.commit(k, 12, 13);
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 18, 18);
+        engine.prewrite_pessimistic_lock(m, k, 18);
+        engine.commit(k, 18, 20);
+
+        let m = Mutation::Lock(Key::from_raw(k));
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 17, 21);
+        engine.prewrite_pessimistic_lock(m, k, 17);
+        engine.commit(k, 17, 21);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 14);
+        engine.prewrite(m, k, 24);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
-        // Commit versions: [13_12 PUT, 11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
+        // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE, 7_6 LOCK,
+        //                   5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
+
+        assert!(reader.get_write(&key, 1).unwrap().is_none());
+
         let write = reader.get_write(&key, 2).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1);
@@ -1017,17 +1034,26 @@ mod tests {
 
         assert!(reader.get_write(&key, 9).unwrap().is_none());
 
-        let write = reader.get_write(&key, 11).unwrap().unwrap();
-        assert_eq!(write.write_type, WriteType::Put);
-        assert_eq!(write.start_ts, 10);
-
-        let write = reader.get_write(&key, 13).unwrap().unwrap();
+        let write = reader.get_write(&key, 14).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12);
 
-        let write = reader.get_write(&key, 15).unwrap().unwrap();
+        let write = reader.get_write(&key, 16).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12);
+
+        let write = reader.get_write(&key, 20).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 18);
+
+        let write = reader.get_write(&key, 24).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 18);
+
+        assert!(reader
+            .get_write(&Key::from_raw(b"j"), 100)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
