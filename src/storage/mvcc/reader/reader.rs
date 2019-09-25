@@ -482,6 +482,7 @@ mod tests {
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
+    use crate::storage::mvcc::lock::{Lock, LockType};
     use crate::storage::mvcc::write::{Write, WriteType};
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{Key, Mutation, Options};
@@ -1104,5 +1105,89 @@ mod tests {
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         // Pessimistic locks don't block any read operation
         assert_eq!(reader.check_lock(&Key::from_raw(k4), 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_scan_locks() {
+        let path = Builder::new()
+            .prefix("_test_storage_mvcc_reader_scan_locks")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        // Put some locks to the db.
+        engine.prewrite(
+            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            b"k1",
+            5,
+        );
+        engine.prewrite(
+            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            b"k1",
+            10,
+        );
+        engine.prewrite(Mutation::Delete(Key::from_raw(b"k3")), b"k1", 10);
+        engine.prewrite(Mutation::Lock(Key::from_raw(b"k3\x00")), b"k1", 10);
+        engine.prewrite(Mutation::Delete(Key::from_raw(b"k4")), b"k1", 12);
+        engine.acquire_pessimistic_lock(Key::from_raw(b"k5"), b"k1", 10, 12);
+        engine.acquire_pessimistic_lock(Key::from_raw(b"k6"), b"k1", 12, 12);
+
+        // All locks whose ts <= 10.
+        let visible_locks: Vec<_> = vec![
+            // key, lock_type, short_value, ts, for_update_ts
+            (b"k1".to_vec(), LockType::Put, Some(b"v1".to_vec()), 5, 0),
+            (b"k2".to_vec(), LockType::Put, Some(b"v2".to_vec()), 10, 0),
+            (b"k3".to_vec(), LockType::Delete, None, 10, 0),
+            (b"k3\x00".to_vec(), LockType::Lock, None, 10, 0),
+            (b"k5".to_vec(), LockType::Pessimistic, None, 10, 12),
+        ]
+        .into_iter()
+        .map(|(k, lock_type, short_value, ts, for_update_ts)| {
+            (
+                Key::from_raw(&k),
+                Lock::new(
+                    lock_type,
+                    b"k1".to_vec(),
+                    ts,
+                    0,
+                    short_value,
+                    for_update_ts,
+                    0,
+                ),
+            )
+        })
+        .collect();
+
+        // Creates a reader and scan locks,
+        let check_scan_lock =
+            |start_key: Option<Key>, limit, expect_res: &[_], expect_is_remain| {
+                let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+                let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+                let res = reader
+                    .scan_locks(start_key.as_ref(), |l| l.ts <= 10, limit)
+                    .unwrap();
+                assert_eq!(res.0, expect_res);
+                assert_eq!(res.1, expect_is_remain);
+            };
+
+        check_scan_lock(None, 6, &visible_locks, false);
+        check_scan_lock(None, 5, &visible_locks, true);
+        check_scan_lock(None, 4, &visible_locks[0..4], true);
+        check_scan_lock(Some(Key::from_raw(b"k2")), 3, &visible_locks[1..4], true);
+        check_scan_lock(
+            Some(Key::from_raw(b"k3\x00")),
+            1,
+            &visible_locks[3..4],
+            true,
+        );
+        check_scan_lock(
+            Some(Key::from_raw(b"k3\x00")),
+            10,
+            &visible_locks[3..],
+            false,
+        );
     }
 }
