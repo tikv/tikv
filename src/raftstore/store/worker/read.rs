@@ -34,7 +34,7 @@ pub struct ReadDelegate {
     peer_id: u64,
     term: u64,
     applied_index_term: u64,
-    leader_lease: Option<RemoteLease>,
+    leader_lease: RemoteLease,
     last_valid_ts: RefCell<Timespec>,
 
     tag: String,
@@ -51,7 +51,7 @@ impl ReadDelegate {
             peer_id,
             term: peer.term(),
             applied_index_term: peer.get_store().applied_index_term(),
-            leader_lease: None,
+            leader_lease: peer.leader_lease().remote_lease(),
             last_valid_ts: RefCell::new(Timespec::new(0, 0)),
             tag: format!("[region {}] {}", region_id, peer_id),
             invalid: Arc::new(AtomicBool::new(false)),
@@ -73,9 +73,6 @@ impl ReadDelegate {
             Progress::AppliedIndexTerm(applied_index_term) => {
                 self.applied_index_term = applied_index_term;
             }
-            Progress::LeaderLease(leader_lease) => {
-                self.leader_lease = Some(leader_lease);
-            }
         }
     }
 
@@ -86,22 +83,20 @@ impl ReadDelegate {
         executor: &mut ReadExecutor,
         metrics: &mut ReadMetrics,
     ) -> Option<ReadResponse> {
-        if let Some(ref lease) = self.leader_lease {
-            let snapshot_time = executor.snapshot_time().unwrap();
-            let mut last_valid_ts = self.last_valid_ts.borrow_mut();
-            if *last_valid_ts == snapshot_time /* quick path for lease checking. */
-                    || lease.inspect(Some(snapshot_time)) == LeaseState::Valid
-            {
-                // Cache snapshot_time for remaining requests in the same batch.
-                *last_valid_ts = snapshot_time;
-                let mut resp = executor.execute(req, &self.region, None);
-                // Leader can read local if and only if it is in lease.
-                cmd_resp::bind_term(&mut resp.response, req.get_header().get_term());
-                return Some(resp);
-            } else {
-                metrics.rejected_by_lease_expire += 1;
-                debug!("rejected by lease expire"; "tag" => &self.tag);
-            }
+        let snapshot_time = executor.snapshot_time().unwrap();
+        let mut last_valid_ts = self.last_valid_ts.borrow_mut();
+        if *last_valid_ts == snapshot_time /* quick path for lease checking. */
+                    || self.leader_lease.inspect(Some(snapshot_time)) == LeaseState::Valid
+        {
+            // Cache snapshot_time for remaining requests in the same batch.
+            *last_valid_ts = snapshot_time;
+            let mut resp = executor.execute(req, &self.region, None);
+            // Leader can read local if and only if it is in lease.
+            cmd_resp::bind_term(&mut resp.response, req.get_header().get_term());
+            return Some(resp);
+        } else {
+            metrics.rejected_by_lease_expire += 1;
+            debug!("rejected by lease expire"; "tag" => &self.tag);
         }
 
         None
@@ -118,7 +113,7 @@ impl Display for ReadDelegate {
             self.peer_id,
             self.term,
             self.applied_index_term,
-            self.leader_lease.is_some(),
+            self.leader_lease.expired_time(),
         )
     }
 }
@@ -128,7 +123,6 @@ pub enum Progress {
     Region(metapb::Region),
     Term(u64),
     AppliedIndexTerm(u64),
-    LeaderLease(RemoteLease),
 }
 
 impl Progress {
@@ -142,10 +136,6 @@ impl Progress {
 
     pub fn applied_index_term(applied_index_term: u64) -> Progress {
         Progress::AppliedIndexTerm(applied_index_term)
-    }
-
-    pub fn leader_lease(lease: RemoteLease) -> Progress {
-        Progress::LeaderLease(lease)
     }
 }
 
@@ -410,14 +400,8 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
 
     fn inspect_lease(&mut self) -> LeaseState {
         // TODO: disable localreader if we did not enable raft's check_quorum.
-        if self.delegate.leader_lease.is_some() {
-            // We skip lease check, because it is postponed until `handle_read`.
-            LeaseState::Valid
-        } else {
-            debug!("rejected by leader lease"; "tag" => &self.delegate.tag);
-            self.metrics.rejected_by_no_lease += 1;
-            LeaseState::Expired
-        }
+        // We skip lease check, because it is postponed until `handle_read`.
+        LeaseState::Valid
     }
 }
 
@@ -658,7 +642,7 @@ mod tests {
 
         // Register region 1
         lease.renew(monotonic_raw_now());
-        let remote = lease.remote_lease().unwrap();
+        let remote = lease.remote_lease();
         // But the applied_index_term is stale.
         {
             let mut meta = store_meta.lock().unwrap();
@@ -668,7 +652,7 @@ mod tests {
                 peer_id: leader2.get_id(),
                 term: term6,
                 applied_index_term: term6 - 1,
-                leader_lease: Some(remote),
+                leader_lease: remote,
                 last_valid_ts: RefCell::new(Timespec::new(0, 0)),
                 invalid: Arc::new(AtomicBool::new(false)),
             };

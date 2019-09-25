@@ -2311,6 +2311,10 @@ impl Peer {
         self.raft_group.raft.term
     }
 
+    pub fn leader_lease(&self) -> &Lease {
+        &self.leader_lease
+    }
+
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
         for mut read in self.pending_reads.reads.drain(..) {

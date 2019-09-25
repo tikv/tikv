@@ -315,7 +315,7 @@ pub struct Lease {
 
     max_drift: Duration,
     last_update: Timespec,
-    remote: Option<RemoteLease>,
+    remote: RemoteLease,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -336,7 +336,9 @@ impl Lease {
 
             max_drift: max_lease / 3,
             last_update: Timespec::new(0, 0),
-            remote: None,
+            remote: RemoteLease {
+                expired_time: Arc::new(AtomicU64::new(0)),
+            },
         }
     }
 
@@ -362,7 +364,15 @@ impl Lease {
                 self.bound = Some(Either::Right(bound));
             }
         }
-        self.maybe_new_remote_lease();
+        // Renew remote lease
+        let bound = match self.bound {
+            Some(Either::Right(ts)) => ts,
+            _ => Timespec::new(0, 0),
+        };
+        if bound - self.last_update > self.max_drift {
+            self.last_update = bound;
+            self.remote.renew(bound);
+        }
     }
 
     /// Suspect the lease to the bound.
@@ -394,40 +404,10 @@ impl Lease {
 
     pub fn expire_remote_lease(&mut self) {
         // Expire remote lease if there is any.
-        if let Some(r) = self.remote.as_mut() {
-            r.expire();
-        }
+        self.remote.expire();
     }
 
-    /// Create a new `RemoteLease` if there is none.
-    fn maybe_new_remote_lease(&mut self) {
-        match self.remote {
-            Some(ref mut remote) => {
-                // The previous remote lease must be expired
-                assert!(remote.expired_time() == 0);
-                let bound = match self.bound {
-                    Some(Either::Right(ts)) => ts,
-                    _ => Timespec::new(0, 0),
-                };
-                if bound - self.last_update > self.max_drift {
-                    self.last_update = bound;
-                    remote.renew(bound);
-                }
-            }
-            None => {
-                let expired_time = match self.bound {
-                    Some(Either::Right(ts)) => timespec_to_u64(ts),
-                    _ => 0,
-                };
-                let remote = RemoteLease {
-                    expired_time: Arc::new(AtomicU64::new(expired_time)),
-                };
-                self.remote = Some(remote);
-            }
-        }
-    }
-
-    pub fn remote_lease(&self) -> Option<RemoteLease> {
+    pub fn remote_lease(&self) -> RemoteLease {
         self.remote.clone()
     }
 }
@@ -644,7 +624,7 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        let remote = lease.remote_lease().unwrap();
+        let remote = lease.remote_lease();
         let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
             assert_eq!(lease.inspect(ts), state);
             if state == LeaseState::Expired || state == LeaseState::Suspect {
@@ -690,7 +670,7 @@ mod tests {
         );
 
         // A new remote lease.
-        let m1 = lease.remote_lease().unwrap();
+        let m1 = lease.remote_lease();
         assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
     }
 
