@@ -129,7 +129,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             };
 
             let mut result = Ok(None);
-            let mut get_ts = self.cfg.ts;
+            let get_ts = self.cfg.ts;
             let mut met_prev_user_key = false;
 
             if has_lock {
@@ -143,7 +143,6 @@ impl<S: Snapshot> BackwardScanner<S> {
                         {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
-                            CheckLockResult::Ignored(ts) => get_ts = ts,
                         }
                     }
                     IsolationLevel::Rc => {}

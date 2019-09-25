@@ -171,8 +171,6 @@ impl<S: Snapshot> Scanner<S> {
                             // TODO: We need to scan locks into batch
                             //       in the future.
                             CheckLockResult::Locked(e) => result = Err(e),
-                            // TODO: better error handling.
-                            CheckLockResult::Ignored(_) => unimplemented!(),
                         }
                     }
                     IsolationLevel::Rc => {}

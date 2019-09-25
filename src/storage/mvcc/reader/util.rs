@@ -11,12 +11,8 @@ pub enum CheckLockResult {
     /// Key is locked. The key lock error is included.
     Locked(Error),
 
-    /// Key is not locked.
+    /// Key is not locked or the lock is ignored.
     NotLocked,
-
-    /// Key's lock exists but was ignored because of requesting the latest committed version
-    /// for the primary key. The committed version is included.
-    Ignored(u64),
 }
 
 /// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the latest
@@ -32,9 +28,8 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
 
     if ts == std::u64::MAX && raw_key == lock.primary {
         // When `ts == u64::MAX` (which means to get latest committed version for
-        // primary key), and current key is the primary key, we return the latest
-        // committed version.
-        return Ok(CheckLockResult::Ignored(lock.ts - 1));
+        // primary key), and current key is the primary key, we ignore this lock.
+        return Ok(CheckLockResult::NotLocked);
     }
 
     // There is a pending lock. Client should wait or clean it.
@@ -110,4 +105,46 @@ where
     }
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_lock() {
+        let expect_locked = |res| match res {
+            CheckLockResult::Locked(_) => (),
+            _ => panic!("unexpected CheckLockResult: {:?}", res),
+        };
+
+        let expect_not_locked = |res| match res {
+            CheckLockResult::NotLocked => (),
+            _ => panic!("unexpected CheckLockResult: {:?}", res),
+        };
+
+        let key = Key::from_raw(b"foo");
+        let mut lock = Lock::new(LockType::Put, vec![], 100, 3, None, 0, 1);
+
+        // Ignore the lock if read ts is less than the lock version
+        expect_not_locked(check_lock(&key, 50, &lock).unwrap());
+
+        // Returns the lock if read ts >= lock version
+        expect_locked(check_lock(&key, 110, &lock).unwrap());
+
+        // Ignore the lock if it is Lock or Pessimistic.
+        lock.lock_type = LockType::Lock;
+        expect_not_locked(check_lock(&key, 110, &lock).unwrap());
+        lock.lock_type = LockType::Pessimistic;
+        expect_not_locked(check_lock(&key, 110, &lock).unwrap());
+
+        // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
+        lock.lock_type = LockType::Put;
+        lock.primary = b"foo".to_vec();
+        expect_not_locked(check_lock(&key, std::u64::MAX, &lock).unwrap());
+
+        // Should not ignore the secondary lock even though reading the latest version
+        lock.primary = b"bar".to_vec();
+        expect_locked(check_lock(&key, std::u64::MAX, &lock).unwrap());
+    }
 }

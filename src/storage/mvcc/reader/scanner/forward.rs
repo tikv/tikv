@@ -149,9 +149,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             // of errors). If there is KeyLocked errors, we should be able to continue scanning.
             let mut result = Ok(None);
 
-            // `get_ts` is the real used timestamp. If user specifies `MaxInt64` as the timestamp,
-            // we need to change it to a most recently available one.
-            let mut get_ts = self.cfg.ts;
+            let get_ts = self.cfg.ts;
 
             // `met_next_user_key` stores whether the write cursor has been already pointing to
             // the next user key. If so, we don't need to compare it again when trying to step
@@ -170,7 +168,6 @@ impl<S: Snapshot> ForwardScanner<S> {
                         {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
-                            CheckLockResult::Ignored(ts) => get_ts = ts,
                         }
                     }
                     IsolationLevel::Rc => {}

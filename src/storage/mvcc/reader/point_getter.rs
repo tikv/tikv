@@ -140,7 +140,7 @@ impl<S: Snapshot> PointGetter<S> {
             }
         }
 
-        let mut ts = self.ts;
+        let ts = self.ts;
 
         match self.isolation_level {
             IsolationLevel::Si => {
@@ -148,7 +148,6 @@ impl<S: Snapshot> PointGetter<S> {
                 match self.load_and_check_lock(user_key, ts)? {
                     CheckLockResult::NotLocked => {}
                     CheckLockResult::Locked(e) => return Err(e),
-                    CheckLockResult::Ignored(new_ts) => ts = new_ts,
                 }
             }
             IsolationLevel::Rc => {}
@@ -646,5 +645,38 @@ mod tests {
         let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4);
         must_get_none(&mut getter, b"foo3");
         must_get_none(&mut getter, b"foo3");
+    }
+
+    #[test]
+    fn test_get_latest_value() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (key, val) = (b"foo", b"bar");
+        must_prewrite_put(&engine, key, val, key, 10);
+        must_commit(&engine, key, 10, 20);
+
+        let mut getter = new_single_point_getter(&engine, std::u64::MAX);
+        must_get_value(&mut getter, key, val);
+
+        // Ignore the primary lock if read with max ts.
+        must_prewrite_delete(&engine, key, key, 30);
+        let mut getter = new_single_point_getter(&engine, std::u64::MAX);
+        must_get_value(&mut getter, key, val);
+        must_rollback(&engine, key, 30);
+
+        // Should not ignore the secondary lock even though reading the latest version
+        must_prewrite_delete(&engine, key, b"bar", 40);
+        let mut getter = new_single_point_getter(&engine, std::u64::MAX);
+        must_get_err(&mut getter, key);
+        must_rollback(&engine, key, 40);
+
+        // Should get the latest committed value if there is a primary lock with a ts less than
+        // the latest Write's commit_ts.
+        //
+        // write.start_ts(10) < primary_lock.start_ts(15) < write.commit_ts(20)
+        must_acquire_pessimistic_lock(&engine, key, key, 15, 50);
+        must_pessimistic_prewrite_delete(&engine, key, key, 15, 50, true);
+        let mut getter = new_single_point_getter(&engine, std::u64::MAX);
+        must_get_value(&mut getter, key, val);
     }
 }
