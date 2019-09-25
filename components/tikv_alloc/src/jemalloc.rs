@@ -37,6 +37,11 @@ pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
         ("resident", stats::resident()?),
         ("mapped", stats::mapped()?),
         ("retained", stats::retained()?),
+        (
+            "dirty",
+            stats::resident()? - stats::active()? - stats::metadata()?,
+        ),
+        ("fragmentation", stats::active()? - stats::allocated()?),
     ]))
 }
 

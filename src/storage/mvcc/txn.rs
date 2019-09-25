@@ -4,7 +4,7 @@ use super::lock::{Lock, LockType};
 use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
-use super::{Error, Result};
+use super::{extract_physical, Error, Result};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -485,8 +485,34 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
+        self.cleanup(key, 0)
+    }
+
+    /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
+    /// cleanup the lock without checking TTL.
+    ///
+    /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
+    /// committed.
+    pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
         let is_pessimistic_txn = match self.reader.load_lock(&key)? {
-            Some(ref lock) if lock.ts == self.start_ts => {
+            Some(ref mut lock) if lock.ts == self.start_ts => {
+                // If current_ts is not 0, check the Lock's TTL.
+                // If the lock is not expired, do not rollback it but report key is locked.
+                if current_ts > 0
+                    && extract_physical(lock.ts) + lock.ttl >= extract_physical(current_ts)
+                {
+                    // The `lock.primary` field will not be accessed again. Use mem::replace to
+                    // avoid cloning.
+                    let primary = ::std::mem::replace(&mut lock.primary, Default::default());
+                    let mut info = kvproto::kvrpcpb::LockInfo::default();
+                    info.set_primary_lock(primary);
+                    info.set_lock_version(lock.ts);
+                    info.set_key(key.into_raw()?);
+                    info.set_lock_ttl(lock.ttl);
+                    info.set_txn_size(lock.txn_size);
+                    return Err(Error::KeyIsLocked(info));
+                }
+
                 // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
                     self.delete_value(key.clone(), lock.ts);
@@ -843,6 +869,37 @@ mod tests {
 
         // Rollback delete
         must_rollback(&engine, k, 15);
+    }
+
+    #[test]
+    fn test_cleanup() {
+        // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests that not
+        // related to TTL check should be covered by other test cases.
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Shorthand for composing ts.
+        let ts = super::super::compose_ts;
+
+        let (k, v) = (b"k", b"v");
+
+        must_prewrite_put(&engine, k, v, k, ts(10, 0));
+        must_locked(&engine, k, ts(10, 0));
+        must_txn_heart_beat(&engine, k, ts(10, 0), 100, 100);
+        // Check the last txn_heart_beat has set the lock's TTL to 100.
+        must_txn_heart_beat(&engine, k, ts(10, 0), 90, 100);
+
+        // TTL not expired. Do nothing but returns an error.
+        must_cleanup_err(&engine, k, ts(10, 0), ts(20, 0));
+        must_locked(&engine, k, ts(10, 0));
+
+        // Try to cleanup another transaction's lock. Does nothing.
+        must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
+        must_locked(&engine, k, ts(10, 0));
+
+        // TTL expired. The lock should be removed.
+        must_cleanup(&engine, k, ts(10, 0), ts(120, 0));
+        must_unlocked(&engine, k);
+        must_get_rollback_ts(&engine, k, ts(10, 0));
     }
 
     #[test]
