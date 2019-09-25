@@ -3,7 +3,6 @@
 use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use std::string::ToString;
 
-use byteorder::{BigEndian, WriteBytesExt};
 use hex;
 
 use crate::codec::error::Error;
@@ -44,20 +43,20 @@ pub fn to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
 }
 
 impl BinaryLiteral {
-    /// from_u64 creates a new BinaryLiteral instance by the given uint value in BitEndian.
+    /// from_u64 creates a new BinaryLiteral instance by the given uint value in BigEndian.
     /// byte size will be used as the length of the new BinaryLiteral, with leading bytes filled to zero.
     /// If byte size is -1, the leading zeros in new BinaryLiteral will be trimmed.
     pub fn from_u64(val: u64, byte_size: isize) -> Result<Self> {
         if byte_size != -1 && (byte_size < 1 || byte_size > 8) {
             return Err(box_err!("invalid byte size: {}", byte_size));
         }
-        let mut wtr = vec![];
-        wtr.write_u64::<BigEndian>(val)?;
+        let bytes = val.to_be_bytes();
         let lit = if byte_size == -1 {
-            Self(trim_leading_zero_bytes(wtr.as_slice()).to_vec())
+            Self(trim_leading_zero_bytes(&bytes[..]).to_vec())
         } else {
-            wtr.drain(0..(8 - byte_size) as usize);
-            Self(wtr)
+            let mut v = bytes[..].to_vec();
+            v.drain(0..(8 - byte_size) as usize);
+            Self(v)
         };
         Ok(lit)
     }
@@ -122,6 +121,7 @@ impl BinaryLiteral {
             return Ok(BinaryLiteral(vec![]));
         }
 
+        // Align the length to 8
         let aligned_len = (trimed.len() + 7) & (!7);
         let mut padding_str = "0".repeat(8);
         padding_str.push_str(trimed);
@@ -172,7 +172,7 @@ impl BinaryLiteral {
 impl ToString for BinaryLiteral {
     fn to_string(&self) -> String {
         if self.0.is_empty() {
-            return "".to_string();
+            return String::new();
         }
         format!("0x{}", hex::encode(self.0.as_slice()))
     }
