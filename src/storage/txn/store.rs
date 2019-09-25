@@ -4,6 +4,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 use tikv_util::buffer_vec::BufferVec;
 
 use crate::storage::metrics::*;
+use crate::storage::mvcc::PointGetterBuilder;
 use crate::storage::mvcc::{EntryScanner, RangeForwardScanner};
 use crate::storage::mvcc::{Error as MvccError, MvccReader};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
@@ -21,7 +22,11 @@ pub trait Store: Send {
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
     /// Fetch the provided set of keys.
-    fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Value>>>;
+    fn batch_get(
+        &self,
+        keys: &[Key],
+        statistics: &mut Statistics,
+    ) -> Result<Vec<Result<Option<Value>>>>;
 
     /// Retrieve a scanner over the bounds.
     fn scanner(
@@ -171,36 +176,52 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
 
     #[inline]
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
-        let mut reader = MvccReader::new(
-            self.snapshot.clone(),
-            None,
-            self.fill_cache,
-            None,
-            None,
-            self.isolation_level,
-        );
-        let v = reader.get(key, self.start_ts)?;
-        statistics.add(reader.get_statistics());
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .multi(false)
+            .build()?;
+        let v = point_getter.get(key)?;
+        statistics.add(&point_getter.take_statistics());
         Ok(v)
     }
 
-    #[inline]
-    fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Value>>> {
-        // TODO: sort the keys and use ScanMode::Forward
-        let mut reader = MvccReader::new(
-            self.snapshot.clone(),
-            None,
-            self.fill_cache,
-            None,
-            None,
-            self.isolation_level,
-        );
-        let mut results = Vec::with_capacity(keys.len());
-        for k in keys {
-            results.push(reader.get(k, self.start_ts).map_err(Error::from));
+    fn batch_get(
+        &self,
+        keys: &[Key],
+        statistics: &mut Statistics,
+    ) -> Result<Vec<Result<Option<Value>>>> {
+        use std::mem::{self, MaybeUninit};
+        type Element = Result<Option<Value>>;
+
+        if keys.len() == 1 {
+            return Ok(vec![self.get(&keys[0], statistics)]);
         }
-        statistics.add(reader.get_statistics());
-        results
+
+        let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
+        order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+
+        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .multi(true)
+            .build()?;
+
+        let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
+        for _ in 0..keys.len() {
+            values.push(MaybeUninit::uninit());
+        }
+        for (original_order, key) in order_and_keys {
+            let value = point_getter.get(key).map_err(Error::from);
+            unsafe {
+                values[original_order].as_mut_ptr().write(value);
+            }
+        }
+
+        statistics.add(&point_getter.take_statistics());
+
+        let values = unsafe { mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(values) };
+        Ok(values)
     }
 
     #[inline]
@@ -352,8 +373,12 @@ impl Store for FixtureStore {
     }
 
     #[inline]
-    fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Vec<u8>>>> {
-        keys.iter().map(|key| self.get(key, statistics)).collect()
+    fn batch_get(
+        &self,
+        keys: &[Key],
+        statistics: &mut Statistics,
+    ) -> Result<Vec<Result<Option<Vec<u8>>>>> {
+        Ok(keys.iter().map(|key| self.get(key, statistics)).collect())
     }
 
     #[inline]
@@ -659,7 +684,9 @@ mod tests {
         for key in &store.keys {
             keys_list.push(Key::from_raw(key.as_bytes()));
         }
-        let data = snapshot_store.batch_get(&keys_list, &mut statistics);
+        let data = snapshot_store
+            .batch_get(&keys_list, &mut statistics)
+            .unwrap();
         for item in data {
             let item = item.unwrap();
             assert!(item.is_some(), "item expect some while get none");
@@ -1135,7 +1162,7 @@ mod benches {
             let store = test::black_box(&store);
             let mut statistics = Statistics::default();
             let value = store.batch_get(test::black_box(&batch_get_keys), &mut statistics);
-            test::black_box(value);
+            test::black_box(value.unwrap());
         })
     }
 

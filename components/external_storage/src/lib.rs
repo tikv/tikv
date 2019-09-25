@@ -5,8 +5,6 @@
 //! This crate define an abstraction of external storage. Currently, it
 //! supports local storage.
 
-#[macro_use(slog_error, slog_info, slog_debug)]
-extern crate slog;
 #[macro_use]
 extern crate slog_global;
 #[allow(unused_extern_crates)]

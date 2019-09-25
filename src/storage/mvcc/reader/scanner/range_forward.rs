@@ -415,10 +415,16 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 10, false)
             .range(None, None)
-            .build_forward_range_scanner().unwrap();
+            .build_forward_range_scanner()
+            .unwrap();
 
         assert!(scanner.scan_first_lock().is_ok());
-        assert!(scanner.next(10, &mut keys_buffer, &mut values_buffer).unwrap(), 0);
+        assert!(
+            scanner
+                .next(10, &mut keys_buffer, &mut values_buffer)
+                .unwrap(),
+            0
+        );
 
         must_prewrite_put(&engine, b"a", b"value_a", b"a", 7);
         must_commit(&engine, b"a", 7, 7);
@@ -431,10 +437,16 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 10, false)
             .range(None, None)
-            .build_forward_range_scanner().unwrap();
+            .build_forward_range_scanner()
+            .unwrap();
 
         assert!(scanner.scan_first_lock().is_ok());
-        assert!(scanner.next(10, &mut keys_buffer, &mut values_buffer).unwrap(), 2);
+        assert!(
+            scanner
+                .next(10, &mut keys_buffer, &mut values_buffer)
+                .unwrap(),
+            2
+        );
         assert_eq!(keys_buffer.len(), 2);
         assert_eq!(values_buffer.len(), 2);
         assert_eq!(&keys_buffer[0], b"a");
@@ -446,10 +458,16 @@ mod tests {
         values_buffer.clear();
         let mut scanner = ScannerBuilder::new(snapshot, 1, false)
             .range(None, None)
-            .build_forward_range_scanner().unwrap();
+            .build_forward_range_scanner()
+            .unwrap();
 
         assert!(scanner.scan_first_lock().is_ok());
-        assert!(scanner.next(10, &mut keys_buffer, &mut values_buffer).unwrap(), 1);
+        assert!(
+            scanner
+                .next(10, &mut keys_buffer, &mut values_buffer)
+                .unwrap(),
+            1
+        );
         assert_eq!(keys_buffer.len(), 1);
         assert_eq!(values_buffer.len(), 1);
         assert_eq!(&keys_buffer[0], b"a");

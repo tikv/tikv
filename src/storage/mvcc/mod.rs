@@ -10,9 +10,7 @@ mod write;
 mod write2;
 
 pub use self::lock::{Lock, LockType};
-pub use self::reader::EntryScanner;
-pub use self::reader::MvccReader;
-pub use self::reader::{RangeForwardScanner, Scanner, ScannerBuilder, ScannerConfig};
+pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
 
@@ -20,6 +18,17 @@ use std::error;
 use std::io;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+
+pub const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
+
+// Extracts physical part of a timestamp, in milliseconds.
+pub fn extract_physical(ts: u64) -> u64 {
+    ts >> TSO_PHYSICAL_SHIFT_BITS
+}
+
+pub fn compose_ts(physical: u64, logical: u64) -> u64 {
+    (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
+}
 
 quick_error! {
     #[derive(Debug)]
@@ -538,6 +547,21 @@ pub mod tests {
         assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
 
+    pub fn must_cleanup<E: Engine>(engine: &E, key: &[u8], start_ts: u64, current_ts: u64) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.cleanup(Key::from_raw(key), current_ts).unwrap();
+        write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_cleanup_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64, current_ts: u64) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        assert!(txn.cleanup(Key::from_raw(key), current_ts).is_err());
+    }
+
     pub fn must_txn_heart_beat<E: Engine>(
         engine: &E,
         primary_key: &[u8],
@@ -715,5 +739,16 @@ pub mod tests {
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect
         );
+    }
+
+    #[test]
+    fn test_ts() {
+        let physical = 1568700549751;
+        let logical = 108;
+        let ts = compose_ts(physical, logical);
+        assert_eq!(ts, 411225436913926252);
+
+        let extracted_physical = extract_physical(ts);
+        assert_eq!(extracted_physical, physical);
     }
 }

@@ -1,35 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO: remove it after all code been merged.
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
-use std::cmp;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
+use engine::rocks::util::io_limiter::IOLimiter;
 use engine::DB;
 use external_storage::*;
+use futures::lazy;
 use futures::sync::mpsc::*;
-use futures::{lazy, Future};
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-use tikv::raftstore::coprocessor::RegionInfoAccessor;
 use tikv::raftstore::store::util::find_peer;
-use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::storage::kv::{
-    Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary,
-};
-use tikv::storage::txn::{
-    EntryBatch, Error as TxnError, Msg, Scanner, SnapshotStore, Store, TxnEntryScanner,
-    TxnEntryStore,
-};
+use tikv::storage::kv::{Engine, RegionInfoProvider};
+use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::{Key, Statistics};
-use tikv_util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::worker::Runnable;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 
 use crate::metrics::*;
@@ -42,7 +31,7 @@ pub struct Task {
     start_ts: u64,
     end_ts: u64,
 
-    storage: Arc<dyn ExternalStorage>,
+    storage: LimitedStorage,
     pub(crate) resp: UnboundedSender<BackupResponse>,
 
     cancel: Arc<AtomicBool>,
@@ -64,24 +53,36 @@ impl fmt::Debug for Task {
     }
 }
 
+#[derive(Clone)]
+struct LimitedStorage {
+    limiter: Option<Arc<IOLimiter>>,
+    storage: Arc<dyn ExternalStorage>,
+}
+
 impl Task {
     /// Create a backup task based on the given backup request.
     pub fn new(
         req: BackupRequest,
         resp: UnboundedSender<BackupResponse>,
     ) -> Result<(Task, Arc<AtomicBool>)> {
-        let start_key = req.get_start_key().to_owned();
-        let end_key = req.get_end_key().to_owned();
-        let start_ts = req.get_start_version();
-        let end_ts = req.get_end_version();
-        let storage = create_storage(req.get_path())?;
         let cancel = Arc::new(AtomicBool::new(false));
+
+        let limiter = if req.get_rate_limit() != 0 {
+            Some(Arc::new(IOLimiter::new(req.get_rate_limit() as _)))
+        } else {
+            None
+        };
+        let storage = LimitedStorage {
+            storage: create_storage(req.get_path())?,
+            limiter,
+        };
+
         Ok((
             Task {
-                start_key,
-                end_key,
-                start_ts,
-                end_ts,
+                start_key: req.get_start_key().to_owned(),
+                end_key: req.get_end_key().to_owned(),
+                start_ts: req.get_start_version(),
+                end_ts: req.get_end_version(),
                 resp,
                 storage,
                 cancel: cancel.clone(),
@@ -128,12 +129,14 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
 
 impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
-        let workers = ThreadPoolBuilder::new().name_prefix("backworker").build();
+        let workers = ThreadPoolBuilder::new()
+            .name_prefix("backworker")
+            .pool_size(8) // TODO: make it configure.
+            .build();
         Endpoint {
             store_id,
             engine,
             region_info,
-            // TODO: support more config.
             workers,
             db,
         }
@@ -193,7 +196,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         brange: BackupRange,
         start_ts: u64,
         end_ts: u64,
-        storage: Arc<dyn ExternalStorage>,
+        storage: LimitedStorage,
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
     ) {
         // TODO: support incremental backup
@@ -232,7 +235,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 .unwrap();
             let mut batch = EntryBatch::with_capacity(1024);
             let name = backup_file_name(store_id, &brange.region);
-            let mut writer = match BackupWriter::new(db, &name) {
+            let mut writer = match BackupWriter::new(db, &name, storage.limiter) {
                 Ok(w) => w,
                 Err(e) => {
                     error!("backup writer failed"; "error" => ?e);
@@ -259,7 +262,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 .with_label_values(&["scan"])
                 .observe(start.elapsed().as_secs_f64());
             // Save sst files to storage.
-            let files = match writer.save(&storage) {
+            let files = match writer.save(&storage.storage) {
                 Ok(files) => files,
                 Err(e) => {
                     error!("backup save file failed"; "error" => ?e);
@@ -313,7 +316,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             response.set_end_key(end_key.clone());
             match res {
                 Ok((mut files, stat)) => {
-                    info!("backup region finish";
+                    debug!("backup region finish";
                         "region" => ?brange.region,
                         "start_key" => hex::encode_upper(&start_key),
                         "end_key" => hex::encode_upper(&end_key),
@@ -426,18 +429,14 @@ pub mod tests {
     use external_storage::LocalStorage;
     use futures::{Future, Stream};
     use kvproto::metapb;
-    use std::collections::BTreeMap;
-    use std::sync::mpsc::{channel, Receiver, Sender};
     use tempfile::TempDir;
     use tikv::raftstore::coprocessor::RegionCollector;
-    use tikv::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
+    use tikv::raftstore::coprocessor::SeekRegionCallback;
     use tikv::raftstore::store::util::new_peer;
     use tikv::storage::kv::Result as EngineResult;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::SHORT_VALUE_MAX_LEN;
-    use tikv::storage::{
-        Mutation, Options, RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder,
-    };
+    use tikv::storage::{RocksEngine, TestEngineBuilder};
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -559,6 +558,10 @@ pub mod tests {
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
                 let ls = LocalStorage::new(tmp.path()).unwrap();
+                let storage = LimitedStorage {
+                    storage: Arc::new(ls) as _,
+                    limiter: None,
+                };
                 let (tx, rx) = unbounded();
                 let task = Task {
                     start_key: start_key.to_vec(),
@@ -566,7 +569,7 @@ pub mod tests {
                     start_ts: 1,
                     end_ts: 1,
                     resp: tx,
-                    storage: Arc::new(ls),
+                    storage,
                     cancel: Arc::default(),
                 };
                 endpoint.handle_backup_task(task);
@@ -654,6 +657,7 @@ pub mod tests {
         }
 
         // TODO: check key number for each snapshot.
+        let limiter = Arc::new(IOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
         for (ts, len) in backup_tss {
             let mut req = BackupRequest::new();
             req.set_start_key(vec![]);
@@ -669,7 +673,16 @@ pub mod tests {
                 "local://{}",
                 tmp.path().join(format!("{}", ts)).display()
             ));
-            let (task, _) = Task::new(req, tx).unwrap();
+            if len % 2 == 0 {
+                req.set_rate_limit(10 * 1024 * 1024);
+            }
+            let (mut task, _) = Task::new(req, tx).unwrap();
+            if len % 2 == 0 {
+                // Make sure the rate limiter is set.
+                assert!(task.storage.limiter.is_some());
+                // Share the same rate limiter.
+                task.storage.limiter = Some(limiter.clone());
+            }
             endpoint.handle_backup_task(task);
             let (resp, rx) = rx.into_future().wait().unwrap();
             let resp = resp.unwrap();
@@ -735,7 +748,7 @@ pub mod tests {
         let commit = alloc_ts();
         must_commit(&engine, key.as_bytes(), start, commit);
 
-        // Test whether it can correctly convert not leader to regoin error.
+        // Test whether it can correctly convert not leader to region error.
         engine.trigger_not_leader();
         let now = alloc_ts();
         req.set_start_version(now);

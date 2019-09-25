@@ -37,11 +37,11 @@ use self::mvcc::Lock;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+use self::kv::with_tls_engine;
 pub use self::kv::{
-    destroy_tls_engine, set_tls_engine, with_tls_engine, CFStatistics, Cursor, CursorBuilder,
-    Engine, Error as EngineError, FlowStatistics, FlowStatsReporter, Iterator, Modify,
-    RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
-    TestEngineBuilder,
+    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics,
+    FlowStatsReporter, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
+    Statistics, StatisticsSummary, TestEngineBuilder,
 };
 pub use self::lock_manager::{DummyLockMgr, LockMgr};
 pub use self::mvcc::Scanner as StoreScanner;
@@ -175,6 +175,9 @@ pub enum Command {
         key: Key,
         /// The transaction timestamp.
         start_ts: u64,
+        /// The approximate current ts when cleanup request is invoked, which is used to check the
+        /// lock's TTL. 0 means do not check TTL.
+        current_ts: u64,
     },
     /// Rollback from the transaction that was started at `start_ts`.
     ///
@@ -876,6 +879,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         }
     }
 
+    #[inline]
+    fn with_tls_engine<F, R>(f: F) -> R
+    where
+        F: FnOnce(&E) -> R,
+    {
+        // Safety: the read pools ensure that a TLS engine exists.
+        unsafe { with_tls_engine(f) }
+    }
+
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
@@ -892,7 +904,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine(|engine| {
+            Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -946,7 +958,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine(|engine| {
+            Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -957,25 +969,30 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
                             );
-                            let kv_pairs: Vec<_> = snap_store
+                            let result = snap_store
                                 .batch_get(&keys, &mut statistics)
-                                .into_iter()
-                                .zip(keys)
-                                .filter(|&(ref v, ref _k)| {
-                                    !(v.is_ok() && v.as_ref().unwrap().is_none())
-                                })
-                                .map(|(v, k)| match v {
-                                    Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                    Err(e) => Err(Error::from(e)),
-                                    _ => unreachable!(),
-                                })
-                                .collect();
+                                .map_err(Error::from)
+                                .map(|v| {
+                                    let kv_pairs: Vec<_> = v
+                                        .into_iter()
+                                        .zip(keys)
+                                        .filter(|&(ref v, ref _k)| {
+                                            !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                        })
+                                        .map(|(v, k)| match v {
+                                            Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                            Err(e) => Err(Error::from(e)),
+                                            _ => unreachable!(),
+                                        })
+                                        .collect();
+                                    tls_collect_key_reads(CMD, kv_pairs.len());
+                                    kv_pairs
+                                });
 
-                            tls_collect_key_reads(CMD, kv_pairs.len());
                             tls_collect_scan_details(CMD, &statistics);
                             tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                            Ok(kv_pairs)
+                            result
                         })
                     })
                     .then(move |r| {
@@ -1011,7 +1028,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine(|engine| {
+            Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1217,9 +1234,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         ctx: Context,
         key: Key,
         start_ts: u64,
+        current_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Cleanup { ctx, key, start_ts };
+        let cmd = Command::Cleanup {
+            ctx,
+            key,
+            start_ts,
+            current_ts,
+        };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
         Ok(())
@@ -1415,7 +1438,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine(|engine| {
+            Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1469,7 +1492,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine(|engine| {
+            Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1752,7 +1775,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine(|engine| {
+            Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1857,7 +1880,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine(|engine| {
+            Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -2225,7 +2248,7 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Other(..)))) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -2248,8 +2271,11 @@ mod tests {
                 )
                 .wait(),
         );
-        expect_multi_values(
-            vec![None, None],
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
             storage
                 .async_batch_get(
                     Context::default(),
@@ -2687,6 +2713,7 @@ mod tests {
                 Context::default(),
                 Key::from_raw(b"x"),
                 100,
+                0,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2694,6 +2721,59 @@ mod tests {
         expect_none(
             storage
                 .async_get(Context::default(), Key::from_raw(b"x"), 105)
+                .wait(),
+        );
+    }
+
+    #[test]
+    fn test_cleanup_check_ttl() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        let ts = mvcc::compose_ts;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec()))],
+                b"x".to_vec(),
+                ts(110, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                Key::from_raw(b"x"),
+                ts(110, 0),
+                ts(120, 0),
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info))) => {
+                        assert_eq!(info.get_lock_ttl(), 100)
+                    }
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                Key::from_raw(b"x"),
+                ts(110, 0),
+                ts(220, 0),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            storage
+                .async_get(Context::default(), Key::from_raw(b"x"), ts(230, 0))
                 .wait(),
         );
     }

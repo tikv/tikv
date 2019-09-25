@@ -12,6 +12,7 @@
 #![feature(const_fn)]
 #![feature(core_intrinsics)]
 #![feature(test)]
+#![feature(int_error_matching)]
 // FIXME: rustc says there are redundant semicolons here but isn't
 // saying where as of nightly-2019-09-05
 // See https://github.com/rust-lang/rust/issues/63967
@@ -21,8 +22,6 @@
 
 #[macro_use]
 extern crate likely;
-#[macro_use(slog_error, slog_warn, slog_debug)]
-extern crate slog;
 #[macro_use(error, debug, warn)]
 extern crate slog_global;
 #[macro_use(box_err, box_try, try_opt)]
