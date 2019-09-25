@@ -482,7 +482,7 @@ mod tests {
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::write::WriteType;
+    use crate::storage::mvcc::write::{Write, WriteType};
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{Key, Mutation, Options};
     use engine::rocks::util::CFOptions;
@@ -873,6 +873,93 @@ mod tests {
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().unwrap();
         assert_eq!(commit_ts, 4);
         assert_eq!(write_type, WriteType::Put);
+    }
+
+    #[test]
+    fn test_seek_write() {
+        let path = Builder::new()
+            .prefix("_test_storage_mvcc_reader_seek_write")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let (k, v) = (b"k", b"v");
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m.clone(), k, 1);
+        engine.commit(k, 1, 5);
+
+        engine.rollback(k, 3);
+        engine.rollback(k, 7);
+
+        engine.prewrite(m.clone(), k, 15);
+        engine.commit(k, 15, 17);
+
+        // Timestamp overlap with the previous transaction.
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 10, 18);
+        engine.prewrite_pessimistic_lock(Mutation::Lock(Key::from_raw(k)), k, 10);
+        engine.commit(k, 10, 20);
+
+        engine.prewrite(m, k, 23);
+        engine.commit(k, 23, 25);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+
+        let k = Key::from_raw(k);
+        let (commit_ts, write) = reader.seek_write(&k, 30).unwrap().unwrap();
+        assert_eq!(commit_ts, 25);
+        assert_eq!(write, Write::new(WriteType::Put, 23, Some(v.to_vec())));
+
+        let (commit_ts, write) = reader.seek_write(&k, 25).unwrap().unwrap();
+        assert_eq!(commit_ts, 25);
+        assert_eq!(write, Write::new(WriteType::Put, 23, Some(v.to_vec())));
+
+        let (commit_ts, write) = reader.seek_write(&k, 20).unwrap().unwrap();
+        assert_eq!(commit_ts, 20);
+        assert_eq!(write, Write::new(WriteType::Lock, 10, None));
+
+        let (commit_ts, write) = reader.seek_write(&k, 19).unwrap().unwrap();
+        assert_eq!(commit_ts, 17);
+        assert_eq!(write, Write::new(WriteType::Put, 15, Some(v.to_vec())));
+
+        let (commit_ts, write) = reader.seek_write(&k, 3).unwrap().unwrap();
+        assert_eq!(commit_ts, 3);
+        assert_eq!(write, Write::new(WriteType::Rollback, 3, None));
+
+        let (commit_ts, write) = reader.seek_write(&k, 16).unwrap().unwrap();
+        assert_eq!(commit_ts, 7);
+        assert_eq!(write, Write::new(WriteType::Rollback, 7, None));
+
+        let (commit_ts, write) = reader.seek_write(&k, 6).unwrap().unwrap();
+        assert_eq!(commit_ts, 5);
+        assert_eq!(write, Write::new(WriteType::Put, 1, Some(v.to_vec())));
+
+        assert!(reader.seek_write(&k, 2).unwrap().is_none());
+
+        // Test seek_write should not see the next key.
+        let (k2, v2) = (b"k2", b"v2");
+        let m2 = Mutation::Put((Key::from_raw(k2), v2.to_vec()));
+        engine.prewrite(m2, k2, 1);
+        engine.commit(k2, 1, 2);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region);
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+
+        let (commit_ts, write) = reader.seek_write(&Key::from_raw(k2), 3).unwrap().unwrap();
+        assert_eq!(commit_ts, 2);
+        assert_eq!(write, Write::new(WriteType::Put, 1, Some(v2.to_vec())));
+
+        assert!(reader.seek_write(&k, 2).unwrap().is_none());
+
+        // Test seek_write touches region's end.
+        let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region1);
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+
+        assert!(reader.seek_write(&k, 2).unwrap().is_none());
     }
 
     #[test]
