@@ -358,20 +358,21 @@ impl MiniBatcher {
                     region: req.get_context().get_region_id(),
                     epoch: req.get_context().get_region_epoch().get_version(),
                 };
-                let mutations: Vec<Mutation> = req
-                    .take_mutations()
-                    .into_iter()
-                    .map(|mut x| match x.get_op() {
-                        Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
-                        Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
-                        Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
-                        Op::Insert => {
-                            Mutation::Insert((Key::from_raw(x.get_key()), x.take_value()))
-                        }
-                        _ => panic!("mismatch Op in prewrite mutations"),
-                    })
-                    .collect();
-                let mut create_cmd = |mutations| {
+                let mutations = req.get_mutations();
+                let create_cmd = |req: &mut PrewriteRequest| {
+                    let mutations: Vec<Mutation> = req
+                        .take_mutations()
+                        .into_iter()
+                        .map(|mut x| match x.get_op() {
+                            Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
+                            Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
+                            Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                            Op::Insert => {
+                                Mutation::Insert((Key::from_raw(x.get_key()), x.take_value()))
+                            }
+                            _ => panic!("mismatch Op in prewrite mutations"),
+                        })
+                        .collect();
                     let mut options = Options::default();
                     options.lock_ttl = req.get_lock_ttl();
                     options.skip_constraint_check = req.get_skip_constraint_check();
@@ -392,17 +393,21 @@ impl MiniBatcher {
                         // if MINIBATCH_MAX_SIZE > 0 && meta.size >= MINIBATCH_MAX_SIZE {
                         //     return false;
                         // }
-                        for m in &mutations {
-                            if meta.key_set.contains(m.key().clone().as_encoded()) {
+                        for m in mutations.iter() {
+                            if meta
+                                .key_set
+                                .contains(Key::from_raw(m.get_key()).as_encoded())
+                            {
                                 inner.key_conflict += 1;
                                 return false;
                             }
                         }
                         meta.size += 1;
-                        for m in &mutations {
-                            meta.key_set.insert(m.key().clone().into_encoded());
+                        for m in mutations.iter() {
+                            meta.key_set
+                                .insert(Key::from_raw(m.get_key()).into_encoded());
                         }
-                        let cmd = create_cmd(mutations);
+                        let cmd = create_cmd(req);
                         if let Command::MiniBatch {
                             ref mut commands,
                             ref mut ids,
@@ -416,12 +421,13 @@ impl MiniBatcher {
                     None => {
                         let mut meta = MiniBatchMeta::new();
                         meta.idx = inner.commands.len();
-                        for m in &mutations {
-                            meta.key_set.insert(m.key().clone().into_encoded());
+                        for m in mutations.iter() {
+                            meta.key_set
+                                .insert(Key::from_raw(m.get_key()).into_encoded());
                         }
                         meta.size = 1;
                         inner.router.insert(ver, meta);
-                        let cmd = create_cmd(mutations);
+                        let cmd = create_cmd(req);
                         inner.commands.push(Command::MiniBatch {
                             tag: CommandKind::prewrite,
                             commands: vec![cmd],

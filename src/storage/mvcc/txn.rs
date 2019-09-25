@@ -525,18 +525,21 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
         }
+
         let (lower, lower_idx) = map.iter().next().unwrap();
-        let (upper, _) = map.iter().next_back().unwrap();
-        let mut upper = upper.to_vec();
         let mut min_key = Key::from_encoded(lower.to_vec());
-        convert_to_prefix_next(&mut upper);
-        let max_key = Key::from_encoded(upper);
         let mut min_idx = lower_idx;
         let mut min_ts = if let Command::Prewrite { start_ts, .. } = commands[min_idx.0] {
             start_ts
         } else {
-            0
+            u64::max_value()
         };
+
+        let (upper, _) = map.iter().next_back().unwrap();
+        let mut upper = upper.to_vec();
+        convert_to_prefix_next(&mut upper);
+        let max_key = Key::from_encoded(upper);
+
         let mut write_iter = self
             .reader
             .new_write_cursor(&min_key, u64::max_value(), &max_key, 0)
@@ -547,7 +550,13 @@ impl<S: Snapshot> MvccTxn<S> {
             self.reader.mut_write_statistics(),
         )?;
         if write_iter.valid()? {
-            if ids[min_idx.0] < u64::max_value() {
+            if ids[min_idx.0] < u64::max_value()
+                && if let Command::Prewrite { options, .. } = &commands[min_idx.0] {
+                    !options.skip_constraint_check
+                } else {
+                    true
+                }
+            {
                 if let Some(msg) = self.check_write(
                     cid,
                     tag,
@@ -569,7 +578,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     ids[min_idx.0] = u64::max_value();
                 }
             }
-            'out: loop {
+            'out: while write_iter.valid()? {
                 let mut range = map.range::<Vec<u8>, _>(
                     &write_iter.key(self.reader.mut_write_statistics()).to_vec()
                         ..max_key.as_encoded(),
@@ -581,7 +590,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     } else {
                         break 'out;
                     }
-                    if ids[min_idx.0] < u64::max_value() {
+                    if ids[min_idx.0] < u64::max_value()
+                        && if let Command::Prewrite { options, .. } = &commands[min_idx.0] {
+                            !options.skip_constraint_check
+                        } else {
+                            true
+                        }
+                    {
                         min_ts = if let Command::Prewrite { start_ts, .. } = commands[min_idx.0] {
                             start_ts
                         } else {
@@ -615,8 +630,6 @@ impl<S: Snapshot> MvccTxn<S> {
                         scheduler.on_batch_msg(ids[min_idx.0], msg);
                         ids[min_idx.0] = u64::max_value();
                     }
-                } else {
-                    break;
                 }
             }
         }
@@ -631,7 +644,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     ids[min_idx.0] = u64::max_value();
                 }
             }
-            'out2: loop {
+            'out2: while lock_iter.valid()? {
                 let mut range = map.range::<Vec<u8>, _>(
                     &lock_iter.key(self.reader.mut_lock_statistics()).to_vec()
                         ..max_key.as_encoded(),
@@ -653,8 +666,6 @@ impl<S: Snapshot> MvccTxn<S> {
                         scheduler.on_batch_msg(ids[min_idx.0], msg);
                         ids[min_idx.0] = u64::max_value();
                     }
-                } else {
-                    break;
                 }
             }
         }
