@@ -13,7 +13,7 @@ fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_update_region_size<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.region_split_check_diff = ReadableSize::kb(1);
@@ -70,5 +70,5 @@ fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_server_update_region_size() {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
-    test_update_regoin_size(&mut cluster);
+    test_update_region_size(&mut cluster);
 }
