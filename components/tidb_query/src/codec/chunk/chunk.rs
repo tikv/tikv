@@ -71,7 +71,7 @@ impl Chunk {
         match vec {
             VectorValue::Int(ref vec) => match &vec[row_index] {
                 None => {
-                    self.append_datum(column_index, &Datum::Null).unwrap();
+                    self.columns[column_index].append_null().unwrap();
                 }
                 Some(val) => {
                     if field_type
@@ -79,65 +79,67 @@ impl Chunk {
                         .flag()
                         .contains(FieldTypeFlag::UNSIGNED)
                     {
-                        self.append_datum(column_index, &Datum::U64(*val as u64))
-                            .unwrap();
+                        self.columns[column_index].append_u64(*val as u64).unwrap();
                     } else {
-                        self.append_datum(column_index, &Datum::I64(*val)).unwrap();
+                        self.columns[column_index].append_i64(*val).unwrap();
                     }
                 }
             },
             VectorValue::Real(ref vec) => match &vec[row_index] {
                 None => {
-                    self.append_datum(column_index, &Datum::Null).unwrap();
+                    self.columns[column_index].append_null().unwrap();
                 }
                 Some(val) => {
-                    self.append_datum(column_index, &Datum::F64(f64::from(*val)))
+                    self.columns[column_index]
+                        .append_f64(f64::from(*val))
                         .unwrap();
                 }
             },
             VectorValue::Decimal(ref vec) => match &vec[row_index] {
                 None => {
-                    self.append_datum(column_index, &Datum::Null).unwrap();
+                    self.columns[column_index].append_null().unwrap();
                 }
                 Some(val) => {
-                    self.append_datum(column_index, &Datum::Dec(val.clone()))
+                    self.columns[column_index]
+                        .append_decimal(&val.clone())
                         .unwrap();
                 }
             },
             VectorValue::Bytes(ref vec) => match &vec[row_index] {
                 None => {
-                    self.append_datum(column_index, &Datum::Null).unwrap();
+                    self.columns[column_index].append_null().unwrap();
                 }
                 Some(val) => {
-                    self.append_datum(column_index, &Datum::Bytes(val.clone()))
+                    self.columns[column_index]
+                        .append_bytes(&val.clone())
                         .unwrap();
                 }
             },
             VectorValue::DateTime(ref vec) => match &vec[row_index] {
                 None => {
-                    self.append_datum(column_index, &Datum::Null).unwrap();
+                    self.columns[column_index].append_null().unwrap();
                 }
                 Some(val) => {
-                    self.append_datum(column_index, &Datum::Time(val.clone()))
+                    self.columns[column_index]
+                        .append_time(&val.clone())
                         .unwrap();
                 }
             },
             VectorValue::Duration(ref vec) => match &vec[row_index] {
                 None => {
-                    self.append_datum(column_index, &Datum::Null).unwrap();
+                    self.columns[column_index].append_null().unwrap();
                 }
                 Some(val) => {
-                    self.append_datum(column_index, &Datum::Dur(*val)).unwrap();
+                    self.columns[column_index].append_duration(*val).unwrap();
                 }
             },
             VectorValue::Json(ref vec) => match &vec[row_index] {
                 None => {
-                    self.append_datum(column_index, &Datum::Null).unwrap();
+                    self.columns[column_index].append_null().unwrap();
                 }
-                Some(val) => {
-                    self.append_datum(column_index, &Datum::Json(val.clone()))
-                        .unwrap();
-                }
+                Some(val) => self.columns[column_index]
+                    .append_json(&val.clone())
+                    .unwrap(),
             },
         }
         Ok(())
