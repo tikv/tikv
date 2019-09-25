@@ -2666,7 +2666,7 @@ dependencies = [
  "kvproto",
  "quick-error",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
- "rand",
+ "rand 0.6.5",
  "slog",
  "slog-global",
  "tempfile",
