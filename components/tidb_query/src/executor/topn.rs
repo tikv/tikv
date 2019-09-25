@@ -152,8 +152,8 @@ pub mod tests {
     use std::cell::RefCell;
     use std::sync::Arc;
 
+    use codec::prelude::NumberEncoder;
     use tidb_query_datatype::FieldTypeTp;
-    use tikv_util::codec::number::NumberEncoder;
     use tikv_util::collections::HashMap;
     use tipb::{Expr, ExprType};
 
@@ -168,7 +168,7 @@ pub mod tests {
         let mut item = ByItem::default();
         let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
-        expr.mut_val().encode_i64(offset).unwrap();
+        expr.mut_val().write_i64(offset).unwrap();
         item.set_expr(expr);
         item.set_desc(desc);
         item

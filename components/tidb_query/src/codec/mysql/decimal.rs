@@ -3,17 +3,14 @@
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use byteorder::WriteBytesExt;
 use num;
 
 use codec::prelude::*;
-use tikv_util::codec::number::NumberEncoder;
 use tikv_util::escape;
 
 use crate::codec::convert::{self, ConvertTo};
@@ -1548,7 +1545,6 @@ impl Decimal {
         Res::Ok(x)
     }
 
-    // TODO, add test
     pub fn from_f64(val: f64) -> Result<Decimal> {
         if val.is_infinite() {
             Err(invalid_type!("{} can't be convert to decimal'", val))
@@ -1727,8 +1723,9 @@ impl ConvertTo<f64> for Decimal {
     /// Port from TiDB's MyDecimal::ToFloat64.
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        let val = self.to_string().parse()?;
-        Ok(val)
+        let r = self.to_string().parse::<f64>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
     }
 }
 
@@ -1795,7 +1792,7 @@ impl ConvertTo<Decimal> for Real {
 }
 
 impl ConvertTo<Decimal> for &[u8] {
-    // FIXME, the err handle is not exactly same as TiDB's,
+    // FIXME: the err handle is not exactly same as TiDB's,
     //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
@@ -1825,17 +1822,14 @@ impl ConvertTo<Decimal> for Json {
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         match self {
             Json::String(s) => {
-                match Decimal::from_str(s.as_str()) {
-                    Ok(d) => Ok(d),
-                    Err(e) => {
-                        ctx.handle_truncate_err(e)?;
-                        // FIXME, if TiDB's MyDecimal::FromString return err,
-                        //  it may has res. However, if TiKV's Decimal::from_str
-                        //  return err, it has no res, so I return zero here,
-                        //  but it may different from TiDB's MyDecimal::FromString
-                        Ok(Decimal::zero())
-                    }
-                }
+                Decimal::from_str(s.as_str()).or_else(|e| {
+                    ctx.handle_truncate_err(e)?;
+                    // FIXME: if TiDB's MyDecimal::FromString return err,
+                    //  it may has res. However, if TiKV's Decimal::from_str
+                    //  return err, it has no res, so I return zero here,
+                    //  but it may different from TiDB's MyDecimal::FromString
+                    Ok(Decimal::zero())
+                })
             }
             _ => {
                 let r: f64 = self.convert(ctx)?;
@@ -1935,7 +1929,7 @@ macro_rules! write_u8 {
         if $written == 0 {
             b ^= 0x80;
         }
-        $writer.write_all(&[b])?;
+        $writer.write_bytes(&[b])?;
         $written += 1;
     }};
 }
@@ -1959,7 +1953,7 @@ macro_rules! write_word {
         if $written == 0 {
             data[0] ^= 0x80;
         }
-        ($writer).write_all(&data[..size as usize])?;
+        ($writer).write_bytes(&data[..size as usize])?;
         $written += size;
     }};
 }
@@ -1968,7 +1962,7 @@ pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
-        self.write_all(&[prec, frac])?;
+        self.write_bytes(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
         let int_word_cnt = int_cnt / DIGITS_PER_WORD;
@@ -2083,13 +2077,13 @@ pub trait DecimalEncoder: NumberEncoder {
         self.write_u8(v.negative as u8)?;
         let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
         for id in 0..len as usize {
-            self.encode_i32_le(v.word_buf[id] as i32)?;
+            self.write_i32_le(v.word_buf[id] as i32)?;
         }
         Ok(())
     }
 }
 
-impl<T: Write> DecimalEncoder for T {}
+impl<T: BufferWriter> DecimalEncoder for T {}
 
 // Mark as `#[inline]` since in many cases `size` is a constant.
 #[inline]
@@ -2398,6 +2392,69 @@ mod tests {
             let dec: Decimal = num.into();
             let dec_str = format!("{}", dec);
             assert_eq!(dec_str, exp);
+        }
+    }
+
+    #[test]
+    fn test_from_f64() {
+        let cs = vec![
+            (
+                std::f64::INFINITY,
+                Err(Error::InvalidDataType(String::new())),
+            ),
+            (
+                -std::f64::INFINITY,
+                Err(Error::InvalidDataType(String::new())),
+            ),
+            (10.123, Ok(Decimal::from_str("10.123").unwrap())),
+            (-10.123, Ok(Decimal::from_str("-10.123").unwrap())),
+            (10.111, Ok(Decimal::from_str("10.111").unwrap())),
+            (-10.111, Ok(Decimal::from_str("-10.111").unwrap())),
+            (
+                18446744073709552000.0,
+                Ok(Decimal::from_str("18446744073709552000").unwrap()),
+            ),
+            (
+                -18446744073709552000.0,
+                Ok(Decimal::from_str("-18446744073709552000").unwrap()),
+            ),
+            // FIXME: because of rust's bug,
+            //  (1<<64)(18446744073709551616), (1<<65)(36893488147419103232) can not be represent by f64
+            //  so these cases can not pass
+            // (18446744073709551616.0, Ok(Decimal::from_str("18446744073709551616").unwrap())),
+            // (-18446744073709551616.0, Ok(Decimal::from_str("-18446744073709551616").unwrap())),
+            // (36893488147419103000.0, Ok(Decimal::from_str("36893488147419103000.0").unwrap())),
+            // (-36893488147419103000.0, Ok(Decimal::from_str("-36893488147419103000.0").unwrap())),
+            (
+                36893488147419103000.0,
+                Ok(Decimal::from_str("36893488147419103000.0").unwrap()),
+            ),
+            (
+                -36893488147419103000.0,
+                Ok(Decimal::from_str("-36893488147419103000.0").unwrap()),
+            ),
+        ];
+        for (input, expect) in cs {
+            let r = Decimal::from_f64(input);
+            let log = format!(
+                "input: {}, expect: {:?}, output: {:?}",
+                input,
+                expect.as_ref().map(|x| x.to_string()),
+                r.as_ref().map(|x| x.to_string())
+            );
+            match expect {
+                Err(e) => {
+                    assert!(r.is_err(), "{}", log.as_str());
+                    match e {
+                        Error::InvalidDataType(_) => (),
+                        _ => panic!("{}", log.as_str()),
+                    }
+                }
+                Ok(d) => {
+                    assert!(r.is_ok(), "{}", log.as_str());
+                    assert_eq!(r.unwrap(), d, "{}", log.as_str());
+                }
+            }
         }
     }
 
@@ -3565,11 +3622,7 @@ mod tests {
         // OVERFLOWING
         let big = (0..85).map(|_| '9').collect::<String>();
         let val: Result<Decimal> = big.as_bytes().convert(&mut ctx);
-        assert!(
-            val.is_err(),
-            "expected error, but got {:?}",
-            val.unwrap().to_string()
-        );
+        assert!(val.is_err(), "expected error, but got {:?}", val);
         assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
 
         // OVERFLOW_AS_WARNING

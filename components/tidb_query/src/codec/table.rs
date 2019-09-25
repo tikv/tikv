@@ -12,7 +12,8 @@ use tipb::ColumnInfo;
 use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
 use crate::expr::EvalContext;
-use tikv_util::codec::number::{self, NumberEncoder};
+use codec::prelude::*;
+use tikv_util::codec::number::{self};
 use tikv_util::codec::BytesSlice;
 use tikv_util::collections::{HashMap, HashSet};
 
@@ -30,19 +31,19 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
-        self.write_all(TABLE_PREFIX)?;
-        self.encode_i64(table_id)?;
-        self.write_all(RECORD_PREFIX_SEP).map_err(Error::from)
+        self.write_bytes(TABLE_PREFIX)?;
+        self.write_i64(table_id)?;
+        self.write_bytes(RECORD_PREFIX_SEP).map_err(Error::from)
     }
 
     fn append_table_index_prefix(&mut self, table_id: i64) -> Result<()> {
-        self.write_all(TABLE_PREFIX)?;
-        self.encode_i64(table_id)?;
-        self.write_all(INDEX_PREFIX_SEP).map_err(Error::from)
+        self.write_bytes(TABLE_PREFIX)?;
+        self.write_i64(table_id)?;
+        self.write_bytes(INDEX_PREFIX_SEP).map_err(Error::from)
     }
 }
 
-impl<T: Write> TableEncoder for T {}
+impl<T: BufferWriter> TableEncoder for T {}
 
 /// Extracts table prefix from table record or index.
 #[inline]
@@ -123,7 +124,7 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN);
     // can't panic
     key.append_table_record_prefix(table_id).unwrap();
-    key.encode_i64(handle).unwrap();
+    key.write_i64(handle).unwrap();
     key
 }
 
@@ -131,8 +132,8 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
 pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN + ID_LEN);
     key.append_table_record_prefix(table_id).unwrap();
-    key.encode_i64(handle).unwrap();
-    key.encode_i64(column_id).unwrap();
+    key.write_i64(handle).unwrap();
+    key.write_i64(column_id).unwrap();
     key
 }
 
@@ -169,7 +170,7 @@ pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
 pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PREFIX_LEN + ID_LEN + encoded.len());
     key.append_table_index_prefix(table_id).unwrap();
-    key.encode_i64(idx_id).unwrap();
+    key.write_i64(idx_id).unwrap();
     key.write_all(encoded).unwrap();
     key
 }
@@ -416,6 +417,7 @@ mod tests {
 
     use crate::codec::datum::{self, Datum};
     use tikv_util::collections::{HashMap, HashSet};
+    use tikv_util::map;
 
     use super::*;
 

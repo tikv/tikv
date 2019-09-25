@@ -2,11 +2,9 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::{i64, u64};
 
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::BytesSlice;
+use codec::prelude::*;
 
 use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
@@ -627,7 +625,7 @@ impl Duration {
             sep,
             self.secs()
         )
-            .unwrap();
+        .unwrap();
 
         let fsp = usize::from(self.fsp());
 
@@ -638,7 +636,7 @@ impl Duration {
                 self.micros() / TEN_POW[MICRO_WIDTH - fsp],
                 width = fsp
             )
-                .unwrap();
+            .unwrap();
         }
 
         string
@@ -650,17 +648,17 @@ impl Duration {
         self.format("")
     }
 
-    /// If the error is overflow, the result will return true,
-    /// otherwise, only one of result or err will be returned
+    /// If the error is overflow, the result will be returned, too.
+    /// Otherwise, only one of result or err will be returned
     pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> (Option<Duration>, Option<Error>) {
         let fsp = match check_fsp(fsp) {
             Err(e) => return (None, Some(e)),
-            Ok(fsp) => fsp
+            Ok(fsp) => fsp,
         };
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
             let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
-            return (Some(max), Some(Error::overflow("Duration", &n.to_string())));
+            return (Some(max), Some(Error::overflow("Duration", n)));
         }
 
         let negative = n < 0;
@@ -689,27 +687,21 @@ impl Duration {
 
     pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
         let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
-        match err {
-            Some(e) => {
+        err.map_or_else(
+            || {
+                debug_assert!(dur.is_some());
+                dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
+            },
+            |e| {
                 if e.is_overflow() {
                     ctx.handle_overflow_err(e)?;
-                    if dur.is_none() {
-                        Err(box_err!("Expect a not none result here, this is a bug"))
-                    } else {
-                        Ok(dur.unwrap())
-                    }
+                    debug_assert!(dur.is_some());
+                    dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
                 } else {
                     Err(e)
                 }
-            }
-            None => {
-                if dur.is_none() {
-                    Err(box_err!("Expect a not none result here, this is a bug"))
-                } else {
-                    Ok(dur.unwrap())
-                }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -728,7 +720,9 @@ impl ConvertTo<Decimal> for Duration {
     /// Port from TiDB' Duration::ToNumber
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        self.to_numeric_string().parse()
+        let r = self.to_numeric_string().parse::<Decimal>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
     }
 }
 
@@ -780,23 +774,25 @@ impl Ord for Duration {
     }
 }
 
-impl<T: Write> DurationEncoder for T {}
+impl<T: BufferWriter> DurationEncoder for T {}
 
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: Duration) -> Result<()> {
-        self.encode_i64(v.to_nanos())?;
-        self.encode_i64(i64::from(v.get_fsp())).map_err(From::from)
+        self.write_i64(v.to_nanos())?;
+        self.write_i64(i64::from(v.get_fsp())).map_err(From::from)
     }
 }
 
-impl Duration {
-    /// `decode` decodes duration encoded by `encode_duration`.
-    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Duration> {
-        let nanos = number::decode_i64(data)?;
-        let fsp = number::decode_i64(data)?;
+pub trait DurationDecoder: NumberDecoder {
+    /// `decode_duration` decodes duration encoded by `encode_duration`.
+    fn decode_duration(&mut self) -> Result<Duration> {
+        let nanos = self.read_i64()?;
+        let fsp = self.read_i64()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 }
+
+impl<T: BufferReader> DurationDecoder for T {}
 
 impl crate::codec::data_type::AsMySQLBool for Duration {
     #[inline]
@@ -1100,7 +1096,7 @@ mod tests {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.encode_duration(t).unwrap();
-            let got = Duration::decode(&mut buf.as_slice()).unwrap();
+            let got = buf.as_slice().decode_duration().unwrap();
             assert_eq!(t, got);
         }
     }
@@ -1145,7 +1141,12 @@ mod tests {
         let cs: Vec<(i64, i8, Result<Duration>, bool)> = vec![
             // (input, fsp, expect, overflow)
             // UNSPECIFIED_LENGTH
-            (8385959, UNSPECIFIED_LENGTH as i8, Ok(Duration::parse(b"838:59:59", 0).unwrap()), false),
+            (
+                8385959,
+                UNSPECIFIED_LENGTH as i8,
+                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
+                false,
+            ),
             (
                 101010,
                 0,
@@ -1247,11 +1248,125 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, add test for num>=10000000000
-            //  after Duration::from_f64 had impl logic for num>=10000000000
-            // (10000000000, 0, Ok(Duration::parse(b"0:0:0", 0).unwrap())),
-            // (10000235959, 0, Ok(Duration::parse(b"23:59:59", 0).unwrap())),
-            // (10000000000, 0, Ok(Duration::parse(b"0:0:0", 0).unwrap())),
+            // TODO, fix these test case after Duration::from_f64
+            //  had impl logic for num>=10000000000
+            (
+                10000000000,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                0,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    0,
+                )),
+                true,
+            ),
+            (
+                10000000000,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                5,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    5,
+                )),
+                true,
+            ),
+            (
+                10000000000,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
+            (
+                10000235959,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
+            (
+                10000000001,
+                6,
+                Ok(Duration::new(
+                    false,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    6,
+                )),
+                true,
+            ),
         ];
         for (input, fsp, expect, overflow) in cs {
             let cfg = Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING));
@@ -1275,8 +1390,7 @@ mod tests {
             );
 
             assert_eq!(r.is_ok(), expect.is_ok(), "{}", log.as_str());
-            if r.is_ok() {
-                let r = r.unwrap();
+            if let Ok(r) = r {
                 assert_eq!(r, expect.unwrap(), "{}", log.as_str());
             } else {
                 let e = r.err().unwrap();
@@ -1366,16 +1480,16 @@ mod benches {
             ("1 23", 5),
             ("1 23:12.1234567", 6),
         ]
-            .into_iter()
-            .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
-            .collect();
+        .into_iter()
+        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .collect();
         b.iter(|| {
             let cases = test::black_box(&cases);
             for &duration in cases {
                 let t = test::black_box(duration);
                 let mut buf = vec![];
                 buf.encode_duration(t).unwrap();
-                let got = test::black_box(Duration::decode(&mut buf.as_slice()).unwrap());
+                let got = test::black_box(buf.as_slice().decode_duration().unwrap());
                 assert_eq!(t, got);
             }
         })
@@ -1389,14 +1503,14 @@ mod benches {
             ("11:30:45.123456", "12:30:00"),
             ("11:30:45.123456", "1 12:30:00"),
         ]
-            .into_iter()
-            .map(|(lhs, rhs)| {
-                (
-                    Duration::parse(lhs.as_bytes(), MAX_FSP).unwrap(),
-                    Duration::parse(rhs.as_bytes(), MAX_FSP).unwrap(),
-                )
-            })
-            .collect();
+        .into_iter()
+        .map(|(lhs, rhs)| {
+            (
+                Duration::parse(lhs.as_bytes(), MAX_FSP).unwrap(),
+                Duration::parse(rhs.as_bytes(), MAX_FSP).unwrap(),
+            )
+        })
+        .collect();
 
         b.iter(|| {
             let cases = test::black_box(&cases);

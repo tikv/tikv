@@ -240,10 +240,15 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
         ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
         ScalarFuncSig::JsonTypeSig => json_type_fn_meta(),
+        ScalarFuncSig::JsonSetSig => json_set_fn_meta(),
+        ScalarFuncSig::JsonReplaceSig => json_replace_fn_meta(),
+        ScalarFuncSig::JsonInsertSig => json_insert_fn_meta(),
         ScalarFuncSig::JsonArraySig => json_array_fn_meta(),
         ScalarFuncSig::JsonObjectSig => json_object_fn_meta(),
         ScalarFuncSig::JsonMergeSig => json_merge_fn_meta(),
         ScalarFuncSig::JsonUnquoteSig => json_unquote_fn_meta(),
+        ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
+        ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |

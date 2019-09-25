@@ -372,7 +372,8 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
             f(engine)
         } else {
             // The program is currently in scheduler worker threads.
-            with_tls_engine(f)
+            // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+            unsafe { with_tls_engine(f) }
         }
     }
 
@@ -576,6 +577,7 @@ mod tests {
                 ctx: Context::default(),
                 key: Key::from_raw(b"k"),
                 start_ts: 10,
+                current_ts: 20,
             },
             Command::Rollback {
                 ctx: Context::default(),

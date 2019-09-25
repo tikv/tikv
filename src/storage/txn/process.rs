@@ -214,7 +214,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 let statistics = if readonly {
                     self.process_read(snapshot, task)
                 } else {
-                    with_tls_engine(|engine| self.process_write(engine, snapshot, task))
+                    // Safety: `self.sched_pool` ensures a TLS engine exists.
+                    unsafe { with_tls_engine(|engine| self.process_write(engine, snapshot, task)) }
                 };
                 tls_collect_scan_details(tag.get_str(), &statistics);
                 slow_log!(
@@ -269,8 +270,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-                if lock_info.is_some() {
-                    let (lock, is_first_lock) = lock_info.unwrap();
+                if let Some(lock_info) = lock_info {
+                    let (lock, is_first_lock) = lock_info;
                     Msg::WaitForLock {
                         cid,
                         start_ts: ts,
@@ -631,13 +632,17 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::Cleanup {
-            ctx, key, start_ts, ..
+            ctx,
+            key,
+            start_ts,
+            current_ts,
+            ..
         } => {
             let mut keys = vec![key];
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
-            let is_pessimistic_txn = txn.rollback(keys.pop().unwrap())?;
+            let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
 
             wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
