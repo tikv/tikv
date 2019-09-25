@@ -461,10 +461,10 @@ fn cast_int_as_duration(
                     }
                 }
                 None => {
-                    if dur.is_none() {
-                        Err(other_err!("Expect a not none result here, this is a bug"))
+                    if let Some(dur) = dur {
+                        Ok(Some(dur))
                     } else {
-                        Ok(Some(dur.unwrap()))
+                        Err(other_err!("Expect a not none result here, this is a bug"))
                     }
                 }
             }
@@ -759,7 +759,7 @@ mod tests {
         if let Some(x) = err_code {
             assert_eq!(
                 ctx.warnings.warning_cnt, 1,
-                "{}, warnings: {:?}",
+                "log: {}, warnings: {:?}",
                 log, ctx.warnings.warnings
             );
             assert_eq!(ctx.warnings.warnings[0].get_code(), x, "{}", log);
