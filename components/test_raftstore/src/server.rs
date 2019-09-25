@@ -185,7 +185,13 @@ impl Simulator for ServerCluster {
             svr.register_service(create_import_sst(import_service.clone()));
             svr.register_service(create_debug(debug_service.clone()));
             match svr.build_and_bind() {
-                Ok(_) => {
+                Ok(addr) => {
+                    let addr = format!("{}", addr);
+                    if self.addrs.values().find(|a| a == &&addr).is_some() {
+                        // This server binded to the same address as previous servers
+                        // because previous servers droped silently
+                        panic!("grpc server drop silently: addr {:?}", addr);
+                    }
                     server = Some(svr);
                     break;
                 }
