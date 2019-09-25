@@ -995,7 +995,7 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<
     } else {
         valid_float
     };
-    // TODO, may here we can use Cow to avoid some copy below
+    // TODO: may here we can use Cow to avoid some copy below
     let int_str = if valid_float.starts_with('-') {
         if dot_idx == 0 {
             "-0"
@@ -2485,10 +2485,10 @@ mod tests {
                 false,
                 false,
             ),
-            // TODO, add test case for Decimal::round failure
+            // TODO: add test case for Decimal::round failure
 
             // zero
-            // FIXME
+            // FIXME:
             //  according to Decimal::prec_and_frac,
             //  the decimals' prec(the number of all digits) and frac(the number of digit after number point) are
             //  Decimal::zero()'s is (1, 0)

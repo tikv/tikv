@@ -1236,7 +1236,7 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, fix these test case after Duration::from_f64
+            // TODO: fix these test case after Duration::from_f64
             //  had impl logic for num>=10000000000
             (
                 10000000000,

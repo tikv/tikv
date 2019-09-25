@@ -384,7 +384,7 @@ fn cast_signed_int_as_unsigned_decimal(
             let dec = if in_union(extra.implicit_args) && *val < 0 {
                 Decimal::zero()
             } else {
-                // FIXME, here TiDB has bug, fix this after fix TiDB's
+                // FIXME: here TiDB has bug, fix this after fix TiDB's
                 // if val is >=0, then val as u64 is ok,
                 // if val <0, there may be bug here.
                 Decimal::from(*val as u64)
@@ -398,7 +398,7 @@ fn cast_signed_int_as_unsigned_decimal(
     }
 }
 
-// FIXME, here TiDB may has bug, fix this after fix TiDB's
+// FIXME: here TiDB may has bug, fix this after fix TiDB's
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
 fn cast_real_as_decimal(
@@ -434,14 +434,14 @@ fn cast_string_as_unsigned_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            // FIXME, in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal` directly
+            // FIXME: in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal` directly
             let d: Decimal = val.convert(ctx)?;
             let d = if in_union(extra.implicit_args) && d.is_negative() {
                 Decimal::zero()
             } else {
                 d
             };
-            // FIXME, how to make a negative decimal value to unsigned decimal value
+            // FIXME: how to make a negative decimal value to unsigned decimal value
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 d,
@@ -484,8 +484,8 @@ fn cast_decimal_as_unsigned_decimal(
             let res = if in_union(extra.implicit_args) && val.is_negative() {
                 Decimal::zero()
             } else {
-                // FIXME, here TiDB may has bug, fix this after fix TiDB's
-                // FIXME, how to make a unsigned decimal from negative decimal
+                // FIXME: here TiDB may has bug, fix this after fix TiDB's
+                // FIXME: how to make a unsigned decimal from negative decimal
                 val.clone()
             };
             Ok(Some(produce_dec_with_specified_tp(
@@ -497,7 +497,7 @@ fn cast_decimal_as_unsigned_decimal(
     }
 }
 
-// FIXME, for cast_int_as_decimal, TiDB's impl has bug, fix this after fixed TiDB's
+// FIXME: for cast_int_as_decimal, TiDB's impl has bug, fix this after fixed TiDB's
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
 fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
@@ -1760,7 +1760,7 @@ mod tests {
                 false,
                 false,
             ),
-            // TODO, add test case for Decimal::round failure
+            // TODO: add test case for Decimal::round failure
         ];
 
         for (input, in_union, is_res_unsigned, base_res) in base_cs {
@@ -1816,7 +1816,7 @@ mod tests {
                         if origin_decimal == 0 || origin_flen <= 1 {
                             continue;
                         }
-                        // TODO, if add test case for Decimal::round failure,
+                        // TODO: if add test case for Decimal::round failure,
                         //  then should check whether this setting is right.
                         let res = base_res
                             .clone()
@@ -1932,7 +1932,7 @@ mod tests {
             (10, true, true, Decimal::from(10)),
             (i64::MAX, true, true, Decimal::from(i64::MAX)),
             // negative, not in_union
-            // FIXME, fix these case(negative to unsigned decimal, without in_union)
+            // FIXME: fix these case(negative to unsigned decimal, without in_union)
             //  after fix the bug of this situation(negative to unsigned decimal, without in_union)
             (-1, false, true, Decimal::from(-1i64 as u64)),
             (-10, false, true, Decimal::from(-10i64 as u64)),
@@ -1980,7 +1980,7 @@ mod tests {
     fn test_real_as_decimal() {
         test_none_with_ctx_and_extra(cast_real_as_decimal);
 
-        // TODO, add test case that make Decimal::from_f64 return err
+        // TODO: add test case that make Decimal::from_f64 return err
         let cs = vec![
             /// (input, in_union, is_res_unsigned, base_result)
             // neg and in_union
@@ -2034,7 +2034,7 @@ mod tests {
     fn test_string_as_signed_decimal() {
         test_none_with_ctx_and_extra(cast_any_as_decimal::<Bytes>);
 
-        // TODO, add test case that make Decimal::from_bytes return err.
+        // TODO: add test case that make Decimal::from_bytes return err.
         let cs = vec![
             // (input, in_union, is_res_unsigned, base_result)
             // neg and in_union
@@ -2602,7 +2602,7 @@ mod tests {
     fn test_time_as_decimal() {
         test_none_with_ctx_and_extra(cast_any_as_decimal::<Time>);
 
-        // TODO, add more test case
+        // TODO: add more test case
         let cs: Vec<(Time, bool, bool, Decimal)> = vec![
             // (cast_func_input, in_union, is_res_unsigned, base_result)
             (
@@ -2630,7 +2630,7 @@ mod tests {
     fn test_duration_as_decimal() {
         test_none_with_ctx_and_extra(cast_any_as_decimal::<Duration>);
 
-        // TODO, add more test case
+        // TODO: add more test case
         let cs: Vec<(Duration, bool, bool, Decimal)> = vec![
             // (input, in_union, is_res_unsigned, base_result)
             (
@@ -2670,7 +2670,7 @@ mod tests {
     fn test_json_as_decimal() {
         test_none_with_ctx_and_extra(cast_any_as_decimal::<Json>);
 
-        // TODO, add test case that make Decimal::from_str failed
+        // TODO: add test case that make Decimal::from_str failed
         let cs: Vec<(Json, bool, bool, Decimal)> = vec![
             // (cast_func_input, in_union, is_res_unsigned, base_result)
             (
