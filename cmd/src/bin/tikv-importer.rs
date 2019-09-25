@@ -16,15 +16,13 @@ extern crate slog;
 #[macro_use]
 extern crate slog_global;
 
-use crate::util::setup::*;
-use crate::util::signal_handler;
+use cmd::fatal;
+use cmd::setup::*;
+use cmd::signal_handler;
 
 use clap::{crate_authors, crate_version, App, Arg, ArgMatches};
 
-#[cfg(unix)]
-use tikv::binutil as util;
 use tikv::config::TiKvConfig;
-use tikv::fatal;
 use tikv::import::ImportKVServer;
 use tikv_util::{self as tikv_util, check_environment_variables};
 
@@ -33,7 +31,7 @@ fn main() {
         .about("The importer server for TiKV")
         .author(crate_authors!())
         .version(crate_version!())
-        .long_version(util::tikv_version_info().as_ref())
+        .long_version(tikv::tikv_version_info().as_ref())
         .arg(
             Arg::with_name("config")
                 .short("C")
@@ -79,7 +77,7 @@ fn main() {
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     initial_metric(&config.metric, None);
-    util::log_tikv_info();
+    tikv::log_tikv_info();
     check_environment_variables();
 
     if tikv_util::panic_mark_file_exists(&config.storage.data_dir) {

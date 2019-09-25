@@ -24,15 +24,6 @@ no-fail = ["fail/no_fail"]
 [lib]
 name = "tikv"
 
-[[bin]]
-name = "tikv-server"
-
-[[bin]]
-name = "tikv-ctl"
-
-[[bin]]
-name = "tikv-importer"
-
 [[test]]
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
@@ -90,7 +81,6 @@ chrono = "0.4"
 chrono-tz = "0.5.1"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
-clap = "2.32"
 url = "1.7.2"
 regex = "1.0"
 sys-info = "0.5.7"
@@ -136,7 +126,7 @@ codec = { path = "components/codec" }
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 # TODO: use master branch after the next version is released.
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.1" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
@@ -196,6 +186,7 @@ members = [
   "components/log_wrappers",
   "components/tikv_util",
   "components/external_storage",
+  "cmd",
 ]
 
 [profile.dev]

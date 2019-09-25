@@ -73,15 +73,15 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build:
-	cargo build  --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --no-default-features --features "${ENABLE_FEATURES}" -p cmd
 
 ctl:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl -p cmd
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
 run:
-	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
+	cargo run --no-default-features --features  "${ENABLE_FEATURES}" -p cmd --bin tikv-server
 
 # An optimized build suitable for development and benchmarking, by default built
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
@@ -128,7 +128,7 @@ dist_fail_release:
 
 # Build with release flag
 build_release:
-	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
+	cargo build --no-default-features --release --features "${ENABLE_FEATURES}" -p cmd
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
@@ -149,7 +149,7 @@ test:
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} -p cmd --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
