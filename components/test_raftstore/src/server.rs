@@ -187,7 +187,7 @@ impl Simulator for ServerCluster {
             match svr.build_and_bind() {
                 Ok(addr) => {
                     let addr = format!("{}", addr);
-                    if self.addrs.values().any(|a| a == &addr) {
+                    if self.addrs.iter().any(|(&k, v)| k != node_id && v == &addr) {
                         // This server binded to the same address as previous servers
                         // because previous servers droped silently
                         panic!("grpc server drop silently: addr {:?}", addr);
