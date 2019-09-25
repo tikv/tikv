@@ -247,6 +247,7 @@ mod tests {
         let cases = vec![
             (1, 1),
             (2, 2),
+            (-3, -3),
             (std::i64::MAX, std::i64::MAX),
             (std::i64::MIN, std::i64::MIN),
         ];
