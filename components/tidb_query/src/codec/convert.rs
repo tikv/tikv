@@ -568,7 +568,6 @@ pub fn produce_dec_with_specified_tp(
     mut dec: Decimal,
     ft: &FieldType,
 ) -> Result<Decimal> {
-    let origin_clone = dec.clone();
     let (flen, decimal) = (ft.as_accessor().flen(), ft.as_accessor().decimal());
     if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
         if flen < decimal {
@@ -2569,7 +2568,7 @@ mod tests {
             let ctx_in_dml_flag = vec![Flag::IN_INSERT_STMT, Flag::IN_UPDATE_OR_DELETE_STMT];
             for in_dml_flag in ctx_in_dml_flag {
                 // make ctx
-                let mut flag: Flag = Flag::default();
+                let mut flag: Flag = Flag::empty();
                 if overflow_as_warning {
                     flag |= Flag::OVERFLOW_AS_WARNING;
                 }

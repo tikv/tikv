@@ -2,7 +2,6 @@
 
 #![allow(dead_code)]
 
-use std::borrow::Cow;
 use std::convert::TryFrom;
 
 use tidb_query_codegen::rpn_fn;
@@ -16,6 +15,7 @@ use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
+use std::borrow::Cow;
 use std::num::IntErrorKind;
 
 fn get_cast_fn_rpn_meta(
@@ -98,18 +98,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Decimal, EvalType::Real) => cast_any_as_any_fn_meta::<Decimal, Real>(),
         (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
         (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
-        (EvalType::Int, EvalType::Decimal) => {
-            if !from_field_type.is_unsigned() && !to_field_type.is_unsigned() {
-                cast_any_as_decimal_fn_meta::<Int>()
-            } else {
-                cast_uint_as_decimal_fn_meta()
-            }
-        }
-        (EvalType::Bytes, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Bytes>(),
-        (EvalType::Real, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Real>(),
-        (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
-        (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
-        (EvalType::Json, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Json>(),
+
         (EvalType::Int, EvalType::Bytes) => {
             if !from_field_type.is_unsigned() {
                 cast_any_as_any_fn_meta::<Int, Bytes>()
@@ -559,6 +548,52 @@ fn cast_uint_as_int(val: &Option<Int>) -> Result<Option<i64>> {
     }
 }
 
+/// The implementation for push down signature `CastIntAsReal` from unsigned integer.
+#[rpn_fn(capture = [extra])]
+#[inline]
+fn cast_uint_as_real(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            // TODO: TiDB's here may has bug(val is uint, why it will <0 ?),
+            // fix this after TiDB's had fixed.
+            if in_union(extra.implicit_args) && *val < 0 {
+                return Ok(Some(Real::new(0f64).unwrap()));
+            }
+            let val = *val as u64;
+            Ok(Real::new(val as f64).ok())
+        }
+    }
+}
+
+/// The implementation for push down signature `CastIntAsString` from unsigned integer.
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_uint_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let p = (*val as u64).to_string().into_bytes();
+            let res = produce_str_with_specified_tp(
+                ctx,
+                Cow::Borrowed(p.as_slice()),
+                &extra.ret_field_type,
+                false,
+            )?;
+            let mut res = match res {
+                Cow::Borrowed(_) => p,
+                Cow::Owned(x) => x.to_vec(),
+            };
+            pad_zero_for_binary_type(&mut res, &extra.ret_field_type);
+            Ok(Some(res))
+        }
+    }
+}
+
 /// The implementation for push down signature `CastIntAsJson` from unsigned integer.
 #[rpn_fn]
 #[inline]
@@ -673,19 +708,16 @@ mod tests {
     use crate::codec::convert::produce_dec_with_specified_tp;
     use crate::codec::data_type::{Bytes, Decimal, Int, Real, ScalarValue};
     use crate::codec::error::*;
-    use crate::codec::mysql::charset::*;
     use crate::codec::mysql::decimal::{max_decimal, max_or_min_dec};
     use crate::codec::mysql::{Duration, Json, RoundMode, Time};
-    use crate::codec::Error;
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
-    use crate::rpn_expr::{RpnExpression, RpnFnCallExtra};
-    use nom::AsBytes;
+    use crate::rpn_expr::RpnFnCallExtra;
     use std::collections::BTreeMap;
     use std::fmt::{Debug, Display, Formatter};
     use std::sync::Arc;
-    use std::{f32, f64, i64, u64};
+    use std::{f64, i64, u64};
     use tidb_query_datatype::{
         Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH,
     };
@@ -778,7 +810,7 @@ mod tests {
         truncate_as_warning: bool,
         flags: Vec<Flag>,
     ) -> EvalContext {
-        let mut flag: Flag = Flag::default();
+        let mut flag: Flag = Flag::empty();
         if overflow_as_warning {
             flag |= Flag::OVERFLOW_AS_WARNING;
         }
@@ -1512,6 +1544,7 @@ mod tests {
         FnToStr: Fn(&T) -> String,
     {
         #[derive(Clone, Copy, Debug)]
+        #[allow(clippy::enum_variant_names)]
         enum Cond {
             TargetIntPartLenLessThanOriginIntPartLen,
             TargetDecimalBiggerThanOriginDecimal,
@@ -2246,9 +2279,6 @@ mod tests {
     fn test_string_as_unsigned_decimal() {
         test_none_with_ctx_and_extra(cast_string_as_unsigned_decimal);
 
-        // TODO, add test case that make Decimal::from_bytes return err.
-        let cs = vec![("-10abc", Decimal::from(-10))];
-
         let cs = vec![
             // (input, in_union, is_res_unsigned, base_result)
             // neg and in_union
@@ -2654,7 +2684,7 @@ mod tests {
                 Json::I64(10),
                 false,
                 false,
-                Decimal::from_f64(10f64 as f64).unwrap(),
+                Decimal::from_f64(10f64).unwrap(),
             ),
             (
                 Json::I64(i64::MAX),
