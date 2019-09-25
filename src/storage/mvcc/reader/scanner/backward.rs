@@ -8,9 +8,9 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
+use crate::storage::{Cursor, Key, KeyBuilder, Lock, Snapshot, Statistics, Value};
 
-use super::super::util::{key_to_key_buf, CheckLockResult};
+use super::super::util::{replace_with, CheckLockResult};
 use super::ScannerConfig;
 
 // When there are many versions for the user key, after several tries,
@@ -38,7 +38,7 @@ pub struct BackwardScanner<S: Snapshot> {
     is_started: bool,
     statistics: Statistics,
 
-    key_buf: Option<Key>,
+    key_buf: KeyBuilder,
 }
 
 impl<S: Snapshot> BackwardScanner<S> {
@@ -55,7 +55,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             default_cursor: None,
             is_started: false,
 
-            key_buf: None,
+            key_buf: KeyBuilder::default(),
         }
     }
 
@@ -241,10 +241,9 @@ impl<S: Snapshot> BackwardScanner<S> {
         // reallocation happens in `append_ts`.
 
         // TODO: Replace by cast + seek().
-        self.write_cursor.internal_seek(
-            key_to_key_buf(&mut self.key_buf, user_key).append_ts_ref(ts),
-            &mut self.statistics.write,
-        )?;
+        replace_with(&mut self.key_buf, user_key).append_ts(ts);
+        self.write_cursor
+            .internal_seek(self.key_buf.as_ref(), &mut self.statistics.write)?;
         assert!(self.write_cursor.valid()?);
 
         loop {

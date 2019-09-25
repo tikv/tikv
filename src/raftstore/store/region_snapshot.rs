@@ -6,14 +6,19 @@ use engine::{
     SyncSnapshot,
 };
 use kvproto::metapb::Region;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
-use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::keybuilder::KeyBuilder as UtilKeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+
+thread_local! {
+    pub static REGION_SNAPSHOT_KEY_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(20));
+}
 
 /// Snapshot of a region.
 ///
@@ -63,8 +68,8 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
-        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
+        let start = UtilKeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = UtilKeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
         let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
@@ -81,8 +86,8 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
-        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
+        let start = UtilKeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = UtilKeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
         let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
@@ -138,8 +143,11 @@ impl Peekable for RegionSnapshot {
             self.region.get_start_key(),
             self.region.get_end_key(),
         )?;
-        let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key)
+        REGION_SNAPSHOT_KEY_BUF.with(|key_buf| {
+            let buf = &mut key_buf.borrow_mut();
+            let k = data_buf_key(buf, key);
+            self.snap.get_value(&k)
+        })
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
@@ -149,8 +157,11 @@ impl Peekable for RegionSnapshot {
             self.region.get_start_key(),
             self.region.get_end_key(),
         )?;
-        let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key)
+        REGION_SNAPSHOT_KEY_BUF.with(|key_buf| {
+            let buf = &mut key_buf.borrow_mut();
+            let k = data_buf_key(buf, key);
+            self.snap.get_value_cf(cf, &k)
+        })
     }
 }
 
@@ -164,7 +175,7 @@ pub struct RegionIterator {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 
-    buf_key: Option<Vec<u8>>,
+    buf_key: Vec<u8>,
 }
 
 fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
@@ -191,17 +202,10 @@ fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     }
 }
 
-fn data_buf_key<'a>(buf_key: &'a mut Option<Vec<u8>>, key: &[u8]) -> &'a Vec<u8> {
-    match buf_key {
-        None => {
-            *buf_key = Some(keys::data_key(key));
-        }
-        Some(ref mut buf) => {
-            buf.truncate(0);
-            keys::data_key_ref(key, buf);
-        }
-    };
-    &buf_key.as_ref().unwrap()
+fn data_buf_key<'a>(buf_key: &'a mut Vec<u8>, key: &[u8]) -> &'a Vec<u8> {
+    buf_key.truncate(0);
+    keys::data_key_ref(key, buf_key);
+    buf_key
 }
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
@@ -219,7 +223,7 @@ impl RegionIterator {
             end_key,
             region,
 
-            buf_key: None,
+            buf_key: Vec::with_capacity(20),
         }
     }
 
@@ -241,7 +245,7 @@ impl RegionIterator {
             end_key,
             region,
 
-            buf_key: None,
+            buf_key: Vec::with_capacity(20),
         }
     }
 
@@ -524,8 +528,8 @@ mod tests {
             Option<(&[u8], &[u8])>,
         )>| {
             let iter_opt = IterOption::new(
-                lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
-                upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
+                lower_bound.map(|v| UtilKeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
+                upper_bound.map(|v| UtilKeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 true,
             );
             let mut iter = snap.iter(iter_opt);
@@ -687,7 +691,7 @@ mod tests {
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter(IterOption::new(
             None,
-            Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
+            Some(UtilKeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
         ));
         assert!(iter.seek_to_first());

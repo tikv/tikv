@@ -8,9 +8,9 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
+use crate::storage::{Cursor, Key, KeyBuilder, Lock, Snapshot, Statistics, Value};
 
-use super::super::util::{key_to_key_buf, CheckLockResult};
+use super::super::util::{replace_with, CheckLockResult};
 use super::ScannerConfig;
 /// This struct can be used to scan keys starting from the given user key (greater than or equal).
 ///
@@ -28,7 +28,7 @@ pub struct ForwardScanner<S: Snapshot> {
     is_started: bool,
     statistics: Statistics,
 
-    key_buf: Option<Key>,
+    key_buf: KeyBuilder,
 }
 
 impl<S: Snapshot> ForwardScanner<S> {
@@ -45,7 +45,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             default_cursor: None,
             is_started: false,
 
-            key_buf: None,
+            key_buf: KeyBuilder::default(),
         }
     }
 
@@ -248,10 +248,9 @@ impl<S: Snapshot> ForwardScanner<S> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
-            self.write_cursor.seek(
-                key_to_key_buf(&mut self.key_buf, user_key).append_ts_ref(ts),
-                &mut self.statistics.write,
-            )?;
+            replace_with(&mut self.key_buf, user_key).append_ts(ts);
+            self.write_cursor
+                .seek(self.key_buf.as_ref(), &mut self.statistics.write)?;
             if !self.write_cursor.valid()? {
                 // Key space ended.
                 return Ok(None);
@@ -351,10 +350,9 @@ impl<S: Snapshot> ForwardScanner<S> {
         // After that, we must pointing to another key, or out of bound.
         // `current_user_key` must have reserved space here, so its clone has reserved space too.
         // So no reallocation happens in `append_ts`.
-        self.write_cursor.internal_seek(
-            key_to_key_buf(&mut self.key_buf, current_user_key).append_ts_ref(0),
-            &mut self.statistics.write,
-        )?;
+        replace_with(&mut self.key_buf, current_user_key).append_ts(0);
+        self.write_cursor
+            .internal_seek(self.key_buf.as_ref(), &mut self.statistics.write)?;
 
         Ok(())
     }

@@ -3,7 +3,7 @@
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::mvcc::{Lock, LockType, Write};
-use crate::storage::{Cursor, Iterator, Key, Statistics, Value};
+use crate::storage::{Cursor, Iterator, Key, KeyBuilder, Statistics, Value};
 
 /// Representing check lock result.
 #[derive(Debug)]
@@ -113,14 +113,7 @@ where
 }
 
 #[inline]
-pub fn key_to_key_buf<'a>(mut key_buf: &'a mut Option<Key>, key: &Key) -> &'a mut Key {
-    match &mut key_buf {
-        None => {
-            *key_buf = Some(key.clone());
-        }
-        Some(ref mut local_key) => {
-            local_key.copy_from_encoded_key(key);
-        }
-    };
-    key_buf.as_mut().unwrap()
+pub fn replace_with<'a>(dest: &'a mut KeyBuilder, src: &Key) -> &'a mut KeyBuilder {
+    dest.copy_from_encoded_key(src);
+    dest
 }

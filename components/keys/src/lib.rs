@@ -14,7 +14,7 @@ use std::mem;
 
 mod types;
 
-pub use types::{Key, KvPair, Value};
+pub use types::{Key, KeyBuilder, KvPair, Value};
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];
