@@ -222,13 +222,13 @@ impl VectorValue {
     /// Returns maximum encoded size in arrow format.
     pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
         match self {
-            VectorValue::Int(_) => Ok(logical_rows.len() * 9),
-            VectorValue::Real(_) => Ok(logical_rows.len() * 9),
-            VectorValue::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1)),
-            VectorValue::DateTime(_) => Ok(logical_rows.len() * 21),
-            VectorValue::Duration(_) => Ok(logical_rows.len() * 9),
+            VectorValue::Int(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Real(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10),
+            VectorValue::DateTime(_) => Ok(logical_rows.len() * 21 + 10),
+            VectorValue::Duration(_) => Ok(logical_rows.len() * 9 + 10),
             VectorValue::Bytes(vec) => {
-                let mut size = logical_rows.len();
+                let mut size = logical_rows.len() + 10;
                 for idx in logical_rows {
                     let el = &vec[*idx];
                     match el {
@@ -243,7 +243,7 @@ impl VectorValue {
                 Ok(size)
             }
             VectorValue::Json(vec) => {
-                let mut size = logical_rows.len();
+                let mut size = logical_rows.len() + 10;
                 for idx in logical_rows {
                     let el = &vec[*idx];
                     match el {

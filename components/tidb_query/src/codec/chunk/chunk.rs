@@ -68,10 +68,11 @@ impl Chunk {
         vec: &VectorValue,
         column_index: usize,
     ) -> Result<()> {
+        let col = &mut self.columns[column_index];
         match vec {
             VectorValue::Int(ref vec) => match &vec[row_index] {
                 None => {
-                    self.columns[column_index].append_null().unwrap();
+                    col.append_null().unwrap();
                 }
                 Some(val) => {
                     if field_type
@@ -79,67 +80,57 @@ impl Chunk {
                         .flag()
                         .contains(FieldTypeFlag::UNSIGNED)
                     {
-                        self.columns[column_index].append_u64(*val as u64).unwrap();
+                        col.append_u64(*val as u64).unwrap();
                     } else {
-                        self.columns[column_index].append_i64(*val).unwrap();
+                        col.append_i64(*val).unwrap();
                     }
                 }
             },
             VectorValue::Real(ref vec) => match &vec[row_index] {
                 None => {
-                    self.columns[column_index].append_null().unwrap();
+                    col.append_null().unwrap();
                 }
                 Some(val) => {
-                    self.columns[column_index]
-                        .append_f64(f64::from(*val))
-                        .unwrap();
+                    col.append_f64(f64::from(*val)).unwrap();
                 }
             },
             VectorValue::Decimal(ref vec) => match &vec[row_index] {
                 None => {
-                    self.columns[column_index].append_null().unwrap();
+                    col.append_null().unwrap();
                 }
                 Some(val) => {
-                    self.columns[column_index]
-                        .append_decimal(&val.clone())
-                        .unwrap();
+                    col.append_decimal(&val.clone()).unwrap();
                 }
             },
             VectorValue::Bytes(ref vec) => match &vec[row_index] {
                 None => {
-                    self.columns[column_index].append_null().unwrap();
+                    col.append_null().unwrap();
                 }
                 Some(val) => {
-                    self.columns[column_index]
-                        .append_bytes(&val.clone())
-                        .unwrap();
+                    col.append_bytes(&val.clone()).unwrap();
                 }
             },
             VectorValue::DateTime(ref vec) => match &vec[row_index] {
                 None => {
-                    self.columns[column_index].append_null().unwrap();
+                    col.append_null().unwrap();
                 }
                 Some(val) => {
-                    self.columns[column_index]
-                        .append_time(&val.clone())
-                        .unwrap();
+                    col.append_time(&val.clone()).unwrap();
                 }
             },
             VectorValue::Duration(ref vec) => match &vec[row_index] {
                 None => {
-                    self.columns[column_index].append_null().unwrap();
+                    col.append_null().unwrap();
                 }
                 Some(val) => {
-                    self.columns[column_index].append_duration(*val).unwrap();
+                    col.append_duration(*val).unwrap();
                 }
             },
             VectorValue::Json(ref vec) => match &vec[row_index] {
                 None => {
-                    self.columns[column_index].append_null().unwrap();
+                    col.append_null().unwrap();
                 }
-                Some(val) => self.columns[column_index]
-                    .append_json(&val.clone())
-                    .unwrap(),
+                Some(val) => col.append_json(&val.clone()).unwrap(),
             },
         }
         Ok(())
