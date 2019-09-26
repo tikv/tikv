@@ -376,7 +376,7 @@ fn cast_signed_int_as_unsigned_real(
             if in_union(extra.implicit_args) && *val < 0 {
                 Ok(Some(Real::zero()))
             } else {
-                // FIXME: TiDB here may has bug, fix this after fix TiDB's
+                // FIXME: negative number to unsigned real's logic may be wrong here.
                 Ok(Real::new(*val as u64 as f64).ok())
             }
         }
@@ -397,10 +397,7 @@ fn cast_unsigned_int_as_signed_or_unsigned_real(val: &Option<Int>) -> Result<Opt
 #[rpn_fn]
 #[inline]
 fn cast_real_as_signed_real(val: &Option<Real>) -> Result<Option<Real>> {
-    match val {
-        None => Ok(None),
-        Some(val) => Ok(Some(*val)),
-    }
+    Ok(*val)
 }
 
 #[rpn_fn(capture = [extra])]
@@ -415,6 +412,7 @@ fn cast_real_as_unsigned_real(
             if in_union(extra.implicit_args) && val.into_inner() < 0f64 {
                 Ok(Some(Real::zero()))
             } else {
+                // FIXME: negative number to unsigned real's logic may be wrong here.
                 Ok(Some(*val))
             }
         }
@@ -457,6 +455,7 @@ fn cast_string_as_unsigned_real(
                 r = 0f64;
             }
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
+            // FIXME: negative number to unsigned real's logic may be wrong here.
             Ok(Real::new(r).ok())
         }
     }
@@ -475,7 +474,7 @@ fn cast_decimal_as_unsigned_real(
             if in_union(extra.implicit_args) && val.is_negative() {
                 Ok(Some(Real::zero()))
             } else {
-                // FIXME: here TiDB's may has bug, fix this after fix TiDB's
+                // FIXME: negative number to unsigned real's logic may be wrong here.
                 Ok(Some(val.convert(ctx)?))
             }
         }
@@ -988,7 +987,7 @@ mod tests {
             let rtf = make_ret_field_type(true);
             let ia = make_implicit_args(true);
             let extra = make_extra(&rtf, &ia);
-            let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
+            let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1033,7 +1032,7 @@ mod tests {
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type(true);
             let extra = make_extra(&rft, &ia);
-            let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
+            let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1558,7 +1557,7 @@ mod tests {
             (u64::MAX as f64, u64::MAX as f64),
         ];
         for (input, expect) in cs {
-            let r = cast_real_as_signed_real(&Real::new(input).ok());
+            let r = cast_real_as_signed_real(&Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1594,7 +1593,7 @@ mod tests {
             let ia = make_implicit_args(in_union);
             let rft = make_ret_field_type(true);
             let extra = make_extra(&rft, &ia);
-            let r = cast_real_as_unsigned_real(&extra, &Real::new(input).ok());
+            let r = cast_real_as_unsigned_real(&extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
                 "input: {}, expect: {}, in_union: {}",
