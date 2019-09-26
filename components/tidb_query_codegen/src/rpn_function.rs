@@ -4,7 +4,7 @@
 //!
 //! The macro should be applied to a function:
 //!
-//! ```rust
+//! ```ignore
 //! #[rpn_fn]
 //! fn foo(x: &Option<u32>) -> Result<Option<u8>> {
 //!     Ok(None)
