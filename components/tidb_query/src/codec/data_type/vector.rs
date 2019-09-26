@@ -6,6 +6,7 @@ use tipb::FieldType;
 use super::*;
 use crate::codec::data_type::scalar::ScalarValueRef;
 use crate::codec::datum;
+use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::Result;
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
@@ -210,6 +211,47 @@ impl VectorValue {
                         }
                         None => {
                             size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+        }
+    }
+
+    /// Returns maximum encoded size in arrow format.
+    pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
+        match self {
+            VectorValue::Int(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Real(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10),
+            VectorValue::DateTime(_) => Ok(logical_rows.len() * 21 + 10),
+            VectorValue::Duration(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Bytes(vec) => {
+                let mut size = logical_rows.len() + 10;
+                for idx in logical_rows {
+                    let el = &vec[*idx];
+                    match el {
+                        Some(v) => {
+                            size += 8 /* Offset */ + v.len();
+                        }
+                        None => {
+                            size +=  8 /* Offset */;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            VectorValue::Json(vec) => {
+                let mut size = logical_rows.len() + 10;
+                for idx in logical_rows {
+                    let el = &vec[*idx];
+                    match el {
+                        Some(v) => {
+                            size += 8 /* Offset */ + v.binary_len();
+                        }
+                        None => {
+                            size += 8 /* Offset */;
                         }
                     }
                 }
