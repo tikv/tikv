@@ -83,7 +83,7 @@ impl<T> Res<T> {
             Res::Overflow(t) => if let Some(error) = overflow_err {
                 ctx.handle_overflow_err(error)
             } else {
-                ctx.handle_overflow(true)
+                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))
             }
             .map(|()| t),
         }
