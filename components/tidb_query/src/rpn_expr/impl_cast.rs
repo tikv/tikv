@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 use std::convert::TryFrom;
 
@@ -241,18 +239,30 @@ fn cast_string_as_int_or_uint(
             // TODO: in TiDB, if `b.args[0].GetType().Hybrid()` || `IsBinaryLiteral(b.args[0])`,
             //  then it will return res from EvalInt() directly.
             let is_unsigned = extra.ret_field_type.is_unsigned();
+            // FIXME: if the err get_valid_utf8_prefix returned is overflow err,
+            //  it should be ERR_TRUNCATE_WRONG_VALUE but not others.
             let val = get_valid_utf8_prefix(ctx, val.as_slice())?;
             let val = val.trim();
             let is_str_neg = val.starts_with('-');
             if in_union(extra.implicit_args) && is_unsigned && is_str_neg {
                 Ok(Some(0))
             } else {
+                // FIXME: if the err get_valid_int_prefix returned is overflow err,
+                //  it should be ERR_TRUNCATE_WRONG_VALUE but not others.
                 let valid_int_prefix = get_valid_int_prefix(ctx, val)?;
                 let parse_res = if !is_str_neg {
                     valid_int_prefix.parse::<u64>().map(|x| x as i64)
                 } else {
                     valid_int_prefix.parse::<i64>()
                 };
+                // In TiDB, they only handle overflow using ctx when `sc.InSelectStmt` is true,
+                // However, according to https://github.com/pingcap/tidb/blob/e173c7f5c1041b3c7e67507889d50a7bdbcdfc01/executor/executor.go#L153,
+                // when InSelectStmt, OverflowAsWarning is always true,
+                // and when not InSelectStmt, OverflowAsWarning is always not true.
+                // So we needn't to check `sc.InSelectStmt` and can handle it using ctx directly.
+                //
+                // Be careful that, if this flag(OverflowAsWarning)'s setting had changed,
+                // then here's behavior will change, so it may make some bug different to find.
                 match parse_res {
                     Ok(x) => {
                         if !is_str_neg {
@@ -266,24 +276,24 @@ fn cast_string_as_int_or_uint(
                         }
                         Ok(Some(x as i64))
                     }
-                    Err(err) => {
-                        if err.kind() == &IntErrorKind::Overflow {
+                    Err(err) => match *err.kind() {
+                        IntErrorKind::Overflow | IntErrorKind::Underflow => {
                             let err = if is_str_neg {
                                 Error::overflow("BIGINT UNSIGNED", valid_int_prefix)
                             } else {
                                 Error::overflow("BIGINT", valid_int_prefix)
                             };
-                            ctx.handle_overflow_err(err)?;
+                            let warn_err = Error::truncated_wrong_val("INTEGER", val);
+                            ctx.handle_overflow_err(warn_err).map_err(|_| err)?;
                             let val = if is_str_neg {
                                 std::i64::MIN
                             } else {
                                 std::u64::MAX as i64
                             };
                             Ok(Some(val))
-                        } else {
-                            Err(other_err!("parse string to int failed: {}", err))
                         }
-                    }
+                        _ => Err(other_err!("parse string to int failed: {}", err)),
+                    },
                 }
             }
         }
@@ -708,6 +718,13 @@ mod tests {
     }
 
     fn check_warning_2(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
+        // if ctx.warnings.warning_cnt != err_code.len() {
+        //     println!(
+        //         "expect ctx.warnings.warning_cnt!=err_code.len() failed, log: {}, warnings: {:?}",
+        //         log,
+        //         ctx.warnings.warnings
+        //     );
+        // }
         assert_eq!(
             ctx.warnings.warning_cnt,
             err_code.len(),
@@ -718,6 +735,12 @@ mod tests {
         for i in 0..err_code.len() {
             let e1 = err_code[i];
             let e2 = ctx.warnings.warnings[i].get_code();
+            // if e1 != e2 {
+            //     println!(
+            //         "e1==e2 failed, log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
+            //         log, ctx.warnings.warnings, err_code
+            //     )
+            // }
             assert_eq!(
                 e1, e2,
                 "log: {}, ctx_warnings: {:?}, expect_warning: {:?}",
@@ -730,9 +753,15 @@ mod tests {
         assert!(res.is_ok(), "{}", log);
         let res = res.as_ref().unwrap();
         if res.is_none() {
+            // if !expect.is_none() {
+            //     println!("expect.is_none failed, log: {}", log);
+            // }
             assert!(expect.is_none(), "{}", log);
         } else {
             let res = res.as_ref().unwrap();
+            // if res != expect.unwrap() {
+            //     println!("res!=expect failed, log: {}", log);
+            // }
             assert_eq!(res, expect.unwrap(), "{}", log);
         }
     }
@@ -896,7 +925,6 @@ mod tests {
         enum Cond {
             None,
             Unsigned,
-            InSelectStmt,
             InUnionAndUnsigned,
         }
         impl Cond {
@@ -988,30 +1016,30 @@ mod tests {
                 vec![],
                 Cond::None,
             ),
-            // FIXME: if not is select stmt, should has this err code ERR_DATA_OUT_OF_RANGE, too.
-            // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::None),
             // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
-            // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::InSelectStmt),
+            (
+                "-9223372036854775809",
+                -9223372036854775808i64,
+                vec![ERR_TRUNCATE_WRONG_VALUE],
+                Cond::None,
+            ),
             ("-10", -10i64, vec![ERR_UNKNOWN], Cond::Unsigned),
-            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
-            // ("-9223372036854775808", -9223372036854775808i64, Some(ERR_UNKNOWN), Cond::Unsigned),
-            // FIXME: if not is select stmt, should has this err code ERR_DATA_OUT_OF_RANGE, too.
-            // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::Unsigned),
-            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
-            // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::Unsigned),
+            (
+                "-9223372036854775808",
+                -9223372036854775808i64,
+                vec![ERR_UNKNOWN],
+                Cond::Unsigned,
+            ),
+            (
+                "-9223372036854775809",
+                -9223372036854775808i64,
+                vec![ERR_TRUNCATE_WRONG_VALUE],
+                Cond::Unsigned,
+            ),
         ];
 
         for (input, expect, err_code, cond) in cs {
-            let mut ctx = if let Cond::InSelectStmt = cond {
-                let mut flag: Flag = Flag::empty();
-                flag |= Flag::OVERFLOW_AS_WARNING;
-                flag |= Flag::TRUNCATE_AS_WARNING;
-                flag |= Flag::IN_SELECT_STMT;
-                let cfg = Arc::new(EvalConfig::from_flag(flag));
-                EvalContext::new(cfg)
-            } else {
-                make_ctx(true, true, false)
-            };
+            let mut ctx = make_ctx(true, true, false);
             let ia = make_implicit_args(cond.in_union());
             let rft = make_ret_field_type(cond.is_unsigned());
             let extra = make_extra(&rft, &ia);
