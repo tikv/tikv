@@ -24,6 +24,9 @@ use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use crate::metrics::*;
 use crate::*;
 
+const WORKER_TAKE_RANGE: usize = 6;
+const WORKER_NUM: usize = 8;
+
 /// Backup task.
 pub struct Task {
     start_key: Vec<u8>,
@@ -103,13 +106,59 @@ pub struct BackupRange {
     end_key: Option<Key>,
     region: Region,
     leader: Peer,
-
-    cancel: Arc<AtomicBool>,
 }
 
 impl BackupRange {
-    fn has_canceled(&self) -> bool {
-        self.cancel.load(Ordering::SeqCst)
+    /// Get entries from the scanner and save them to storage
+    fn backup<E: Engine>(
+        &self,
+        writer: &mut BackupWriter,
+        engine: &E,
+        backup_ts: u64,
+    ) -> Result<Statistics> {
+        let mut ctx = Context::new();
+        ctx.set_region_id(self.region.get_id());
+        ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
+        ctx.set_peer(self.leader.clone());
+        let snapshot = match engine.snapshot(&ctx) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("backup snapshot failed"; "error" => ?e);
+                return Err(e.into());
+            }
+        };
+        let snap_store = SnapshotStore::new(
+            snapshot,
+            backup_ts,
+            IsolationLevel::SI,
+            false, /* fill_cache */
+        );
+        let start_key = self.start_key.clone();
+        let end_key = self.end_key.clone();
+        let mut scanner = snap_store.entry_scanner(start_key, end_key).unwrap();
+
+        let start = Instant::now();
+        let mut batch = EntryBatch::with_capacity(1024);
+        loop {
+            if let Err(e) = scanner.scan_entries(&mut batch) {
+                error!("backup scan entries failed"; "error" => ?e);
+                return Err(e.into());
+            };
+            if batch.is_empty() {
+                break;
+            }
+            debug!("backup scan entries"; "len" => batch.len());
+            // Build sst files.
+            if let Err(e) = writer.write(batch.drain()) {
+                error!("backup build sst failed"; "error" => ?e);
+                return Err(e);
+            }
+        }
+        BACKUP_RANGE_HISTOGRAM_VEC
+            .with_label_values(&["scan"])
+            .observe(start.elapsed().as_secs_f64());
+        let stat = scanner.take_statistics();
+        Ok(stat)
     }
 }
 
@@ -127,35 +176,45 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
     pub(crate) region_info: R,
 }
 
-impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
-    pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
-        let workers = ThreadPoolBuilder::new()
-            .name_prefix("backworker")
-            .pool_size(8) // TODO: make it configure.
-            .build();
-        Endpoint {
+/// The progress of a backup task
+pub struct Progress<R: RegionInfoProvider> {
+    store_id: u64,
+    next_start: Option<Key>,
+    end_key: Option<Key>,
+    region_info: R,
+    finished: bool,
+}
+
+impl<R: RegionInfoProvider> Progress<R> {
+    fn new(store_id: u64, next_start: Option<Key>, end_key: Option<Key>, region_info: R) -> Self {
+        Progress {
             store_id,
-            engine,
+            next_start,
+            end_key,
             region_info,
-            workers,
-            db,
+            finished: Default::default(),
         }
     }
 
-    fn seek_backup_range(
-        &self,
-        start_key: Option<Key>,
-        end_key: Option<Key>,
-        cancel: Arc<AtomicBool>,
-    ) -> mpsc::Receiver<BackupRange> {
+    /// Forward the progress by `ranges` BackupRanges
+    ///
+    /// The size of the returned BackupRanges should <= `ranges`
+    fn forward(&mut self, limit: usize) -> Vec<BackupRange> {
+        if self.finished {
+            return Vec::new();
+        }
         let store_id = self.store_id;
         let (tx, rx) = mpsc::channel();
-        let start_key_ = start_key
+        let start_key_ = self
+            .next_start
             .clone()
             .map_or_else(Vec::new, |k| k.into_encoded());
+        let start_key = self.next_start.clone();
+        let end_key = self.end_key.clone();
         let res = self.region_info.seek_region(
             &start_key_,
             Box::new(move |iter| {
+                let mut sended = 0;
                 for info in iter {
                     let region = &info.region;
                     if end_key.is_some() {
@@ -177,9 +236,12 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             end_key: ekey,
                             region: region.clone(),
                             leader,
-                            cancel: cancel.clone(),
                         };
                         tx.send(backup_range).unwrap();
+                        sended += 1;
+                        if sended >= limit {
+                            break;
+                        }
                     }
                 }
             }),
@@ -188,89 +250,88 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             // TODO: handle error.
             error!("backup seek region failed"; "error" => ?e);
         }
-        rx
+
+        let branges: Vec<_> = rx.iter().collect();
+        if let Some(b) = branges.last() {
+            // The region's end key is empty means it is the last
+            // region, we need to set the `finished` flag here in case
+            // we run with `next_start` set to None
+            if b.region.get_end_key().is_empty() {
+                self.finished = true;
+            }
+            self.next_start = b.end_key.clone();
+        } else {
+            self.finished = true;
+        }
+        branges
+    }
+}
+
+impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
+    pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
+        let workers = ThreadPoolBuilder::new()
+            .name_prefix("backup-worker")
+            .pool_size(8) // TODO: make it configure.
+            .build();
+        Endpoint {
+            store_id,
+            engine,
+            region_info,
+            workers,
+            db,
+        }
     }
 
-    fn dispatch_backup_range(
+    fn spawn_backup_worker(
         &self,
-        brange: BackupRange,
+        prs: Arc<Mutex<Progress<R>>>,
         start_ts: u64,
         end_ts: u64,
         storage: LimitedStorage,
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
+        cancel: Arc<AtomicBool>,
     ) {
         // TODO: support incremental backup
         let _ = start_ts;
 
         let backup_ts = end_ts;
-        let mut ctx = Context::new();
-        ctx.set_region_id(brange.region.get_id());
-        ctx.set_region_epoch(brange.region.get_region_epoch().to_owned());
-        ctx.set_peer(brange.leader.clone());
-        // TODO: make it async.
-        let snapshot = match self.engine.snapshot(&ctx) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("backup snapshot failed"; "error" => ?e);
-                return tx.send((brange, Err(e.into()))).unwrap();
-            }
-        };
+        let engine = self.engine.clone();
         let db = self.db.clone();
         let store_id = self.store_id;
-        self.workers.spawn(lazy(move || {
-            if brange.has_canceled() {
-                warn!("backup task has canceled"; "range" => ?brange);
+        // TODO: make it async.
+        self.workers.spawn(lazy(move || loop {
+            let branges = prs.lock().unwrap().forward(WORKER_TAKE_RANGE);
+            if branges.is_empty() {
                 return Ok(());
             }
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                backup_ts,
-                IsolationLevel::SI,
-                false, /* fill_cache */
-            );
-            let start_key = brange.start_key.clone();
-            let end_key = brange.end_key.clone();
-            let mut scanner = snap_store
-                .entry_scanner(start_key.clone(), end_key.clone())
-                .unwrap();
-            let mut batch = EntryBatch::with_capacity(1024);
-            let name = backup_file_name(store_id, &brange.region);
-            let mut writer = match BackupWriter::new(db, &name, storage.limiter) {
-                Ok(w) => w,
-                Err(e) => {
-                    error!("backup writer failed"; "error" => ?e);
-                    return tx.send((brange, Err(e))).map_err(|_| ());
+            for brange in branges {
+                if cancel.load(Ordering::SeqCst) {
+                    warn!("backup task has canceled"; "range" => ?brange);
+                    return Ok(());
                 }
-            };
-            let start = Instant::now();
-            loop {
-                if let Err(e) = scanner.scan_entries(&mut batch) {
-                    error!("backup scan entries failed"; "error" => ?e);
-                    return tx.send((brange, Err(e.into()))).map_err(|_| ());
+                let name = backup_file_name(store_id, &brange.region);
+                let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
+                {
+                    Ok(w) => w,
+                    Err(e) => {
+                        error!("backup writer failed"; "error" => ?e);
+                        return tx.send((brange, Err(e))).map_err(|_| ());
+                    }
                 };
-                if batch.is_empty() {
-                    break;
-                }
-                debug!("backup scan entries"; "len" => batch.len());
-                // Build sst files.
-                if let Err(e) = writer.write(batch.drain()) {
-                    error!("backup build sst failed"; "error" => ?e);
-                    return tx.send((brange, Err(e))).map_err(|_| ());
-                }
+                let stat = match brange.backup(&mut writer, &engine, backup_ts) {
+                    Ok(s) => s,
+                    Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
+                };
+                // Save sst files to storage.
+                let files = match writer.save(&storage.storage) {
+                    Ok(files) => files,
+                    Err(e) => {
+                        error!("backup save file failed"; "error" => ?e);
+                        return tx.send((brange, Err(e))).map_err(|_| ());
+                    }
+                };
+                let _ = tx.send((brange, Ok((files, stat)))).map_err(|_| ());
             }
-            BACKUP_RANGE_HISTOGRAM_VEC
-                .with_label_values(&["scan"])
-                .observe(start.elapsed().as_secs_f64());
-            // Save sst files to storage.
-            let files = match writer.save(&storage.storage) {
-                Ok(files) => files,
-                Err(e) => {
-                    error!("backup save file failed"; "error" => ?e);
-                    return tx.send((brange, Err(e))).map_err(|_| ());
-                }
-            };
-            let stat = scanner.take_statistics();
-            tx.send((brange, Ok((files, stat)))).map_err(|_| ())
         }));
     }
 
@@ -286,17 +347,22 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         } else {
             Some(Key::from_raw(&task.end_key))
         };
-        let rx = self.seek_backup_range(start_key, end_key, task.cancel);
 
         let (res_tx, res_rx) = mpsc::channel();
-        for brange in rx {
-            let tx = res_tx.clone();
-            self.dispatch_backup_range(
-                brange,
+        let prs = Arc::new(Mutex::new(Progress::new(
+            self.store_id,
+            start_key,
+            end_key,
+            self.region_info.clone(),
+        )));
+        for _ in 0..WORKER_NUM {
+            self.spawn_backup_worker(
+                prs.clone(),
                 task.start_ts,
                 task.end_ts,
                 task.storage.clone(),
-                tx,
+                res_tx.clone(),
+                task.cancel.clone(),
             );
         }
 
@@ -312,8 +378,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 .end_key
                 .map_or_else(|| vec![], |k| k.into_raw().unwrap());
             let mut response = BackupResponse::new();
-            response.set_start_key(start_key.clone());
-            response.set_end_key(end_key.clone());
             match res {
                 Ok((mut files, stat)) => {
                     debug!("backup region finish";
@@ -340,6 +404,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     response.set_error(e.into());
                 }
             }
+            response.set_start_key(start_key);
+            response.set_end_key(end_key);
             if let Err(e) = resp.unbounded_send(response) {
                 error!("backup failed to send response"; "error" => ?e);
                 break;
@@ -429,6 +495,7 @@ pub mod tests {
     use external_storage::LocalStorage;
     use futures::{Future, Stream};
     use kvproto::metapb;
+    use rand;
     use tempfile::TempDir;
     use tikv::raftstore::coprocessor::RegionCollector;
     use tikv::raftstore::coprocessor::SeekRegionCallback;
@@ -531,15 +598,33 @@ pub mod tests {
                 } else {
                     Some(Key::from_raw(end_key))
                 };
-                let rx = endpoint.seek_backup_range(start_key, end_key, Arc::default());
-                let ranges: Vec<BackupRange> = rx.into_iter().collect();
-                assert_eq!(
-                    ranges.len(),
-                    expect.len(),
-                    "got {:?}, expect {:?}",
-                    ranges,
-                    expect
+                let mut prs = Progress::new(
+                    endpoint.store_id,
+                    start_key,
+                    end_key,
+                    endpoint.region_info.clone(),
                 );
+
+                let mut ranges = Vec::with_capacity(expect.len());
+                while ranges.len() != expect.len() {
+                    let n = (rand::random::<usize>() % 3) + 1;
+                    let mut r = prs.forward(n);
+                    // The returned backup ranges should <= n
+                    assert!(r.len() <= n);
+
+                    if r.is_empty() {
+                        // if return a empty vec then the progress is finished
+                        assert_eq!(
+                            ranges.len(),
+                            expect.len(),
+                            "got {:?}, expect {:?}",
+                            ranges,
+                            expect
+                        );
+                    }
+                    ranges.append(&mut r);
+                }
+
                 for (a, b) in ranges.into_iter().zip(expect) {
                     assert_eq!(
                         a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
