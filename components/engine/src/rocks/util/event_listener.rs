@@ -70,7 +70,7 @@ impl engine_rocksdb::EventListener for EventListener {
         assert!(result.is_err());
         if let Err(err) = result {
             STORE_ENGINE_EVENT_COUNTER_VEC
-                .with_label_values(&[&self.db_name, "background_error"])
+                .with_label_values(&[&self.db_name, "db", "background_error"])
                 .inc();
             let r = match reason {
                 DBBackgroundErrorReason::Flush => "flush",
