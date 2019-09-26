@@ -102,14 +102,28 @@ impl Chunk {
                 }
             }
             VectorValue::Real(ref vec) => {
-                for row_index in row_indexs {
-                    let row_index = *row_index as usize;
-                    match &vec[row_index] {
-                        None => {
-                            col.append_null().unwrap();
+                if col.get_fixed_len() == 4 {
+                    for row_index in row_indexs {
+                        let row_index = *row_index as usize;
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_f32(f64::from(*val) as f32).unwrap();
+                            }
                         }
-                        Some(val) => {
-                            col.append_f64(f64::from(*val)).unwrap();
+                    }
+                } else {
+                    for row_index in row_indexs {
+                        let row_index = *row_index as usize;
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_f64(f64::from(*val)).unwrap();
+                            }
                         }
                     }
                 }

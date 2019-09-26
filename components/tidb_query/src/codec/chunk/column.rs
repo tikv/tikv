@@ -101,7 +101,13 @@ impl Column {
             Datum::Null => self.append_null(),
             Datum::I64(v) => self.append_i64(*v),
             Datum::U64(v) => self.append_u64(*v),
-            Datum::F64(v) => self.append_f64(*v),
+            Datum::F64(v) => {
+                if self.fixed_len == 4 {
+                    self.append_f32(*v as f32)
+                } else {
+                    self.append_f64(*v)
+                }
+            }
             Datum::Bytes(ref v) => self.append_bytes(v),
             Datum::Dec(ref v) => self.append_decimal(v),
             Datum::Dur(v) => self.append_duration(*v),
@@ -137,6 +143,12 @@ impl Column {
     #[inline]
     fn is_fixed(&self) -> bool {
         self.fixed_len > 0
+    }
+
+    /// Return the column's fixed length.
+    #[inline]
+    pub fn get_fixed_len(&self) -> usize {
+        self.fixed_len
     }
 
     /// Reset the column
@@ -231,11 +243,13 @@ impl Column {
 
     /// Append a f64 datum to the column.
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
-        if self.fixed_len == 4 {
-            self.data.write_f32_le(v as f32)?;
-        } else {
-            self.data.write_f64_le(v)?;
-        }
+        self.data.write_f64_le(v)?;
+        self.finish_append_fixed()
+    }
+
+    /// Append a f32 datum to the column.
+    pub fn append_f32(&mut self, v: f32) -> Result<()> {
+        self.data.write_f32_le(v)?;
         self.finish_append_fixed()
     }
 
