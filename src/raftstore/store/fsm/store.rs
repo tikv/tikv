@@ -2063,7 +2063,7 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::raftstore::coprocessor::properties::{RangeProperties, RangeOffsets};
+    use crate::raftstore::coprocessor::properties::{RangeOffsets, RangeProperties};
     use crate::storage::kv::CompactedEvent;
     use tikv_util::collections::HashMap;
 
@@ -2073,9 +2073,27 @@ mod tests {
     fn test_calc_region_declined_bytes() {
         let prop = RangeProperties {
             offsets: vec![
-                (b"a".to_vec(), RangeOffsets { size: 4 * 1024, keys: 1}),
-                (b"b".to_vec(), RangeOffsets { size: 8 * 1024, keys: 2}),
-                (b"c".to_vec(), RangeOffsets { size: 12 * 1024, keys: 3}),
+                (
+                    b"a".to_vec(),
+                    RangeOffsets {
+                        size: 4 * 1024,
+                        keys: 1,
+                    },
+                ),
+                (
+                    b"b".to_vec(),
+                    RangeOffsets {
+                        size: 8 * 1024,
+                        keys: 2,
+                    },
+                ),
+                (
+                    b"c".to_vec(),
+                    RangeOffsets {
+                        size: 12 * 1024,
+                        keys: 3,
+                    },
+                ),
             ],
         };
         let event = CompactedEvent {
