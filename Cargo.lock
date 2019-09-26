@@ -127,6 +127,7 @@ dependencies = [
  "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.6.5",
  "serde",
  "serde_derive",
  "slog",
@@ -1310,7 +1311,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#9129309afd90eba1d9430a9f3ee5440b2e1bfb9f"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#84451e36e69443df497c2d5ba71c0a3994384a4a"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1327,7 +1328,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#9129309afd90eba1d9430a9f3ee5440b2e1bfb9f"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#84451e36e69443df497c2d5ba71c0a3994384a4a"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2304,7 +2305,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#9129309afd90eba1d9430a9f3ee5440b2e1bfb9f"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#84451e36e69443df497c2d5ba71c0a3994384a4a"
 dependencies = [
  "crc",
  "libc",
