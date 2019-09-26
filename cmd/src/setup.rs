@@ -15,11 +15,11 @@ pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 #[macro_export]
 macro_rules! fatal {
-    ($lvl:expr, $($arg:tt)+) => ({
+    ($lvl:expr $(, $arg:expr)*) => ({
         if $crate::setup::LOG_INITIALIZED.load(::std::sync::atomic::Ordering::SeqCst) {
-            crit!($lvl, $($arg)+);
+            crit!($lvl $(, $arg)*);
         } else {
-            eprintln!($lvl, $($arg)+);
+            eprintln!($lvl $(, $arg)*);
         }
         slog_global::clear_global();
         ::std::process::exit(1)

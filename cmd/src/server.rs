@@ -9,6 +9,7 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use kvproto::backup_grpc::create_backup;
 use kvproto::deadlock_grpc::create_deadlock;
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
@@ -251,6 +252,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     // Create Debug service.
     let debug_service = DebugService::new(engines.clone(), raft_router.clone());
 
+    // Create Backup service.
+    let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");
+    let backup_scheduler = backup_worker.scheduler();
+    let backup_service = backup::Service::new(backup_scheduler);
+
     // Create server
     let mut server = Server::new(
         &server_cfg,
@@ -264,10 +270,31 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
     // Register services.
-    server.register_service(create_import_sst(import_service));
-    server.register_service(create_debug(debug_service));
+    if server
+        .register_service(create_import_sst(import_service))
+        .is_some()
+    {
+        fatal!("failed to register import service");
+    }
+    if server
+        .register_service(create_debug(debug_service))
+        .is_some()
+    {
+        fatal!("failed to register debug service");
+    }
     if let Some(deadlock_service) = deadlock_service {
-        server.register_service(create_deadlock(deadlock_service));
+        if server
+            .register_service(create_deadlock(deadlock_service))
+            .is_some()
+        {
+            fatal!("failed to register deadlock service");
+        }
+    }
+    if server
+        .register_service(create_backup(backup_service))
+        .is_some()
+    {
+        fatal!("failed to register backup service");
     }
 
     let trans = server.transport();
@@ -301,6 +328,17 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     )
     .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
     initial_metric(&cfg.metric, Some(node.id()));
+
+    // Start backup endpoint.
+    let backup_endpoint = backup::Endpoint::new(
+        node.id(),
+        engine.clone(),
+        region_info_accessor.clone(),
+        engines.kv.clone(),
+    );
+    backup_worker
+        .start(backup_endpoint)
+        .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
     // Start auto gc
     let auto_gc_cfg = AutoGCConfig::new(
@@ -377,7 +415,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     signal_handler::handle_signal(Some(engines));
 
-    // Stop.
+    // Stop backup worker.
+    if let Some(j) = backup_worker.stop() {
+        j.join()
+            .unwrap_or_else(|e| fatal!("failed to stop backup: {:?}", e))
+    }
+
+    // Stop server.
     server
         .stop()
         .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
