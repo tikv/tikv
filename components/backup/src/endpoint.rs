@@ -130,7 +130,7 @@ impl BackupRange {
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
-            IsolationLevel::Si,
+            IsolationLevel::SI,
             false, /* fill_cache */
         );
         let start_key = self.start_key.clone();
