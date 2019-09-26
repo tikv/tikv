@@ -517,6 +517,67 @@ impl<S: Snapshot> MvccTxn<S> {
         ids: &mut Vec<u64>,
         scheduler: &Sched,
     ) -> Result<u64> {
+        let tag = commands[0].tag();
+        let mut rows = 0;
+        let len = commands.len();
+        for i in 0..len {
+            let mut locks = vec![];
+            if let Command::Prewrite {
+                mutations,
+                primary,
+                start_ts,
+                options,
+                ..
+            } = &commands[i]
+            {
+                self.start_ts = *start_ts;
+                let mut r = mutations.len();
+                for m in mutations {
+                    match self.prewrite(m.clone(), &primary, &options) {
+                        Ok(_) => {}
+                        e @ Err(Error::KeyIsLocked { .. }) => {
+                            locks.push(e.map_err(txn::Error::from).map_err(StorageError::from));
+                        }
+                        Err(e) => {
+                            scheduler.on_batch_msg(
+                                ids[i],
+                                Msg::FinishedWithErr {
+                                    cid,
+                                    err: txn::Error::Mvcc(e),
+                                    tag,
+                                },
+                            );
+                            ids[i] = u64::max_value();
+                            r = 0;
+                            break;
+                        }
+                    }
+                }
+                rows += r;
+                if !locks.is_empty() {
+                    scheduler.on_batch_msg(
+                        ids[i],
+                        Msg::WriteFinished {
+                            cid,
+                            pr: ProcessResult::MultiRes { results: locks },
+                            result: Ok(()),
+                            tag,
+                        },
+                    );
+                    ids[i] = u64::max_value();
+                }
+            }
+        }
+        Ok(rows as u64)
+    }
+
+    pub fn batch_prewrite_old<Sched: MsgScheduler>(
+        &mut self,
+        cid: u64,
+        commands: &[Command],
+        ids: &mut Vec<u64>,
+        scheduler: &Sched,
+    ) -> Result<u64> {
         let mut map = BTreeMap::new();
         let len = commands.len();
         let tag = commands[0].tag();
