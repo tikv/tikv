@@ -138,8 +138,8 @@ mod tests {
             (None, WriteType::Rollback, FLAG_ROLLBACK),
         ];
         for (i, (lock_type, write_type, flag)) in tests.drain(..).enumerate() {
-            if lock_type.is_some() {
-                let wt = WriteType::from_lock_type(lock_type.unwrap()).unwrap();
+            if let Some(lock_type) = lock_type {
+                let wt = WriteType::from_lock_type(lock_type).unwrap();
                 assert_eq!(
                     wt, write_type,
                     "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",

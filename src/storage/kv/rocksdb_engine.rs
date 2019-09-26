@@ -5,6 +5,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use engine::rocks;
 use engine::rocks::util::CFOptions;
@@ -32,6 +33,7 @@ const TEMP_DIR: &str = "";
 enum Task {
     Write(Vec<Modify>, Callback<()>),
     Snapshot(Callback<RocksSnapshot>),
+    Pause(Duration),
 }
 
 impl Display for Task {
@@ -39,6 +41,7 @@ impl Display for Task {
         match *self {
             Task::Write(..) => write!(f, "write task"),
             Task::Snapshot(_) => write!(f, "snapshot task"),
+            Task::Pause(_) => write!(f, "pause"),
         }
     }
 }
@@ -53,6 +56,7 @@ impl Runnable<Task> for Runner {
                 CbContext::new(),
                 Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
             )),
+            Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
 }
@@ -115,6 +119,10 @@ impl RocksEngine {
 
     pub fn trigger_not_leader(&self) {
         self.not_leader.store(true, Ordering::SeqCst);
+    }
+
+    pub fn pause(&self, dur: Duration) {
+        self.sched.schedule(Task::Pause(dur)).unwrap();
     }
 
     pub fn get_rocksdb(&self) -> Arc<DB> {

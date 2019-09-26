@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use bitflags::bitflags;
 use std::sync::Arc;
 use std::{i64, mem, u64};
 
@@ -237,14 +238,6 @@ impl EvalContext {
             return Ok(());
         }
         Err(err)
-    }
-
-    pub fn handle_overflow(&mut self, is_overflow: bool) -> Result<()> {
-        if !is_overflow {
-            Ok(())
-        } else {
-            self.handle_overflow_err(Error::overflow("DECIMAL", ""))
-        }
     }
 
     /// handle_overflow treats ErrOverflow as warnings or returns the error

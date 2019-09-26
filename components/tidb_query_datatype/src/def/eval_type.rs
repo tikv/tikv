@@ -5,7 +5,7 @@ use std::fmt;
 /// Function implementations' parameter data types.
 ///
 /// It is similar to the `EvalType` in TiDB, but doesn't provide type `Timestamp`, which is
-/// handled by the same type as `DateTime` here instead of a new type. Also, `String` is
+/// handled by the same type as `DateTime` here, instead of a new type. Also, `String` is
 /// called `Bytes` here to be less confusing.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum EvalType {
@@ -45,6 +45,7 @@ impl fmt::Display for EvalType {
 impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
     type Error = crate::DataTypeError;
 
+    // Succeeds for all field types supported as eval types, fails for unsupported types.
     fn try_from(tp: crate::FieldTypeTp) -> Result<Self, crate::DataTypeError> {
         let eval_type = match tp {
             crate::FieldTypeTp::Tiny
@@ -68,7 +69,7 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::VarString
             | crate::FieldTypeTp::String => EvalType::Bytes,
             _ => {
-                // Note: In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
+                // In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
                 return Err(crate::DataTypeError::UnsupportedType {
                     name: tp.to_string(),
                 });
