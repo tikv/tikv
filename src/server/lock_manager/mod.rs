@@ -17,7 +17,7 @@ use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{lock_manager::Lock, txn::ProcessResult, LockMgr, StorageCb};
 use pd_client::RpcClient;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use tikv_util::security::SecurityManager;
@@ -33,7 +33,7 @@ pub struct LockManager {
     waiter_mgr_scheduler: WaiterMgrScheduler,
     detector_scheduler: DetectorScheduler,
 
-    has_waiter: Arc<AtomicBool>,
+    waiter_count: Arc<AtomicUsize>,
 }
 
 impl Clone for LockManager {
@@ -43,7 +43,7 @@ impl Clone for LockManager {
             detector_worker: None,
             waiter_mgr_scheduler: self.waiter_mgr_scheduler.clone(),
             detector_scheduler: self.detector_scheduler.clone(),
-            has_waiter: self.has_waiter.clone(),
+            waiter_count: self.waiter_count.clone(),
         }
     }
 }
@@ -58,7 +58,7 @@ impl LockManager {
             waiter_mgr_worker: Some(waiter_mgr_worker),
             detector_scheduler: DetectorScheduler::new(detector_worker.scheduler()),
             detector_worker: Some(detector_worker),
-            has_waiter: Arc::new(AtomicBool::new(false)),
+            waiter_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -71,8 +71,20 @@ impl LockManager {
         security_mgr: Arc<SecurityManager>,
         cfg: &Config,
     ) -> Result<()> {
+        self.start_waiter_manager(cfg)?;
+        self.start_deadlock_detector(store_id, pd_client, resolver, security_mgr, cfg)?;
+        Ok(())
+    }
+
+    /// Stops `WaiterManager` and `Detector`.
+    pub fn stop(&mut self) {
+        self.stop_waiter_manager();
+        self.stop_deadlock_detector();
+    }
+
+    fn start_waiter_manager(&mut self, cfg: &Config) -> Result<()> {
         let waiter_mgr_runner = WaiterManager::new(
-            Arc::clone(&self.has_waiter),
+            Arc::clone(&self.waiter_count),
             self.detector_scheduler.clone(),
             cfg,
         );
@@ -80,7 +92,31 @@ impl LockManager {
             .as_mut()
             .expect("worker should be some")
             .start(waiter_mgr_runner)?;
+        Ok(())
+    }
 
+    fn stop_waiter_manager(&mut self) {
+        if let Some(Err(e)) = self
+            .waiter_mgr_worker
+            .take()
+            .and_then(|mut w| w.stop())
+            .map(JoinHandle::join)
+        {
+            info!(
+                "ignore failure when stopping waiter manager worker";
+                "err" => ?e
+            );
+        }
+    }
+
+    fn start_deadlock_detector<S: StoreAddrResolver + 'static>(
+        &mut self,
+        store_id: u64,
+        pd_client: Arc<RpcClient>,
+        resolver: S,
+        security_mgr: Arc<SecurityManager>,
+        cfg: &Config,
+    ) -> Result<()> {
         let detector_runner = Detector::new(
             store_id,
             pd_client,
@@ -96,20 +132,7 @@ impl LockManager {
         Ok(())
     }
 
-    /// Stops `WaiterManager` and `Detector`.
-    pub fn stop(&mut self) {
-        if let Some(Err(e)) = self
-            .waiter_mgr_worker
-            .take()
-            .and_then(|mut w| w.stop())
-            .map(JoinHandle::join)
-        {
-            info!(
-                "ignore failure when stopping waiter manager worker";
-                "err" => ?e
-            );
-        }
-
+    fn stop_deadlock_detector(&mut self) {
         if let Some(Err(e)) = self
             .detector_worker
             .take()
@@ -148,12 +171,9 @@ impl LockMgr for LockManager {
         lock: Lock,
         is_first_lock: bool,
     ) {
-        // Set `has_waiter` here to prevent there is an on-the-fly WaitFor msg
+        // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
-        //
-        // But it's still possible that the waiter_mgr removes some waiters and set
-        // `has_waiter` to false just after we set it to true here.
-        self.has_waiter.store(true, Ordering::Relaxed);
+        self.waiter_count.fetch_add(1, Ordering::SeqCst);
         self.waiter_mgr_scheduler.wait_for(start_ts, cb, pr, lock);
 
         // If it is the first lock the transaction waits for, it won't cause deadlock.
@@ -185,13 +205,38 @@ impl LockMgr for LockManager {
     }
 
     fn has_waiter(&self) -> bool {
-        self.has_waiter.load(Ordering::Relaxed)
+        self.waiter_count.load(Ordering::SeqCst) > 0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn test_has_waiter() {
+        let mut lock_mgr = LockManager::new();
+        lock_mgr
+            .start_waiter_manager(&Config::default())
+            .expect("could not start waiter manager");
+        assert!(!lock_mgr.has_waiter());
+        let (lock_ts, hash) = (10, 1);
+        lock_mgr.wait_for(
+            20,
+            StorageCb::Boolean(Box::new(|_| ())),
+            ProcessResult::Res,
+            Lock { ts: lock_ts, hash },
+            true,
+        );
+        // new waiters should be sensed immediately
+        assert!(lock_mgr.has_waiter());
+        lock_mgr.wake_up(lock_ts, Some(vec![hash]), 15, false);
+        thread::sleep(Duration::from_secs(1));
+        assert!(!lock_mgr.has_waiter());
+        lock_mgr.stop_waiter_manager();
+    }
 
     #[bench]
     fn bench_lock_mgr_clone(b: &mut test::Bencher) {
