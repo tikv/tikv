@@ -227,6 +227,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(2018),
                 blob_file_compression: CompressionType::Zstd,
@@ -280,6 +281,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -333,6 +335,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -386,6 +389,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -471,6 +475,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig::default(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
