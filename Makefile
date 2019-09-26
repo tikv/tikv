@@ -105,10 +105,6 @@ dev: format clippy
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
-run:
-	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
-
-
 ## Release builds (optimized dev builds)
 ## ----------------------------
 

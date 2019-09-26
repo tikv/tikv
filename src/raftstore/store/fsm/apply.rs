@@ -2532,7 +2532,7 @@ impl ApplyFsm {
 
         // if it is already up to date, no need to catch up anymore
         let apply_index = self.delegate.apply_state.get_applied_index();
-        info!(
+        debug!(
             "check catch up logs for merge";
             "apply_index" => apply_index,
             "commit" => catch_up_logs.merge.get_commit(),
