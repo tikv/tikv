@@ -494,18 +494,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         chunk: &mut Chunk,
         warnings: &mut EvalWarnings,
     ) -> Result<(bool, usize)> {
-        let is_drained;
         let mut record_len = 0;
 
         self.deadline.check()?;
 
         let mut result = self.out_most_executor.next_batch(batch_size);
 
-        match result.is_drained {
-            Err(e) => return Err(e),
-            Ok(f) => is_drained = f,
-        }
-
+        let is_drained = result.is_drained?;
         // Notice that logical rows len == 0 doesn't mean that it is drained.
         if !result.logical_rows.is_empty() {
             assert_eq!(
