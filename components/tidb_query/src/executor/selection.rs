@@ -86,8 +86,8 @@ mod tests {
     use std::i64;
     use std::sync::Arc;
 
+    use codec::prelude::NumberEncoder;
     use tidb_query_datatype::FieldTypeTp;
-    use tikv_util::codec::number::NumberEncoder;
     use tipb::{Expr, ExprType, ScalarFuncSig};
 
     use super::super::tests::*;
@@ -118,13 +118,13 @@ mod tests {
         expr.mut_children().push({
             let mut lhs = Expr::default();
             lhs.set_tp(ExprType::ColumnRef);
-            lhs.mut_val().encode_i64(offset).unwrap();
+            lhs.mut_val().write_i64(offset).unwrap();
             lhs
         });
         expr.mut_children().push({
             let mut rhs = Expr::default();
             rhs.set_tp(ExprType::Uint64);
-            rhs.mut_val().encode_u64(val).unwrap();
+            rhs.mut_val().write_u64(val).unwrap();
             rhs
         });
         expr

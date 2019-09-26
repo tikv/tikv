@@ -1,19 +1,18 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Write;
-
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, Result};
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
-    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationEncoder, Json, JsonEncoder, Time,
-    TimeEncoder,
+    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
+    JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
 };
 use crate::codec::Datum;
 
-use tikv_util::codec::number::{self, NumberEncoder};
+use codec::prelude::*;
+use tikv_util::codec::number;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 
@@ -204,7 +203,7 @@ impl Column {
 
     /// Append i64 datum to the column.
     pub fn append_i64(&mut self, v: i64) -> Result<()> {
-        self.data.encode_i64_le(v)?;
+        self.data.write_i64_le(v)?;
         self.finish_append_fixed()
     }
 
@@ -218,7 +217,7 @@ impl Column {
 
     /// Append u64 datum to the column.
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
-        self.data.encode_u64_le(v)?;
+        self.data.write_u64_le(v)?;
         self.finish_append_fixed()
     }
 
@@ -232,7 +231,7 @@ impl Column {
 
     /// Append a f64 datum to the column.
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
-        self.data.encode_f64_le(v)?;
+        self.data.write_f64_le(v)?;
         self.finish_append_fixed()
     }
 
@@ -277,7 +276,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        Time::decode(&mut data)
+        data.decode_time()
     }
 
     /// Append a duration datum to the column.
@@ -291,7 +290,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        Duration::decode(&mut data)
+        data.decode_duration()
     }
 
     /// Append a decimal datum to the column.
@@ -319,7 +318,7 @@ impl Column {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
         let mut data = &self.data[start..end];
-        Json::decode(&mut data)
+        data.decode_json()
     }
 
     /// Return the total rows in the column.
@@ -359,28 +358,28 @@ impl Column {
 pub trait ColumnEncoder: NumberEncoder {
     fn encode_column(&mut self, col: &Column) -> Result<()> {
         // length
-        self.encode_u32_le(col.length as u32)?;
+        self.write_u32_le(col.length as u32)?;
         // null_cnt
-        self.encode_u32_le(col.null_cnt as u32)?;
+        self.write_u32_le(col.null_cnt as u32)?;
         // bitmap
         if col.null_cnt > 0 {
             let length = (col.length + 7) / 8;
-            self.write_all(&col.null_bitmap[0..length])?;
+            self.write_bytes(&col.null_bitmap[0..length])?;
         }
         // offsets
         if !col.is_fixed() {
             //let length = (col.length+1)*4;
             for v in &col.var_offsets {
-                self.encode_i32_le(*v as i32)?;
+                self.write_i32_le(*v as i32)?;
             }
         }
         // data
-        self.write_all(&col.data)?;
+        self.write_bytes(&col.data)?;
         Ok(())
     }
 }
 
-impl<T: Write> ColumnEncoder for T {}
+impl<T: BufferWriter> ColumnEncoder for T {}
 
 #[cfg(test)]
 mod tests {

@@ -218,6 +218,10 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
         ScalarFuncSig::AbsDecimal => abs_decimal_fn_meta(),
+        ScalarFuncSig::CeilReal => ceil_fn_meta::<CeilReal>(),
+        ScalarFuncSig::CeilDecToDec => ceil_fn_meta::<CeilDecToDec>(),
+        ScalarFuncSig::CeilDecToInt => ceil_fn_meta::<CeilDecToInt>(),
+        ScalarFuncSig::CeilIntToInt => ceil_fn_meta::<CeilIntToInt>(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),
@@ -240,10 +244,15 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
         ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
         ScalarFuncSig::JsonTypeSig => json_type_fn_meta(),
+        ScalarFuncSig::JsonSetSig => json_set_fn_meta(),
+        ScalarFuncSig::JsonReplaceSig => json_replace_fn_meta(),
+        ScalarFuncSig::JsonInsertSig => json_insert_fn_meta(),
         ScalarFuncSig::JsonArraySig => json_array_fn_meta(),
         ScalarFuncSig::JsonObjectSig => json_object_fn_meta(),
         ScalarFuncSig::JsonMergeSig => json_merge_fn_meta(),
         ScalarFuncSig::JsonUnquoteSig => json_unquote_fn_meta(),
+        ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
+        ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |

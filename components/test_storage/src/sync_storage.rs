@@ -164,8 +164,8 @@ impl<E: Engine> SyncTestStorage<E> {
         wait_op!(|cb| self.store.async_commit(ctx, keys, start_ts, commit_ts, cb)).unwrap()
     }
 
-    pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
-        wait_op!(|cb| self.store.async_cleanup(ctx, key, start_ts, cb)).unwrap()
+    pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64, current_ts: u64) -> Result<()> {
+        wait_op!(|cb| self.store.async_cleanup(ctx, key, start_ts, current_ts, cb)).unwrap()
     }
 
     pub fn rollback(&self, ctx: Context, keys: Vec<Key>, start_ts: u64) -> Result<()> {
