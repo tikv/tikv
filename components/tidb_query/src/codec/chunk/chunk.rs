@@ -63,7 +63,7 @@ impl Chunk {
     #[inline]
     pub fn append_vec(
         &mut self,
-        row_indexs: &[usize],
+        row_indexes: &[usize],
         field_type: &FieldType,
         vec: &VectorValue,
         column_index: usize,
@@ -76,8 +76,7 @@ impl Chunk {
                     .flag()
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
-                    for row_index in row_indexs {
-                        let row_index = *row_index as usize;
+                    for &row_index in row_indexes {
                         match &vec[row_index] {
                             None => {
                                 col.append_null().unwrap();
@@ -88,8 +87,7 @@ impl Chunk {
                         }
                     }
                 } else {
-                    for row_index in row_indexs {
-                        let row_index = *row_index as usize;
+                    for &row_index in row_indexes {
                         match &vec[row_index] {
                             None => {
                                 col.append_null().unwrap();
@@ -103,8 +101,7 @@ impl Chunk {
             }
             VectorValue::Real(ref vec) => {
                 if col.get_fixed_len() == 4 {
-                    for row_index in row_indexs {
-                        let row_index = *row_index as usize;
+                    for &row_index in row_indexes {
                         match &vec[row_index] {
                             None => {
                                 col.append_null().unwrap();
@@ -115,8 +112,7 @@ impl Chunk {
                         }
                     }
                 } else {
-                    for row_index in row_indexs {
-                        let row_index = *row_index as usize;
+                    for &row_index in row_indexes {
                         match &vec[row_index] {
                             None => {
                                 col.append_null().unwrap();
@@ -129,8 +125,7 @@ impl Chunk {
                 }
             }
             VectorValue::Decimal(ref vec) => {
-                for row_index in row_indexs {
-                    let row_index = *row_index as usize;
+                for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
                             col.append_null().unwrap();
@@ -142,8 +137,7 @@ impl Chunk {
                 }
             }
             VectorValue::Bytes(ref vec) => {
-                for row_index in row_indexs {
-                    let row_index = *row_index as usize;
+                for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
                             col.append_null().unwrap();
@@ -155,8 +149,7 @@ impl Chunk {
                 }
             }
             VectorValue::DateTime(ref vec) => {
-                for row_index in row_indexs {
-                    let row_index = *row_index as usize;
+                for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
                             col.append_null().unwrap();
@@ -168,8 +161,7 @@ impl Chunk {
                 }
             }
             VectorValue::Duration(ref vec) => {
-                for row_index in row_indexs {
-                    let row_index = *row_index as usize;
+                for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
                             col.append_null().unwrap();
@@ -181,8 +173,7 @@ impl Chunk {
                 }
             }
             VectorValue::Json(ref vec) => {
-                for row_index in row_indexs {
-                    let row_index = *row_index as usize;
+                for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
                             col.append_null().unwrap();
