@@ -315,7 +315,9 @@ mod tests {
         let cases = vec![
             (1, 1),
             (2, 2),
-            (std::i64::MAX, std::i64::MAX),
+            (666, 666),
+            (-3, -3),
+            (-233, -233)(std::i64::MAX, std::i64::MAX),
             (std::i64::MIN, std::i64::MIN),
         ];
 
@@ -329,19 +331,35 @@ mod tests {
         }
     }
 
+    fn test_unary_func_ok_none<I: Evaluable, O: Evaluable>(sig: ScalarFuncSig)
+    where
+        O: PartialEq,
+        Option<I>: Into<ScalarValue>,
+        Option<O>: From<ScalarValue>,
+    {
+        assert_eq!(
+            None,
+            RpnFnScalarEvaluator::new()
+                .push_param(Option::<I>::None)
+                .evaluate::<O>(sig)
+                .unwrap()
+        );
+    }
+
     #[test]
     fn test_floor_real() {
         let cases = vec![
-            (3.0, 3.5),
-            (3.0, 3.7),
-            (3.0, 3.45),
-            (3.0, 3.1),
-            (-4.0, -3.45),
-            (-1.0, -0.1),
+            (3.5, 3.0),
+            (3.7, 3.0),
+            (3.45, 3.0),
+            (3.1, 3.0),
+            (-3.45, -4.0),
+            (-0.1, -1.0),
+            (16140901064495871255.0, 16140901064495871255.0),
             (std::f64::MAX, std::f64::MAX),
             (std::f64::MIN, std::f64::MIN),
         ];
-        for (expected, input) in cases {
+        for (input, expected) in cases {
             let arg = Real::from(input);
             let expected = Real::new(expected).ok();
             let output = RpnFnScalarEvaluator::new()
@@ -350,17 +368,19 @@ mod tests {
                 .unwrap();
             assert_eq!(expected, output);
         }
+
+        test_unary_func_ok_none::<Real, Real>(ScalarFuncSig::FloorReal);
     }
 
     #[test]
     fn test_floor_dec_to_dec() {
         let cases = vec![
             ("9223372036854775808", "9223372036854775808"),
-            ("123", "123.456"),
-            ("-124", "-123.456"),
+            ("123.456", "123"),
+            ("-123.456", "-124"),
         ];
 
-        for (expected, input) in cases {
+        for (input, expected) in cases {
             let arg = input.parse::<Decimal>().ok();
             let expected = expected.parse::<Decimal>().ok();
             let output = RpnFnScalarEvaluator::new()
@@ -369,17 +389,19 @@ mod tests {
                 .unwrap();
             assert_eq!(expected, output);
         }
+
+        test_unary_func_ok_none::<Decimal, Decimal>(ScalarFuncSig::FloorDecToDec);
     }
 
     #[test]
     fn test_floor_dec_to_int() {
         let cases = vec![
-            (123, "123.456"),
-            (1, "1.23"),
-            (-2, "-1.23"),
-            (std::i64::MIN, "-9223372036854775808"),
+            ("123.456", 123),
+            ("1.23", 1),
+            ("-1.23", -2),
+            ("-9223372036854775808", std::i64::MIN),
         ];
-        for (expected, input) in cases {
+        for (input, expected) in cases {
             let arg = input.parse::<Decimal>().ok();
             let expected = Some(expected);
             let output = RpnFnScalarEvaluator::new()
@@ -388,6 +410,8 @@ mod tests {
                 .unwrap();
             assert_eq!(expected, output);
         }
+
+        test_unary_func_ok_none::<Decimal, Int>(ScalarFuncSig::FloorDecToInt);
     }
 
     #[test]
@@ -408,5 +432,7 @@ mod tests {
                 .unwrap();
             assert_eq!(expected, output);
         }
+
+        test_unary_func_ok_none::<Int, Int>(ScalarFuncSig::FloorIntToInt);
     }
 }
