@@ -956,7 +956,7 @@ impl<T: Simulator> Cluster<T> {
 
             if try_cnt > 250 {
                 panic!(
-                    "region {} doesn't exist on store {} after {} tries: {:?}",
+                    "region {} still exists on store {} after {} tries: {:?}",
                     region_id, store_id, try_cnt, resp
                 );
             }
