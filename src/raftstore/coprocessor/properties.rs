@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
-use std::collections::Bound::{Included, Unbounded};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
@@ -499,7 +498,7 @@ impl RangeProperties {
     pub fn get(&self, key: &[u8]) -> &RangeOffsets {
         let idx = self
             .offsets
-            .binary_search_by_key(&key, |&(ref a, ref b)| a)
+            .binary_search_by_key(&key, |&(ref k, _)| k)
             .unwrap();
         &self.offsets[idx].1
     }
@@ -558,11 +557,7 @@ impl RangeProperties {
         if start == end {
             return 0;
         }
-
-        let start_offset = match self
-            .offsets
-            .binary_search_by_key(&start, |&(ref a, ref b)| a)
-        {
+        let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
             Ok(idx) => self.offsets[idx].1.get(kind),
             Err(next_idx) => {
                 if next_idx == 0 {
@@ -573,7 +568,7 @@ impl RangeProperties {
             }
         };
 
-        let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref a, ref b)| a) {
+        let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
             Ok(idx) => self.offsets[idx].1.get(kind),
             Err(next_idx) => {
                 if next_idx == 0 {
@@ -593,12 +588,46 @@ impl RangeProperties {
         end_offset - start_offset
     }
 
+    // equivalent to range(Excluded(start_key), Excluded(end_key))
+    pub fn take_excluded_range(
+        mut self,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Vec<(Vec<u8>, RangeOffsets)> {
+        let start_offset = match self
+            .offsets
+            .binary_search_by_key(&start_key, |&(ref k, _)| k)
+        {
+            Ok(idx) => {
+                if idx == self.offsets.len() - 1 {
+                    return vec![];
+                } else {
+                    idx + 1
+                }
+            }
+            Err(next_idx) => next_idx,
+        };
+
+        let end_offset = match self.offsets.binary_search_by_key(&end_key, |&(ref k, _)| k) {
+            Ok(idx) => {
+                if idx == 0 {
+                    return vec![];
+                } else {
+                    idx - 1
+                }
+            }
+            Err(next_idx) => next_idx - 1,
+        };
+
+        self.offsets.drain(start_offset..=end_offset).collect()
+    }
+
     pub fn smallest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.first().map(|(a, b)| a.to_owned())
+        self.offsets.first().map(|(k, _)| k.to_owned())
     }
 
     pub fn largest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.last().map(|(a, b)| a.to_owned())
+        self.offsets.last().map(|(k, _)| k.to_owned())
     }
 }
 

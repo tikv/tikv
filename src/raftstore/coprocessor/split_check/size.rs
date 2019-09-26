@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::Bound::Excluded;
 use std::mem;
 use std::sync::Mutex;
 
@@ -259,47 +258,23 @@ fn get_approximate_split_keys_cf(
     max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let collection = box_try!(util::get_range_properties_cf(db, cfname, &start, &end));
+    let start_key = keys::enc_start_key(region);
+    let end_key = keys::enc_end_key(region);
+    let collection = box_try!(util::get_range_properties_cf(
+        db, cfname, &start_key, &end_key
+    ));
 
     let mut keys = vec![];
     let mut total_size = 0;
     for (_, v) in &*collection {
-        let mut props = box_try!(RangeProperties::decode(v.user_collected_properties()));
-        total_size += props.get_approximate_size_in_range(&start, &end);
-        let start_offset = match props
-            .offsets
-            .binary_search_by_key(&start.as_slice(), |&(ref a, ref b)| a)
-        {
-            Ok(idx) => {
-                if idx == props.offsets.len() - 1 {
-                    continue;
-                } else {
-                    idx + 1
-                }
-            }
-            Err(next_idx) => next_idx,
-        };
+        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+        total_size += props.get_approximate_size_in_range(&start_key, &end_key);
 
-        let end_offset = match props
-            .offsets
-            .binary_search_by_key(&end.as_slice(), |&(ref a, ref b)| a)
-        {
-            Ok(idx) => {
-                if idx == 0 {
-                    continue;
-                } else {
-                    idx - 1
-                }
-            }
-            Err(next_idx) => next_idx - 1,
-        };
         keys.extend(
             props
-                .offsets
-                .drain(start_offset..=end_offset)
-                .map(|(k, _)| k.to_owned()),
+                .take_excluded_range(start_key.as_slice(), end_key.as_slice())
+                .into_iter()
+                .map(|(k, _)| k),
         );
     }
     if keys.len() == 1 {
@@ -313,8 +288,8 @@ fn get_approximate_split_keys_cf(
             split_size,
             collection.len(),
             cfname,
-            hex::encode_upper(&start),
-            hex::encode_upper(&end)
+            hex::encode_upper(&start_key),
+            hex::encode_upper(&end_key)
         ));
     }
     keys.sort();

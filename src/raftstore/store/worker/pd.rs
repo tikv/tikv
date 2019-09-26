@@ -833,7 +833,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         }
                         return size;
                     }
-                    return 0;
+                    0
                 });
                 let approximate_keys = approximate_keys.unwrap_or_else(|| {
                     if let Ok(keys) = get_region_approximate_keys(&self.db, &region) {
@@ -851,7 +851,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         }
                         return keys;
                     }
-                    return 0;
+                    0
                 });
                 let (
                     read_bytes_delta,

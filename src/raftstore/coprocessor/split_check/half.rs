@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Bound::Excluded;
-
 use engine::rocks::DB;
 use engine::util;
 use engine::{CF_DEFAULT, CF_WRITE};
@@ -142,39 +140,12 @@ fn get_region_approximate_middle_cf(
 
     let mut keys = Vec::new();
     for (_, v) in &*collection {
-        let mut props = box_try!(RangeProperties::decode(v.user_collected_properties()));
-        let start_offset = match props
-            .offsets
-            .binary_search_by_key(&start_key.as_slice(), |&(ref a, ref b)| a)
-        {
-            Ok(idx) => {
-                if idx == props.offsets.len() - 1 {
-                    continue;
-                } else {
-                    idx + 1
-                }
-            }
-            Err(next_idx) => next_idx,
-        };
-
-        let end_offset = match props
-            .offsets
-            .binary_search_by_key(&end_key.as_slice(), |&(ref a, ref b)| a)
-        {
-            Ok(idx) => {
-                if idx == 0 {
-                    continue;
-                } else {
-                    idx - 1
-                }
-            }
-            Err(next_idx) => next_idx - 1,
-        };
+        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
         keys.extend(
             props
-                .offsets
-                .drain(start_offset..=end_offset)
-                .map(|(k, _)| k.to_owned()),
+                .take_excluded_range(start_key.as_slice(), end_key.as_slice())
+                .into_iter()
+                .map(|(k, _)| k),
         );
     }
     if keys.is_empty() {
