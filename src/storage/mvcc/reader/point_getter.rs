@@ -7,8 +7,6 @@ use crate::storage::mvcc::{default_not_found_error, Lock, Result};
 use crate::storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
 
-use super::util::CheckLockResult;
-
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
     snapshot: S,
@@ -140,39 +138,33 @@ impl<S: Snapshot> PointGetter<S> {
             }
         }
 
-        let ts = self.ts;
-
         match self.isolation_level {
             IsolationLevel::Si => {
                 // Check for locks that signal concurrent writes in Si.
-                match self.load_and_check_lock(user_key, ts)? {
-                    CheckLockResult::NotLocked => {}
-                    CheckLockResult::Locked(e) => return Err(e),
-                }
+                self.load_and_check_lock(user_key)?;
             }
             IsolationLevel::Rc => {}
         }
 
-        self.load_data(user_key, ts)
+        self.load_data(user_key)
     }
 
     /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
-    /// see whether it conflicts with the given `ts`. If there is no conflict or no lock,
-    /// the safe `ts` will be returned.
+    /// see whether it conflicts with the given `ts`.
     ///
     /// In common cases we expect to get nothing in lock cf. Using a `get_cf` instead of `seek`
     /// is fast in such cases due to no need for RocksDB to continue move and skip deleted entries
     /// until find a user key.
-    fn load_and_check_lock(&mut self, user_key: &Key, ts: u64) -> Result<CheckLockResult> {
+    fn load_and_check_lock(&mut self, user_key: &Key) -> Result<()> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
-            super::util::check_lock(user_key, ts, &lock)
+            super::util::check_lock(user_key, self.ts, &lock)
         } else {
-            Ok(CheckLockResult::NotLocked)
+            Ok(())
         }
     }
 
@@ -180,16 +172,16 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key, ts: u64) -> Result<Option<Value>> {
+    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
         if !self.write_cursor_valid {
             return Ok(None);
         }
 
         // Seek to `${user_key}_${ts}`. TODO: We can avoid this clone.
-        if !self
-            .write_cursor
-            .near_seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?
-        {
+        if !self.write_cursor.near_seek(
+            &user_key.clone().append_ts(self.ts),
+            &mut self.statistics.write,
+        )? {
             // If we seek to nothing, it means no write `key >= ${user_key}_${ts}`.
             // - If later we want to get a key >= current key, due to the above conclusion we can
             //   quit directly.
