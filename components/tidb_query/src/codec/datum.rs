@@ -16,11 +16,9 @@ use super::mysql::{
 use super::Result;
 use crate::codec::convert::{ConvertTo, ToInt};
 use crate::expr::EvalContext;
-use codec::{
-    byte::{CompactByteCodec, MemComparableByteCodec},
-    number,
-    prelude::*,
-};
+use codec::byte::{CompactByteCodec, MemComparableByteCodec};
+use codec::number::{self, NumberCodec};
+use codec::prelude::*;
 
 pub const NIL_FLAG: u8 = 0;
 pub const BYTES_FLAG: u8 = 1;
@@ -991,18 +989,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         FLOAT_FLAG => number::F64_SIZE,
         DURATION_FLAG => number::I64_SIZE,
         DECIMAL_FLAG => mysql::dec_encoded_len(&buf[1..])?,
-        VAR_INT_FLAG => {
-            let mut v = &buf[1..];
-            let l = v.len();
-            v.read_var_i64()?;
-            l - v.len()
-        }
-        VAR_UINT_FLAG => {
-            let mut v = &buf[1..];
-            let l = v.len();
-            v.read_var_u64()?;
-            l - v.len()
-        }
+        VAR_INT_FLAG | VAR_UINT_FLAG => NumberCodec::get_first_encoded_var_int_len(&buf[1..]),
         JSON_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
