@@ -130,7 +130,7 @@ fn test_stream_batch_row_limit() {
         let chunk_data_limit = stream_row_limit * 3; // we have 3 fields.
         check_chunk_datum_count(&chunks, chunk_data_limit);
 
-        let spliter = DAGChunkSpliter::new(chunks, 3);;
+        let spliter = DAGChunkSpliter::new(chunks, 3);
         let cur_data = &data[(record_len - current_length) as usize..record_len as usize];
         for (ref row, &(id, ref name, cnt)) in spliter.zip(cur_data) {
             let name_datum = name.as_ref().map(|s| s.as_bytes()).into();
