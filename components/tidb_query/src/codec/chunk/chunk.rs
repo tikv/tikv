@@ -63,75 +63,110 @@ impl Chunk {
     #[inline]
     pub fn append_vec(
         &mut self,
-        row_index: usize,
+        row_indexs: &[usize],
         field_type: &FieldType,
         vec: &VectorValue,
         column_index: usize,
     ) -> Result<()> {
         let col = &mut self.columns[column_index];
         match vec {
-            VectorValue::Int(ref vec) => match &vec[row_index] {
-                None => {
-                    col.append_null().unwrap();
-                }
-                Some(val) => {
-                    if field_type
-                        .as_accessor()
-                        .flag()
-                        .contains(FieldTypeFlag::UNSIGNED)
-                    {
-                        col.append_u64(*val as u64).unwrap();
-                    } else {
-                        col.append_i64(*val).unwrap();
+            VectorValue::Int(ref vec) => {
+                for row_index in row_indexs {
+                    let row_index = *row_index as usize;
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            if field_type
+                                .as_accessor()
+                                .flag()
+                                .contains(FieldTypeFlag::UNSIGNED)
+                            {
+                                col.append_u64(*val as u64).unwrap();
+                            } else {
+                                col.append_i64(*val).unwrap();
+                            }
+                        }
                     }
                 }
-            },
-            VectorValue::Real(ref vec) => match &vec[row_index] {
-                None => {
-                    col.append_null().unwrap();
+            }
+            VectorValue::Real(ref vec) => {
+                for row_index in row_indexs {
+                    let row_index = *row_index as usize;
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_f64(f64::from(*val)).unwrap();
+                        }
+                    }
                 }
-                Some(val) => {
-                    col.append_f64(f64::from(*val)).unwrap();
+            }
+            VectorValue::Decimal(ref vec) => {
+                for row_index in row_indexs {
+                    let row_index = *row_index as usize;
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_decimal(&val.clone()).unwrap();
+                        }
+                    }
                 }
-            },
-            VectorValue::Decimal(ref vec) => match &vec[row_index] {
-                None => {
-                    col.append_null().unwrap();
+            }
+            VectorValue::Bytes(ref vec) => {
+                for row_index in row_indexs {
+                    let row_index = *row_index as usize;
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_bytes(&val.clone()).unwrap();
+                        }
+                    }
                 }
-                Some(val) => {
-                    col.append_decimal(&val.clone()).unwrap();
+            }
+            VectorValue::DateTime(ref vec) => {
+                for row_index in row_indexs {
+                    let row_index = *row_index as usize;
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_time(&val.clone()).unwrap();
+                        }
+                    }
                 }
-            },
-            VectorValue::Bytes(ref vec) => match &vec[row_index] {
-                None => {
-                    col.append_null().unwrap();
+            }
+            VectorValue::Duration(ref vec) => {
+                for row_index in row_indexs {
+                    let row_index = *row_index as usize;
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_duration(*val).unwrap();
+                        }
+                    }
                 }
-                Some(val) => {
-                    col.append_bytes(&val.clone()).unwrap();
+            }
+            VectorValue::Json(ref vec) => {
+                for row_index in row_indexs {
+                    let row_index = *row_index as usize;
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => col.append_json(&val.clone()).unwrap(),
+                    }
                 }
-            },
-            VectorValue::DateTime(ref vec) => match &vec[row_index] {
-                None => {
-                    col.append_null().unwrap();
-                }
-                Some(val) => {
-                    col.append_time(&val.clone()).unwrap();
-                }
-            },
-            VectorValue::Duration(ref vec) => match &vec[row_index] {
-                None => {
-                    col.append_null().unwrap();
-                }
-                Some(val) => {
-                    col.append_duration(*val).unwrap();
-                }
-            },
-            VectorValue::Json(ref vec) => match &vec[row_index] {
-                None => {
-                    col.append_null().unwrap();
-                }
-                Some(val) => col.append_json(&val.clone()).unwrap(),
-            },
+            }
         }
         Ok(())
     }

@@ -175,13 +175,15 @@ impl LazyBatchColumnVec {
         }
         let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len());
 
-        for row_idx in logical_rows.as_ref() {
-            for column_idx in 0..output_offsets.len() {
-                let row_idx = *row_idx as usize;
-                let offset = output_offsets[column_idx] as usize;
-                let col = &self.columns[offset];
-                chunk.append_vec(row_idx, &schema[offset], col.decoded(), column_idx)?;
-            }
+        for column_idx in 0..output_offsets.len() {
+            let offset = output_offsets[column_idx] as usize;
+            let col = &self.columns[offset];
+            chunk.append_vec(
+                logical_rows.as_ref(),
+                &schema[offset],
+                col.decoded(),
+                column_idx,
+            )?;
         }
 
         // Step 3 : Encode chunk to output.
