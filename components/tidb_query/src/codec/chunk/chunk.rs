@@ -71,20 +71,30 @@ impl Chunk {
         let col = &mut self.columns[column_index];
         match vec {
             VectorValue::Int(ref vec) => {
-                for row_index in row_indexs {
-                    let row_index = *row_index as usize;
-                    match &vec[row_index] {
-                        None => {
-                            col.append_null().unwrap();
-                        }
-                        Some(val) => {
-                            if field_type
-                                .as_accessor()
-                                .flag()
-                                .contains(FieldTypeFlag::UNSIGNED)
-                            {
+                if field_type
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
+                    for row_index in row_indexs {
+                        let row_index = *row_index as usize;
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
                                 col.append_u64(*val as u64).unwrap();
-                            } else {
+                            }
+                        }
+                    }
+                } else {
+                    for row_index in row_indexs {
+                        let row_index = *row_index as usize;
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
                                 col.append_i64(*val).unwrap();
                             }
                         }
@@ -112,7 +122,7 @@ impl Chunk {
                             col.append_null().unwrap();
                         }
                         Some(val) => {
-                            col.append_decimal(&val.clone()).unwrap();
+                            col.append_decimal(&val).unwrap();
                         }
                     }
                 }
@@ -125,7 +135,7 @@ impl Chunk {
                             col.append_null().unwrap();
                         }
                         Some(val) => {
-                            col.append_bytes(&val.clone()).unwrap();
+                            col.append_bytes(&val).unwrap();
                         }
                     }
                 }
@@ -138,7 +148,7 @@ impl Chunk {
                             col.append_null().unwrap();
                         }
                         Some(val) => {
-                            col.append_time(&val.clone()).unwrap();
+                            col.append_time(&val).unwrap();
                         }
                     }
                 }
@@ -163,7 +173,7 @@ impl Chunk {
                         None => {
                             col.append_null().unwrap();
                         }
-                        Some(val) => col.append_json(&val.clone()).unwrap(),
+                        Some(val) => col.append_json(&val).unwrap(),
                     }
                 }
             }
