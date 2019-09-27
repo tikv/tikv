@@ -30,7 +30,7 @@ use std::sync::Arc;
 use engine::{CF_LOCK, CF_WRITE, DB};
 use test_storage::*;
 use test_util::*;
-use tikv::storage::mvcc::{RangeForwardScanner, ScannerConfig};
+use tikv::storage::mvcc::{RangeForwardScanner, ScannerConfig, ScannerBuilder};
 use tikv::storage::{CFStatistics, CursorBuilder, Engine, Key, Mutation, RocksEngine};
 
 //region Config
@@ -112,25 +112,31 @@ impl ::std::fmt::Debug for Input {
 //endregion
 
 fn bench_mvcc_forward_scan(b: &mut Bencher, input: &Input) {
+    use crate::tikv::storage::Scanner;
+
     b.iter(|| {
         CallgrindClientRequest::start();
-        let kvs = input
-            .store
-            .scan(
-                Context::default(),
-                black_box(Key::from_raw(&[])),
-                None,
-                input.config.number_of_keys + 1,
-                false,
-                input.max_ts,
-            )
-            .unwrap();
-        assert_eq!(kvs.len(), input.config.number_of_keys);
+        let snapshot = input.engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, input.max_ts, false)
+            .build().unwrap();
+        let mut n = 0;
+        loop {
+            let kv = scanner.next().unwrap();
+            if kv.is_none() {
+                break;
+            }
+            black_box(kv);
+            n += 1;
+        }
+        assert_eq!(n, input.config.number_of_keys);
         CallgrindClientRequest::stop(None);
     });
 }
 
 fn bench_range_forward_scanner_1(b: &mut Bencher, input: &Input) {
+    let mut keys_buf = BufferVec::with_capacity(1, 1 * 100);
+    let mut values_buf = BufferVec::with_capacity(1, 1 * 200);
+
     b.iter(|| {
         CallgrindClientRequest::start();
         let snapshot = input.engine.snapshot(&Context::default()).unwrap();
@@ -140,8 +146,7 @@ fn bench_range_forward_scanner_1(b: &mut Bencher, input: &Input) {
         let mut scanner = RangeForwardScanner::new(cfg, lock_cursor, write_cursor).unwrap();
         scanner.scan_first_lock().unwrap();
         let mut all_n = 0;
-        let mut keys_buf = BufferVec::with_capacity(1, 1 * 100);
-        let mut values_buf = BufferVec::with_capacity(1, 1 * 200);
+
         loop {
             keys_buf.clear();
             values_buf.clear();
@@ -159,8 +164,15 @@ fn bench_range_forward_scanner_1(b: &mut Bencher, input: &Input) {
 }
 
 fn bench_range_forward_scanner_1024(b: &mut Bencher, input: &Input) {
+    let mut keys_buf = BufferVec::with_capacity(1024, 1024 * 100);
+    let mut values_buf = BufferVec::with_capacity(1024, 1024 * 200);
+
     b.iter(|| {
         CallgrindClientRequest::start();
+
+        keys_buf.clear();
+        values_buf.clear();
+
         let snapshot = input.engine.snapshot(&Context::default()).unwrap();
         let mut cfg = ScannerConfig::new(snapshot, input.max_ts, false);
         let lock_cursor = cfg.create_cf_cursor(CF_LOCK).unwrap();
@@ -168,8 +180,6 @@ fn bench_range_forward_scanner_1024(b: &mut Bencher, input: &Input) {
         let mut scanner = RangeForwardScanner::new(cfg, lock_cursor, write_cursor).unwrap();
         scanner.scan_first_lock().unwrap();
         let mut all_n = 0;
-        let mut keys_buf = BufferVec::with_capacity(1024, 1024 * 100);
-        let mut values_buf = BufferVec::with_capacity(1024, 1024 * 200);
         loop {
             let n = scanner.next(1024, &mut keys_buf, &mut values_buf).unwrap();
             black_box(&keys_buf);
@@ -282,7 +292,7 @@ fn bench_iter_forward_with_value(b: &mut Bencher, input: &Input) {
         opt.fill_cache(true);
         opt.set_total_order_seek(true);
         let mut iter = snapshot.iter_cf(cf_write, opt);
-        assert!(iter.seek(SeekKey::Key(b"")));
+        assert!(iter.seek(SeekKey::Start));
         let mut n = 0;
         loop {
             if !iter.next() {
@@ -321,7 +331,7 @@ fn bench_iter_forward_alloc_vec_for_kv(b: &mut Bencher, input: &Input) {
         opt.set_total_order_seek(true);
         opt.set_iterate_lower_bound(vec![]);
         let mut iter = snapshot.iter_cf(cf_write, opt);
-        assert!(iter.seek(SeekKey::Key(b"")));
+        assert!(iter.seek(SeekKey::Start));
         let mut n = 0;
         loop {
             if !iter.next() {
@@ -331,6 +341,41 @@ fn bench_iter_forward_alloc_vec_for_kv(b: &mut Bencher, input: &Input) {
             n += 1;
         }
         black_box(&mut out);
+        assert_eq!(
+            n,
+            input.config.number_of_keys * input.config.number_of_versions - 1
+        );
+        CallgrindClientRequest::stop(None);
+    })
+}
+
+fn bench_cursor_forward(b: &mut Bencher, input: &Input) {
+    b.iter(|| {
+        CallgrindClientRequest::start();
+        let snapshot = input.engine.snapshot(&Context::default()).unwrap();
+        let mut stats = CFStatistics::default();
+        let mut cursor_lock = CursorBuilder::new(&snapshot, "lock")
+            .fill_cache(true)
+            .prefix_seek(false)
+            .build()
+            .unwrap();
+        assert!(!cursor_lock.seek_to_first(&mut stats));
+        let mut cursor = CursorBuilder::new(&snapshot, "write")
+            .fill_cache(true)
+            .prefix_seek(false)
+            .build()
+            .unwrap();
+
+        cursor.seek_to_first(&mut stats);
+        let mut n = 0;
+        loop {
+            if !cursor.next(&mut stats) {
+                break;
+            }
+            black_box(cursor.key(&mut stats));
+            black_box(cursor.value(&mut stats));
+            n += 1;
+        }
         assert_eq!(
             n,
             input.config.number_of_keys * input.config.number_of_versions - 1
@@ -542,27 +587,32 @@ fn main() {
         bench_range_forward_scanner_1024,
         inputs.clone(),
     );
-    criterion.bench_function_over_inputs("iter_forward", bench_iter_forward, inputs.clone());
-    criterion.bench_function_over_inputs(
-        "iter_forward_3_cf",
-        bench_iter_forward_3_cf,
-        inputs.clone(),
-    );
+//    criterion.bench_function_over_inputs("iter_forward", bench_iter_forward, inputs.clone());
+//    criterion.bench_function_over_inputs(
+//        "iter_forward_3_cf",
+//        bench_iter_forward_3_cf,
+//        inputs.clone(),
+//    );
     criterion.bench_function_over_inputs(
         "iter_forward_with_value",
         bench_iter_forward_with_value,
         inputs.clone(),
     );
+//    criterion.bench_function_over_inputs(
+//        "iter_forward_alloc_vec_for_kv",
+//        bench_iter_forward_alloc_vec_for_kv,
+//        inputs.clone(),
+//    );
     criterion.bench_function_over_inputs(
-        "iter_forward_alloc_vec_for_kv",
-        bench_iter_forward_alloc_vec_for_kv,
+        "cursor_forward",
+        bench_cursor_forward,
         inputs.clone(),
     );
-    criterion.bench_function_over_inputs(
-        "cursor_forward_alloc_vec_for_kv",
-        bench_cursor_forward_alloc_vec_for_kv,
-        inputs.clone(),
-    );
+//    criterion.bench_function_over_inputs(
+//        "cursor_forward_alloc_vec_for_kv",
+//        bench_cursor_forward_alloc_vec_for_kv,
+//        inputs.clone(),
+//    );
 
     //    criterion.bench_function("eq_key", bench_eq_key);
     //    criterion.bench_function("eq_naive", bench_eq_naive);
