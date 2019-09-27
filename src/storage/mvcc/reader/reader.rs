@@ -5,7 +5,7 @@ use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{Error, Result};
+use crate::storage::mvcc::Result;
 use crate::storage::{CFStatistics, Key, Value};
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
@@ -157,7 +157,8 @@ impl<S: Snapshot> MvccReader<S> {
         })
     }
 
-    /// Moves cursor using the given closure and reads a Write record from the new position.
+    /// Moves cursor using the given closure and reads the commit ts and write record
+    /// from the new position.
     ///
     /// `move_cursor` takes the write CF cursor and statistics, and should return whether
     /// the cursor is still valid.
@@ -214,17 +215,20 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(None)
     }
 
-    pub fn get_write(&mut self, key: &Key, mut ts: u64) -> Result<Option<Write>> {
+    pub fn get_write(&mut self, key: &Key, ts: u64) -> Result<Option<Write>> {
+        let mut record = self.seek_write(key, ts)?;
         loop {
-            match self.seek_write(key, ts)? {
-                Some((commit_ts, write)) => match write.write_type {
+            match record {
+                Some((_, write)) => match write.write_type {
                     WriteType::Put => {
                         return Ok(Some(write));
                     }
                     WriteType::Delete => {
                         return Ok(None);
                     }
-                    WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
+                    WriteType::Lock | WriteType::Rollback => {
+                        record = self.next_write(key)?;
+                    }
                 },
                 None => return Ok(None),
             }
@@ -241,15 +245,15 @@ impl<S: Snapshot> MvccReader<S> {
         // I.e., txn_1.commit_ts > txn_2.commit_ts > txn_2.start_ts > txn_1.start_ts.
         //
         // Scan all the versions from `u64::max_value()` to `start_ts`.
-        let mut seek_ts = u64::max_value();
-        while let Some((commit_ts, write)) = self.seek_write(key, seek_ts)? {
+        let mut record = self.seek_write(key, u64::max_value())?;
+        while let Some((commit_ts, write)) = record {
             if write.start_ts == start_ts {
                 return Ok(Some((commit_ts, write.write_type)));
             }
             if commit_ts <= start_ts {
                 break;
             }
-            seek_ts = commit_ts - 1;
+            record = self.next_write(key)?;
         }
         Ok(None)
     }
