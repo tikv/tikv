@@ -8,7 +8,7 @@ use tipb::FieldType;
 
 use super::data_type::*;
 use crate::codec::datum;
-use crate::codec::mysql::Tz;
+use crate::codec::mysql::{DecimalDecoder, JsonDecoder, Tz};
 use crate::codec::{Error, Result};
 
 #[inline]
@@ -43,7 +43,7 @@ fn decode_float(v: &mut &[u8]) -> Result<f64> {
 
 #[inline]
 fn decode_decimal(v: &mut &[u8]) -> Result<Decimal> {
-    Decimal::decode(v)
+    v.decode_decimal()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as decimal".to_owned()))
 }
 
@@ -61,12 +61,13 @@ fn decode_compact_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
 
 #[inline]
 fn decode_json(v: &mut &[u8]) -> Result<Json> {
-    Json::decode(v).map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
+    v.decode_json()
+        .map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
 }
 
 #[inline]
-fn decode_duration_from_i64(v: i64) -> Result<Duration> {
-    Duration::from_nanos(v, 0)
+fn decode_duration_from_i64(v: i64, field_type: &FieldType) -> Result<Duration> {
+    Duration::from_nanos(v, field_type.as_accessor().decimal() as i8)
         .map_err(|_| Error::InvalidDataType("Failed to decode i64 as duration".to_owned()))
 }
 
@@ -199,7 +200,10 @@ pub fn decode_date_time_datum(
     }
 }
 
-pub fn decode_duration_datum(mut raw_datum: &[u8]) -> Result<Option<Duration>> {
+pub fn decode_duration_datum(
+    mut raw_datum: &[u8],
+    field_type: &FieldType,
+) -> Result<Option<Duration>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
             "Failed to decode datum flag".to_owned(),
@@ -212,13 +216,13 @@ pub fn decode_duration_datum(mut raw_datum: &[u8]) -> Result<Option<Duration>> {
         // In index, it's flag is `DURATION`. See TiDB's `encode()`.
         datum::DURATION_FLAG => {
             let v = decode_int(&mut raw_datum)?;
-            let v = decode_duration_from_i64(v)?;
+            let v = decode_duration_from_i64(v, field_type)?;
             Ok(Some(v))
         }
         // In record, it's flag is `VAR_INT`. See TiDB's `flatten()` and `encode()`.
         datum::VAR_INT_FLAG => {
             let v = decode_var_int(&mut raw_datum)?;
-            let v = decode_duration_from_i64(v)?;
+            let v = decode_duration_from_i64(v, field_type)?;
             Ok(Some(v))
         }
         _ => Err(Error::InvalidDataType(format!(
@@ -282,8 +286,8 @@ impl<'a> RawDatumDecoder<DateTime> for &'a [u8] {
 }
 
 impl<'a> RawDatumDecoder<Duration> for &'a [u8] {
-    fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Duration>> {
-        decode_duration_datum(self)
+    fn decode(self, field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Duration>> {
+        decode_duration_datum(self, field_type)
     }
 }
 

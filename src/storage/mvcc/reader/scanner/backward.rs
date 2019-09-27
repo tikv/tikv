@@ -10,7 +10,6 @@ use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
-use super::util::CheckLockResult;
 use super::ScannerConfig;
 
 // When there are many versions for the user key, after several tries,
@@ -129,8 +128,8 @@ impl<S: Snapshot> BackwardScanner<S> {
             };
 
             let mut result = Ok(None);
-            let mut get_ts = self.cfg.ts;
             let mut met_prev_user_key = false;
+            let ts = self.cfg.ts;
 
             if has_lock {
                 match self.cfg.isolation_level {
@@ -139,11 +138,8 @@ impl<S: Snapshot> BackwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
-                            CheckLockResult::NotLocked => {}
-                            CheckLockResult::Locked(e) => result = Err(e),
-                            CheckLockResult::Ignored(ts) => get_ts = ts,
-                        }
+                        result = super::super::util::check_lock(&current_user_key, ts, &lock)
+                            .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
                 }
@@ -151,7 +147,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             }
             if has_write {
                 if result.is_ok() {
-                    result = self.reverse_get(&current_user_key, get_ts, &mut met_prev_user_key);
+                    result = self.reverse_get(&current_user_key, ts, &mut met_prev_user_key);
                 }
                 if !met_prev_user_key {
                     // Skip rest later versions and point to previous user key.
@@ -311,7 +307,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             None => {
                 // Value is in the default CF.
                 self.ensure_default_cursor()?;
-                let value = super::util::near_reverse_load_data_by_write(
+                let value = super::super::util::near_reverse_load_data_by_write(
                     &mut self.default_cursor.as_mut().unwrap(),
                     user_key,
                     write,
@@ -1134,5 +1130,4 @@ mod tests {
         assert_eq!(statistics.lock.prev, 15);
         assert_eq!(statistics.write.prev, 1);
     }
-
 }

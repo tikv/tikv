@@ -87,7 +87,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
 
     let expr = path_expr.index(dollar_index + 1..).trim_start();
 
-    lazy_static! {
+    lazy_static::lazy_static! {
         static ref RE: Regex = Regex::new(PATH_EXPR_LEG_RE_STR).unwrap();
     }
     let mut legs = vec![];

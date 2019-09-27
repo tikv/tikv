@@ -225,6 +225,10 @@ fn test_node_merge_catch_up_logs_restart() {
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
 
+    // make sure the peer of left region on engine 3 has caught up logs.
+    cluster.must_put(b"k0", b"v0");
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
             .direction(Direction::Recv)
@@ -302,6 +306,77 @@ fn test_node_merge_catch_up_logs_leader_election() {
     fail::remove("before_peer_destroy_1000_1003");
 
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+}
+
+// Test if merge is working properly if no need to catch up logs,
+// also there may be a propose of compact log after prepare merge is proposed.
+#[test]
+fn test_node_merge_catch_up_logs_no_need() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 25;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // put some keys to trigger compact raft log
+    for i in 2..20 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v");
+    }
+
+    // let the peer of left region on store 3 falls behind.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+
+    // make sure the peer is isolated.
+    cluster.must_put(b"k11", b"v11");
+    must_get_none(&cluster.get_engine(3), b"k11");
+
+    // propose merge but not let apply index make progress.
+    fail::cfg("apply_after_prepare_merge", "pause").unwrap();
+    pd_client.merge_region(left.get_id(), right.get_id());
+    must_get_none(&cluster.get_engine(3), b"k11");
+
+    // wait to trigger compact raft log
+    thread::sleep(Duration::from_millis(100));
+
+    // let source region not merged
+    fail::cfg("on_handle_catch_up_logs_for_merge", "pause").unwrap();
+    fail::cfg("after_handle_catch_up_logs_for_merge", "pause").unwrap();
+    // due to `on_handle_catch_up_logs_for_merge` failpoint, we already pass `apply_index < catch_up_logs.merge.get_commit()`
+    // so now can let apply index make progress.
+    fail::remove("apply_after_prepare_merge");
+
+    // make sure all the logs are committed, including the compact command
+    cluster.clear_send_filters();
+    thread::sleep(Duration::from_millis(50));
+
+    // let merge process continue
+    fail::remove("on_handle_catch_up_logs_for_merge");
+    fail::remove("after_handle_catch_up_logs_for_merge");
+    thread::sleep(Duration::from_millis(50));
+
+    // the source region should be merged and the peer should be destroyed.
+    assert!(pd_client.check_merged(left.get_id()));
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    cluster.must_region_not_exist(left.get_id(), 3);
 }
 
 /// Test if merging state will be removed after accepting a snapshot.

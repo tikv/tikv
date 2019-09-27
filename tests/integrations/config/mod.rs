@@ -87,7 +87,7 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker_low: 2500,
             stack_size: ReadableSize::mb(20),
         },
-        coprocessor: CoprocessorReadPoolConfig {
+        coprocessor: CoprReadPoolConfig {
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
@@ -226,6 +226,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(2018),
                 blob_file_compression: CompressionType::Zstd,
@@ -239,6 +240,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -278,6 +280,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -291,6 +294,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -330,6 +334,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -343,6 +348,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -382,6 +388,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -395,6 +402,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
         titan: TitanDBConfig {
             enabled: true,
@@ -466,9 +474,11 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            force_consistency_checks: false,
             titan: TitanCfConfig::default(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
     };
     value.storage = StorageConfig {
@@ -485,6 +495,7 @@ fn test_serde_custom_tikv_config() {
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
+            memory_allocator: Some(String::from("nodump")),
         },
         gc: GCConfig {
             ratio_threshold: 1.2,
@@ -558,38 +569,4 @@ fn test_block_cache_backward_compatible() {
             + cfg.rocksdb.lockcf.block_cache_size.0
             + cfg.raftdb.defaultcf.block_cache_size.0
     );
-}
-
-#[test]
-fn test_error_on_unrecognized_config() {
-    let contents = [
-        "unknown-field = 123\n",
-        "[unknown-dict]\ncontent = 123\n",
-        "[[unknown-array]]\ncontent = 123\n",
-        "[readpool]\nunknown-field = 123\n",
-        "[readpool.coprocessor]\nunknown-field = 123\n",
-        "[readpool.storage]\nunknown-field = 123\n",
-        "[server]\nunknown-field = 123\n",
-        "[storage]\nunknown-field = 123\n",
-        "[storage.block-cache]\nunknown-field = 123\n",
-        "[pd]\nunknown-field = 123\n",
-        "[metric]\nunknown-field = 123\n",
-        "[raftstore]\nunknown-field = 123\n",
-        "[coprocessor]\nunknown-field = 123\n",
-        "[rocksdb]\nunknown-field = 123\n",
-        "[rocksdb.titan]\nunknown-field = 123\n",
-        "[rocksdb.defaultcf]\nunknown-field = 123\n",
-        "[rocksdb.defaultcf.titan]\nunknown-field = 123\n",
-        "[rocksdb.writecf]\nunknown-field = 123\n",
-        "[rocksdb.lockcf]\nunknown-field = 123\n",
-        "[raftdb]\nunknown-field = 123\n",
-        "[raftdb.defaultcf]\nunknown-field = 123\n",
-        "[security]\nunknown-field = 123\n",
-        "[import]\nunknown-field = 123\n",
-    ];
-
-    for content in &contents {
-        let result = toml::from_str::<TiKvConfig>(content);
-        assert!(result.is_err());
-    }
 }

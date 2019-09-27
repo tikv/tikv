@@ -8,8 +8,7 @@ use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use kvproto::debugpb::*;
-use kvproto::debugpb_grpc;
+use kvproto::debugpb::{self, *};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
     StatusCmdType, StatusRequest,
@@ -83,7 +82,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
+impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -407,6 +406,48 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
                 }
                 resp
             });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn get_store_info(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetStoreInfoRequest,
+        sink: UnarySink<GetStoreInfoResponse>,
+    ) {
+        const TAG: &str = "debug_get_store_id";
+        let debugger = self.debugger.clone();
+
+        let f = self.pool.spawn_fn(move || {
+            let mut resp = GetStoreInfoResponse::default();
+            match debugger.get_store_id() {
+                Ok(store_id) => resp.set_store_id(store_id),
+                Err(_) => resp.set_store_id(0),
+            }
+            Ok(resp)
+        });
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn get_cluster_info(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetClusterInfoRequest,
+        sink: UnarySink<GetClusterInfoResponse>,
+    ) {
+        const TAG: &str = "debug_get_cluster_id";
+        let debugger = self.debugger.clone();
+
+        let f = self.pool.spawn_fn(move || {
+            let mut resp = GetClusterInfoResponse::default();
+            match debugger.get_cluster_id() {
+                Ok(cluster_id) => resp.set_cluster_id(cluster_id),
+                Err(_) => resp.set_cluster_id(0),
+            }
+            Ok(resp)
+        });
 
         self.handle_response(ctx, sink, f, TAG);
     }

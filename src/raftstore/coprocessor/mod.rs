@@ -18,7 +18,9 @@ pub mod split_observer;
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
-pub use self::region_info_accessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
+pub use self::region_info_accessor::{
+    RegionCollector, RegionInfo, RegionInfoAccessor, SeekRegionCallback,
+};
 pub use self::split_check::{
     get_region_approximate_keys, get_region_approximate_keys_cf, get_region_approximate_middle,
     get_region_approximate_size, get_region_approximate_size_cf, HalfCheckObserver,

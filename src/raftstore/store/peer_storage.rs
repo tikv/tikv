@@ -529,7 +529,7 @@ impl PeerStorage {
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = self.raft_state.get_hard_state().clone();
-        if hard_state == HardState::new() {
+        if hard_state == HardState::default() {
             assert!(
                 !self.is_initialized(),
                 "peer for region {:?} is initialized but local state {:?} has empty hard \
@@ -1397,7 +1397,7 @@ pub fn do_snapshot(
         )));
     }
 
-    let mut snapshot = Snapshot::new();
+    let mut snapshot = Snapshot::default();
 
     // Set snapshot metadata.
     snapshot.mut_metadata().set_index(key.idx);
@@ -1529,7 +1529,7 @@ pub fn maybe_upgrade_from_2_to_3(
     // For meta data in the default CF.
     //
     //  1. store_ident_key: 0x01 0x01
-    //  2. prepare_boostrap_key: 0x01 0x02
+    //  2. prepare_bootstrap_key: 0x01 0x02
     if let Some(m) =
         kv_engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)?
     {
@@ -1570,7 +1570,7 @@ pub fn maybe_upgrade_from_2_to_3(
                 let raft_state_key = keys::raft_state_key(region_id);
                 let raft_state = raft_engine
                     .get_msg(&raft_state_key)?
-                    .unwrap_or_else(RaftLocalState::new);
+                    .unwrap_or_else(RaftLocalState::default);
                 let mut snapshot_raft_state = RaftLocalState::default();
                 box_try!(snapshot_raft_state.merge_from_bytes(value));
                 // if we recv append log when applying snapshot, last_index in
@@ -1949,7 +1949,7 @@ mod tests {
     #[test]
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut cs = ConfState::new();
+        let mut cs = ConfState::default();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
@@ -2013,7 +2013,7 @@ mod tests {
             &mut ready_ctx,
         )
         .unwrap();
-        let mut hs = HardState::new();
+        let mut hs = HardState::default();
         hs.set_commit(7);
         hs.set_term(5);
         ctx.raft_state.set_hard_state(hs);
@@ -2266,7 +2266,7 @@ mod tests {
             new_entry(5, 5),
             new_entry(6, 6),
         ];
-        let mut cs = ConfState::new();
+        let mut cs = ConfState::default();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();

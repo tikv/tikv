@@ -228,8 +228,8 @@ impl CFStatistics {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
-    pub fn details(&self) -> Vec<(&str, usize)> {
-        vec![
+    pub fn details(&self) -> [(&'static str, usize); 8] {
+        [
             (STAT_TOTAL, self.total_op_count()),
             (STAT_PROCESSED, self.processed),
             (STAT_GET, self.get),
@@ -276,8 +276,8 @@ impl Statistics {
         self.lock.processed + self.write.processed + self.data.processed
     }
 
-    pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
-        vec![
+    pub fn details(&self) -> [(&'static str, [(&'static str, usize); 8]); 3] {
+        [
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
             (CF_WRITE, self.write.details()),
@@ -710,27 +710,46 @@ thread_local! {
 }
 
 /// Execute the closure on the thread local engine.
-pub fn with_tls_engine<E: Engine, F, R>(f: F) -> R
+///
+/// Safety: precondition: `TLS_ENGINE_ANY` is non-null.
+pub unsafe fn with_tls_engine<E: Engine, F, R>(f: F) -> R
 where
     F: FnOnce(&E) -> R,
 {
     TLS_ENGINE_ANY.with(|e| {
-        let engine = unsafe { &*(*e.get() as *const E) };
+        let engine = &*(*e.get() as *const E);
         f(engine)
     })
 }
 
 /// Set the thread local engine.
+///
+/// Postcondition: `TLS_ENGINE_ANY` is non-null.
 pub fn set_tls_engine<E: Engine>(engine: E) {
-    let engine = Box::into_raw(Box::new(engine)) as *mut ();
-    TLS_ENGINE_ANY.with(|e| unsafe { *e.get() = engine });
+    // Safety: we check that `TLS_ENGINE_ANY` is null to ensure we don't leak an existing
+    // engine; we ensure there are no other references to `engine`.
+    TLS_ENGINE_ANY.with(move |e| unsafe {
+        if (*e.get()).is_null() {
+            let engine = Box::into_raw(Box::new(engine)) as *mut ();
+            *e.get() = engine;
+        }
+    });
 }
 
 /// Destroy the thread local engine.
-pub fn destroy_tls_engine<E: Engine>() {
-    TLS_ENGINE_ANY.with(|e| unsafe {
-        drop(Box::from_raw(*e.get() as *mut E));
-        *e.get() = ptr::null_mut();
+///
+/// Safety: the current tls engine must have the same type as `E` (or at least
+/// there destructors must be compatible).
+/// Postcondition: `TLS_ENGINE_ANY` is null.
+pub unsafe fn destroy_tls_engine<E: Engine>() {
+    // Safety: we check that `TLS_ENGINE_ANY` is non-null, we must ensure that references
+    // to `TLS_ENGINE_ANY` can never be stored outside of `TLS_ENGINE_ANY`.
+    TLS_ENGINE_ANY.with(|e| {
+        let ptr = *e.get();
+        if !ptr.is_null() {
+            drop(Box::from_raw(ptr as *mut E));
+            *e.get() = ptr::null_mut();
+        }
     });
 }
 

@@ -467,7 +467,6 @@ pub mod tests {
         }
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn new_runner(cap: usize) -> (mpsc::LooseBoundedSender<Message>, Box<Runner>) {
         let (tx, rx) = mpsc::loose_bounded(cap);
         let fsm = Runner {
@@ -562,8 +561,8 @@ pub mod tests {
             .send_control(Some(Box::new(move |_: &mut Runner| {
                 let (tx, runner) = new_runner(10);
                 let mailbox = BasicMailbox::new(tx, runner);
-                tx_.send(1).unwrap();
                 r.register(1, mailbox);
+                tx_.send(1).unwrap();
             })))
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));

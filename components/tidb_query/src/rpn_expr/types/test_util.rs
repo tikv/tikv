@@ -5,6 +5,7 @@ use tipb::{Expr, FieldType, ScalarFuncSig};
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{Evaluable, ScalarValue};
 use crate::expr::EvalContext;
+use crate::rpn_expr::types::function::RpnFnMeta;
 use crate::rpn_expr::RpnExpressionBuilder;
 use crate::Result;
 
@@ -98,7 +99,19 @@ impl RpnFnScalarEvaluator {
                 ed
             })
             .collect();
-        let func = super::super::map_pb_sig_to_rpn_func(sig, &children_ed).unwrap();
+
+        let ret_field_type = ret_field_type.into();
+        let mut fun_sig_expr = Expr::default();
+        fun_sig_expr.set_sig(sig);
+        fun_sig_expr.set_children(children_ed.clone().into());
+        fun_sig_expr.set_field_type(ret_field_type.clone());
+
+        // use validator_ptr to testing the test arguments.
+        let func: RpnFnMeta = super::super::map_expr_node_to_rpn_func(&fun_sig_expr).unwrap();
+
+        if let Err(e) = (func.validator_ptr)(&fun_sig_expr) {
+            return (Err(e), context);
+        }
 
         let expr = self
             .rpn_expr_builder
@@ -121,7 +134,6 @@ impl RpnFnScalarEvaluator {
             Some(ft) => ft.clone(),
             None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
         };
-
         let result = self.evaluate_raw(return_field_type, sig).0;
         result.map(|v| v.into())
     }

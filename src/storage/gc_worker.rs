@@ -20,7 +20,7 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 
 use super::config::GCConfig;
-use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary};
+use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
@@ -136,7 +136,7 @@ struct GCRunner<E: Engine> {
 
     cfg: GCConfig,
 
-    stats: StatisticsSummary,
+    stats: Statistics,
 }
 
 impl<E: Engine> GCRunner<E> {
@@ -157,7 +157,7 @@ impl<E: Engine> GCRunner<E> {
             raft_store_router,
             limiter,
             cfg,
-            stats: StatisticsSummary::default(),
+            stats: Statistics::default(),
         }
     }
 
@@ -216,7 +216,7 @@ impl<E: Engine> GCRunner<E> {
                     Ok((keys, next))
                 })
         };
-        self.stats.add_statistics(reader.get_statistics());
+        self.stats.add(reader.get_statistics());
         res
     }
 
@@ -257,7 +257,7 @@ impl<E: Engine> GCRunner<E> {
                 break;
             }
         }
-        self.stats.add_statistics(&txn.take_statistics());
+        self.stats.add(&txn.take_statistics());
 
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
@@ -436,12 +436,12 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     }
 
     fn on_tick(&mut self) {
-        let stats = mem::replace(&mut self.stats, StatisticsSummary::default());
-        for (cf, details) in stats.stat.details() {
-            for (tag, count) in details {
+        let stats = mem::replace(&mut self.stats, Statistics::default());
+        for (cf, details) in stats.details().iter() {
+            for (tag, count) in details.iter() {
                 GC_KEYS_COUNTER_VEC
-                    .with_label_values(&[cf, tag])
-                    .inc_by(count as i64);
+                    .with_label_values(&[cf, *tag])
+                    .inc_by(*count as i64);
             }
         }
     }
@@ -1180,6 +1180,7 @@ mod tests {
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::Result as EngineResult;
+    use crate::storage::lock_manager::DummyLockMgr;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
@@ -1498,7 +1499,10 @@ mod tests {
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
-    fn check_data<E: Engine>(storage: &Storage<E>, expected_data: &BTreeMap<Vec<u8>, Vec<u8>>) {
+    fn check_data<E: Engine>(
+        storage: &Storage<E, DummyLockMgr>,
+        expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
+    ) {
         let scan_res = storage
             .async_scan(
                 Context::default(),

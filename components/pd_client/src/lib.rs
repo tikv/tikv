@@ -7,8 +7,6 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(slog_error, slog_warn, slog_info, slog_debug)]
-extern crate slog;
 #[macro_use]
 extern crate slog_global;
 extern crate hex;
@@ -145,6 +143,7 @@ pub trait PdClient: Send + Sync {
     /// Region's Leader uses this to heartbeat PD.
     fn region_heartbeat(
         &self,
+        term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,

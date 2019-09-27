@@ -4,7 +4,6 @@ use std::thread;
 use std::time::Duration;
 
 use kvproto::kvrpcpb::Context;
-use std::collections::HashMap;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use test_raftstore::*;
@@ -12,6 +11,7 @@ use test_storage::*;
 use tikv::storage::config::Config;
 use tikv::storage::{self, AutoGCConfig, Engine, Key, Mutation};
 use tikv::storage::{kv, mvcc, txn};
+use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
 fn new_raft_storage() -> (

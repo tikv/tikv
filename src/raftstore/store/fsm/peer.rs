@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
@@ -49,7 +49,8 @@ use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
-    CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
+    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
+    SplitCheckTask,
 };
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
@@ -1857,19 +1858,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
         }
         let target = state.get_target().get_id();
+        let commit = state.get_commit();
         self.fsm.peer.pending_merge_state = Some(state);
         self.notify_prepare_merge();
 
         if let Some(logs_up_to_date) = self.fsm.peer.catch_up_logs.take() {
-            logs_up_to_date.store(region.get_id(), Ordering::SeqCst);
-            let mailbox = self.ctx.apply_router.mailbox(target).unwrap();
             // Send CatchUpLogs back to destroy source apply delegate,
             // then it will send `LogsUpToDate` to target apply delegate.
+            let mut req = CommitMergeRequest::new();
+            req.set_commit(commit);
             self.ctx.apply_router.schedule_task(
                 region.get_id(),
                 ApplyTask::CatchUpLogs(CatchUpLogs {
-                    target_mailbox: mailbox,
-                    merge: CommitMergeRequest::new(),
+                    target_region_id: target,
+                    merge: req,
                     logs_up_to_date,
                 }),
             );
@@ -1923,17 +1925,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         Some(ready_to_merge)
     }
 
-    fn on_ready_catch_up_logs(
-        &mut self,
-        merge: CommitMergeRequest,
-        logs_up_to_date: Arc<AtomicU64>,
-    ) {
+    fn on_ready_catch_up_logs(&mut self, catch_up_logs: CatchUpLogs) {
         let region_id = self.fsm.region_id();
-        assert_eq!(region_id, merge.get_source().get_id());
-        self.fsm.peer.catch_up_logs = Some(logs_up_to_date);
+        assert_eq!(region_id, catch_up_logs.merge.get_source().get_id());
 
         // directly append these logs to raft log and then commit
-        match self.fsm.peer.maybe_append_merge_entries(merge) {
+        match self
+            .fsm
+            .peer
+            .maybe_append_merge_entries(&catch_up_logs.merge)
+        {
             Some(last_index) => {
                 info!(
                     "append and commit entries to source region";
@@ -1943,6 +1944,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
                 // Now it has some committed entries, so mark it to take `Ready` in next round.
                 self.fsm.has_ready = true;
+                self.fsm.peer.catch_up_logs = Some(catch_up_logs.logs_up_to_date);
             }
             None => {
                 info!(
@@ -1950,6 +1952,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     "region_id" => region_id,
                     "peer_id" => self.fsm.peer.peer_id(),
                 );
+                // Send CatchUpLogs back to destroy source apply delegate,
+                // then it will send `LogsUpToDate` to target apply delegate.
+                self.ctx
+                    .apply_router
+                    .schedule_task(region_id, ApplyTask::CatchUpLogs(catch_up_logs));
             }
         }
     }
@@ -2130,7 +2137,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "check snapshot range";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
-            "ranges" => ?meta.region_ranges,
             "prev_region" => ?prev_region,
         );
         let initialized = !prev_region.get_peers().is_empty();
@@ -2178,11 +2184,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state);
                 }
-                ExecResult::CatchUpLogs {
-                    merge,
-                    logs_up_to_date,
-                } => {
-                    self.on_ready_catch_up_logs(merge, logs_up_to_date);
+                ExecResult::CatchUpLogs(catch_up_logs) => {
+                    self.on_ready_catch_up_logs(catch_up_logs);
                 }
                 ExecResult::CommitMerge { region, source } => {
                     if let Some(ready_to_merge) =
@@ -2896,7 +2899,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_split_region_check_tick();
 
         let task = CleanupSSTTask::DeleteSST { ssts };
-        if let Err(e) = self.ctx.cleanup_sst_scheduler.schedule(task) {
+        if let Err(e) = self
+            .ctx
+            .cleanup_scheduler
+            .schedule(CleanupTask::CleanupSST(task))
+        {
             error!(
                 "schedule to delete ssts";
                 "region_id" => self.fsm.region_id(),

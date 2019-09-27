@@ -11,8 +11,9 @@ use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
-use kvproto::tikvpb::{BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage};
-use kvproto::tikvpb_grpc::{create_tikv, Tikv};
+use kvproto::tikvpb::{
+    create_tikv, BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage, Tikv,
+};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
 macro_rules! unary_call {
@@ -109,6 +110,12 @@ trait MockKvService {
         BatchRollbackRequest,
         BatchRollbackResponse
     );
+    unary_call!(kv_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse);
+    unary_call!(
+        kv_check_txn_status,
+        CheckTxnStatusRequest,
+        CheckTxnStatusResponse
+    );
     unary_call!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
     unary_call!(kv_gc, GcRequest, GcResponse);
@@ -173,6 +180,12 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         kv_batch_rollback,
         BatchRollbackRequest,
         BatchRollbackResponse
+    );
+    unary_call_dispatch!(kv_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse);
+    unary_call_dispatch!(
+        kv_check_txn_status,
+        CheckTxnStatusRequest,
+        CheckTxnStatusResponse
     );
     unary_call_dispatch!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call_dispatch!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);

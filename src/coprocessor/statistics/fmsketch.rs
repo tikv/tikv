@@ -59,11 +59,11 @@ mod tests {
     use super::*;
 
     use std::iter::repeat;
+    use std::slice::from_ref;
 
     use tidb_query::codec::datum;
     use tidb_query::codec::datum::Datum;
     use tidb_query::codec::Result;
-    use tikv_util::as_slice;
 
     struct TestData {
         samples: Vec<Datum>,
@@ -107,7 +107,7 @@ mod tests {
     pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FmSketch> {
         let mut s = FmSketch::new(max_size);
         for value in values {
-            let bytes = datum::encode_value(as_slice(value))?;
+            let bytes = datum::encode_value(from_ref(value))?;
             s.insert(&bytes);
         }
         Ok(s)
@@ -140,5 +140,4 @@ mod tests {
         sketch.insert_hash_value(4);
         assert_eq!(sketch.hash_set.len(), max_size);
     }
-
 }

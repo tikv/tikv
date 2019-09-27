@@ -9,8 +9,7 @@ use tipb::{Expr, ExprType, FieldType};
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::codec::data_type::*;
-use crate::codec::mysql::Tz;
-use crate::codec::mysql::MAX_FSP;
+use crate::codec::mysql::{JsonDecoder, Tz, MAX_FSP};
 use crate::codec::{datum, Datum};
 use crate::Result;
 
@@ -28,8 +27,7 @@ impl RpnExpressionBuilder {
 
         match c.get_tp() {
             ExprType::ScalarFunc => {
-                let sig = c.get_sig();
-                super::super::map_pb_sig_to_rpn_func(sig, c.get_children())?;
+                super::super::map_expr_node_to_rpn_func(c)?;
                 for n in c.get_children() {
                     RpnExpressionBuilder::check_expr_tree_supported(n)?;
                 }
@@ -82,7 +80,7 @@ impl RpnExpressionBuilder {
             tree_node,
             &mut expr_nodes,
             time_zone,
-            super::super::map_pb_sig_to_rpn_func,
+            super::super::map_expr_node_to_rpn_func,
             max_columns,
         )?;
         Ok(RpnExpression::from(expr_nodes))
@@ -96,7 +94,7 @@ impl RpnExpressionBuilder {
         max_columns: usize,
     ) -> Result<RpnExpression>
     where
-        F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+        F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
     {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
@@ -250,7 +248,7 @@ fn append_rpn_nodes_recursively<F>(
     // the full schema instead.
 ) -> Result<()>
 where
-    F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+    F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
 {
     match tree_node.get_tp() {
         ExprType::ScalarFunc => {
@@ -290,10 +288,10 @@ fn handle_node_fn_call<F>(
     max_columns: usize,
 ) -> Result<()>
 where
-    F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+    F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
 {
     // Map pb func to `RpnFnMeta`.
-    let func_meta = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
+    let func_meta = fn_mapper(&tree_node)?;
 
     // Validate the input expression.
     (func_meta.validator_ptr)(&tree_node).map_err(|e| {
@@ -452,14 +450,19 @@ fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
 
 #[inline]
 fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = Decimal::decode(&mut val.as_slice())
+    use crate::codec::mysql::DecimalDecoder;
+    let value = val
+        .as_slice()
+        .decode_decimal()
         .map_err(|_| other_err!("Unable to decode decimal from the request"))?;
     Ok(ScalarValue::Decimal(Some(value)))
 }
 
 #[inline]
 fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = Json::decode(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .decode_json()
         .map_err(|_| other_err!("Unable to decode json from the request"))?;
     Ok(ScalarValue::Json(Some(value)))
 }
@@ -527,7 +530,7 @@ mod tests {
     /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
     /// cannot be modified by us in tests to support fn_a ~ fn_d. So let's just hard code some
     /// substitute.
-    fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<RpnFnMeta> {
+    fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
         // fn_a: CastIntAsInt
         // fn_b: CastIntAsReal
         // fn_c: CastIntAsString
@@ -536,7 +539,7 @@ mod tests {
         // fn_f: CastIntAsDuration
         // fn_g: CastIntAsJson
         // fn_h: CastRealAsInt
-        Ok(match value {
+        Ok(match expr.get_sig() {
             ScalarFuncSig::CastIntAsInt => fn_a_fn_meta(),
             ScalarFuncSig::CastIntAsReal => fn_b_fn_meta(),
             ScalarFuncSig::CastIntAsString => fn_c_fn_meta(),

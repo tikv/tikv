@@ -9,7 +9,9 @@ use rand::RngCore;
 use tempfile::{Builder, TempDir};
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::pdpb::{
+    ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
+};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
@@ -34,8 +36,8 @@ pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-        if value.is_some() && res.is_some() {
-            assert_eq!(value.unwrap(), &*res.unwrap());
+        if let (Some(value), Some(res)) = (value, res.as_ref()) {
+            assert_eq!(value, res.as_ref());
             return;
         }
         if value.is_none() && res.is_none() {
@@ -158,11 +160,11 @@ pub fn new_readpool_cfg() -> ReadPoolConfig {
             low_concurrency: 1,
             ..StorageReadPoolConfig::default()
         },
-        coprocessor: CoprocessorReadPoolConfig {
+        coprocessor: CoprReadPoolConfig {
             high_concurrency: 1,
             normal_concurrency: 1,
             low_concurrency: 1,
-            ..CoprocessorReadPoolConfig::default()
+            ..CoprReadPoolConfig::default()
         },
     }
 }
@@ -349,8 +351,10 @@ pub fn new_pd_change_peer(
     resp
 }
 
-pub fn new_half_split_region() -> RegionHeartbeatResponse {
-    let split_region = SplitRegion::default();
+pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
+    let mut split_region = SplitRegion::default();
+    split_region.set_policy(policy);
+    split_region.set_keys(keys.into());
     let mut resp = RegionHeartbeatResponse::default();
     resp.set_split_region(split_region);
     resp

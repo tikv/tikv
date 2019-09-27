@@ -6,7 +6,6 @@ authors = ["Brian Anderson <andersrb@gmail.com>"]
 publish = false
 
 [features]
-default = ["jemalloc"]
 jemalloc = ["jemallocator", "jemalloc-sys", "jemalloc-ctl"]
 
 # Build jemalloc's profiling features. Without this
@@ -16,7 +15,7 @@ mimalloc = ["mimallocator"]
 
 [dependencies]
 libc = "0.2"
-log = "0.3"
+log = "0.4"
 
 [dev-dependencies]
 tempfile = "3.0"

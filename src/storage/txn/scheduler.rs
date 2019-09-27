@@ -31,9 +31,7 @@ use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
-use crate::storage::lock_manager::{
-    self, store_wait_table_is_empty, DetectorScheduler, WaiterMgrScheduler,
-};
+use crate::storage::lock_manager::{self, LockMgr};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
@@ -138,7 +136,7 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner {
+struct SchedulerInner<L: LockMgr> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
@@ -159,9 +157,7 @@ struct SchedulerInner {
     // used to control write flow
     running_write_bytes: AtomicUsize,
 
-    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-
-    detector_scheduler: Option<DetectorScheduler>,
+    lock_mgr: Option<L>,
 }
 
 #[inline]
@@ -169,7 +165,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl SchedulerInner {
+impl<L: LockMgr> SchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -236,20 +232,19 @@ impl SchedulerInner {
 
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
-pub struct Scheduler<E: Engine> {
+pub struct Scheduler<E: Engine, L: LockMgr> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
-    inner: Arc<SchedulerInner>,
+    inner: Arc<SchedulerInner<L>>,
 }
 
-unsafe impl<E: Engine> Send for Scheduler<E> {}
+unsafe impl<E: Engine, L: LockMgr> Send for Scheduler<E, L> {}
 
-impl<E: Engine> Scheduler<E> {
+impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     /// Creates a scheduler.
     pub fn new(
         engine: E,
-        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
-        detector_scheduler: Option<DetectorScheduler>,
+        lock_mgr: Option<L>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -274,8 +269,7 @@ impl<E: Engine> Scheduler<E> {
                 std::cmp::max(1, worker_pool_size / 2),
                 "sched-high-pri-pool",
             ),
-            waiter_mgr_scheduler,
-            detector_scheduler,
+            lock_mgr,
         });
 
         slow_log!(t, "initialized the transaction scheduler");
@@ -290,8 +284,8 @@ impl<E: Engine> Scheduler<E> {
     }
 }
 
-impl<E: Engine> Scheduler<E> {
-    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self> {
+impl<E: Engine, L: LockMgr> Scheduler<E, L> {
+    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self, L> {
         let pool = if priority == CommandPri::High || is_sys_cmd {
             self.inner.high_priority_pool.clone()
         } else {
@@ -301,12 +295,7 @@ impl<E: Engine> Scheduler<E> {
             engine: None,
             inner: Arc::clone(&self.inner),
         };
-        Executor::new(
-            scheduler,
-            pool,
-            self.inner.waiter_mgr_scheduler.clone(),
-            self.inner.detector_scheduler.clone(),
-        )
+        Executor::new(scheduler, pool, self.inner.lock_mgr.clone())
     }
 
     /// Releases all the latches held by a command.
@@ -383,7 +372,8 @@ impl<E: Engine> Scheduler<E> {
             f(engine)
         } else {
             // The program is currently in scheduler worker threads.
-            with_tls_engine(f)
+            // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+            unsafe { with_tls_engine(f) }
         }
     }
 
@@ -461,24 +451,16 @@ impl<E: Engine> Scheduler<E> {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
-        self.inner.waiter_mgr_scheduler.as_ref().unwrap().wait_for(
-            start_ts,
-            tctx.cb,
-            pr,
-            lock.clone(),
-            is_first_lock,
-        );
-        // Set `WAIT_TABLE_IS_EMPTY` here to prevent there is an on-the-fly WaitFor msg
-        // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
-        //
-        // But it's still possible that the waiter_mgr removes some waiters and set
-        // `WAIT_TABLE_IS_EMPTY` to true just after we set it to false here.
-        store_wait_table_is_empty(false);
+        self.inner
+            .lock_mgr
+            .as_ref()
+            .unwrap()
+            .wait_for(start_ts, tctx.cb, pr, lock, is_first_lock);
         self.release_lock(&tctx.lock, cid);
     }
 }
 
-impl<E: Engine> MsgScheduler for Scheduler<E> {
+impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
     fn on_msg(&self, task: Msg) {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
@@ -523,7 +505,15 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         | Command::PessimisticRollback { ref keys, .. } => latches.gen_lock(keys),
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
-        _ => Lock::new(vec![]),
+        Command::TxnHeartBeat {
+            ref primary_key, ..
+        } => latches.gen_lock(&[primary_key]),
+
+        // Avoid using wildcard _ here to avoid forgetting add new commands here.
+        Command::ScanLock { .. }
+        | Command::DeleteRange { .. }
+        | Command::MvccByKey { .. }
+        | Command::MvccByStartTs { .. } => Lock::new(vec![]),
     }
 }
 
@@ -587,6 +577,7 @@ mod tests {
                 ctx: Context::default(),
                 key: Key::from_raw(b"k"),
                 start_ts: 10,
+                current_ts: 20,
             },
             Command::Rollback {
                 ctx: Context::default(),
@@ -613,6 +604,12 @@ mod tests {
                 start_ts: 10,
                 commit_ts: 0,
                 resolve_keys: vec![Key::from_raw(b"k")],
+            },
+            Command::TxnHeartBeat {
+                ctx: Context::default(),
+                primary_key: Key::from_raw(b"k"),
+                start_ts: 10,
+                advise_ttl: 100,
             },
         ];
 

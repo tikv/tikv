@@ -12,7 +12,7 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(slog_o, slog_error, slog_warn, slog_info, slog_debug, slog_crit)]
+#[macro_use(slog_o)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
-use std::{env, slice, thread, u64};
+use std::{env, thread, u64};
 
 use protobuf::Message;
 use rand;
@@ -269,14 +269,6 @@ pub fn unescape(s: &str) -> Vec<u8> {
     buf
 }
 
-/// Converts a borrow to a slice.
-pub fn as_slice<T>(t: &T) -> &[T] {
-    unsafe {
-        let ptr = t as *const T;
-        slice::from_raw_parts(ptr, 1)
-    }
-}
-
 /// A helper trait for `Entry` to accept a failable closure.
 pub trait TryInsertWith<'a, V, E> {
     fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>;
@@ -498,7 +490,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = log::max_log_level().to_log_level() {
+        if let Some(level) = log::max_level().to_level() {
             let drainer = logger::term_drainer();
             let _ = logger::init_log(
                 drainer,
@@ -554,14 +546,6 @@ pub fn check_environment_variables() {
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
-}
-
-pub unsafe fn erase_lifetime_mut<'a, T: ?Sized>(v: &mut T) -> &'a mut T {
-    &mut *(v as *mut T)
-}
-
-pub unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
-    &*(v as *const T)
 }
 
 #[cfg(test)]
@@ -644,9 +628,8 @@ mod tests {
             }
         }
 
-        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
-            a.clone()
+            *a
         }
     }
 

@@ -145,23 +145,23 @@ fn get_unified_log_level(lv: Level) -> &'static str {
     }
 }
 
-pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
+pub fn convert_slog_level_to_log_level(lv: Level) -> log::Level {
     match lv {
-        Level::Critical | Level::Error => log::LogLevel::Error,
-        Level::Warning => log::LogLevel::Warn,
-        Level::Debug => log::LogLevel::Debug,
-        Level::Trace => log::LogLevel::Trace,
-        Level::Info => log::LogLevel::Info,
+        Level::Critical | Level::Error => log::Level::Error,
+        Level::Warning => log::Level::Warn,
+        Level::Debug => log::Level::Debug,
+        Level::Trace => log::Level::Trace,
+        Level::Info => log::Level::Info,
     }
 }
 
-pub fn convert_log_level_to_slog_level(lv: log::LogLevel) -> Level {
+pub fn convert_log_level_to_slog_level(lv: log::Level) -> Level {
     match lv {
-        log::LogLevel::Error => Level::Error,
-        log::LogLevel::Warn => Level::Warning,
-        log::LogLevel::Debug => Level::Debug,
-        log::LogLevel::Trace => Level::Trace,
-        log::LogLevel::Info => Level::Info,
+        log::Level::Error => Level::Error,
+        log::Level::Warn => Level::Warning,
+        log::Level::Debug => Level::Debug,
+        log::Level::Trace => Level::Trace,
+        log::Level::Info => Level::Info,
     }
 }
 
@@ -318,7 +318,6 @@ impl<'a> Drop for Serializer<'a> {
     fn drop(&mut self) {}
 }
 
-#[allow(clippy::write_literal)]
 impl<'a> slog::ser::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))
@@ -350,6 +349,7 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
 mod tests {
     use super::*;
     use chrono::DateTime;
+    use slog::{slog_debug, slog_info, slog_warn};
     use slog_term::PlainSyncDecorator;
     use std::cell::RefCell;
     use std::io;

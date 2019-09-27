@@ -1,8 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
 use std::fmt::{self, Display, Formatter};
+use std::io;
+use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use std::thread::{Builder, JoinHandle};
+use std::time::Duration;
 
 use futures::Future;
 use tokio_core::reactor::Handle;
@@ -28,8 +31,11 @@ use crate::storage::FlowStatistics;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
+use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::time_now_sec;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+
+type RecordPairVec = Vec<pdpb::RecordPair>;
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
@@ -50,6 +56,7 @@ pub enum Task {
         callback: Callback,
     },
     Heartbeat {
+        term: u64,
         region: metapb::Region,
         peer: metapb::Peer,
         down_peers: Vec<pdpb::PeerStats>,
@@ -77,6 +84,11 @@ pub enum Task {
     DestroyPeer {
         region_id: u64,
     },
+    StoreInfos {
+        cpu_usages: RecordPairVec,
+        read_io_rates: RecordPairVec,
+        write_io_rates: RecordPairVec,
+    },
 }
 
 pub struct StoreStat {
@@ -90,6 +102,10 @@ pub struct StoreStat {
     pub region_keys_read: LocalHistogram,
     pub region_bytes_written: LocalHistogram,
     pub region_keys_written: LocalHistogram,
+
+    pub store_cpu_usages: RecordPairVec,
+    pub store_read_io_rates: RecordPairVec,
+    pub store_write_io_rates: RecordPairVec,
 }
 
 impl Default for StoreStat {
@@ -105,6 +121,10 @@ impl Default for StoreStat {
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
             engine_last_total_keys_read: 0,
+
+            store_cpu_usages: RecordPairVec::default(),
+            store_read_io_rates: RecordPairVec::default(),
+            store_write_io_rates: RecordPairVec::default(),
         }
     }
 }
@@ -172,6 +192,92 @@ impl Display for Task {
             Task::DestroyPeer { ref region_id } => {
                 write!(f, "destroy peer of region {}", region_id)
             }
+            Task::StoreInfos {
+                ref cpu_usages,
+                ref read_io_rates,
+                ref write_io_rates,
+            } => write!(
+                f,
+                "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
+                cpu_usages, read_io_rates, write_io_rates,
+            ),
+        }
+    }
+}
+
+#[inline]
+fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
+    m.into_iter()
+        .map(|(k, v)| {
+            let mut pair = pdpb::RecordPair::new();
+            pair.set_key(k);
+            pair.set_value(v);
+            pair
+        })
+        .collect()
+}
+
+struct StatsMonitor {
+    scheduler: Scheduler<Task>,
+    handle: Option<JoinHandle<()>>,
+    sender: Option<Sender<bool>>,
+    interval: Duration,
+}
+
+impl StatsMonitor {
+    pub fn new(interval: Duration, scheduler: Scheduler<Task>) -> Self {
+        StatsMonitor {
+            scheduler,
+            handle: None,
+            sender: None,
+            interval,
+        }
+    }
+
+    pub fn start(&mut self) -> Result<(), io::Error> {
+        let (tx, rx) = mpsc::channel();
+        let interval = self.interval;
+        let scheduler = self.scheduler.clone();
+        self.sender = Some(tx);
+        let h = Builder::new()
+            .name(thd_name!("stats-monitor"))
+            .spawn(move || {
+                let mut thread_stats = ThreadInfoStatistics::new();
+
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
+                    thread_stats.record();
+
+                    let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
+                    let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
+                    let write_io_rates = convert_record_pairs(thread_stats.get_write_io_rates());
+
+                    let task = Task::StoreInfos {
+                        cpu_usages,
+                        read_io_rates,
+                        write_io_rates,
+                    };
+                    if let Err(e) = scheduler.schedule(task) {
+                        error!(
+                            "failed to send store infos to pd worker";
+                            "err" => ?e,
+                        );
+                    }
+                }
+            })?;
+
+        self.handle = Some(h);
+        Ok(())
+    }
+
+    pub fn stop(&mut self) {
+        let h = self.handle.take();
+        if h.is_none() {
+            return;
+        }
+        drop(self.sender.take().unwrap());
+        if let Err(e) = h.unwrap().join() {
+            error!("join stats collector failed"; "err" => ?e);
+            return;
         }
     }
 }
@@ -184,24 +290,33 @@ pub struct Runner<T: PdClient> {
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
-    // Seconds between when a region is expected to send a heartbeat.
-    region_heartbeat_interval: u64,
+    // Records the timestamp of boot time.
+    start_ts: u64,
 
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task>,
+    stats_monitor: StatsMonitor,
 }
 
 impl<T: PdClient> Runner<T> {
+    const INTERVAL_DIVISOR: u32 = 2;
+
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
         router: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
-        region_heartbeat_interval: u64,
+        store_heartbeat_interval: u64,
     ) -> Runner<T> {
+        let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
+        let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
+        if let Err(e) = stats_monitor.start() {
+            error!("failed to start stats collector, error = {:?}", e);
+        }
+
         Runner {
             store_id,
             pd_client,
@@ -210,8 +325,9 @@ impl<T: PdClient> Runner<T> {
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
-            region_heartbeat_interval,
+            start_ts: time_now_sec(),
             scheduler,
+            stats_monitor,
         }
     }
 
@@ -337,6 +453,7 @@ impl<T: PdClient> Runner<T> {
     fn handle_heartbeat(
         &self,
         handle: &Handle,
+        term: u64,
         region: metapb::Region,
         peer: metapb::Peer,
         region_stat: RegionStat,
@@ -356,7 +473,7 @@ impl<T: PdClient> Runner<T> {
 
         let f = self
             .pd_client
-            .region_heartbeat(region.clone(), peer.clone(), region_stat)
+            .region_heartbeat(term, region.clone(), peer.clone(), region_stat)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -417,6 +534,17 @@ impl<T: PdClient> Runner<T> {
         stats.set_keys_read(
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
+
+        stats.set_cpu_usages(protobuf::RepeatedField::from_vec(
+            self.store_stat.store_cpu_usages.clone(),
+        ));
+        stats.set_read_io_rates(protobuf::RepeatedField::from_vec(
+            self.store_stat.store_read_io_rates.clone(),
+        ));
+        stats.set_write_io_rates(protobuf::RepeatedField::from_vec(
+            self.store_stat.store_write_io_rates.clone(),
+        ));
+
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts);
         stats.set_interval(interval);
@@ -577,11 +705,19 @@ impl<T: PdClient> Runner<T> {
                         .with_label_values(&["split region"])
                         .inc();
 
-                    let split_region = resp.take_split_region();
+                    let mut split_region = resp.take_split_region();
                     info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
-                    let msg = CasualMessage::HalfSplitRegion {
-                        region_epoch: epoch,
-                        policy: split_region.get_policy(),
+                    let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
+                        CasualMessage::SplitRegion{
+                            region_epoch: epoch,
+                            split_keys: split_region.take_keys().into_vec(),
+                            callback: Callback::None,
+                        }
+                    } else {
+                        CasualMessage::HalfSplitRegion {
+                            region_epoch: epoch,
+                            policy: split_region.get_policy(),
+                        }
                     };
                     if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
                         error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
@@ -627,6 +763,17 @@ impl<T: PdClient> Runner<T> {
             Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
         }
     }
+
+    fn handle_store_infos(
+        &mut self,
+        cpu_usages: RecordPairVec,
+        read_io_rates: RecordPairVec,
+        write_io_rates: RecordPairVec,
+    ) {
+        self.store_stat.store_cpu_usages = cpu_usages;
+        self.store_stat.store_read_io_rates = read_io_rates;
+        self.store_stat.store_write_io_rates = write_io_rates;
+    }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
@@ -660,6 +807,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 callback,
             ),
             Task::Heartbeat {
+                term,
                 region,
                 peer,
                 down_peers,
@@ -696,10 +844,9 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
                     peer_stat.last_report_ts = time_now_sec();
-                    last_report_ts = cmp::max(
-                        last_report_ts,
-                        peer_stat.last_report_ts - self.region_heartbeat_interval,
-                    );
+                    if last_report_ts == 0 {
+                        last_report_ts = self.start_ts;
+                    }
                     (
                         read_bytes_delta,
                         read_keys_delta,
@@ -710,6 +857,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 };
                 self.handle_heartbeat(
                     handle,
+                    term,
                     region,
                     peer,
                     RegionStat {
@@ -736,7 +884,16 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             } => self.handle_validate_peer(handle, region, peer, merge_source),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
+            Task::StoreInfos {
+                cpu_usages,
+                read_io_rates,
+                write_io_rates,
+            } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
         };
+    }
+
+    fn shutdown(&mut self) {
+        self.stats_monitor.stop();
     }
 }
 
@@ -859,5 +1016,95 @@ fn send_destroy_peer_message(
             "region_id" => local_region.get_id(),
             "err" => ?e
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    use tikv_util::worker::FutureWorker;
+
+    use super::*;
+
+    struct RunnerTest {
+        store_stat: Arc<Mutex<StoreStat>>,
+        stats_monitor: StatsMonitor,
+    }
+
+    impl RunnerTest {
+        fn new(
+            interval: u64,
+            scheduler: Scheduler<Task>,
+            store_stat: Arc<Mutex<StoreStat>>,
+        ) -> RunnerTest {
+            let mut stats_monitor =
+                StatsMonitor::new(Duration::from_secs(interval), scheduler.clone());
+            if let Err(e) = stats_monitor.start() {
+                error!("failed to start stats collector, error = {:?}", e);
+            }
+
+            RunnerTest {
+                store_stat,
+                stats_monitor,
+            }
+        }
+
+        fn handle_store_infos(
+            &mut self,
+            cpu_usages: RecordPairVec,
+            read_io_rates: RecordPairVec,
+            write_io_rates: RecordPairVec,
+        ) {
+            let mut store_stat = self.store_stat.lock().unwrap();
+            store_stat.store_cpu_usages = cpu_usages;
+            store_stat.store_read_io_rates = read_io_rates;
+            store_stat.store_write_io_rates = write_io_rates;
+        }
+    }
+
+    impl Runnable<Task> for RunnerTest {
+        fn run(&mut self, task: Task, _handle: &Handle) {
+            if let Task::StoreInfos {
+                cpu_usages,
+                read_io_rates,
+                write_io_rates,
+            } = task
+            {
+                self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates)
+            };
+        }
+
+        fn shutdown(&mut self) {
+            self.stats_monitor.stop();
+        }
+    }
+
+    fn sum_record_pairs(pairs: &[pdpb::RecordPair]) -> u64 {
+        let mut sum = 0;
+        for record in pairs.iter() {
+            sum += record.get_value();
+        }
+        sum
+    }
+
+    #[test]
+    fn test_collect_stats() {
+        let mut pd_worker = FutureWorker::new("test-pd-worker");
+        let store_stat = Arc::new(Mutex::new(StoreStat::default()));
+        let runner = RunnerTest::new(1, pd_worker.scheduler(), Arc::clone(&store_stat));
+        pd_worker.start(runner).unwrap();
+
+        let start = Instant::now();
+        loop {
+            if (Instant::now() - start).as_secs() > 2 {
+                break;
+            }
+        }
+
+        let total_cpu_usages = sum_record_pairs(&store_stat.lock().unwrap().store_cpu_usages);
+        assert!(total_cpu_usages > 90);
+
+        pd_worker.stop();
     }
 }

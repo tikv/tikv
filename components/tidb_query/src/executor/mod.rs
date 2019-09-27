@@ -354,10 +354,11 @@ pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::codec::{datum, table, Datum};
     use crate::storage::fixture::FixtureStorage;
+    use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
-    use std::collections::HashMap;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::collections::HashMap;
+    use tikv_util::map;
     use tipb::ColumnInfo;
     use tipb::TableScan;
     use tipb::{Expr, ExprType};
@@ -366,7 +367,7 @@ pub mod tests {
         let mut expr = Expr::default();
         expr.set_tp(tp);
         if tp == ExprType::ColumnRef {
-            expr.mut_val().encode_i64(id.unwrap()).unwrap();
+            expr.mut_val().write_i64(id.unwrap()).unwrap();
         } else {
             expr.mut_children().push(child.unwrap());
         }

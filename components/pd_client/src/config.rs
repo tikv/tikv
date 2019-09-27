@@ -9,7 +9,6 @@ use tikv_util::config::ReadableDuration;
 /// for infinity, logging only every 10th duplicate error.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     /// The PD endpoints for the client.
@@ -34,7 +33,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            endpoints: Default::default(),
+            endpoints: vec!["127.0.0.1:2379".to_string()],
             retry_interval: ReadableDuration::millis(300),
             retry_max_count: std::isize::MAX,
             retry_log_every: 10,
@@ -73,10 +72,7 @@ mod tests {
 
     #[test]
     fn test_pd_cfg() {
-        let mut cfg = Config::default();
-        // endpoints is required.
-        cfg.validate().unwrap_err();
-        cfg.endpoints = vec!["127.0.0.1:2333".to_owned()];
+        let cfg = Config::default();
         cfg.validate().unwrap();
     }
 }

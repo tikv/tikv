@@ -191,7 +191,7 @@ impl RpnExpression {
         Ok(())
     }
 
-    /// Evaluates the expression into a vector. The input columns must be already decoded.
+    /// Evaluates the expression into a stack node. The input columns must be already decoded.
     ///
     /// It differs from `eval` in that `eval_decoded` needn't receive a mutable reference
     /// to `LazyBatchColumnVec`. However, since `eval_decoded` doesn't decode columns,
@@ -222,10 +222,7 @@ impl RpnExpression {
         for node in self.as_ref() {
             match node {
                 RpnExpressionNode::Constant { value, field_type } => {
-                    stack.push(RpnStackNode::Scalar {
-                        value: &value,
-                        field_type,
-                    });
+                    stack.push(RpnStackNode::Scalar { value, field_type });
                 }
                 RpnExpressionNode::ColumnRef { offset } => {
                     let field_type = &schema[*offset];
@@ -370,7 +367,7 @@ mod tests {
             [Some(1), Some(5), None, None, Some(42)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[2, 0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
@@ -386,7 +383,7 @@ mod tests {
             val.vector_value().unwrap().logical_rows(),
             logical_rows.as_slice()
         );
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Single column node but row numbers in `eval()` does not match column length, should panic.
@@ -434,7 +431,7 @@ mod tests {
             [Some(42), Some(42), Some(42), Some(42)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2, 3]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Unary function (argument is scalar)
@@ -464,7 +461,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Unary function (argument is vector)
@@ -498,7 +495,7 @@ mod tests {
             [None, Some(6)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Unary function (argument is raw column). The column should be decoded.
@@ -573,7 +570,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are vector, scalar)
@@ -611,7 +608,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are scalar, vector)
@@ -649,7 +646,7 @@ mod tests {
             ]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are vector, vector)
@@ -746,7 +743,7 @@ mod tests {
             [Some(49)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Ternary function (arguments are vector, scalar, vector)
@@ -782,7 +779,7 @@ mod tests {
             [Some(-10), Some(-2), Some(8)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     // Comprehensive expression:
@@ -871,7 +868,7 @@ mod tests {
             [Real::new(146.0).ok(), Real::new(25.0).ok(),]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Unary function, but supplied zero arguments. Should panic.
@@ -977,12 +974,12 @@ mod tests {
             Ok(Some(a.unwrap().into_inner() as i64))
         }
 
-        fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<RpnFnMeta> {
+        fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
             // fn_a: CastIntAsInt
             // fn_b: CastIntAsReal
             // fn_c: CastIntAsString
             // fn_d: CastIntAsDecimal
-            Ok(match value {
+            Ok(match expr.get_sig() {
                 ScalarFuncSig::CastIntAsInt => fn_a_fn_meta(),
                 ScalarFuncSig::CastIntAsReal => fn_b_fn_meta(),
                 ScalarFuncSig::CastIntAsString => fn_c_fn_meta(),
@@ -1042,7 +1039,7 @@ mod tests {
             [Some(574), Some(-13)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     #[bench]

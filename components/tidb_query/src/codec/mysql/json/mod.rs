@@ -15,7 +15,7 @@ mod json_remove;
 mod json_type;
 mod json_unquote;
 
-pub use self::binary::JsonEncoder;
+pub use self::binary::{JsonDecoder, JsonEncoder};
 pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
@@ -25,7 +25,9 @@ use tikv_util::is_even;
 use super::super::datum::Datum;
 use super::super::{Error, Result};
 use crate::codec::convert::ConvertTo;
-use crate::codec::data_type::Decimal;
+use crate::codec::data_type::{Decimal, Real};
+use crate::codec::mysql;
+use crate::codec::mysql::{Duration, Time, TimeType};
 use crate::expr::EvalContext;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
@@ -103,12 +105,59 @@ impl ConvertTo<f64> for Json {
     }
 }
 
-impl ConvertTo<Decimal> for Json {
-    /// Converts a `Json` to a `Decimal`
+impl ConvertTo<Json> for i64 {
     #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let f: f64 = self.convert(ctx)?;
-        f.convert(ctx)
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        Ok(Json::I64(*self))
+    }
+}
+
+impl ConvertTo<Json> for f64 {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
+        Ok(Json::Double(*self))
+    }
+}
+
+impl ConvertTo<Json> for Real {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
+        Ok(Json::Double(self.into_inner()))
+    }
+}
+
+impl ConvertTo<Json> for Decimal {
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
+        let val: f64 = self.convert(ctx)?;
+        Ok(Json::Double(val))
+    }
+}
+
+impl ConvertTo<Json> for Time {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        let tp = self.get_time_type();
+        let s = if tp == TimeType::DateTime || tp == TimeType::Timestamp {
+            // TODO: avoid this clone
+            let mut val = self.clone();
+            val.set_fsp(mysql::MAX_FSP as u8);
+            val.to_string()
+        } else {
+            self.to_string()
+        };
+        Ok(Json::String(s))
+    }
+}
+
+impl ConvertTo<Json> for Duration {
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        let d = self.maximize_fsp();
+        Ok(Json::String(d.to_string()))
     }
 }
 

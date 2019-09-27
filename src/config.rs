@@ -31,11 +31,10 @@ use crate::raftstore::coprocessor::properties::{
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
-use crate::server::readpool;
+use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
-use crate::storage::lock_manager::Config as PessimisticTxnConfig;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
@@ -45,6 +44,7 @@ use engine::rocks::util::{
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use pd_client::Config as PdConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
 
@@ -75,7 +75,6 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
     pub min_blob_size: ReadableSize,
@@ -125,7 +124,6 @@ macro_rules! cf_config {
     ($name:ident) => {
         #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
-        #[serde(deny_unknown_fields)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
             pub block_size: ReadableSize,
@@ -160,8 +158,10 @@ macro_rules! cf_config {
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+            pub force_consistency_checks: bool,
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
+            pub enable_doubly_skiplist: bool,
             pub titan: TitanCfConfig,
         }
 
@@ -267,6 +267,12 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "hard_pending_compaction_bytes_limit"])
             .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
         $metrics
+            .with_label_values(&[$tag, "force_consistency_checks"])
+            .set(($cf.force_consistency_checks as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "enable_doubly_skiplist"])
+            .set(($cf.enable_doubly_skiplist as i32).into());
+        $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.0 as f64);
         $metrics
@@ -336,7 +342,10 @@ macro_rules! build_cf_opt {
         cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
         cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
         cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
-
+        cf_opts.set_force_consistency_checks($opt.force_consistency_checks);
+        if $opt.enable_doubly_skiplist {
+            cf_opts.set_doubly_skiplist();
+        }
         cf_opts
     }};
 }
@@ -383,8 +392,10 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
         }
     }
@@ -448,8 +459,10 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
             titan,
         }
     }
@@ -515,8 +528,10 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
             titan,
         }
     }
@@ -572,8 +587,10 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
             titan,
         }
     }
@@ -594,7 +611,6 @@ impl RaftCfConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 // Note that Titan is still an experimental feature. Once enabled, it can't fall back.
 // Forced fallback may result in data loss.
@@ -635,7 +651,6 @@ impl TitanDBConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
@@ -841,8 +856,10 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
             titan: TitanCfConfig::default(),
         }
     }
@@ -865,7 +882,6 @@ impl RaftDefaultCfConfig {
 // But each instance will limit their background jobs according to their own max_background_jobs
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
@@ -982,7 +998,6 @@ impl RaftDbConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct MetricConfig {
     pub interval: ReadableDuration,
@@ -1028,9 +1043,8 @@ pub mod log_level_serde {
 
 macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
-        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+        #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
-        #[serde(deny_unknown_fields)]
         #[serde(rename_all = "kebab-case")]
         pub struct $struct_name {
             pub high_concurrency: usize,
@@ -1043,15 +1057,36 @@ macro_rules! readpool_config {
         }
 
         impl $struct_name {
-            pub fn build_config(&self) -> readpool::Config {
-                readpool::Config {
-                    high_concurrency: self.high_concurrency,
-                    normal_concurrency: self.normal_concurrency,
-                    low_concurrency: self.low_concurrency,
-                    max_tasks_per_worker_high: self.max_tasks_per_worker_high,
-                    max_tasks_per_worker_normal: self.max_tasks_per_worker_normal,
-                    max_tasks_per_worker_low: self.max_tasks_per_worker_low,
-                    stack_size: self.stack_size,
+            /// Builds configurations for low, normal and high priority pools.
+            pub fn to_future_pool_configs(&self) -> Vec<future_pool::Config> {
+                vec![
+                    future_pool::Config {
+                        workers: self.low_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_low,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                    future_pool::Config {
+                        workers: self.normal_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_normal,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                    future_pool::Config {
+                        workers: self.high_concurrency,
+                        max_tasks_per_worker: self.max_tasks_per_worker_high,
+                        stack_size: self.stack_size.0 as usize,
+                    },
+                ]
+            }
+
+            pub fn default_for_test() -> Self {
+                Self {
+                    high_concurrency: 2,
+                    normal_concurrency: 2,
+                    low_concurrency: 2,
+                    max_tasks_per_worker_high: 2000,
+                    max_tasks_per_worker_normal: 2000,
+                    max_tasks_per_worker_low: 2000,
+                    stack_size: ReadableSize::mb(1),
                 }
             }
 
@@ -1163,6 +1198,14 @@ macro_rules! readpool_config {
 
 const DEFAULT_STORAGE_READPOOL_CONCURRENCY: usize = 4;
 
+// Assume a request can be finished in 1ms, a request at position x will wait about
+// 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
+// backoff. So when it needs to wait for more than 2 seconds, return error won't causse
+// larger latency.
+const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 as usize * 1000;
+
+const DEFAULT_READPOOL_STACK_SIZE_MB: u64 = 10;
+
 readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
@@ -1171,10 +1214,10 @@ impl Default for StorageReadPoolConfig {
             high_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
             normal_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
             low_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            max_tasks_per_worker_high: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_normal: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_low: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
+            max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
         }
     }
 }
@@ -1182,12 +1225,12 @@ impl Default for StorageReadPoolConfig {
 const DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY: usize = 8;
 
 readpool_config!(
-    CoprocessorReadPoolConfig,
+    CoprReadPoolConfig,
     coprocessor_read_pool_test,
     "coprocessor"
 );
 
-impl Default for CoprocessorReadPoolConfig {
+impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = sys_info::cpu_num().unwrap();
         let concurrency = if cpu_num > 8 {
@@ -1199,21 +1242,20 @@ impl Default for CoprocessorReadPoolConfig {
             high_concurrency: concurrency,
             normal_concurrency: concurrency,
             low_concurrency: concurrency,
-            max_tasks_per_worker_high: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_normal: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            max_tasks_per_worker_low: readpool::config::DEFAULT_MAX_TASKS_PER_WORKER,
-            stack_size: ReadableSize::mb(readpool::config::DEFAULT_STACK_SIZE_MB),
+            max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub storage: StorageReadPoolConfig,
-    pub coprocessor: CoprocessorReadPoolConfig,
+    pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
@@ -1226,7 +1268,6 @@ impl ReadPoolConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[serde(with = "log_level_serde")]
@@ -1487,15 +1528,24 @@ impl TiKvConfig {
 /// Loads the previously-loaded configuration from `last_tikv.toml`,
 /// compares key configuration items and fails if they are not
 /// identical.
-pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
     let store_path = Path::new(&config.storage.data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+
     if last_cfg_path.exists() {
         let last_cfg = TiKvConfig::from_file(&last_cfg_path);
         config.check_critical_cfg_with(&last_cfg)?;
     }
+
+    Ok(())
+}
+
+/// Persists critical config to `last_tikv.toml`
+pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
+    let store_path = Path::new(&config.storage.data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
@@ -1592,7 +1642,7 @@ mod tests {
 
         let mut tikv_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = path.as_path().to_str().unwrap().to_owned();
-        assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
+        assert!(persist_critical_config(&tikv_cfg).is_ok());
     }
 
     #[test]

@@ -5,6 +5,7 @@ use futures::Future;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
+use tikv::storage::lock_manager::DummyLockMgr;
 use tikv::storage::{
     AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider,
     Result, Storage, Value,
@@ -58,7 +59,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
-    store: Storage<E>,
+    store: Storage<E, DummyLockMgr>,
 }
 
 impl<E: Engine> SyncTestStorage<E> {
@@ -69,7 +70,7 @@ impl<E: Engine> SyncTestStorage<E> {
         self.store.start_auto_gc(cfg).unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E> {
+    pub fn get_storage(&self) -> Storage<E, DummyLockMgr> {
         self.store.clone()
     }
 
@@ -163,8 +164,8 @@ impl<E: Engine> SyncTestStorage<E> {
         wait_op!(|cb| self.store.async_commit(ctx, keys, start_ts, commit_ts, cb)).unwrap()
     }
 
-    pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
-        wait_op!(|cb| self.store.async_cleanup(ctx, key, start_ts, cb)).unwrap()
+    pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64, current_ts: u64) -> Result<()> {
+        wait_op!(|cb| self.store.async_cleanup(ctx, key, start_ts, current_ts, cb)).unwrap()
     }
 
     pub fn rollback(&self, ctx: Context, keys: Vec<Key>, start_ts: u64) -> Result<()> {

@@ -154,3 +154,37 @@ fn test_server_pending_peers() {
     let mut cluster = new_server_cluster(0, 3);
     test_pending_peers(&mut cluster);
 }
+
+#[test]
+fn test_region_heartbeat_timestamp() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    // transfer leader to (2, 2) first to make address resolve happen early.
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    let reported_ts = cluster.pd_client.get_region_last_report_ts(1).unwrap();
+    assert_ne!(reported_ts, 0);
+
+    sleep(Duration::from_millis(1000));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    sleep(Duration::from_millis(1000));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    let reported_ts_now = cluster.pd_client.get_region_last_report_ts(1).unwrap();
+    assert!(reported_ts_now > reported_ts);
+}
+
+#[test]
+fn test_region_heartbeat_term() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    // transfer leader to (2, 2) first to make address resolve happen early.
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    let reported_term = cluster.pd_client.get_region_last_report_term(1).unwrap();
+    assert_ne!(reported_term, 0);
+
+    // transfer leader to increase the term
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let reported_term_now = cluster.pd_client.get_region_last_report_term(1).unwrap();
+    assert!(reported_term_now > reported_term);
+}

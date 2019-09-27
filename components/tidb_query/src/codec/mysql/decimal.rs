@@ -3,16 +3,14 @@
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use byteorder::WriteBytesExt;
 use num;
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::BytesSlice;
+
+use codec::prelude::*;
 use tikv_util::escape;
 
 use crate::codec::convert::{self, ConvertTo};
@@ -20,7 +18,7 @@ use crate::codec::data_type::*;
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Res<T> {
     Ok(T),
     Truncated(T),
@@ -61,6 +59,46 @@ impl<T> Res<T> {
             Res::Truncated(_) => true,
             _ => false,
         }
+    }
+
+    /// Convert `Res` into `Result` with an `EvalContext` that handling the errors
+    /// If `truncated_err` is None, `ctx` will try to handle the default truncated error: `Error::truncated()`,
+    /// otherwise handle the specified error inside `truncated_err`.
+    /// Same does `overflow_err` means.
+    fn into_result_impl(
+        self,
+        ctx: &mut EvalContext,
+        truncated_err: Option<Error>,
+        overflow_err: Option<Error>,
+    ) -> Result<T> {
+        match self {
+            Res::Ok(t) => Ok(t),
+            Res::Truncated(t) => if let Some(error) = truncated_err {
+                ctx.handle_truncate_err(error)
+            } else {
+                ctx.handle_truncate(true)
+            }
+            .map(|()| t),
+
+            Res::Overflow(t) => if let Some(error) = overflow_err {
+                ctx.handle_overflow_err(error)
+            } else {
+                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))
+            }
+            .map(|()| t),
+        }
+    }
+
+    pub fn into_result_with_overflow_err(
+        self,
+        ctx: &mut EvalContext,
+        overflow_err: Error,
+    ) -> Result<T> {
+        self.into_result_impl(ctx, None, Some(overflow_err))
+    }
+
+    pub fn into_result(self, ctx: &mut EvalContext) -> Result<T> {
+        self.into_result_impl(ctx, None, None)
     }
 }
 
@@ -457,7 +495,7 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     if res.is_overflow() {
         return Res::Overflow(max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0));
     }
-    let (int_word_to, frac_word_to) = res.clone().unwrap();
+    let (int_word_to, frac_word_to) = res.unwrap();
     let mut idx_to = (int_word_to + frac_word_to) as usize;
     let mut res = res.map(|_| {
         Decimal::new(
@@ -1068,6 +1106,8 @@ impl Decimal {
         self.word_buf[buf_from] /= TEN_POW[shift];
     }
 
+    // TODO, remove this after merge the `refactor ScalarFunc::builtin_cast`
+    //
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
     pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
@@ -1504,6 +1544,15 @@ impl Decimal {
         Res::Ok(x)
     }
 
+    pub fn from_f64(val: f64) -> Result<Decimal> {
+        if val.is_infinite() {
+            Err(invalid_type!("{} can't be convert to decimal'", val))
+        } else {
+            let r = val.to_string();
+            Decimal::from_str(r.as_str())
+        }
+    }
+
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
@@ -1667,9 +1716,15 @@ enable_conv_for_int!(usize, u64);
 enable_conv_for_int!(isize, i64);
 
 impl ConvertTo<f64> for Decimal {
+    /// This function should not return err,
+    /// if it return err, then the err because of bug.
+    ///
+    /// Port from TiDB's MyDecimal::ToFloat64.
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
-        let val = self.to_string().parse()?;
-        Ok(val)
+        let r = self.to_string().parse::<f64>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
     }
 }
 
@@ -1724,12 +1779,7 @@ impl ConvertTo<Decimal> for f64 {
     /// rather than the accurate value the float represent.
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
-        if !self.is_finite() {
-            return Err(invalid_type!("{} can't be convert to decimal'", self));
-        }
-
-        let s = format!("{}", self);
-        s.parse()
+        Decimal::from_f64(*self)
     }
 }
 
@@ -1741,20 +1791,13 @@ impl ConvertTo<Decimal> for Real {
 }
 
 impl ConvertTo<Decimal> for &[u8] {
+    // FIXME: the err handle is not exactly same as TiDB's,
+    //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let dec = match Decimal::from_bytes(self)? {
-            Res::Ok(d) => d,
-            Res::Overflow(d) => {
-                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))?;
-                d
-            }
-            Res::Truncated(d) => {
-                ctx.handle_truncate(true)?;
-                d
-            }
-        };
-        Ok(dec)
+        let r = Decimal::from_bytes(self)?;
+        let err = Error::overflow("DECIMAL", "");
+        r.into_result_with_overflow_err(ctx, err)
     }
 }
 
@@ -1769,6 +1812,29 @@ impl ConvertTo<Decimal> for Bytes {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         self.as_slice().convert(ctx)
+    }
+}
+
+impl ConvertTo<Decimal> for Json {
+    /// Port from TiDB's types.ConvertJSONToDecimal
+    #[inline]
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
+        match self {
+            Json::String(s) => {
+                Decimal::from_str(s.as_str()).or_else(|e| {
+                    ctx.handle_truncate_err(e)?;
+                    // FIXME: if TiDB's MyDecimal::FromString return err,
+                    //  it may has res. However, if TiKV's Decimal::from_str
+                    //  return err, it has no res, so I return zero here,
+                    //  but it may different from TiDB's MyDecimal::FromString
+                    Ok(Decimal::zero())
+                })
+            }
+            _ => {
+                let r: f64 = self.convert(ctx)?;
+                Decimal::from_f64(r)
+            }
+        }
     }
 }
 
@@ -1861,7 +1927,7 @@ macro_rules! write_u8 {
         if $written == 0 {
             b ^= 0x80;
         }
-        $writer.write_all(&[b])?;
+        $writer.write_bytes(&[b])?;
         $written += 1;
     }};
 }
@@ -1885,46 +1951,8 @@ macro_rules! write_word {
         if $written == 0 {
             data[0] ^= 0x80;
         }
-        ($writer).write_all(&data[..size as usize])?;
+        ($writer).write_bytes(&data[..size as usize])?;
         $written += size;
-    }};
-}
-
-macro_rules! read_word {
-    ($data:expr, $size:expr, $readed:ident) => {{
-        let size = $size as usize;
-        if $data.len() >= size {
-            let mut first = $data[0];
-            if $readed == 0 {
-                first ^= 0x80;
-                $readed += size;
-            }
-            let res = match size {
-                1 => i32::from(first as i8) as u32,
-                2 => ((i32::from(first as i8) << 8) + i32::from($data[1])) as u32,
-                3 => {
-                    if first & 128 > 0 {
-                        (255 << 24)
-                            | (u32::from(first) << 16)
-                            | (u32::from($data[1]) << 8)
-                            | u32::from($data[2])
-                    } else {
-                        (u32::from(first) << 16) | (u32::from($data[1]) << 8) | u32::from($data[2])
-                    }
-                }
-                4 => {
-                    ((i32::from(first as i8) << 24)
-                        + (i32::from($data[1]) << 16)
-                        + (i32::from($data[2]) << 8)
-                        + i32::from($data[3])) as u32
-                }
-                _ => unreachable!(),
-            };
-            *$data = &$data[size..];
-            Ok(res)
-        } else {
-            Err(Error::unexpected_eof())
-        }
     }};
 }
 
@@ -1932,7 +1960,7 @@ pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
-        self.write_all(&[prec, frac])?;
+        self.write_bytes(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
         let int_word_cnt = int_cnt / DIGITS_PER_WORD;
@@ -2047,22 +2075,66 @@ pub trait DecimalEncoder: NumberEncoder {
         self.write_u8(v.negative as u8)?;
         let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
         for id in 0..len as usize {
-            self.encode_i32_le(v.word_buf[id] as i32)?;
+            self.write_i32_le(v.word_buf[id] as i32)?;
         }
         Ok(())
     }
 }
 
-impl<T: Write> DecimalEncoder for T {}
+impl<T: BufferWriter> DecimalEncoder for T {}
 
-impl Decimal {
-    /// `decode` decodes value encoded by `encode_decimal`.
-    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Decimal> {
-        if data.len() < 3 {
-            return Err(box_err!("decimal too short: {} < 3", data.len()));
+// Mark as `#[inline]` since in many cases `size` is a constant.
+#[inline]
+fn read_word<T: BufferReader + ?Sized>(
+    data: &mut T,
+    size: usize,
+    is_first: &mut bool,
+) -> Result<u32> {
+    // Note: In TiDB's implementation, the first byte to read is flipped:
+    // dCopy[0] ^= 0x80
+    //
+    // In TiKV, we do zero copy so that we need `is_first` flag.
+    let buf = data.bytes();
+    if buf.len() < size {
+        return Err(Error::unexpected_eof());
+    }
+    let mut first = buf[0];
+    if *is_first {
+        first ^= 0x80;
+        *is_first = false;
+    }
+    let res = match size {
+        1 => i32::from(first as i8) as u32,
+        2 => ((i32::from(first as i8) << 8) + i32::from(buf[1])) as u32,
+        3 => {
+            if first & 128 > 0 {
+                (255 << 24)
+                    | (u32::from(first) << 16)
+                    | (u32::from(buf[1]) << 8)
+                    | u32::from(buf[2])
+            } else {
+                (u32::from(first) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2])
+            }
         }
-        let (prec, frac_cnt) = (data[0], data[1]);
-        *data = &data[2..];
+        4 => {
+            ((i32::from(first as i8) << 24)
+                + (i32::from(buf[1]) << 16)
+                + (i32::from(buf[2]) << 8)
+                + i32::from(buf[3])) as u32
+        }
+        _ => unreachable!(),
+    };
+    data.advance(size);
+    Ok(res)
+}
+
+pub trait DecimalDecoder: NumberDecoder {
+    /// `decode` decodes value encoded by `encode_decimal`.
+    fn decode_decimal(&mut self) -> Result<Decimal> {
+        if self.bytes().len() < 3 {
+            return Err(box_err!("decimal too short: {} < 3", self.bytes().len()));
+        }
+        let (prec, frac_cnt) = (self.read_u8().unwrap(), self.read_u8().unwrap());
 
         if prec < frac_cnt {
             return Err(box_err!(
@@ -2085,7 +2157,11 @@ impl Decimal {
         if trailing_digits > 0 {
             frac_word_to += 1;
         }
-        let mask = if data[0] & 0x80 > 0 { 0 } else { u32::MAX };
+        let mask = if self.bytes()[0] & 0x80 > 0 {
+            0
+        } else {
+            u32::MAX
+        };
         let res = fix_word_cnt_err(int_word_to, frac_word_to, WORD_BUF_LEN);
         if !res.is_ok() {
             return Err(box_err!("decoding decimal failed: {:?}", res));
@@ -2094,10 +2170,10 @@ impl Decimal {
         d.precision = prec;
         d.result_frac_cnt = frac_cnt;
         let mut word_idx = 0;
-        let mut _readed = 0;
+        let mut is_first = true;
         if leading_digits > 0 {
             let i = DIG_2_BYTES[leading_digits];
-            d.word_buf[word_idx] = read_word!(data, i, _readed)? ^ mask;
+            d.word_buf[word_idx] = read_word(self, i as usize, &mut is_first)? ^ mask;
             if d.word_buf[word_idx] >= TEN_POW[leading_digits + 1] {
                 return Err(box_err!("invalid leading digits for decimal number"));
             }
@@ -2108,7 +2184,7 @@ impl Decimal {
             }
         }
         for _ in 0..int_word_cnt {
-            d.word_buf[word_idx] = read_word!(data, 4, _readed)? ^ mask;
+            d.word_buf[word_idx] = read_word(self, 4, &mut is_first)? ^ mask;
             if d.word_buf[word_idx] > WORD_MAX {
                 return Err(box_err!("invalid int part for decimal number"));
             }
@@ -2119,14 +2195,14 @@ impl Decimal {
             }
         }
         for _ in 0..frac_word_cnt {
-            d.word_buf[word_idx] = read_word!(data, 4, _readed)? ^ mask;
+            d.word_buf[word_idx] = read_word(self, 4, &mut is_first)? ^ mask;
             if d.word_buf[word_idx] > WORD_MAX {
                 return Err(box_err!("invalid frac part decimal number"));
             }
             word_idx += 1;
         }
         if trailing_digits > 0 {
-            let x = read_word!(data, DIG_2_BYTES[trailing_digits], _readed)? ^ mask;
+            let x = read_word(self, DIG_2_BYTES[trailing_digits] as usize, &mut is_first)? ^ mask;
             d.word_buf[word_idx] = x * TEN_POW[DIGITS_PER_WORD as usize - trailing_digits];
             if d.word_buf[word_idx] > WORD_MAX {
                 return Err(box_err!("invalid trailing digits for decimal number"));
@@ -2139,27 +2215,29 @@ impl Decimal {
         Ok(d)
     }
 
-    /// `decode_from_chunk` decode Decimal encodeded by `encode_decimal_to_chunk`.
-    pub fn decode_from_chunk(data: &mut BytesSlice<'_>) -> Result<Decimal> {
-        let mut d = if data.len() > 4 {
-            let int_cnt = data[0];
-            let frac_cnt = data[1];
-            let result_frac_cnt = data[2];
-            let negative = data[3] == 1;
-            let mut d = Decimal::new(int_cnt, frac_cnt, negative);
-            d.result_frac_cnt = result_frac_cnt;
-            *data = &data[4..];
-            d
-        } else {
+    /// `decode_decimal_from_chunk` decode Decimal encoded by `encode_decimal_to_chunk`.
+    fn decode_decimal_from_chunk(&mut self) -> Result<Decimal> {
+        let buf = self.bytes();
+        if buf.len() <= 4 {
             return Err(Error::unexpected_eof());
-        };
+        }
+        let int_cnt = buf[0];
+        let frac_cnt = buf[1];
+        let result_frac_cnt = buf[2];
+        let negative = buf[3] == 1;
+        self.advance(4);
+
+        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
+        d.result_frac_cnt = result_frac_cnt;
 
         for id in 0..WORD_BUF_LEN {
-            d.word_buf[id as usize] = number::decode_i32_le(data)? as u32;
+            d.word_buf[id as usize] = self.read_i32_le()? as u32;
         }
         Ok(d)
     }
 }
+
+impl<T: BufferReader> DecimalDecoder for T {}
 
 impl PartialEq for Decimal {
     fn eq(&self, right: &Decimal) -> bool {
@@ -2312,6 +2390,69 @@ mod tests {
             let dec: Decimal = num.into();
             let dec_str = format!("{}", dec);
             assert_eq!(dec_str, exp);
+        }
+    }
+
+    #[test]
+    fn test_from_f64() {
+        let cs = vec![
+            (
+                std::f64::INFINITY,
+                Err(Error::InvalidDataType(String::new())),
+            ),
+            (
+                -std::f64::INFINITY,
+                Err(Error::InvalidDataType(String::new())),
+            ),
+            (10.123, Ok(Decimal::from_str("10.123").unwrap())),
+            (-10.123, Ok(Decimal::from_str("-10.123").unwrap())),
+            (10.111, Ok(Decimal::from_str("10.111").unwrap())),
+            (-10.111, Ok(Decimal::from_str("-10.111").unwrap())),
+            (
+                18446744073709552000.0,
+                Ok(Decimal::from_str("18446744073709552000").unwrap()),
+            ),
+            (
+                -18446744073709552000.0,
+                Ok(Decimal::from_str("-18446744073709552000").unwrap()),
+            ),
+            // FIXME: because of rust's bug,
+            //  (1<<64)(18446744073709551616), (1<<65)(36893488147419103232) can not be represent by f64
+            //  so these cases can not pass
+            // (18446744073709551616.0, Ok(Decimal::from_str("18446744073709551616").unwrap())),
+            // (-18446744073709551616.0, Ok(Decimal::from_str("-18446744073709551616").unwrap())),
+            // (36893488147419103000.0, Ok(Decimal::from_str("36893488147419103000.0").unwrap())),
+            // (-36893488147419103000.0, Ok(Decimal::from_str("-36893488147419103000.0").unwrap())),
+            (
+                36893488147419103000.0,
+                Ok(Decimal::from_str("36893488147419103000.0").unwrap()),
+            ),
+            (
+                -36893488147419103000.0,
+                Ok(Decimal::from_str("-36893488147419103000.0").unwrap()),
+            ),
+        ];
+        for (input, expect) in cs {
+            let r = Decimal::from_f64(input);
+            let log = format!(
+                "input: {}, expect: {:?}, output: {:?}",
+                input,
+                expect.as_ref().map(|x| x.to_string()),
+                r.as_ref().map(|x| x.to_string())
+            );
+            match expect {
+                Err(e) => {
+                    assert!(r.is_err(), "{}", log.as_str());
+                    match e {
+                        Error::InvalidDataType(_) => (),
+                        _ => panic!("{}", log.as_str()),
+                    }
+                }
+                Ok(d) => {
+                    assert!(r.is_ok(), "{}", log.as_str());
+                    assert_eq!(r.unwrap(), d, "{}", log.as_str());
+                }
+            }
         }
     }
 
@@ -2766,6 +2907,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn test_string() {
         let cases = vec![
             (WORD_BUF_LEN, b"12345" as &'static [u8], Res::Ok("12345")),
@@ -2821,25 +2963,25 @@ mod tests {
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
             (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
-            (WORD_BUF_LEN, b"1e -1",Res::Ok("0.1")),
-            (WORD_BUF_LEN, b"1e001",Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e -1", Res::Ok("0.1")),
+            (WORD_BUF_LEN, b"1e001", Res::Ok("10")),
             (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
             (WORD_BUF_LEN, b"1e1073741823",
-            Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+             Res::Overflow("999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
             (WORD_BUF_LEN, b"-1e1073741823",
-            Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
-            (WORD_BUF_LEN,b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+             Res::Overflow("-999999999999999999999999999999999999999999999999999999999999999999999999999999999")),
+            (WORD_BUF_LEN, b"135999696916777530000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
              Res::Overflow("0")),
-            (WORD_BUF_LEN,b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
-            Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
+            (WORD_BUF_LEN, b"-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002932935661422768",
+             Res::Truncated("0.000000000000000000000000000000000000000000000000000000000000000000000000")),
             // The following case return truncated in tidb, need to fix it in bytes_to_int_without_context
-            (WORD_BUF_LEN,b"1eabc",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e",Res::Ok("1")),
-            (WORD_BUF_LEN,b"1e 1ddd",Res::Ok("10")),
-            (WORD_BUF_LEN,b"1e - 1",Res::Ok("1")),
+            (WORD_BUF_LEN, b"1eabc", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e", Res::Ok("1")),
+            (WORD_BUF_LEN, b"1e 1ddd", Res::Ok("10")),
+            (WORD_BUF_LEN, b"1e - 1", Res::Ok("1")),
             // with word_buf_len 1
-            (1,b"123450000098765",Res::Overflow("98765")),
-            (1,b"123450.000098765", Res::Truncated("123450")),
+            (1, b"123450000098765", Res::Overflow("98765")),
+            (1, b"123450.000098765", Res::Truncated("123450")),
         ];
 
         for (word_buf_len, dec, exp) in cases {
@@ -2905,7 +3047,7 @@ mod tests {
             let dec = dec_str.parse::<Decimal>().unwrap();
             let mut buf = vec![];
             let res = buf.encode_decimal(&dec, prec, frac).unwrap();
-            let decoded = Decimal::decode(&mut buf.as_slice()).unwrap();
+            let decoded = buf.as_slice().decode_decimal().unwrap();
             let res = res.map(|_| decoded.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
@@ -2935,7 +3077,7 @@ mod tests {
             let mut buf = vec![];
             buf.encode_decimal_to_chunk(&dec).unwrap();
             buf.resize(DECIMAL_STRUCT_SIZE, 0);
-            let decoded = Decimal::decode_from_chunk(&mut buf.as_slice()).unwrap();
+            let decoded = buf.as_slice().decode_decimal_from_chunk().unwrap();
             assert_eq!(decoded, dec);
         }
     }
@@ -3478,11 +3620,7 @@ mod tests {
         // OVERFLOWING
         let big = (0..85).map(|_| '9').collect::<String>();
         let val: Result<Decimal> = big.as_bytes().convert(&mut ctx);
-        assert!(
-            val.is_err(),
-            "expected error, but got {:?}",
-            val.unwrap().to_string()
-        );
+        assert!(val.is_err(), "expected error, but got {:?}", val);
         assert_eq!(val.unwrap_err().code(), ERR_DATA_OUT_OF_RANGE);
 
         // OVERFLOW_AS_WARNING
@@ -3498,5 +3636,54 @@ mod tests {
         );
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+    }
+
+    #[test]
+    fn test_into_result_impl() {
+        // Truncated cases
+        let mut ctx = EvalContext::default();
+        let truncated_res = Res::Truncated(2333);
+        let truncated_err_cases = vec![Error::truncated(), Error::truncated_wrong_val("", "")];
+
+        for error in truncated_err_cases {
+            assert_eq!(
+                error.code(),
+                truncated_res
+                    .into_result_impl(&mut ctx, Some(error), None)
+                    .unwrap_err()
+                    .code()
+            );
+        }
+
+        // TRUNCATE_AS_WARNING
+        let mut ctx = EvalContext::new(std::sync::Arc::new(EvalConfig::from_flag(
+            Flag::TRUNCATE_AS_WARNING,
+        )));
+        let truncated_res = Res::Truncated(2333);
+
+        assert!(truncated_res
+            .into_result_impl(&mut ctx, Some(Error::truncated()), None)
+            .is_ok());
+
+        // Overflow cases
+        let mut ctx = EvalContext::default();
+        let overflow_res = Res::Overflow(666);
+        let error = Error::overflow("", "");
+        assert_eq!(
+            error.code(),
+            overflow_res
+                .into_result_impl(&mut ctx, None, Some(error))
+                .unwrap_err()
+                .code(),
+        );
+
+        // OVERFLOW_AS_WARNING
+        let mut ctx = EvalContext::new(std::sync::Arc::new(EvalConfig::from_flag(
+            Flag::OVERFLOW_AS_WARNING,
+        )));
+        let error = Error::overflow("", "");
+        assert!(overflow_res
+            .into_result_impl(&mut ctx, None, Some(error))
+            .is_ok());
     }
 }
