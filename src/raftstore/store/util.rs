@@ -372,6 +372,7 @@ impl Lease {
                     self.remote.renew(ts);
                 }
             }
+            // Remote lease must be expired when lease state changes to Suspect
             _ => assert_eq!(self.remote.expired_time(), 0),
         };
     }

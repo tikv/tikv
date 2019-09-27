@@ -994,6 +994,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let progress_term = ReadProgress::term(self.term());
+                    assert_eq!(self.leader_lease.remote_lease().expired_time(), 0);
                     self.maybe_renew_leader_lease(monotonic_raw_now(), ctx, Some(progress_term));
                     debug!(
                         "becomes leader with lease";
@@ -1014,6 +1015,7 @@ impl Peer {
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
+                    assert_eq!(self.leader_lease.remote_lease().expired_time(), 0);
                 }
                 _ => {}
             }
