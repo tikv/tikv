@@ -360,7 +360,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        self.default_cursor = Some(self.cfg.create_cf_cursor(CF_DEFAULT)?);
+        self.default_cursor = Some(self.cfg.create_cf_cursor_and_take(CF_DEFAULT)?);
         Ok(())
     }
 }
@@ -390,7 +390,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10)
+            .desc(false)
             .range(None, None)
             .build()
             .unwrap();
@@ -444,7 +445,8 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
+        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2)
+            .desc(false)
             .range(None, None)
             .build()
             .unwrap();
@@ -507,7 +509,8 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
+        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2)
+            .desc(false)
             .range(None, None)
             .build()
             .unwrap();
@@ -576,7 +579,8 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10)
+            .desc(false)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
@@ -591,7 +595,8 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10)
+            .desc(false)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
@@ -606,7 +611,8 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10)
+            .desc(false)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
@@ -621,7 +627,8 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10)
+            .desc(false)
             .range(None, None)
             .build()
             .unwrap();

@@ -206,7 +206,8 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
-        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+            .desc(desc)
             .range(lower_bound, upper_bound)
             .omit_value(key_only)
             .fill_cache(self.fill_cache)
@@ -227,7 +228,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
         let scanner =
-            ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
+            ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+                .desc(false)
                 .range(lower_bound, upper_bound)
                 .omit_value(false)
                 .fill_cache(self.fill_cache)

@@ -35,8 +35,8 @@ impl<S: Snapshot> std::ops::DerefMut for ScannerBuilder<S> {
 
 impl<S: Snapshot> ScannerBuilder<S> {
     /// Initialize a new `ScannerBuilder`
-    pub fn new(snapshot: S, ts: u64, desc: bool) -> Self {
-        Self(ScannerConfig::new(snapshot, ts, desc))
+    pub fn new(snapshot: S, ts: u64) -> Self {
+        Self(ScannerConfig::new(snapshot, ts))
     }
 
     /// Set whether or not read operations should fill the cache.
@@ -66,6 +66,15 @@ impl<S: Snapshot> ScannerBuilder<S> {
     #[inline]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.isolation_level = isolation_level;
+        self
+    }
+
+    /// Set the desc.
+    /// 
+    /// Defaults to `false`.
+    #[inline]
+    pub fn desc(mut self, desc: bool) -> Self {
+        self.desc = desc;
         self
     }
 
@@ -105,7 +114,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         let write_cursor = self.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
-        let default_cursor = self.create_cf_cursor(CF_DEFAULT)?;
+        let default_cursor = self.create_cf_cursor_and_take(CF_DEFAULT)?;
         Ok(EntryScanner::new(
             self.0,
             lock_cursor,
@@ -154,7 +163,7 @@ pub struct ScannerConfig<S: Snapshot> {
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
-    fn new(snapshot: S, ts: u64, desc: bool) -> Self {
+    fn new(snapshot: S, ts: u64) -> Self {
         Self {
             snapshot,
             fill_cache: true,
@@ -163,7 +172,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             lower_bound: None,
             upper_bound: None,
             ts,
-            desc,
+            desc: false,
         }
     }
 
@@ -179,11 +188,19 @@ impl<S: Snapshot> ScannerConfig<S> {
     /// Create the cursor.
     #[inline]
     fn create_cf_cursor(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
-        let (lower, upper) = if cf == CF_DEFAULT {
-            (self.lower_bound.take(), self.upper_bound.take())
-        } else {
-            (self.lower_bound.clone(), self.upper_bound.clone())
-        };
+        let (lower, upper) = (self.lower_bound.clone(), self.upper_bound.clone());
+        let cursor = CursorBuilder::new(&self.snapshot, cf)
+            .range(lower, upper)
+            .fill_cache(self.fill_cache)
+            .scan_mode(self.scan_mode())
+            .build()?;
+        Ok(cursor)
+    }
+
+    /// Create the cursor and take bounds.
+    #[inline]
+    fn create_cf_cursor_and_take(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
+        let (lower,upper) = (self.lower_bound.take(), self.upper_bound.take());
         let cursor = CursorBuilder::new(&self.snapshot, cf)
             .range(lower, upper)
             .fill_cache(self.fill_cache)
@@ -246,7 +263,8 @@ mod tests {
             move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
                 let snapshot = engine.snapshot(&Context::default()).unwrap();
 
-                let scanner = ScannerBuilder::new(snapshot.clone(), SCAN_TS, desc)
+                let scanner = ScannerBuilder::new(snapshot.clone(), SCAN_TS)
+                    .desc(desc)
                     .build()
                     .unwrap();
                 check_scan_result(scanner, &expected_result);
@@ -338,17 +356,20 @@ mod tests {
             expected_result = expected_result.into_iter().rev().collect();
         }
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 30, desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 30)
+            .desc(desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 70, desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 70)
+            .desc(desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 103, desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 103)
+            .desc(desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
@@ -359,7 +380,10 @@ mod tests {
         } else {
             expected_result[4].1 = None;
         }
-        let scanner = ScannerBuilder::new(snapshot, 106, desc).build().unwrap();
+        let scanner = ScannerBuilder::new(snapshot, 106)
+            .desc(desc)
+            .build()
+            .unwrap();
         check_scan_result(scanner, &expected_result);
     }
 

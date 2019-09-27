@@ -435,7 +435,8 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10)
+            .desc(false)
             .range(None, None)
             .build_entry_scanner()
             .unwrap();
@@ -494,7 +495,8 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
+        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2)
+            .desc(false)
             .range(None, None)
             .build_entry_scanner()
             .unwrap();
@@ -563,7 +565,8 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
+        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2)
+            .desc(false)
             .range(None, None)
             .build_entry_scanner()
             .unwrap();
@@ -638,7 +641,8 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10)
+            .desc(false)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build_entry_scanner()
             .unwrap();
@@ -657,7 +661,8 @@ mod tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10)
+            .desc(false)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build_entry_scanner()
             .unwrap();
@@ -666,7 +671,8 @@ mod tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10)
+            .desc(false)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build_entry_scanner()
             .unwrap();
@@ -675,7 +681,8 @@ mod tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10)
+            .desc(false)
             .range(None, None)
             .build_entry_scanner()
             .unwrap();

@@ -1047,7 +1047,8 @@ mod tests {
         r.set_start_key(b"a".to_vec());
         r.set_end_key(b"z".to_vec());
         let snapshot = RegionSnapshot::from_raw(Arc::clone(&engines1.kv), r);
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10)
+            .desc(false)
             .range(Some(Key::from_raw(b"a")), None)
             .build()
             .unwrap();
