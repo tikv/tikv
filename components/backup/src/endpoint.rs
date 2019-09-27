@@ -1024,5 +1024,45 @@ pub mod tests {
         });
     }
 
+    #[test]
+    fn test_adjust_thread_pool_size() {
+        let (_tmp, endpoint) = new_endpoint();
+        endpoint
+            .region_info
+            .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
+
+        let mut req = BackupRequest::new();
+        req.set_start_key(vec![]);
+        req.set_end_key(vec![]);
+        req.set_start_version(1);
+        req.set_end_version(1);
+        req.set_path("noop://foo".to_owned());
+
+        let (tx, _) = unbounded();
+
+        // at lease spwan one thread
+        req.set_concurrency(0);
+        let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
+        endpoint.handle_backup_task(task);
+        assert!(endpoint.pool.borrow().size == 1);
+
+        // expand thread pool is needed
+        req.set_concurrency(15);
+        let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
+        endpoint.handle_backup_task(task);
+        assert!(endpoint.pool.borrow().size == 15);
+
+        // shrink thread pool only if there are too many idle threads
+        req.set_concurrency(10);
+        let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
+        endpoint.handle_backup_task(task);
+        assert!(endpoint.pool.borrow().size == 15);
+
+        req.set_concurrency(3);
+        let (task, _) = Task::new(req, tx).unwrap();
+        endpoint.handle_backup_task(task);
+        assert!(endpoint.pool.borrow().size == 3);
+    }
+
     // TODO: region err in txn(engine(request))
 }
