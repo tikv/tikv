@@ -309,6 +309,7 @@ impl ControlThreadPool {
             .build();
         let _ = self.workers.replace(workers);
         self.size = new_size;
+        BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as f64);
     }
 
     fn heartbeat(&mut self) {
@@ -339,7 +340,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
 
     pub fn new_timer(&self) -> Timer<()> {
         let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(IDLE_THREADPOOL_CHECK_INTERVAL), ());
+        timer.add_task(Duration::from_millis(IDLE_THREADPOOL_DURATION), ());
         timer
     }
 
