@@ -754,8 +754,16 @@ mod tests {
         must_prewrite_put(&engine, k1, v, k1, 25);
         must_commit(&engine, k1, 25, 27);
         must_acquire_pessimistic_lock(&engine, k1, k1, 23, 29);
+        must_acquire_pessimistic_lock(&engine, k2, k1, 23, 29);
         must_get(&engine, k1, 30, v);
+
         must_pessimistic_prewrite_delete(&engine, k1, k1, 23, 29, true);
+        must_pessimistic_prewrite_delete(&engine, k2, k1, 23, 29, true);
+        // should ignore the primary lock and get none when reading the latest record
+        must_get(&engine, k1, u64::MAX, v);
+        // should read secondary locks even when reading the latest record
+        must_get_err(&engine, k2, u64::MAX);
+
         must_commit(&engine, k1, 23, 31);
         must_get(&engine, k1, 30, v);
         must_get_none(&engine, k1, 32);
