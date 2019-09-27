@@ -30,11 +30,8 @@ use crate::*;
 
 const WORKER_TAKE_RANGE: usize = 6;
 
-// used to periodically check whether the thread pool are idle.
-const IDLE_THREADPOOL_CHECK_INTERVAL: u64 = 30_000; // 30 secs
-
 // if thread pool has been idle for such long time, we will shutdown it.
-const IDLE_THREADPOOL_DURATION: u64 = 30_000; // 30 secs
+const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 
 /// Backup task.
 pub struct Task {
@@ -508,7 +505,7 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
 impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         self.pool.borrow_mut().check_active();
-        timer.add_task(Duration::from_millis(IDLE_THREADPOOL_CHECK_INTERVAL), ());
+        timer.add_task(Duration::from_millis(IDLE_THREADPOOL_DURATION), ());
     }
 }
 
