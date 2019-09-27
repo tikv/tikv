@@ -9,8 +9,7 @@ use engine_rocksdb::{
     set_external_sst_file_global_seq_no, DBIterator, IngestExternalFileOptions, Writable, DB,
 };
 use engine_traits::{
-    DeleteRangeType, Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions,
-    Result, WriteOptions,
+    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
 };
 use tikv_util::file::calc_crc32;
 
@@ -99,35 +98,16 @@ impl KvEngine for Rocks {
         self.0.cf_names()
     }
 
-    fn delete_all_in_range_cf(
-        &self,
-        t: DeleteRangeType,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> Result<()> {
+    fn delete_all_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()> {
         if start_key >= end_key {
             return Ok(());
         }
-
-        match t {
-            DeleteRangeType::WriteBatch => {
-                delete_all_in_range_cf(
-                    &self.0, cf, start_key, end_key, false, /* use_delete_range*/
-                )
-            }
-            DeleteRangeType::DeleteRange => {
-                delete_all_in_range_cf(
-                    &self.0, cf, start_key, end_key, true, /* use_delete_range*/
-                )
-            }
-            DeleteRangeType::DeleteFiles => {
-                let handle = get_cf_handle(&self.0, cf)?;
-                self.0
-                    .delete_files_in_range_cf(handle, start_key, end_key, false)?;
-                Ok(())
-            }
-        }
+        let handle = get_cf_handle(&self.0, cf)?;
+        self.0
+            .delete_files_in_range_cf(handle, start_key, end_key, false)?;
+        delete_all_in_range_cf(
+            &self.0, cf, start_key, end_key, false, /* use_delete_range*/
+        )
     }
 
     fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {

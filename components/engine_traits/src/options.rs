@@ -168,10 +168,3 @@ impl Default for IterOptions {
         }
     }
 }
-
-#[derive(Clone, Copy)]
-pub enum DeleteRangeType {
-    WriteBatch,
-    DeleteFiles,
-    DeleteRange,
-}
