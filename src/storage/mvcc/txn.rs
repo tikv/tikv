@@ -792,7 +792,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.cleanup(key, 0)
     }
 
-    /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
+    /// Cleanup the lock if its TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
     /// cleanup the lock without checking TTL.
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
