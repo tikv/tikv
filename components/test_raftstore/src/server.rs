@@ -59,6 +59,7 @@ pub struct ServerCluster {
     addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
+    pub importers: HashMap<u64, Arc<SSTImporter>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
@@ -89,6 +90,7 @@ impl ServerCluster {
             pd_client,
             storages: HashMap::default(),
             region_info_accessors: HashMap::default(),
+            importers: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client,
             _stats_pool: stats_pool,
@@ -216,9 +218,6 @@ impl Simulator for ServerCluster {
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
 
-        self.region_info_accessors
-            .insert(node_id, region_info_accessor);
-
         node.start(
             engines.clone(),
             simulate_trans.clone(),
@@ -226,14 +225,16 @@ impl Simulator for ServerCluster {
             pd_worker,
             store_meta,
             coprocessor_host,
-            importer,
+            importer.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
             self.snap_paths.insert(node_id, tmp);
         }
-
+        self.region_info_accessors
+            .insert(node_id, region_info_accessor);
+        self.importers.insert(node_id, importer);
         server.start(server_cfg, security_mgr).unwrap();
 
         self.metas.insert(
