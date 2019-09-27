@@ -6,7 +6,7 @@ use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
-use crate::storage::{Key, Value};
+use crate::storage::{CFStatistics, Key, Value};
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
@@ -146,9 +146,30 @@ impl<S: Snapshot> MvccReader<S> {
             self.write_cursor = Some(iter);
         }
 
-        let cursor = self.write_cursor.as_mut().unwrap();
-        let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
-        if !ok {
+        self.read_write(key, |write_cursor, statistics| {
+            Ok(write_cursor.near_seek(&key.clone().append_ts(ts), statistics)?)
+        })
+    }
+
+    pub fn next_write(&mut self, key: &Key) -> Result<Option<(u64, Write)>> {
+        self.read_write(key, |write_cursor, statistics| {
+            Ok(write_cursor.next(statistics))
+        })
+    }
+
+    /// Moves cursor using the given closure and reads a Write record from the new position.
+    ///
+    /// `move_cursor` takes the write CF cursor and statistics, and should return whether
+    /// the cursor is still valid.
+    fn read_write<F>(&mut self, key: &Key, move_cursor: F) -> Result<Option<(u64, Write)>>
+    where
+        F: FnOnce(&mut Cursor<S::Iter>, &mut CFStatistics) -> Result<bool>,
+    {
+        let cursor = self
+            .write_cursor
+            .as_mut()
+            .expect("write cursor must exist in read_write");
+        if !move_cursor(cursor, &mut self.statistics.write)? {
             return Ok(None);
         }
         let write_key = cursor.key(&mut self.statistics.write);
