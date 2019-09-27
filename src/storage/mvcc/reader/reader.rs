@@ -328,6 +328,9 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(None)
     }
 
+    /// Scan locks that satisfies `filter(lock)` returns true, from the given start key `start`.
+    /// At most `limit` locks will be returned. If `limit` is set to `0`, it means unlimited.
+    ///
     /// The return type is `(locks, is_remain)`. `is_remain` indicates whether there MAY be
     /// remaining locks that can be scanned.
     pub fn scan_locks<F>(
