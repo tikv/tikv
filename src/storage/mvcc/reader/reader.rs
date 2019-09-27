@@ -3,9 +3,9 @@
 use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::default_not_found_error;
-use crate::storage::mvcc::lock::{Lock, LockType};
+use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{Error, Result};
+use crate::storage::mvcc::Result;
 use crate::storage::{Key, Value};
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
@@ -162,45 +162,18 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     /// Checks if there is a lock which blocks reading the key at the given ts.
-    /// Returns the version which should be used for reading if there is no blocking lock.
-    /// Otherwise, returns the blocking lock as the `Err` variant.
-    fn check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
+    /// Returns the blocking lock as the `Err` variant.
+    fn check_lock(&mut self, key: &Key, ts: u64) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return self.check_lock_impl(key, ts, lock);
+            return super::util::check_lock(key, ts, &lock);
         }
-        Ok(ts)
+        Ok(())
     }
 
-    fn check_lock_impl(&self, key: &Key, ts: u64, lock: Lock) -> Result<u64> {
-        if lock.ts > ts
-            || lock.lock_type == LockType::Lock
-            || lock.lock_type == LockType::Pessimistic
-        {
-            // ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
-            return Ok(ts);
-        }
-
-        if ts == std::u64::MAX && key.to_raw()? == lock.primary {
-            // when ts == u64::MAX (which means to get latest committed version for
-            // primary key), and current key is the primary key, returns the latest
-            // commit version's value
-            return Ok(lock.ts - 1);
-        }
-
-        // There is a pending lock. Client should wait or clean it.
-        let mut info = kvproto::kvrpcpb::LockInfo::default();
-        info.set_primary_lock(lock.primary);
-        info.set_lock_version(lock.ts);
-        info.set_key(key.to_raw()?);
-        info.set_lock_ttl(lock.ttl);
-        info.set_txn_size(lock.txn_size);
-        Err(Error::KeyIsLocked(info))
-    }
-
-    pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
+    pub fn get(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
-            IsolationLevel::Si => ts = self.check_lock(key, ts)?,
+            IsolationLevel::Si => self.check_lock(key, ts)?,
             IsolationLevel::Rc => {}
         }
         if let Some(mut write) = self.get_write(key, ts)? {
@@ -1079,16 +1052,15 @@ mod tests {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         // Ignore the lock if read ts is less than the lock version
-        assert_eq!(reader.check_lock(&Key::from_raw(k1), 4).unwrap(), 4);
-        assert_eq!(reader.check_lock(&Key::from_raw(k2), 4).unwrap(), 4);
+        assert!(reader.check_lock(&Key::from_raw(k1), 4).is_ok());
+        assert!(reader.check_lock(&Key::from_raw(k2), 4).is_ok());
         // Returns the lock if read ts >= lock version
         assert!(reader.check_lock(&Key::from_raw(k1), 6).is_err());
         assert!(reader.check_lock(&Key::from_raw(k2), 6).is_err());
         // Read locks don't block any read operation
-        assert_eq!(reader.check_lock(&Key::from_raw(k3), 6).unwrap(), 6);
-        // Ignore the primary lock and returns the version before the lock
-        // when reading the latest committed version by setting u64::MAX as ts
-        assert_eq!(reader.check_lock(&Key::from_raw(k1), u64::MAX).unwrap(), 4);
+        assert!(reader.check_lock(&Key::from_raw(k3), 6).is_ok());
+        // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
+        assert!(reader.check_lock(&Key::from_raw(k1), u64::MAX).is_ok());
         // Should not ignore the secondary lock even though reading the latest version
         assert!(reader.check_lock(&Key::from_raw(k2), u64::MAX).is_err());
 
@@ -1097,7 +1069,7 @@ mod tests {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         // Then reading the primary key should succeed
-        assert_eq!(reader.check_lock(&Key::from_raw(k1), 6).unwrap(), 6);
+        assert!(reader.check_lock(&Key::from_raw(k1), 6).is_ok());
         // Reading secondary keys should still fail
         assert!(reader.check_lock(&Key::from_raw(k2), 6).is_err());
         assert!(reader.check_lock(&Key::from_raw(k2), u64::MAX).is_err());
@@ -1107,7 +1079,7 @@ mod tests {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         // Pessimistic locks don't block any read operation
-        assert_eq!(reader.check_lock(&Key::from_raw(k4), 10).unwrap(), 10);
+        assert!(reader.check_lock(&Key::from_raw(k4), 10).is_ok());
     }
 
     #[test]
