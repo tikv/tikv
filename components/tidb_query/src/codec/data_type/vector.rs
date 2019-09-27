@@ -314,7 +314,7 @@ impl VectorValue {
                     Some(val) => {
                         output.push(datum::DECIMAL_FLAG);
                         let (prec, frac) = val.prec_and_frac();
-                        output.encode_decimal(val, prec, frac)?;
+                        output.write_decimal(val, prec, frac)?;
                     }
                 }
                 Ok(())
@@ -362,7 +362,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::JSON_FLAG);
-                        output.encode_json(val)?;
+                        output.write_json(val)?;
                     }
                 }
                 Ok(())

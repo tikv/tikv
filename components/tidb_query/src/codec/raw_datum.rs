@@ -43,7 +43,7 @@ fn decode_float(v: &mut &[u8]) -> Result<f64> {
 
 #[inline]
 fn decode_decimal(v: &mut &[u8]) -> Result<Decimal> {
-    v.decode_decimal()
+    v.read_decimal()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as decimal".to_owned()))
 }
 
@@ -61,7 +61,7 @@ fn decode_compact_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
 
 #[inline]
 fn decode_json(v: &mut &[u8]) -> Result<Json> {
-    v.decode_json()
+    v.read_json()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
 }
 

@@ -183,7 +183,7 @@ pub fn decode_index_key(
         if buf.is_empty() {
             return Err(box_err!("{} is too short.", hex::encode_upper(encoded)));
         }
-        let mut v = buf.decode_datum()?;
+        let mut v = buf.read_datum()?;
         v = unflatten(ctx, v, info)?;
         res.push(v);
     }
@@ -246,7 +246,7 @@ pub fn decode_col_value(
     ctx: &EvalContext,
     col: &ColumnInfo,
 ) -> Result<Datum> {
-    let d = data.decode_datum()?;
+    let d = data.read_datum()?;
     unflatten(ctx, d, col)
 }
 
@@ -367,7 +367,7 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
-            let id = tmp_data.decode_datum()?.i64();
+            let id = tmp_data.read_datum()?.i64();
             let offset = length - tmp_data.len();
             let (val, rem) = datum::split_datum(tmp_data, false)?;
             if cols.contains(&id) {
@@ -398,7 +398,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(tmp_data.decode_datum()?.i64())
+            Some(tmp_data.read_datum()?.i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))
@@ -601,12 +601,7 @@ mod tests {
         let handle = if handle_data.is_empty() {
             None
         } else {
-            Some(
-                (handle_data.as_ref() as &[u8])
-                    .decode_datum()
-                    .unwrap()
-                    .i64(),
-            )
+            Some((handle_data.as_ref() as &[u8]).read_datum().unwrap().i64())
         };
         col_ids.remove(3);
         res = cut_idx_key_as_owned(&bs, &col_ids);

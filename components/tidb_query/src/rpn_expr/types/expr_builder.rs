@@ -465,7 +465,7 @@ fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
     use crate::codec::mysql::DecimalDecoder;
     let value = val
         .as_slice()
-        .decode_decimal()
+        .read_decimal()
         .map_err(|_| other_err!("Unable to decode decimal from the request"))?;
     Ok(ScalarValue::Decimal(Some(value)))
 }
@@ -474,7 +474,7 @@ fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
 fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
     let value = val
         .as_slice()
-        .decode_json()
+        .read_json()
         .map_err(|_| other_err!("Unable to decode json from the request"))?;
     Ok(ScalarValue::Json(Some(value)))
 }

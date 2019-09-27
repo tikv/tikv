@@ -465,7 +465,7 @@ mod tests {
                 expr.set_tp(ExprType::MysqlDecimal);
                 let (prec, frac) = d.prec_and_frac();
                 let mut buf = Vec::with_capacity(mysql::dec_encoded_len(&[prec, frac]).unwrap());
-                buf.encode_decimal(&d, prec, frac).unwrap();
+                buf.write_decimal(&d, prec, frac).unwrap();
                 expr.set_val(buf);
             }
             Datum::Time(t) => {
@@ -483,7 +483,7 @@ mod tests {
             Datum::Json(j) => {
                 expr.set_tp(ExprType::MysqlJson);
                 let mut buf = Vec::new();
-                buf.encode_json(&j).unwrap();
+                buf.write_json(&j).unwrap();
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),

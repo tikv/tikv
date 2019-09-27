@@ -292,7 +292,7 @@ impl Column {
 
     /// Append a time datum to the column.
     pub fn append_time(&mut self, t: &Time) -> Result<()> {
-        self.data.encode_time(t)?;
+        self.data.write_time(t)?;
         self.finish_append_fixed()
     }
 
@@ -301,12 +301,12 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_time()
+        data.read_time()
     }
 
     /// Append a duration datum to the column.
     pub fn append_duration(&mut self, d: Duration) -> Result<()> {
-        self.data.encode_duration_to_chunk(d)?;
+        self.data.write_duration_to_chunk(d)?;
         self.finish_append_fixed()
     }
 
@@ -315,12 +315,12 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_duration_from_chunk(fsp)
+        data.read_duration_from_chunk(fsp)
     }
 
     /// Append a decimal datum to the column.
     pub fn append_decimal(&mut self, d: &Decimal) -> Result<()> {
-        self.data.encode_decimal_to_chunk(d)?;
+        self.data.write_decimal_to_chunk(d)?;
         self.finish_append_fixed()
     }
 
@@ -329,12 +329,12 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_decimal_from_chunk()
+        data.read_decimal_from_chunk()
     }
 
     /// Append a json datum to the column.
     pub fn append_json(&mut self, j: &Json) -> Result<()> {
-        self.data.encode_json(j)?;
+        self.data.write_json(j)?;
         self.finished_append_var()
     }
 
@@ -343,7 +343,7 @@ impl Column {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
         let mut data = &self.data[start..end];
-        data.decode_json()
+        data.read_json()
     }
 
     /// Return the total rows in the column.
@@ -380,7 +380,7 @@ impl Column {
 
 /// `ColumnEncoder` encodes the column.
 pub trait ColumnEncoder: NumberEncoder {
-    fn encode_column(&mut self, col: &Column) -> Result<()> {
+    fn write_column(&mut self, col: &Column) -> Result<()> {
         // length
         self.write_u32_le(col.length as u32)?;
         // null_cnt
