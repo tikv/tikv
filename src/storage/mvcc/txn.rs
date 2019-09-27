@@ -12,7 +12,7 @@ use crate::storage::{
     Result as StorageResult, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use kvproto::kvrpcpb::IsolationLevel;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use tidb_query::util::convert_to_prefix_next;
 
@@ -427,13 +427,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    fn check_lock(
-        &mut self,
-        cid: u64,
-        tag: CommandKind,
-        key: Key,
-        iter: &mut Cursor<S::Iter>,
-    ) -> Result<Option<Msg>> {
+    fn check_lock(&mut self, key: Key, iter: &mut Cursor<S::Iter>) -> Result<Option<StorageError>> {
         let statistics = self.reader.mut_lock_statistics();
         let lock_key = iter.key(statistics);
         if lock_key == key.as_encoded().as_slice() {
@@ -445,16 +439,9 @@ impl<S: Snapshot> MvccTxn<S> {
             info.set_lock_ttl(lock.ttl);
             info.set_txn_size(lock.txn_size);
             info!("check_lock::KeyIsLocked");
-            Ok(Some(Msg::WriteFinished {
-                cid,
-                pr: ProcessResult::MultiRes {
-                    results: vec![StorageResult::Err(StorageError::Txn(txn::Error::Mvcc(
-                        Error::KeyIsLocked(info),
-                    )))],
-                },
-                result: Ok(()),
-                tag,
-            }))
+            Ok(Some(StorageError::Txn(txn::Error::Mvcc(
+                Error::KeyIsLocked(info),
+            ))))
         } else {
             Ok(None)
         }
@@ -463,7 +450,6 @@ impl<S: Snapshot> MvccTxn<S> {
     fn check_write(
         &mut self,
         cid: u64,
-        tag: CommandKind,
         key: Key,
         ts: u64,
         is_insert: bool,
@@ -485,7 +471,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         key: key.into_raw()?,
                         primary: primary.to_vec(),
                     }),
-                    tag,
+                    tag: CommandKind::prewrite,
                 }));
             } else if is_insert {
                 // check data constraint using existing cursor
@@ -496,7 +482,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         return Ok(Some(Msg::FinishedWithErr {
                             cid,
                             err: txn::Error::Mvcc(Error::AlreadyExist { key: key.to_raw()? }),
-                            tag,
+                            tag: CommandKind::prewrite,
                         }));
                     }
                     write = if iter.next(statistics)
@@ -520,6 +506,7 @@ impl<S: Snapshot> MvccTxn<S> {
         scheduler: &Sched,
     ) -> Result<u64> {
         let mut map = BTreeMap::new();
+        let mut locks = HashMap::<_, Vec<StorageResult<()>>>::new();
         let len = commands.len();
         let tag = commands[0].tag();
         let mut rows = 0;
@@ -584,7 +571,6 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             if let Some(msg) = self.check_write(
                 cid,
-                tag,
                 min_key,
                 min_ts,
                 if let Command::Prewrite { mutations, .. } = &commands[idx.0] {
@@ -628,9 +614,12 @@ impl<S: Snapshot> MvccTxn<S> {
             if !lock_iter.valid()? {
                 break;
             }
-            if let Some(msg) = self.check_lock(cid, tag, min_key, &mut lock_iter)? {
-                scheduler.on_batch_msg(ids[idx.0], msg);
-                ids[idx.0] = u64::max_value();
+            if let Some(err) = self.check_lock(min_key, &mut lock_iter)? {
+                if let Some(locks) = locks.get_mut(&idx.0) {
+                    locks.push(StorageResult::Err(err));
+                } else {
+                    locks.insert(idx.0, vec![StorageResult::Err(err)]);
+                }
             }
             if !lock_iter.valid()? {
                 break;
@@ -651,10 +640,29 @@ impl<S: Snapshot> MvccTxn<S> {
                 {
                     self.start_ts = *start_ts;
                     rows += mutations.len();
-                    for m in mutations {
-                        let lock_type = LockType::from_mutation(&m);
-                        let (key, value) = m.clone().into_key_value();
-                        self.prewrite_key_value(key, lock_type, primary.to_vec(), value, &options);
+                    if let Some(locks) = locks.remove(&i) {
+                        scheduler.on_batch_msg(
+                            ids[i],
+                            Msg::WriteFinished {
+                                cid,
+                                pr: ProcessResult::MultiRes { results: locks },
+                                result: Ok(()),
+                                tag,
+                            },
+                        );
+                        ids[i] = u64::max_value();
+                    } else {
+                        for m in mutations {
+                            let lock_type = LockType::from_mutation(&m);
+                            let (key, value) = m.clone().into_key_value();
+                            self.prewrite_key_value(
+                                key,
+                                lock_type,
+                                primary.to_vec(),
+                                value,
+                                &options,
+                            );
+                        }
                     }
                 }
             }
