@@ -1190,6 +1190,6 @@ mod tests {
             false,
         );
         // limit = 0 means unlimited.
-        check_scan_lock(None, 0, &visible_locks, true);
+        check_scan_lock(None, 0, &visible_locks, false);
     }
 }
