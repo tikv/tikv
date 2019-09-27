@@ -710,7 +710,8 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
         return;
     }
     let flen = flen as usize;
-    if ft.tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
+    let tp = ft.as_accessor().tp();
+    if tp == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
         // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
         s.resize(flen, 0);
     }
