@@ -139,7 +139,17 @@ impl Peekable for RegionSnapshot {
             self.region.get_end_key(),
         )?;
         let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key)
+        self.snap.get_value(&data_key).map_err(|e| {
+            if panic_when_unexpected_key_or_data() {
+                set_panic_mark();
+                panic!(
+                    "failed to get key {} of region {}",
+                    hex::encode_upper(&key),
+                    self.region.get_id(),
+                );
+            }
+            e
+        })
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
@@ -150,7 +160,17 @@ impl Peekable for RegionSnapshot {
             self.region.get_end_key(),
         )?;
         let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key)
+        self.snap.get_value_cf(cf, &data_key).map_err(|e| {
+            if panic_when_unexpected_key_or_data() {
+                set_panic_mark();
+                panic!(
+                    "failed to get key {} of region {}",
+                    hex::encode_upper(&key),
+                    self.region.get_id(),
+                );
+            }
+            e
+        })
     }
 }
 
