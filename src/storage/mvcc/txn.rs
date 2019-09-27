@@ -525,18 +525,17 @@ impl<S: Snapshot> MvccTxn<S> {
         // initialize mutation to txn mapping
         for i in 0..len {
             if let Command::Prewrite { mutations, .. } = &commands[i] {
-                let mutation_count = mutations.len();
-                for j in 0..mutation_count {
+                let len = mutations.len();
+                for j in 0..len {
                     map.insert(mutations[j].key().clone().into_encoded(), (i, j));
                 }
             }
         }
 
+        let mut idx;
         // peek mutation boundaries
         let (lower, _) = map.iter().next().unwrap();
-        let mut min_key = Key::from_encoded(lower.to_vec());
-        let mut min_idx;
-
+        let min_key = Key::from_encoded(lower.to_vec());
         let (upper, _) = map.iter().next_back().unwrap();
         let mut upper = upper.to_vec();
         convert_to_prefix_next(&mut upper);
@@ -549,28 +548,30 @@ impl<S: Snapshot> MvccTxn<S> {
             .unwrap();
         let mut lock_iter = self.reader.new_lock_cursor(&min_key, &max_key).unwrap();
 
-        let mut range = map.range::<Vec<u8>, _>(lower..);
-        'out: loop {
+        let mut range = map.range::<Vec<u8>, _>(..);
+        'write_loop: loop {
             // find first active mutation
-            let min_ts = loop {
+            let (min_key, min_ts) = loop {
                 if let Some(tuple) = range.next() {
-                    min_key = Key::from_encoded(tuple.0.to_vec());
-                    min_idx = tuple.1;
-                } else {
-                    break 'out;
-                }
-                if ids[min_idx.0] < u64::max_value()
-                    && if let Command::Prewrite { options, .. } = &commands[min_idx.0] {
-                        !options.skip_constraint_check
-                    } else {
-                        true
+                    idx = tuple.1;
+                    if ids[idx.0] < u64::max_value()
+                        && if let Command::Prewrite { options, .. } = &commands[idx.0] {
+                            !options.skip_constraint_check
+                        } else {
+                            unreachable!()
+                        }
+                    {
+                        break (
+                            Key::from_encoded(tuple.0.to_vec()),
+                            if let Command::Prewrite { start_ts, .. } = commands[idx.0] {
+                                start_ts
+                            } else {
+                                unreachable!()
+                            },
+                        );
                     }
-                {
-                    break if let Command::Prewrite { start_ts, .. } = commands[min_idx.0] {
-                        start_ts
-                    } else {
-                        u64::max_value()
-                    };
+                } else {
+                    break 'write_loop;
                 }
             };
             write_iter.seek(
@@ -585,58 +586,56 @@ impl<S: Snapshot> MvccTxn<S> {
                 tag,
                 min_key,
                 min_ts,
-                if let Command::Prewrite { mutations, .. } = &commands[min_idx.0] {
-                    mutations[min_idx.1].is_insert()
+                if let Command::Prewrite { mutations, .. } = &commands[idx.0] {
+                    mutations[idx.1].is_insert()
                 } else {
-                    false
+                    unreachable!()
                 },
-                if let Command::Prewrite { primary, .. } = &commands[min_idx.0] {
+                if let Command::Prewrite { primary, .. } = &commands[idx.0] {
                     primary.clone()
                 } else {
-                    vec![]
+                    unreachable!()
                 },
                 &mut write_iter,
             )? {
-                scheduler.on_batch_msg(ids[min_idx.0], msg);
-                ids[min_idx.0] = u64::max_value();
+                scheduler.on_batch_msg(ids[idx.0], msg);
+                ids[idx.0] = u64::max_value();
             }
             if !write_iter.valid()? {
                 break;
             }
             // update range w.r.t. latest cursor value
             range = map.range::<Vec<u8>, _>(
-                &write_iter.key(self.reader.mut_write_statistics()).to_vec()..max_key.as_encoded(),
+                &write_iter.key(self.reader.mut_write_statistics()).to_vec()..,
             );
         }
 
-        range = map.range::<Vec<u8>, _>(lower..);
-        'out2: loop {
-            loop {
+        range = map.range::<Vec<u8>, _>(..);
+        'lock_loop: loop {
+            let min_key = loop {
                 if let Some(tuple) = range.next() {
-                    min_key = Key::from_encoded(tuple.0.to_vec());
-                    min_idx = tuple.1;
+                    idx = tuple.1;
+                    if ids[idx.0] < u64::max_value() {
+                        break Key::from_encoded(tuple.0.to_vec());
+                    }
                 } else {
-                    break 'out2;
+                    break 'lock_loop;
                 }
-                if ids[min_idx.0] < u64::max_value() {
-                    break;
-                }
-            }
+            };
 
             lock_iter.seek(&min_key, self.reader.mut_lock_statistics())?;
             if !lock_iter.valid()? {
                 break;
             }
             if let Some(msg) = self.check_lock(cid, tag, min_key, &mut lock_iter)? {
-                scheduler.on_batch_msg(ids[min_idx.0], msg);
-                ids[min_idx.0] = u64::max_value();
+                scheduler.on_batch_msg(ids[idx.0], msg);
+                ids[idx.0] = u64::max_value();
             }
             if !lock_iter.valid()? {
                 break;
             }
-            range = map.range::<Vec<u8>, _>(
-                &lock_iter.key(self.reader.mut_lock_statistics()).to_vec()..max_key.as_encoded(),
-            );
+            range = map
+                .range::<Vec<u8>, _>(&lock_iter.key(self.reader.mut_lock_statistics()).to_vec()..);
         }
 
         for i in 0..len {
