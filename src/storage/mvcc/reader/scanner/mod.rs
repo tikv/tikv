@@ -70,7 +70,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     }
 
     /// Set the desc.
-    /// 
+    ///
     /// Defaults to `false`.
     #[inline]
     pub fn desc(mut self, desc: bool) -> Self {
@@ -200,7 +200,7 @@ impl<S: Snapshot> ScannerConfig<S> {
     /// Create the cursor and take bounds.
     #[inline]
     fn create_cf_cursor_and_take(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
-        let (lower,upper) = (self.lower_bound.take(), self.upper_bound.take());
+        let (lower, upper) = (self.lower_bound.take(), self.upper_bound.take());
         let cursor = CursorBuilder::new(&self.snapshot, cf)
             .range(lower, upper)
             .fill_cache(self.fill_cache)

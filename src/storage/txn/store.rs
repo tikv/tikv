@@ -227,14 +227,13 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
-        let scanner =
-            ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                .desc(false)
-                .range(lower_bound, upper_bound)
-                .omit_value(false)
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .build_entry_scanner()?;
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+            .desc(false)
+            .range(lower_bound, upper_bound)
+            .omit_value(false)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .build_entry_scanner()?;
 
         Ok(scanner)
     }
