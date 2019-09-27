@@ -1189,5 +1189,7 @@ mod tests {
             &visible_locks[3..],
             false,
         );
+        // limit = 0 means unlimited.
+        check_scan_lock(None, 0, &visible_locks, true);
     }
 }
