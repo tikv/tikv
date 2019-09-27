@@ -175,16 +175,13 @@ impl<S: Snapshot> MvccReader<S> {
         if lock.ts > ts
             || lock.lock_type == LockType::Lock
             || lock.lock_type == LockType::Pessimistic
+            || ts == std::u64::MAX && key.to_raw()? == lock.primary
         {
-            // ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
+            // 1) ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
+            // 2) when ts == u64::MAX (which means to get latest committed version for
+            //    primary key), and current key is the primary key, use u64::MAX to read
+            //    the latest commit version's value
             return Ok(ts);
-        }
-
-        if ts == std::u64::MAX && key.to_raw()? == lock.primary {
-            // when ts == u64::MAX (which means to get latest committed version for
-            // primary key), and current key is the primary key, returns the latest
-            // commit version's value
-            return Ok(lock.ts - 1);
         }
 
         // There is a pending lock. Client should wait or clean it.
@@ -969,9 +966,12 @@ mod tests {
         assert!(reader.check_lock(&Key::from_raw(k2), 6).is_err());
         // Read locks don't block any read operation
         assert_eq!(reader.check_lock(&Key::from_raw(k3), 6).unwrap(), 6);
-        // Ignore the primary lock and returns the version before the lock
-        // when reading the latest committed version by setting u64::MAX as ts
-        assert_eq!(reader.check_lock(&Key::from_raw(k1), u64::MAX).unwrap(), 4);
+        // Ignore the primary lock when reading the latest committed version
+        // by setting u64::MAX as ts
+        assert_eq!(
+            reader.check_lock(&Key::from_raw(k1), u64::MAX).unwrap(),
+            u64::MAX
+        );
         // Should not ignore the secondary lock even though reading the latest version
         assert!(reader.check_lock(&Key::from_raw(k2), u64::MAX).is_err());
 
@@ -986,10 +986,18 @@ mod tests {
         assert!(reader.check_lock(&Key::from_raw(k2), u64::MAX).is_err());
 
         // Pessimistic locks
-        engine.acquire_pessimistic_lock(Key::from_raw(k4), k4, 9, 9);
+        engine.acquire_pessimistic_lock(Key::from_raw(k4), k4, 9, 12);
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         // Pessimistic locks don't block any read operation
         assert_eq!(reader.check_lock(&Key::from_raw(k4), 10).unwrap(), 10);
+
+        engine.prewrite_pessimistic_lock(Mutation::Delete(Key::from_raw(k4)), k4, 9);
+        // Ignore the primary lock when reading the latest committed version
+        // by setting u64::MAX as ts
+        assert_eq!(
+            reader.check_lock(&Key::from_raw(k4), u64::MAX).unwrap(),
+            u64::MAX
+        );
     }
 }
