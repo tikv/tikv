@@ -473,7 +473,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let write_key = iter.key(statistics);
         let commit_ts = Key::decode_ts_from(write_key)?;
         if Key::is_user_key_eq(write_key, key.as_encoded()) {
-            let write = Write::parse(iter.value(statistics))?;
+            let mut write = Write::parse(iter.value(statistics))?;
             if commit_ts >= ts {
                 return Ok(Some(Msg::FinishedWithErr {
                     cid,
@@ -488,19 +488,20 @@ impl<S: Snapshot> MvccTxn<S> {
                 }));
             } else if is_insert {
                 // check data constraint using existing cursor
-                while iter.next(statistics) {
-                    let write_key = iter.key(statistics);
-                    if Key::is_user_key_eq(write_key, key.as_encoded()) {
-                        let write = Write::parse(iter.value(statistics))?;
-                        if write.write_type == WriteType::Delete {
-                            break;
-                        } else if write.write_type == WriteType::Put {
-                            return Ok(Some(Msg::FinishedWithErr {
-                                cid,
-                                err: txn::Error::Mvcc(Error::AlreadyExist { key: key.to_raw()? }),
-                                tag,
-                            }));
-                        }
+                loop {
+                    if write.write_type == WriteType::Delete {
+                        break;
+                    } else if write.write_type == WriteType::Put {
+                        return Ok(Some(Msg::FinishedWithErr {
+                            cid,
+                            err: txn::Error::Mvcc(Error::AlreadyExist { key: key.to_raw()? }),
+                            tag,
+                        }));
+                    }
+                    write = if iter.next(statistics)
+                        && Key::is_user_key_eq(iter.key(statistics), key.as_encoded())
+                    {
+                        Write::parse(iter.value(statistics))?
                     } else {
                         break;
                     }
