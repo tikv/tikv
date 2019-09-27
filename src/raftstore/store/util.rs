@@ -364,15 +364,16 @@ impl Lease {
                 self.bound = Some(Either::Right(bound));
             }
         }
-        // Renew remote lease
-        let bound = match self.bound {
-            Some(Either::Right(ts)) => ts,
-            _ => Timespec::new(0, 0),
+        // May renew remote lease
+        match self.bound {
+            Some(Either::Right(ts)) => {
+                if ts - self.last_update > self.max_drift {
+                    self.last_update = ts;
+                    self.remote.renew(ts);
+                }
+            }
+            _ => assert_eq!(self.remote.expired_time(), 0),
         };
-        if bound - self.last_update > self.max_drift {
-            self.last_update = bound;
-            self.remote.renew(bound);
-        }
     }
 
     /// Suspect the lease to the bound.
