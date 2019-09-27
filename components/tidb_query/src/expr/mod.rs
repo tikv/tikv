@@ -280,13 +280,13 @@ impl Expression {
                 .map(|e| Expression::new_const(e, field_type)),
             ExprType::MysqlDecimal => expr
                 .get_val()
-                .decode_decimal()
+                .read_decimal()
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
             ExprType::MysqlJson => expr
                 .get_val()
-                .decode_json()
+                .read_json()
                 .map(Datum::Json)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
