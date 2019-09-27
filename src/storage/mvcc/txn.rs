@@ -548,7 +548,7 @@ impl<S: Snapshot> MvccTxn<S> {
             .unwrap();
         let mut lock_iter = self.reader.new_lock_cursor(&min_key, &max_key).unwrap();
 
-        let mut range = map.range::<Vec<u8>, _>(lower..max_key.as_encoded());
+        let mut range = map.range::<Vec<u8>, _>(lower..);
         'out: loop {
             // find first active mutation
             let min_ts = loop {
@@ -608,7 +608,7 @@ impl<S: Snapshot> MvccTxn<S> {
             );
         }
 
-        range = map.range::<Vec<u8>, _>(lower..max_key.as_encoded());
+        range = map.range::<Vec<u8>, _>(lower..);
         'out2: loop {
             loop {
                 if let Some(tuple) = range.next() {
