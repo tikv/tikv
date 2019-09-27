@@ -444,6 +444,7 @@ impl<S: Snapshot> MvccTxn<S> {
             info.set_key(key.into_raw()?);
             info.set_lock_ttl(lock.ttl);
             info.set_txn_size(lock.txn_size);
+            info!("check_lock::KeyIsLocked");
             Ok(Some(Msg::WriteFinished {
                 cid,
                 pr: ProcessResult::MultiRes {
