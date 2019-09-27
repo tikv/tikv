@@ -101,7 +101,7 @@ impl<S: Snapshot> MvccReader<S> {
             self.fill_cache,
         )
         .use_prefix_seek()
-        .set_prefix_same_as_start(true);
+        .set_prefix_same_as_start(false);
         if let Ok(iter) = self
             .snapshot
             .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))
@@ -127,7 +127,7 @@ impl<S: Snapshot> MvccReader<S> {
             self.fill_cache,
         )
         .use_prefix_seek()
-        .set_prefix_same_as_start(true);
+        .set_prefix_same_as_start(false);
         if let Ok(iter) = self
             .snapshot
             .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))
