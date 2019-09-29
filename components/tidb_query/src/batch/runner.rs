@@ -61,11 +61,6 @@ pub struct BatchExecutorsRunner<SS> {
     encode_type: EncodeType,
 }
 
-enum SelectChunk {
-    BatchData(Vec<u8>),
-    Chunk(Chunk),
-}
-
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
 impl BatchExecutorsRunner<()> {
     /// Given a list of executor descriptors and checks whether all executor descriptors can
