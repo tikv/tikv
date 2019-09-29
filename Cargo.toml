@@ -120,6 +120,7 @@ engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
 keys = { path = "components/keys" }
+engine_traits = { path = "components/engine_traits" }
 sst_importer = { path = "components/sst_importer" }
 
 [dependencies.murmur3]

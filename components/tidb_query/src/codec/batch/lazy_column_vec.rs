@@ -3,7 +3,9 @@
 use tipb::FieldType;
 
 use super::LazyBatchColumn;
+use crate::codec::chunk::{Chunk, ChunkEncoder};
 use crate::codec::data_type::VectorValue;
+use crate::codec::mysql::Tz;
 use crate::codec::Result;
 
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
@@ -110,6 +112,21 @@ impl LazyBatchColumnVec {
         Ok(size)
     }
 
+    /// Returns maximum encoded size in arrow format.
+    // TODO: Move to other place.
+    pub fn maximum_encoded_size_arrow(
+        &self,
+        logical_rows: impl AsRef<[usize]>,
+        output_offsets: impl AsRef<[u32]>,
+    ) -> Result<usize> {
+        let logical_rows = logical_rows.as_ref();
+        let mut size = 0;
+        for offset in output_offsets.as_ref() {
+            size += self.columns[(*offset) as usize].maximum_encoded_size_arrow(logical_rows)?;
+        }
+        Ok(size)
+    }
+
     /// Encodes into binary format.
     // TODO: Move to other place.
     pub fn encode(
@@ -128,6 +145,49 @@ impl LazyBatchColumnVec {
                 col.encode(*idx, &schema[offset], output)?;
             }
         }
+        Ok(())
+    }
+
+    /// Encode into arrow format.
+    pub fn encode_arrow(
+        &mut self,
+        logical_rows: impl AsRef<[usize]>,
+        output_offsets: impl AsRef<[u32]>,
+        schema: impl AsRef<[FieldType]>,
+        output: &mut Vec<u8>,
+        time_zone: &Tz,
+    ) -> Result<()> {
+        // Step 1 : Decode all data.
+        let schema = schema.as_ref();
+        let output_offsets = output_offsets.as_ref();
+        for offset in output_offsets {
+            let offset = *offset as usize;
+            let col = &mut self.columns[offset];
+            col.ensure_decoded(time_zone, &schema[offset], logical_rows.as_ref())?;
+        }
+
+        // Step 2 : Make the chunk and append data.
+        let mut fields: Vec<FieldType> = Vec::new();
+        for offset in output_offsets {
+            let offset = *offset as usize;
+            let field_type = &schema[offset];
+            fields.push(field_type.clone());
+        }
+        let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len());
+
+        for column_idx in 0..output_offsets.len() {
+            let offset = output_offsets[column_idx] as usize;
+            let col = &self.columns[offset];
+            chunk.append_vec(
+                logical_rows.as_ref(),
+                &schema[offset],
+                col.decoded(),
+                column_idx,
+            )?;
+        }
+
+        // Step 3 : Encode chunk to output.
+        output.encode_chunk(&chunk).unwrap();
         Ok(())
     }
 

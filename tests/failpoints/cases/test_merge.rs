@@ -376,8 +376,7 @@ fn test_node_merge_catch_up_logs_no_need() {
     // the source region should be merged and the peer should be destroyed.
     assert!(pd_client.check_merged(left.get_id()));
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
-    let router = cluster.sim.wl().get_router(3).unwrap();
-    assert!(router.mailbox(left.get_id()).is_none());
+    cluster.must_region_not_exist(left.get_id(), 3);
 }
 
 /// Test if merging state will be removed after accepting a snapshot.
