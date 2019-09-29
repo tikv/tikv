@@ -374,7 +374,7 @@ impl<E: Engine, L: LockMgr> MiniBatcherInner<E, L> for WriteBatcher {
                     let ratio = if let Command::MiniBatch { commands, .. } = &cmd {
                         commands.len()
                     } else {
-                        0
+                        unreachable!()
                     };
                     if max_ratio < ratio {
                         max_ratio = ratio;
@@ -418,7 +418,7 @@ impl<E: Engine, L: LockMgr> MiniBatcherInner<E, L> for WriteBatcher {
                     let ratio = if let Command::MiniBatch { commands, .. } = &cmd {
                         commands.len()
                     } else {
-                        0
+                        unreachable!()
                     };
                     if max_ratio < ratio {
                         max_ratio = ratio;

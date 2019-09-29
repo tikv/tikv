@@ -438,13 +438,6 @@ pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
 }
 
 impl Command {
-    pub fn batched(&self) -> bool {
-        match *self {
-            Command::MiniBatch { .. } => true,
-            _ => false,
-        }
-    }
-
     pub fn readonly(&self) -> bool {
         match *self {
             Command::ScanLock { .. } |

@@ -86,8 +86,9 @@ impl<S: Snapshot> MvccReader<S> {
         lo_ts: u64,
         hi: &Key,
         hi_ts: u64,
+        use_prefix_seek: bool,
     ) -> Option<Cursor<S::Iter>> {
-        let iter_opt = IterOption::new(
+        let mut iter_opt = IterOption::new(
             Some(KeyBuilder::from_slice(
                 lo.clone().append_ts(lo_ts).as_encoded().as_slice(),
                 DATA_KEY_PREFIX_LEN,
@@ -99,9 +100,10 @@ impl<S: Snapshot> MvccReader<S> {
                 0,
             )),
             self.fill_cache,
-        )
-        .use_prefix_seek()
-        .set_prefix_same_as_start(false);
+        );
+        if use_prefix_seek {
+            iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
+        }
         if let Ok(iter) = self
             .snapshot
             .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))
@@ -125,9 +127,7 @@ impl<S: Snapshot> MvccReader<S> {
                 0,
             )),
             self.fill_cache,
-        )
-        .use_prefix_seek()
-        .set_prefix_same_as_start(false);
+        );
         if let Ok(iter) = self
             .snapshot
             .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))

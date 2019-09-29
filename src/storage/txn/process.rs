@@ -187,13 +187,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                     .pool
                     .spawn(move || {
                         let sched = self.take_scheduler();
-                        if task.cmd().batched() {
-                            let ids = if let Command::MiniBatch { ids, .. } = task.cmd() {
-                                Some(ids)
-                            } else {
-                                None
-                            };
-                            for id in ids.unwrap() {
+                        if let Command::MiniBatch { ids, .. } = task.cmd() {
+                            for id in ids {
                                 if *id < u64::max_value() {
                                     sched.on_batch_msg(
                                         *id,
@@ -399,9 +394,6 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
     sched_pool: SchedPool,
     statistics: &mut Statistics,
 ) -> Result<()> {
-    if !cmd.batched() {
-        return Ok(());
-    }
     if let Command::MiniBatch {
         commands,
         mut ids,
