@@ -294,8 +294,11 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::{thread, time};
 
+    use futures::executor::{self, Notify, Spawn};
+    use futures::Future;
     use futures_cpupool::CpuPool;
 
     use super::*;
@@ -376,5 +379,37 @@ mod tests {
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 17);
+    }
+
+    #[test]
+    fn test_switch_between_sender_and_receiver() {
+        struct Notifier<F>(Arc<Mutex<Option<Spawn<F>>>>);
+        impl<F> Clone for Notifier<F> {
+            fn clone(&self) -> Notifier<F> {
+                Notifier(Arc::clone(&self.0))
+            }
+        }
+        impl<F> Notify for Notifier<F>
+        where
+            F: Future<Item = (), Error = ()> + Send + 'static,
+        {
+            fn notify(&self, id: usize) {
+                let n = Arc::new(self.clone());
+                let mut s = self.0.lock().unwrap();
+                match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
+                    Some(Ok(Async::NotReady)) | None => {}
+                    _ => *s = None,
+                }
+            }
+        }
+
+        let (tx, rx) = unbounded::<u64>(4);
+        let f = rx.for_each(|_| Ok(())).map_err(|_| ());
+        let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
+        Notifier(Arc::clone(&spawn)).notify(0);
+
+        // Switch to `receiver` in one thread in where `sender` is dropped.
+        drop(tx);
+        assert!(spawn.lock().unwrap().is_none());
     }
 }
