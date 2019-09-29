@@ -767,4 +767,45 @@ pub mod tests {
         let size = get_region_approximate_size(&db, &region).unwrap();
         assert_eq!(size, 0);
     }
+
+    use test::Bencher;
+
+    #[bench]
+    fn bench_get_region_approximate_size(b: &mut Bencher) {
+        let path = Builder::new()
+            .prefix("_bench_get_region_approximate_size")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_disable_auto_compactions(true);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut cf_size = 0;
+        let cf = db.cf_handle("default").unwrap();
+        for i in 0..10 {
+            let v = vec![0; 4096];
+            for j in 10000 * i..10000 * (i + 1) {
+                let k1 = keys::data_key(format!("k1{:0100}", j).as_bytes());
+                let k2 = keys::data_key(format!("k9{:0100}", j).as_bytes());
+                cf_size += k1.len() + k2.len() + v.len() * 2;
+                db.put_cf(cf, &k1, &v).unwrap();
+                db.put_cf(cf, &k2, &v).unwrap();
+            }
+            db.flush_cf(cf, true).unwrap();
+        }
+
+        let region = make_region(1, vec![], vec![]);
+        b.iter(|| {
+            let size = get_region_approximate_size(&db, &region).unwrap();
+            assert_eq!(size, cf_size as u64);
+        })
+    }
 }
