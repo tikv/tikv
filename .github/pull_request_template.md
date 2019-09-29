@@ -30,6 +30,10 @@ Pick one of the following and delete the others:
 ###  How is the PR tested?
 
 Please describe the tests that you ran to verify your changes. Have you added unit or integration tests, or run manual tests? What additional tests would give you greater confidence in this change?
+- Unit test
+- Integration test
+- Manual test (add detailed scripts or steps below)
+- No code
 
 ###  Does this PR affect documentation (docs) or should it be mentioned in the release notes?
 
