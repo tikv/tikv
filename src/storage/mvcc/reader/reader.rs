@@ -810,11 +810,14 @@ mod tests {
         assert_eq!(write_type, WriteType::Rollback);
 
         let seek_old = reader.get_statistics().write.seek;
+        let next_old = reader.get_statistics().write.next;
         assert!(reader.get_txn_commit_info(&key, 30).unwrap().is_none());
         let seek_new = reader.get_statistics().write.seek;
+        let next_new = reader.get_statistics().write.next;
 
         // `get_txn_commit_info(&key, 30)` stopped at `30_25 PUT`.
-        assert_eq!(seek_new - seek_old, 3);
+        assert_eq!(seek_new - seek_old, 1);
+        assert_eq!(next_new - next_old, 2);
     }
 
     #[test]
