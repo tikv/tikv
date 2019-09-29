@@ -831,6 +831,10 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k1, k1, 23, 29);
         must_get(&engine, k1, 30, v);
         must_pessimistic_prewrite_delete(&engine, k1, k1, 23, 29, true);
+        must_get_err(&engine, k1, 30);
+        // should read the latest record when `ts == u64::MAX`
+        // even if lock.start_ts(23) < latest write.commit_ts(27)
+        must_get(&engine, k1, u64::MAX, v);
         must_commit(&engine, k1, 23, 31);
         must_get(&engine, k1, 30, v);
         must_get_none(&engine, k1, 32);

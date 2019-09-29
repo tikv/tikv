@@ -83,7 +83,7 @@ impl<T> Res<T> {
             Res::Overflow(t) => if let Some(error) = overflow_err {
                 ctx.handle_overflow_err(error)
             } else {
-                ctx.handle_overflow(true)
+                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))
             }
             .map(|()| t),
         }
@@ -1106,7 +1106,7 @@ impl Decimal {
         self.word_buf[buf_from] /= TEN_POW[shift];
     }
 
-    // TODO, remove this after merge the `refactor ScalarFunc::builtin_cast`
+    // TODO: remove this after merge the `refactor ScalarFunc::builtin_cast`
     //
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
