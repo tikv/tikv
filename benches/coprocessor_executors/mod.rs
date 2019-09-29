@@ -19,7 +19,7 @@ fn main() {
     nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set).unwrap();
 
     let mut c = criterion::Criterion::default()
-        .with_measurement(criterion_cycles_per_byte::CyclesPerByte)
+        .with_measurement(criterion_papi::PapiMeasurement::new("PAPI_TOT_INS"))
         .configure_from_args();
 
     util::fixture::bench(&mut c);
