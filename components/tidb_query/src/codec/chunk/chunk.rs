@@ -2,8 +2,11 @@
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
+use crate::codec::data_type::VectorValue;
 use crate::codec::Datum;
 use codec::buffer::BufferWriter;
+use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::FieldTypeFlag;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 use tipb::FieldType;
@@ -54,6 +57,133 @@ impl Chunk {
     #[inline]
     pub fn append_datum(&mut self, col_idx: usize, v: &Datum) -> Result<()> {
         self.columns[col_idx].append_datum(v)
+    }
+
+    /// Append a datum from vec to the column
+    #[inline]
+    pub fn append_vec(
+        &mut self,
+        row_indexes: &[usize],
+        field_type: &FieldType,
+        vec: &VectorValue,
+        column_index: usize,
+    ) -> Result<()> {
+        let col = &mut self.columns[column_index];
+        match vec {
+            VectorValue::Int(ref vec) => {
+                if field_type
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
+                    for &row_index in row_indexes {
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_u64(*val as u64).unwrap();
+                            }
+                        }
+                    }
+                } else {
+                    for &row_index in row_indexes {
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_i64(*val).unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+            VectorValue::Real(ref vec) => {
+                if col.get_fixed_len() == 4 {
+                    for &row_index in row_indexes {
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_f32(f64::from(*val) as f32).unwrap();
+                            }
+                        }
+                    }
+                } else {
+                    for &row_index in row_indexes {
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_f64(f64::from(*val)).unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+            VectorValue::Decimal(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_decimal(&val).unwrap();
+                        }
+                    }
+                }
+            }
+            VectorValue::Bytes(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_bytes(&val).unwrap();
+                        }
+                    }
+                }
+            }
+            VectorValue::DateTime(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_time(&val).unwrap();
+                        }
+                    }
+                }
+            }
+            VectorValue::Duration(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_duration(*val).unwrap();
+                        }
+                    }
+                }
+            }
+            VectorValue::Json(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => col.append_json(&val).unwrap(),
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Get the Row in the chunk with the row index.

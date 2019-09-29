@@ -115,6 +115,11 @@ pub trait NumberEncoder: Write {
         self.write_u16::<LittleEndian>(v).map_err(From::from)
     }
 
+    /// Writes `f32` numbers in little endian order.
+    fn encode_f32_le(&mut self, v: f32) -> Result<()> {
+        self.write_f32::<LittleEndian>(v).map_err(From::from)
+    }
+
     /// Writes `u32` numbers in little endian order.
     fn encode_u32_le(&mut self, v: u32) -> Result<()> {
         self.write_u32::<LittleEndian>(v).map_err(From::from)
@@ -288,6 +293,12 @@ pub fn decode_i32_le(data: &mut BytesSlice<'_>) -> Result<i32> {
 #[inline]
 pub fn decode_f64_le(data: &mut BytesSlice<'_>) -> Result<f64> {
     read_num_bytes(mem::size_of::<f64>(), data, LittleEndian::read_f64)
+}
+
+/// Decodes value encoded by `encode_f32_le` before.
+#[inline]
+pub fn decode_f32_le(data: &mut BytesSlice<'_>) -> Result<f32> {
+    read_num_bytes(mem::size_of::<f32>(), data, LittleEndian::read_f32)
 }
 
 /// Decodes value encoded by `encode_i64_le` before.
