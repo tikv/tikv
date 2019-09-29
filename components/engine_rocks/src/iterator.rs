@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use engine_rocksdb::rocksdb::{DBIterator, SeekKey as RawSeekKey, DB};
 use engine_traits::{self, Error, Result};
+use rocksdb::{DBIterator, SeekKey as RawSeekKey, DB};
 
 // TODO: use &DB
 pub struct Iterator(DBIterator<Arc<DB>>);

@@ -4,9 +4,9 @@ use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use engine_rocksdb::rocksdb_options::UnsafeSnap;
-use engine_rocksdb::{DBIterator, DB};
 use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result};
+use rocksdb::rocksdb_options::UnsafeSnap;
+use rocksdb::{DBIterator, DB};
 
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;

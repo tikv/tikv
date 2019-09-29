@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocksdb::{
+use rocksdb::{
     ColumnFamilyOptions as RawCFOptions, ReadOptions as RawReadOptions,
     WriteOptions as RawWriteOptions,
 };

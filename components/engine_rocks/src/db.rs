@@ -5,11 +5,11 @@ use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 
-use engine_rocksdb::{
-    set_external_sst_file_global_seq_no, DBIterator, IngestExternalFileOptions, Writable, DB,
-};
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
+};
+use rocksdb::{
+    set_external_sst_file_global_seq_no, DBIterator, IngestExternalFileOptions, Writable, DB,
 };
 use tikv_util::file::calc_crc32;
 
@@ -30,7 +30,7 @@ impl Rocks {
         self.0.clone()
     }
 
-    pub fn existed(path: &str) -> bool {
+    pub fn exists(path: &str) -> bool {
         let path = Path::new(path);
         if !path.exists() || !path.is_dir() {
             return false;
