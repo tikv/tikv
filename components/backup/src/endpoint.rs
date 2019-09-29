@@ -310,7 +310,7 @@ impl ControlThreadPool {
             .build();
         let _ = self.workers.replace(workers);
         self.size = new_size;
-        BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as f64);
+        BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
     }
 
     fn heartbeat(&mut self) {
