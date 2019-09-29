@@ -133,9 +133,9 @@
 //!     fn eval(
 //!         self,
 //!         ctx: &mut EvalContext,
-//          output_rows: usize,
-//          args: &[RpnStackNode<'_>],
-//          extra: &mut RpnFnCallExtra<'_>,
+//!          output_rows: usize,
+//!          args: &[RpnStackNode<'_>],
+//!          extra: &mut RpnFnCallExtra<'_>,
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
