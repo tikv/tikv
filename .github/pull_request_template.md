@@ -29,7 +29,7 @@ Pick one of the following and delete the others:
 
 ###  How is the PR tested?
 
-Pick some of the following tests which have been tested
+Pick some of the following tests which be tested
 - Unit test
 - Integration test
 - Manual test (add detailed scripts or steps below)
