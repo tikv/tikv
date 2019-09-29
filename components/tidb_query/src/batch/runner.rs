@@ -4,10 +4,9 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
-use tipb::{self, ExecType, ExecutorExecutionSummary};
-use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
-
 use tikv_util::deadline::Deadline;
+use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{Chunk, DagRequest, EncodeType, SelectResponse, StreamResponse};
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
@@ -54,6 +53,17 @@ pub struct BatchExecutorsRunner<SS> {
     /// `batch_size` in stream mode. When calling `next_batch(batch_size)`,
     /// Scanner will fetch `batch_size` physical rows. This variable will be initialized as `BATCH_INITIAL_SIZE`.
     stream_batch_size: usize,
+
+    /// The encoding method for the response.
+    /// Possible encoding methods are:
+    /// 1. default: result is encoded row by row using datum format.
+    /// 2. arrow: result is encoded column by column using arrow format.
+    encode_type: EncodeType,
+}
+
+enum SelectChunk {
+    BatchData(Vec<u8>),
+    Chunk(Chunk),
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -319,6 +329,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
+        let encode_type = req.get_encode_type();
 
         let out_most_executor = if collect_exec_summary {
             build_executors::<_, ExecSummaryCollectorEnabled>(
@@ -366,11 +377,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             exec_stats,
             stream_min_rows_each_iter,
             stream_batch_size: BATCH_INITIAL_SIZE,
+            encode_type,
         })
     }
 
     pub fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut chunks = vec![];
+        let mut batch_data: Vec<u8> = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
@@ -378,7 +391,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             let mut chunk = Chunk::default();
             let (is_drained, record_len) =
                 // return (is_drained, record_len)
-                self.internal_handle_request(batch_size, &mut chunk, &mut warnings)?;
+                self.internal_handle_request(false, batch_size, &mut chunk, &mut batch_data, &mut warnings)?;
 
             if record_len > 0 {
                 chunks.push(chunk);
@@ -389,7 +402,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     .collect_exec_stats(&mut self.exec_stats);
 
                 let mut sel_resp = SelectResponse::default();
-                sel_resp.set_chunks(chunks.into());
+                match self.encode_type {
+                    EncodeType::TypeDefault => {
+                        sel_resp.set_chunks(chunks.into());
+                    }
+                    EncodeType::TypeArrow => {
+                        sel_resp.set_row_batch_data(batch_data);
+                    }
+                }
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
                     self.exec_stats
@@ -440,11 +460,17 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let (mut record_len, mut is_drained) = (0, false);
         let mut chunk = Chunk::default();
+        let mut batch_data: Vec<u8> = vec![];
 
         // record count less than batch size and is not drained
         while record_len < self.stream_min_rows_each_iter && !is_drained {
-            let (drained, len) =
-                self.internal_handle_request(self.stream_batch_size, &mut chunk, &mut warnings)?;
+            let (drained, len) = self.internal_handle_request(
+                true,
+                self.stream_batch_size,
+                &mut chunk,
+                &mut batch_data,
+                &mut warnings,
+            )?;
             record_len += len;
             is_drained = drained;
 
@@ -490,8 +516,10 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     fn internal_handle_request(
         &mut self,
+        is_streaming: bool,
         batch_size: usize,
         chunk: &mut Chunk,
+        batch_data: &mut Vec<u8>,
         warnings: &mut EvalWarnings,
     ) -> Result<(bool, usize)> {
         let mut record_len = 0;
@@ -501,7 +529,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut result = self.out_most_executor.next_batch(batch_size);
 
         let is_drained = result.is_drained?;
-        // Notice that logical rows len == 0 doesn't mean that it is drained.
+
         if !result.logical_rows.is_empty() {
             assert_eq!(
                 result.physical_columns.columns_len(),
@@ -509,22 +537,40 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             );
             {
                 let data = chunk.mut_rows_data();
-                data.reserve(
-                    result
-                        .physical_columns
-                        .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
-                );
                 // Although `schema()` can be deeply nested, it is ok since we process data in
                 // batch.
-                result.physical_columns.encode(
-                    &result.logical_rows,
-                    &self.output_offsets,
-                    self.out_most_executor.schema(),
-                    data,
-                )?;
-                record_len += result.logical_rows.len();
+                if is_streaming || self.encode_type == EncodeType::TypeDefault {
+                    data.reserve(
+                        result
+                            .physical_columns
+                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
+                    );
+                    result.physical_columns.encode(
+                        &result.logical_rows,
+                        &self.output_offsets,
+                        self.out_most_executor.schema(),
+                        data,
+                    )?;
+                } else {
+                    data.reserve(
+                        result.physical_columns.maximum_encoded_size_arrow(
+                            &result.logical_rows,
+                            &self.output_offsets,
+                        )?,
+                    );
+                    result.physical_columns.encode_arrow(
+                        &result.logical_rows,
+                        &self.output_offsets,
+                        self.out_most_executor.schema(),
+                        data,
+                        &self.config.tz,
+                    )?;
+                    batch_data.extend_from_slice(data);
+                }
             }
+            record_len += result.logical_rows.len();
         }
+
         warnings.merge(&mut result.warnings);
         Ok((is_drained, record_len))
     }

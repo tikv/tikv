@@ -12,7 +12,6 @@ use crate::storage::mvcc::Result;
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics};
 
-use super::super::util::CheckLockResult;
 use super::ScannerConfig;
 
 /// A dedicate scanner that outputs content in each CF.
@@ -147,15 +146,12 @@ impl<S: Snapshot> Scanner<S> {
             // of errors). If there is KeyLocked errors, we should be able to continue scanning.
             let mut result = Ok(None);
 
-            // `get_ts` is the real used timestamp. If user specifies `MaxInt64` as the timestamp,
-            // we need to change it to a most recently available one.
-            // But in this scanner we does not allow such operation.
-            let get_ts = self.cfg.ts;
-
             // `met_next_user_key` stores whether the write cursor has been already pointing to
             // the next user key. If so, we don't need to compare it again when trying to step
             // to the next user key later.
             let mut met_next_user_key = false;
+
+            let ts = self.cfg.ts;
 
             if has_lock {
                 match self.cfg.isolation_level {
@@ -165,15 +161,10 @@ impl<S: Snapshot> Scanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::super::util::check_lock(&current_user_key, self.cfg.ts, &lock)?
-                        {
-                            CheckLockResult::NotLocked => {}
-                            // TODO: We need to scan locks into batch
-                            //       in the future.
-                            CheckLockResult::Locked(e) => result = Err(e),
-                            // TODO: better error handling.
-                            CheckLockResult::Ignored(_) => unimplemented!(),
-                        }
+                        // TODO: We need to scan locks into batch
+                        //       in the future.
+                        result = super::super::util::check_lock(&current_user_key, ts, &lock)
+                            .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
                 }
@@ -184,7 +175,7 @@ impl<S: Snapshot> Scanner<S> {
                 if result.is_ok() {
                     // Attempt to read specified version of the key. Note that we may get `None`
                     // indicating that no desired version is found, or a DELETE version is found
-                    result = self.get(&current_user_key, get_ts, &mut met_next_user_key);
+                    result = self.get(&current_user_key, ts, &mut met_next_user_key);
                 }
                 // Even if there is a lock error, we still need to step the cursor for future
                 // calls. However if we are already pointing at next user key, we don't need to
