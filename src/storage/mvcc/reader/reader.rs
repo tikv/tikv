@@ -129,21 +129,21 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        if self.scan_mode.is_some() {
-            if self.write_cursor.is_none() {
+        if self.write_cursor.is_none() {
+            if self.scan_mode.is_some() {
                 let iter_opt = IterOption::new(None, None, self.fill_cache);
                 let iter = self
                     .snapshot
                     .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
                 self.write_cursor = Some(iter);
+            } else {
+                // use prefix bloom filter
+                let iter_opt = IterOption::default()
+                    .use_prefix_seek()
+                    .set_prefix_same_as_start(true);
+                let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
+                self.write_cursor = Some(iter);
             }
-        } else {
-            // use prefix bloom filter
-            let iter_opt = IterOption::default()
-                .use_prefix_seek()
-                .set_prefix_same_as_start(true);
-            let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
-            self.write_cursor = Some(iter);
         }
 
         let cursor = self.write_cursor.as_mut().unwrap();
