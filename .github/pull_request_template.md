@@ -28,7 +28,7 @@ Pick one of the following and delete the others:
 - Misc (other changes)
 
 ###  How is the PR tested?
-Pick some of the following tests which be tested
+Please select the tests that you ran to verify your changes:
 - Unit test
 - Integration test
 - Manual test (add detailed scripts or steps below)
@@ -36,7 +36,7 @@ Pick some of the following tests which be tested
 
 ###  Does this PR affect documentation (docs) or should it be mentioned in the release notes?
 
-- If there is a document change, please file a PR in ([docs](https://github.com/tikv/tikv/tree/master/docs)) and add the PR number here.
+- If there is a document change, please file a PR in ([docs](https://github.com/tikv/website/tree/master/content)) and add the PR number here.
 - If this PR should be mentioned in the release note, please update the [release notes](https://github.com/tikv/tikv/blob/master/CHANGELOG.md).
 
 ###  Does this PR affect `tidb-ansible`?
