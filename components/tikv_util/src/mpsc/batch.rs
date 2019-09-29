@@ -101,7 +101,7 @@ impl Drop for Notifier {
 }
 
 pub struct Sender<T> {
-    sender: channel::Sender<T>,
+    sender: Option<channel::Sender<T>>,
     state: Arc<State>,
 }
 
@@ -118,6 +118,7 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
+        drop(self.sender.take());
         self.state.notify();
     }
 }
@@ -130,21 +131,21 @@ pub struct Receiver<T> {
 impl<T> Sender<T> {
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        self.sender.send(t)?;
+        self.sender.as_ref().unwrap().send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
 
     #[inline]
     pub fn send_and_notify(&self, t: T) -> Result<(), SendError<T>> {
-        self.sender.send(t)?;
+        self.sender.as_ref().unwrap().send(t)?;
         self.state.notify();
         Ok(())
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        self.sender.try_send(t)?;
+        self.sender.as_ref().unwrap().try_send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
@@ -188,7 +189,7 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     let (sender, receiver) = channel::unbounded();
     (
         Sender {
-            sender,
+            sender: Some(sender),
             state: state.clone(),
         },
         Receiver { receiver, state },
@@ -207,7 +208,7 @@ pub fn bounded<T>(cap: usize, notify_size: usize) -> (Sender<T>, Receiver<T>) {
     let (sender, receiver) = channel::bounded(cap);
     (
         Sender {
-            sender,
+            sender: Some(sender),
             state: state.clone(),
         },
         Receiver { receiver, state },
