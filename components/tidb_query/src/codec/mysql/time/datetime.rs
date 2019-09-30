@@ -195,15 +195,12 @@ impl Time {
 mod parser {
     use super::*;
     fn bytes_to_u32(input: &[u8]) -> Result<u32> {
-        let mut sum = 0u32;
-        for digit in input {
-            assert(digit.is_ascii_digit())?;
-            sum = sum
-                .checked_mul(10)
-                .and_then(|t| t.checked_add(u32::from(digit - b'0')))
-                .ok_or_else(Error::truncated)?;
-        }
-        Ok(sum)
+        input.iter().try_fold(0u32, |acc, d| {
+            assert(d.is_ascii_digit())?;
+            acc.checked_mul(10)
+                .and_then(|t| t.checked_add(u32::from(d - b'0')))
+                .ok_or_else(Error::truncated)
+        })
     }
 
     fn digit1(input: &[u8]) -> Result<(&[u8], &[u8])> {
@@ -225,7 +222,7 @@ mod parser {
         Ok(&input[end..])
     }
 
-    /// We assume that the `input` is trimed and is not empty.
+    /// We assume that the `input` is trimmed and is not empty.
     fn split_components(input: &str) -> Result<Vec<&[u8]>> {
         let mut buffer = input.as_bytes();
 
@@ -361,19 +358,19 @@ mod parser {
         fsp: u8,
         round: bool,
     ) -> Result<Time> {
-        let trimed = input.trim();
-        if trimed.is_empty() {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
             assert(false)?;
         }
 
-        let components = split_components(trimed)?;
+        let components = split_components(trimmed)?;
         match components.len() {
             1 | 2 => {
                 let whole = parse_whole(components[0])?;
 
                 let (carry, frac) = if let Some(frac) = components.get(1) {
                     // If we have a fractional part,
-                    // we expect the `whole` is in format: yymmddhhmmss/yyyymmddhhmmss.
+                    // we expect the `whole` is in format: `yymmddhhmmss/yyyymmddhhmmss`.
                     // Otherwise, the fractional part is meaningless.
                     assert(components[0].len() == 12 || components[0].len() == 14)?;
                     parse_frac(frac, fsp, round)?
@@ -1120,7 +1117,7 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_datetimte() -> Result<()> {
+    fn test_invalid_datetime() -> Result<()> {
         let mut ctx = EvalContext::from(DateTimeConfig {
             strict_mode: false,
             no_zero_in_date: false,
