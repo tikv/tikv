@@ -66,17 +66,27 @@ where
 pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
 
-    /// Borrows this concrete type from a `ScalarValue` in the same type.
+    /// Borrows this concrete type from a `ScalarValue` in the same type;
+    /// panics if the varient mismatches.
     fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self>;
 
-    /// Borrows this concrete type from a `ScalarValueRef` in the same type.
+    /// Borrows this concrete type from a `ScalarValueRef` in the same type;
+    /// panics if the varient mismatches.
     fn borrow_scalar_value_ref<'a>(v: &'a ScalarValueRef<'a>) -> &'a Option<Self>;
 
-    /// Borrows a slice of this concrete type from a `VectorValue` in the same type.
+    /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
+    /// panics if the varient mismatches.
     fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>];
 
-    /// Converts a vector of this concrete type into a `VectorValue` in the same type.
+    /// Converts a vector of this concrete type into a `VectorValue` in the same type;
+    /// panics if the varient mismatches.
     fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
+
+    /// Try to borrow this concrete type from a `ScalarValue`.
+    fn try_borrow_scalar_value(v: &ScalarValue) -> Option<&Option<Self>>;
+
+    /// Try to borrow a slice of this concrete type from a `VectorValue`.
+    fn try_borrow_vector_value(v: &VectorValue) -> Option<&[Option<Self>]>;
 }
 
 macro_rules! impl_evaluable_type {
@@ -102,6 +112,22 @@ macro_rules! impl_evaluable_type {
             #[inline]
             fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
                 VectorValue::from(vec)
+            }
+
+            #[inline]
+            default fn try_borrow_scalar_value(v: &ScalarValue) -> Option<&Option<Self>> {
+                match v {
+                    ScalarValue::$ty(value) => Some(value),
+                    _ => None,
+                }
+            }
+
+            #[inline]
+            default fn try_borrow_vector_value(v: &VectorValue) -> Option<&[Option<Self>]> {
+                match v {
+                    VectorValue::$ty(value) => Some(value),
+                    _ => None,
+                }
             }
         }
     };

@@ -560,6 +560,7 @@ impl VargsRpnFn {
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
                     crate::rpn_expr::function::VARG_PARAM_BUF.with(|vargs_buf| {
+                        use crate::codec::data_type::Evaluable;
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, 0);
@@ -776,7 +777,6 @@ impl NormalRpnFn {
         generics
             .params
             .push(parse_str("D_: crate::rpn_expr::function::ArgDef").unwrap());
-        let fn_name = self.item_fn.sig.ident.to_string();
         let fn_trait_ident = &self.fn_trait_ident;
         let tp_ident = Ident::new("D_", Span::call_site());
         let (_, ty_generics, _) = self.item_fn.sig.generics.split_for_impl();
@@ -790,7 +790,7 @@ impl NormalRpnFn {
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    panic!("Cannot apply {} on {:?}", #fn_name, self)
+                    unreachable!()
                 }
             }
         }
@@ -883,8 +883,8 @@ impl NormalRpnFn {
         let evaluator_ident = &self.evaluator_ident;
         let mut evaluator =
             quote! { #evaluator_ident #ty_generics_turbofish (std::marker::PhantomData) };
-        for arg_index in 0..self.arg_types.len() {
-            evaluator = quote! { ArgConstructor::new(#arg_index, #evaluator) };
+        for (arg_index, arg_type) in self.arg_types.iter().enumerate() {
+            evaluator = quote! { <ArgConstructor<#arg_type, _>>::new(#arg_index, #evaluator) };
         }
         let fn_name = self.item_fn.sig.ident.to_string();
 
@@ -968,7 +968,7 @@ mod tests_normal {
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    panic!("Cannot apply {} on {:?}", "foo", self)
+                    unreachable!()
                 }
             }
         };
@@ -984,8 +984,8 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             impl<
                 'arg_,
-                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<Real> > ,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<Int> >
+                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
+                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Int> >
             > Foo_Fn for crate::rpn_expr::function::Arg<
                 Arg0_,
                 crate::rpn_expr::function::Arg<
@@ -1053,15 +1053,16 @@ mod tests_normal {
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
-                    ArgConstructor::new(
+                    <ArgConstructor<Real, _>>::new(
                         1usize,
-                        ArgConstructor::new(0usize, Foo_Evaluator(std::marker::PhantomData))
+                        <ArgConstructor<Int, _>>::new(0usize, Foo_Evaluator(std::marker::PhantomData))
                     )
                     .eval(Null, ctx, output_rows, args, extra)
                 }
                 fn validate(expr: &tipb::Expr) -> crate::Result<()> {
                     use crate::codec::data_type::Evaluable;
                     use crate::rpn_expr::function;
+
                     function::validate_expr_return_type(expr, Decimal::EVAL_TYPE)?;
                     function::validate_expr_arguments_eq(expr, 2usize)?;
                     let children = expr.get_children();
@@ -1083,7 +1084,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             fn foo<A: M, B>(arg0: &Option<A::X>) -> Result<Option<B>>
-            where B: N<M> {
+            where B: N<A> {
                 Ok(None)
             }
         "#,
@@ -1098,7 +1099,7 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             trait Foo_Fn<A: M, B>
             where
-                B: N<M>
+                B: N<A>
             {
                 fn eval(
                     self,
@@ -1118,7 +1119,7 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             impl<A: M, B, D_: crate::rpn_expr::function::ArgDef> Foo_Fn<A, B> for D_
             where
-                B: N<M>
+                B: N<A>
             {
                 default fn eval(
                     self,
@@ -1127,7 +1128,7 @@ mod tests_normal {
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    panic!("Cannot apply {} on {:?}", "foo", self)
+                    unreachable!()
                 }
             }
         };
@@ -1145,11 +1146,11 @@ mod tests_normal {
                 'arg_,
                 A: M,
                 B,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<A::X> >
+                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<A::X> >
             > Foo_Fn<A, B> for crate::rpn_expr::function::Arg<
                 Arg0_,
                 crate::rpn_expr::function::Null
-            > where B: N<M> {
+            > where B: N<A> {
                 default fn eval(
                     self,
                     ctx: &mut crate::expr::EvalContext,
@@ -1179,11 +1180,11 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             pub struct Foo_Evaluator<A: M, B>(std::marker::PhantomData<(A, B)>)
             where
-                B: N<M>;
+                B: N<A>;
 
             impl<A: M, B> crate::rpn_expr::function::Evaluator for Foo_Evaluator<A, B>
             where
-                B: N<M>
+                B: N<A>
             {
                 #[inline]
                 fn eval(
@@ -1207,7 +1208,7 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             pub const fn foo_fn_meta<A: M, B>() -> crate::rpn_expr::RpnFnMeta
             where
-                B: N<M>
+                B: N<A>
             {
                 #[inline]
                 fn run<A: M, B>(
@@ -1217,20 +1218,15 @@ mod tests_normal {
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue>
                 where
-                    B: N<M>
+                    B: N<A>
                 {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
-                    ArgConstructor::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData)).eval(
-                        Null,
-                        ctx,
-                        output_rows,
-                        args,
-                        extra
-                    )
+                    <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
+                                .eval(Null, ctx, output_rows, args, extra)
                 }
                 fn validate<A: M, B>(expr: &tipb::Expr) -> crate::Result<()>
                 where
-                    B: N<M>
+                    B: N<A>
                 {
                     use crate::codec::data_type::Evaluable;
                     use crate::rpn_expr::function;
@@ -1279,8 +1275,8 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             impl<
                 'arg_,
-                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<Real> > ,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<Int> >
+                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
+                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Int> >
             > Foo_Fn for crate::rpn_expr::function::Arg<
                 Arg0_,
                 crate::rpn_expr::function::Arg<
