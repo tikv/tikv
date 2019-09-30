@@ -201,7 +201,7 @@ mod parser {
             sum = sum
                 .checked_mul(10)
                 .and_then(|t| t.checked_add(u32::from(digit - b'0')))
-                .ok_or(Error::truncated())?;
+                .ok_or_else(Error::truncated)?;
         }
         Ok(sum)
     }
@@ -210,7 +210,7 @@ mod parser {
         let end = input
             .iter()
             .position(|&c| !c.is_ascii_digit())
-            .unwrap_or(input.len());
+            .unwrap_or_else(|| input.len());
         assert(end != 0)?;
         Ok((&input[end..], &input[..end]))
     }
@@ -219,7 +219,7 @@ mod parser {
         let end = input
             .iter()
             .position(|&c| !c.is_ascii_whitespace())
-            .unwrap_or(input.len());
+            .unwrap_or_else(|| input.len());
 
         assert(end < input.len())?;
         Ok(&input[end..])
@@ -390,13 +390,13 @@ mod parser {
             }
             3..=7 => {
                 let whole = std::cmp::min(components.len(), 6);
-                let mut parts: Vec<_> = components[..whole].into_iter().try_fold(
-                    vec![],
-                    |mut acc, part| -> Result<_> {
-                        acc.push(bytes_to_u32(part)?);
-                        Ok(acc)
-                    },
-                )?;
+                let mut parts: Vec<_> =
+                    components[..whole]
+                        .iter()
+                        .try_fold(vec![], |mut acc, part| -> Result<_> {
+                            acc.push(bytes_to_u32(part)?);
+                            Ok(acc)
+                        })?;
                 parts.resize(6, 0);
 
                 let (carry, frac) = if let Some(frac) = components.get(6) {
