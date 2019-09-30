@@ -616,8 +616,6 @@ impl<S: Snapshot> MvccTxn<S> {
                         .to_vec()..,
                     );
                 }
-            } else if !write_minor.valid()? {
-                continue;
             }
             // two cursor implementation
             // if !write_minor.valid()? {

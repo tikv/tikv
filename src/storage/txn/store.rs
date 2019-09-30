@@ -253,6 +253,10 @@ impl<S: Snapshot> SnapshotStore<S> {
         }
     }
 
+    pub fn set_start_ts(&mut self, start_ts: u64) {
+        self.start_ts = start_ts;
+    }
+
     fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
         if let Some(ref l) = lower_bound {
             if let Some(b) = self.snapshot.lower_bound() {

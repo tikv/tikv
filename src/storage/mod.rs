@@ -26,7 +26,7 @@ use engine::rocks::DB;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
@@ -119,6 +119,33 @@ pub enum StorageCb {
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
     TxnStatus(Callback<(u64, u64)>),
+}
+
+pub struct ReadpoolCommand {
+    req: u64,
+    ctx: Context,
+    key: Key,
+    ts: Option<u64>,
+}
+
+impl ReadpoolCommand {
+    pub fn from_get(request_id: u64, request: &mut GetRequest) -> Self {
+        ReadpoolCommand {
+            req: request_id,
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: Some(request.get_version()),
+        }
+    }
+
+    pub fn from_raw_get(request_id: u64, request: &mut RawGetRequest) -> Self {
+        ReadpoolCommand {
+            req: request_id,
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: None,
+        }
+    }
 }
 
 /// Store Transaction scheduler commands.
@@ -967,6 +994,48 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             .flatten()
     }
 
+    pub fn batch_async_get(
+        &self,
+        gets: Vec<ReadpoolCommand>,
+        callback: BatchCallback<Option<Vec<u8>>>,
+    ) -> Result<()> {
+        const CMD: &str = "get";
+        let ctx = gets[0].ctx.clone();
+        let priority = get_priority_tag(ctx.get_priority());
+        let res = self.get_read_pool(priority).spawn_handle(move || {
+            tls_collect_command_count(CMD, priority);
+            Self::with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
+                    tls_processing_read_observe_duration(CMD, || {
+                        let mut statistics = Statistics::default();
+                        let mut snap_store = SnapshotStore::new(
+                            snapshot,
+                            0,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                        );
+                        for get in gets {
+                            snap_store.set_start_ts(get.ts.unwrap());
+                            callback(
+                                get.req,
+                                snap_store
+                                    .get(&get.key, &mut statistics)
+                                    .map_err(Error::from),
+                            );
+                        }
+                        Ok(())
+                    })
+                })
+            })
+        });
+        // uncaptured SchedTooBusy
+        if res.is_err() {
+            Err(Error::SchedTooBusy)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Get values of a set of keys in a batch from the snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
@@ -1161,10 +1230,9 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// The prewrite phase of a transaction. The first phase of 2PC.
     ///
     /// Schedules a [`Command::Prewrite`].
-    pub fn batch_prewrite(
+    pub fn batch_async_prewrite(
         &self,
         mut command: Command,
-        // callback: Callback<Vec<Result<()>>>,
         callback: BatchCallback<Vec<Result<()>>>,
     ) -> Result<()> {
         if let Command::MiniBatch {
@@ -1249,7 +1317,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         Ok(())
     }
 
-    pub fn batch_commit(
+    pub fn batch_async_commit(
         &self,
         command: Command,
         callback: BatchCallback<Vec<Result<()>>>,
@@ -1545,6 +1613,45 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
             .flatten()
+    }
+
+    pub fn batch_async_raw_get(
+        &self,
+        cf: String,
+        gets: Vec<ReadpoolCommand>,
+        callback: BatchCallback<Option<Vec<u8>>>,
+    ) -> Result<()> {
+        const CMD: &str = "raw_get";
+        let ctx = gets[0].ctx.clone();
+        let priority = get_priority_tag(ctx.get_priority());
+        let res = self.get_read_pool(priority).spawn_handle(move || {
+            tls_collect_command_count(CMD, priority);
+            Self::with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
+                    tls_processing_read_observe_duration(CMD, || {
+                        let cf = match Self::rawkv_cf(&cf) {
+                            Ok(x) => x,
+                            _ => {
+                                for get in gets {
+                                    callback(get.req, Err(Error::InvalidCf(cf.to_owned())));
+                                }
+                                return Ok(());
+                            }
+                        };
+                        for get in gets {
+                            callback(get.req, snapshot.get_cf(cf, &get.key).map_err(Error::from));
+                        }
+                        Ok(())
+                    })
+                })
+            })
+        });
+        // uncaptured SchedTooBusy
+        if res.is_err() {
+            Err(Error::SchedTooBusy)
+        } else {
+            Ok(())
+        }
     }
 
     /// Get the values of some raw keys in a batch.
