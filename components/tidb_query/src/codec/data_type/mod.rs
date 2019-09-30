@@ -115,7 +115,7 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            default fn try_borrow_scalar_value(v: &ScalarValue) -> Option<&Option<Self>> {
+            fn try_borrow_scalar_value(v: &ScalarValue) -> Option<&Option<Self>> {
                 match v {
                     ScalarValue::$ty(value) => Some(value),
                     _ => None,
@@ -123,7 +123,7 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            default fn try_borrow_vector_value(v: &VectorValue) -> Option<&[Option<Self>]> {
+            fn try_borrow_vector_value(v: &VectorValue) -> Option<&[Option<Self>]> {
                 match v {
                     VectorValue::$ty(value) => Some(value),
                     _ => None,

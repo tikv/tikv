@@ -199,9 +199,9 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                     };
                     self.inner.eval(new_def, ctx, output_rows, args, extra)
                 } else {
-                    // TODO: Should print fn name
+                    // TODO: Should print fn name as well
                     panic!(
-                        "Cannot apply {:?} at {} argument postion",
+                        "Cannot apply {:?} at argument postion {}",
                         value, self.arg_index
                     );
                 }
@@ -218,9 +218,9 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                     };
                     self.inner.eval(new_def, ctx, output_rows, args, extra)
                 } else {
-                    // TODO: Should print fn name
+                    // TODO: Should print fn name as well
                     panic!(
-                        "Cannot apply {:?} at {} argument postion",
+                        "Cannot apply {:?} at argument postion {}",
                         value, self.arg_index
                     );
                 }
