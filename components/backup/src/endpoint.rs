@@ -508,9 +508,7 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
 impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
-        self.pool
-            .borrow_mut()
-            .check_active(pool_idle_duration.clone());
+        self.pool.borrow_mut().check_active(pool_idle_duration);
         timer.add_task(pool_idle_duration, ());
     }
 }
@@ -1107,7 +1105,7 @@ pub mod tests {
         let (tx, _) = futures::sync::mpsc::unbounded();
         let (task, _) = Task::new(req, tx).unwrap();
 
-        // if not task arrive after create the thread pool is empty
+        // if no task arrive after create, the thread pool is empty
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
 
         scheduler.send(Some(task)).unwrap();
@@ -1119,7 +1117,7 @@ pub mod tests {
         thread::sleep(Duration::from_millis(50));
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
 
-        // thread pool shutdown if not task arrive for 100ms
+        // thread pool shutdown if no task arrive for 100ms
         thread::sleep(Duration::from_millis(50));
         assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
     }
