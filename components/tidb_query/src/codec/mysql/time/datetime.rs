@@ -197,14 +197,11 @@ mod parser {
     fn bytes_to_u32(input: &[u8]) -> Result<u32> {
         let mut sum = 0u32;
         for digit in input {
-            if digit.is_ascii_digit() {
-                sum = sum
-                    .checked_mul(10)
-                    .and_then(|t| t.checked_add(u32::from(digit - b'0')))
-                    .ok_or(Error::truncated())?;
-            } else {
-                return Err(Error::truncated());
-            }
+            assert(digit.is_ascii_digit())?;
+            sum = sum
+                .checked_mul(10)
+                .and_then(|t| t.checked_add(u32::from(digit - b'0')))
+                .ok_or(Error::truncated())?;
         }
         Ok(sum)
     }
@@ -214,11 +211,8 @@ mod parser {
             .iter()
             .position(|&c| !c.is_ascii_digit())
             .unwrap_or(input.len());
-        if end == 0 {
-            Err(Error::truncated())
-        } else {
-            Ok((&input[end..], &input[..end]))
-        }
+        assert(end != 0)?;
+        Ok((&input[end..], &input[..end]))
     }
 
     fn space1(input: &[u8]) -> Result<&[u8]> {
@@ -227,11 +221,8 @@ mod parser {
             .position(|&c| !c.is_ascii_whitespace())
             .unwrap_or(input.len());
 
-        if end == input.len() {
-            Err(Error::truncated())
-        } else {
-            Ok(&input[end..])
-        }
+        assert(end < input.len())?;
+        Ok(&input[end..])
     }
 
     /// We assume that the `input` is trimed and is not empty.
@@ -299,7 +290,7 @@ mod parser {
         let year_digits = match input.len() {
             14 | 8 => 4,
             9..=12 | 5..=7 => 2,
-            _ => return Err(box_err!("Invalid float string")),
+            _ => return Err(Error::truncated()),
         };
 
         parts[0] = bytes_to_u32(&input[..year_digits])?;
@@ -381,6 +372,10 @@ mod parser {
                 let whole = parse_whole(components[0])?;
 
                 let (carry, frac) = if let Some(frac) = components.get(1) {
+                    // If we have a fractional part,
+                    // we expect the `whole` is in format: yymmddhhmmss/yyyymmddhhmmss.
+                    // Otherwise, the fractional part is meaningless.
+                    assert(components[0].len() == 12 || components[0].len() == 14)?;
                     parse_frac(frac, fsp, round)?
                 } else {
                     (false, 0)
@@ -802,6 +797,7 @@ impl Time {
         self.set_fsp_tt(mask);
     }
 
+    // TODO: Add some tests for it.
     pub fn from_packed_u64(
         ctx: &mut EvalContext,
         value: u64,
@@ -1004,6 +1000,25 @@ mod tests {
                 expected,
                 Time::parse(&mut ctx, actual, TimeType::DateTime, fsp, round)?.to_string()
             );
+        }
+
+        let should_fail = vec![
+            ("11-12-13 T 12:34:56", 0),
+            ("11:12:13 T12:34:56", 0),
+            ("11:12:13 T12:34:56.12", 7),
+            ("11121311121.1", 2),
+            ("1112131112.1", 2),
+            ("111213111.1", 2),
+            ("11121311.1", 2),
+            ("1112131.1", 2),
+            ("111213.1", 2),
+            ("111213.1", 2),
+            ("11121.1", 2),
+            ("1112", 2),
+        ];
+
+        for (case, fsp) in should_fail {
+            assert!(Time::parse(&mut ctx, case, TimeType::DateTime, fsp, false).is_err());
         }
         Ok(())
     }
