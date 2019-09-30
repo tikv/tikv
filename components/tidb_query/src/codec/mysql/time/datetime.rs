@@ -1,11 +1,10 @@
 use std::convert::{TryFrom, TryInto};
-use std::sync::Arc;
 
 use crate::codec;
-use crate::codec::mysql::{self, Tz};
+use crate::codec::mysql;
 use crate::codec::TEN_POW;
 use crate::codec::{Error, Result};
-use crate::expr::{EvalConfig, EvalContext, Flag, SqlMode};
+use crate::expr::{EvalContext, Flag, SqlMode};
 
 use tidb_query_datatype::FieldTypeTp;
 
@@ -74,62 +73,6 @@ bitfield! {
     // Since `Date` does not require `fsp`, we could use `fsp` == 0b111 to represent it.
     #[inline]
     u8, get_fsp_tt, set_fsp_tt: 3, 0;
-}
-
-#[derive(Debug)]
-struct DateTimeConfig {
-    strict_mode: bool,
-    no_zero_in_date: bool,
-    no_zero_date: bool,
-    allow_invalid_date: bool,
-    ignore_truncate: bool,
-    time_zone: Option<Tz>,
-}
-
-impl DateTimeConfig {
-    pub fn from_ctx(ctx: &EvalContext) -> DateTimeConfig {
-        let sql_mode = ctx.cfg.sql_mode;
-        let flags = ctx.cfg.flag;
-        DateTimeConfig {
-            strict_mode: sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
-                | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES),
-            no_zero_in_date: sql_mode.contains(SqlMode::NO_ZERO_IN_DATE),
-            no_zero_date: sql_mode.contains(SqlMode::NO_ZERO_DATE),
-            allow_invalid_date: sql_mode.contains(SqlMode::INVALID_DATES),
-            ignore_truncate: flags.contains(Flag::IGNORE_TRUNCATE),
-            time_zone: Some(ctx.cfg.tz.clone()),
-        }
-    }
-}
-
-impl From<DateTimeConfig> for EvalContext {
-    fn from(config: DateTimeConfig) -> EvalContext {
-        let mut eval_config = EvalConfig::new();
-        let mut sql_mode = SqlMode::empty();
-        let mut flags = Flag::empty();
-
-        if config.strict_mode {
-            sql_mode |= SqlMode::STRICT_ALL_TABLES;
-        }
-        if config.allow_invalid_date {
-            sql_mode |= SqlMode::INVALID_DATES;
-        }
-        if config.no_zero_date {
-            sql_mode |= SqlMode::NO_ZERO_DATE;
-        }
-        if config.no_zero_in_date {
-            sql_mode |= SqlMode::NO_ZERO_IN_DATE;
-        }
-
-        if config.ignore_truncate {
-            flags |= Flag::IGNORE_TRUNCATE;
-        }
-
-        eval_config.set_sql_mode(sql_mode).set_flag(flags).tz =
-            config.time_zone.unwrap_or_else(Tz::utc);
-
-        EvalContext::new(Arc::new(eval_config))
-    }
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -429,13 +372,15 @@ impl Time {
 macro_rules! handle_zero_date {
     ($datetime:expr, $ctx:expr) => {{
         let ctx: &mut EvalContext = $ctx;
-        let DateTimeConfig {
-            strict_mode,
-            no_zero_date,
-            ignore_truncate,
-            ..
-        } = DateTimeConfig::from_ctx(ctx);
-        let datetime: TimeValidator = $datetime;
+        let sql_mode = ctx.cfg.sql_mode;
+        let flags = ctx.cfg.flag;
+
+        let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
+            | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
+        let no_zero_date = sql_mode.contains(SqlMode::NO_ZERO_DATE);
+        let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
+
+        let datetime: TimeArgs = $datetime;
         assert!(datetime.is_zero_date());
         if no_zero_date {
             if strict_mode && !ignore_truncate {
@@ -452,13 +397,15 @@ macro_rules! handle_zero_date {
 macro_rules! handle_zero_in_date {
     ($datetime:expr, $ctx:expr) => {{
         let ctx: &mut EvalContext = $ctx;
-        let DateTimeConfig {
-            strict_mode,
-            no_zero_in_date,
-            ignore_truncate,
-            ..
-        } = DateTimeConfig::from_ctx(ctx);
-        let mut datetime: TimeValidator = $datetime;
+        let sql_mode = ctx.cfg.sql_mode;
+        let flags = ctx.cfg.flag;
+
+        let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
+            | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
+        let no_zero_in_date = sql_mode.contains(SqlMode::NO_ZERO_IN_DATE);
+        let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
+
+        let mut datetime: TimeArgs = $datetime;
         assert!(datetime.month == 0 || datetime.day == 0);
         if no_zero_in_date {
             // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
@@ -478,10 +425,11 @@ macro_rules! handle_zero_in_date {
 macro_rules! handle_invalid_date {
     ($datetime:expr, $ctx:expr) => {{
         let ctx: &mut EvalContext = $ctx;
-        let DateTimeConfig {
-            allow_invalid_date, ..
-        } = DateTimeConfig::from_ctx(ctx);
-        let mut datetime: TimeValidator = $datetime;
+        let sql_mode = ctx.cfg.sql_mode;
+
+        let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
+
+        let mut datetime: TimeArgs = $datetime;
         if allow_invalid_date {
             datetime.clear();
             return Ok(handle_zero_date!(datetime, ctx));
@@ -498,7 +446,7 @@ macro_rules! handle_invalid_date {
 /// `month` and set it, we will got 0 (16 % 16 == 0) instead 16 which is definitely
 /// an invalid value. So we need a larger range for validation.
 #[derive(Debug)]
-struct TimeValidator {
+pub struct TimeArgs {
     year: u32,
     month: u32,
     day: u32,
@@ -510,32 +458,8 @@ struct TimeValidator {
     time_type: TimeType,
 }
 
-impl TimeValidator {
-    pub fn new(
-        year: u32,
-        month: u32,
-        day: u32,
-        hour: u32,
-        minute: u32,
-        second: u32,
-        micro: u32,
-        fsp: u8,
-        time_type: TimeType,
-    ) -> Self {
-        TimeValidator {
-            year,
-            month,
-            day,
-            hour,
-            minute,
-            second,
-            micro,
-            fsp,
-            time_type,
-        }
-    }
-
-    fn check(self, ctx: &mut EvalContext) -> Result<TimeValidator> {
+impl TimeArgs {
+    fn check(self, ctx: &mut EvalContext) -> Result<TimeArgs> {
         match self.time_type {
             TimeType::Date => self.check_date(ctx),
             TimeType::DateTime => self.check_datetime(ctx),
@@ -561,10 +485,8 @@ impl TimeValidator {
         let Self {
             year, month, day, ..
         } = self;
-        let DateTimeConfig {
-            allow_invalid_date: is_relaxed,
-            ..
-        } = DateTimeConfig::from_ctx(ctx);
+
+        let is_relaxed = ctx.cfg.sql_mode.contains(SqlMode::INVALID_DATES);
 
         if self.is_zero_date() {
             self = handle_zero_date!(self, ctx);
@@ -642,37 +564,6 @@ impl TimeValidator {
     }
 }
 
-impl From<TimeValidator> for Time {
-    fn from(validator: TimeValidator) -> Time {
-        // If the type of validator is `Date`, ignore the hms[.fraction] part.
-        if validator.time_type == TimeType::Date {
-            Time::new(
-                validator.year,
-                validator.month,
-                validator.day,
-                0,
-                0,
-                0,
-                0,
-                0,
-                validator.time_type,
-            )
-        } else {
-            Time::new(
-                validator.year,
-                validator.month,
-                validator.day,
-                validator.hour,
-                validator.minute,
-                validator.second,
-                validator.micro,
-                validator.fsp,
-                validator.time_type,
-            )
-        }
-    }
-}
-
 // Utility
 impl Time {
     fn from_slice(
@@ -684,25 +575,35 @@ impl Time {
         let [year, month, day, hour, minute, second, micro]: [u32; 7] =
             parts.try_into().map_err(|_| Error::truncated())?;
 
-        TimeValidator::new(
-            year, month, day, hour, minute, second, micro, fsp, time_type,
+        Time::new(
+            ctx,
+            TimeArgs {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                micro,
+                fsp,
+                time_type,
+            },
         )
-        .check(ctx)
-        .map(Time::from)
     }
 
-    fn new(
-        year: u32,
-        month: u32,
-        day: u32,
-        hour: u32,
-        minute: u32,
-        second: u32,
-        micro: u32,
-        fsp: u8,
-        time_type: TimeType,
-    ) -> Self {
+    fn unchecked_new(config: TimeArgs) -> Self {
         let mut time = Time(0);
+        let TimeArgs {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            micro,
+            fsp,
+            time_type,
+        } = config;
         time.set_year(year);
         time.set_month(month);
         time.set_day(day);
@@ -713,6 +614,17 @@ impl Time {
         time.set_fsp(fsp);
         time.set_time_type(time_type);
         time
+    }
+
+    pub fn new(ctx: &mut EvalContext, mut config: TimeArgs) -> Result<Time> {
+        if config.time_type == TimeType::Date {
+            config.hour = 0;
+            config.minute = 0;
+            config.second = 0;
+            config.micro = 0;
+            config.fsp = 0;
+        }
+        Ok(Self::unchecked_new(config.check(ctx)?))
     }
 
     fn check_month_and_day(
@@ -815,11 +727,20 @@ impl Time {
         let hour = (hms >> 12) as u32;
         let micro = (value & !(1 << 24)) as u32;
 
-        TimeValidator::new(
-            year, month, day, hour, minute, second, micro, fsp, time_type,
+        Time::new(
+            ctx,
+            TimeArgs {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                micro,
+                fsp,
+                time_type,
+            },
         )
-        .check(ctx)
-        .map(Time::from)
     }
 }
 
@@ -878,6 +799,50 @@ impl std::fmt::Debug for Time {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::mysql::Tz;
+    use crate::expr::EvalConfig;
+
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct TimeEnv {
+        strict_mode: bool,
+        no_zero_in_date: bool,
+        no_zero_date: bool,
+        allow_invalid_date: bool,
+        ignore_truncate: bool,
+        time_zone: Option<Tz>,
+    }
+
+    impl From<TimeEnv> for EvalContext {
+        fn from(config: TimeEnv) -> EvalContext {
+            let mut eval_config = EvalConfig::new();
+            let mut sql_mode = SqlMode::empty();
+            let mut flags = Flag::empty();
+
+            if config.strict_mode {
+                sql_mode |= SqlMode::STRICT_ALL_TABLES;
+            }
+            if config.allow_invalid_date {
+                sql_mode |= SqlMode::INVALID_DATES;
+            }
+            if config.no_zero_date {
+                sql_mode |= SqlMode::NO_ZERO_DATE;
+            }
+            if config.no_zero_in_date {
+                sql_mode |= SqlMode::NO_ZERO_IN_DATE;
+            }
+
+            if config.ignore_truncate {
+                flags |= Flag::IGNORE_TRUNCATE;
+            }
+
+            eval_config.set_sql_mode(sql_mode).set_flag(flags).tz =
+                config.time_zone.unwrap_or_else(Tz::utc);
+
+            EvalContext::new(Arc::new(eval_config))
+        }
+    }
 
     #[test]
     fn test_parse_valid_date() -> Result<()> {
@@ -1100,7 +1065,7 @@ mod tests {
         ];
 
         for (expected, actual) in cases {
-            let mut ctx = EvalContext::from(DateTimeConfig {
+            let mut ctx = EvalContext::from(TimeEnv {
                 strict_mode: false,
                 no_zero_in_date: false,
                 no_zero_date: false,
@@ -1118,7 +1083,7 @@ mod tests {
 
     #[test]
     fn test_invalid_datetime() -> Result<()> {
-        let mut ctx = EvalContext::from(DateTimeConfig {
+        let mut ctx = EvalContext::from(TimeEnv {
             strict_mode: false,
             no_zero_in_date: false,
             no_zero_date: false,
@@ -1144,7 +1109,7 @@ mod tests {
 
     #[test]
     fn test_allow_invalid_timestamp() -> Result<()> {
-        let mut ctx = EvalContext::from(DateTimeConfig {
+        let mut ctx = EvalContext::from(TimeEnv {
             strict_mode: false,
             no_zero_in_date: false,
             no_zero_date: false,
@@ -1170,7 +1135,7 @@ mod tests {
             ("2018-04-01 02:00:00", "America/Monterrey"),
         ];
         for (timestamp, time_zone) in dsts {
-            let mut ctx = EvalContext::from(DateTimeConfig {
+            let mut ctx = EvalContext::from(TimeEnv {
                 strict_mode: false,
                 no_zero_in_date: false,
                 no_zero_date: false,
@@ -1190,7 +1155,7 @@ mod tests {
     #[test]
     fn test_no_zero_date() -> Result<()> {
         // Enable NO_ZERO_DATE only. If zero-date is encountered, a warning is produced.
-        let mut ctx = EvalContext::from(DateTimeConfig {
+        let mut ctx = EvalContext::from(TimeEnv {
             no_zero_date: true,
             no_zero_in_date: false,
             ignore_truncate: false,
@@ -1211,7 +1176,7 @@ mod tests {
 
         // Enable both NO_ZERO_DATE and STRICT_MODE.
         // If zero-date is encountered, an error is returned.
-        let mut ctx = EvalContext::from(DateTimeConfig {
+        let mut ctx = EvalContext::from(TimeEnv {
             no_zero_date: true,
             strict_mode: true,
             no_zero_in_date: false,
@@ -1231,7 +1196,7 @@ mod tests {
 
         // Enable NO_ZERO_DATE, STRICT_MODE and IGNORE_TRUNCATE.
         // If zero-date is encountered, an error is returned.
-        let mut ctx = EvalContext::from(DateTimeConfig {
+        let mut ctx = EvalContext::from(TimeEnv {
             no_zero_date: true,
             strict_mode: true,
             ignore_truncate: true,
@@ -1263,7 +1228,7 @@ mod tests {
         for case in cases {
             // Enable NO_ZERO_DATE, STRICT_MODE and ALLOW_INVALID_DATE.
             // If an invalid date (converted to zero-date) is encountered, an error is returned.
-            let mut ctx = EvalContext::from(DateTimeConfig {
+            let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_date: true,
                 strict_mode: true,
                 ignore_truncate: false,
@@ -1283,7 +1248,7 @@ mod tests {
 
         for &case in cases.iter() {
             // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is produced.
-            let mut ctx = EvalContext::from(DateTimeConfig {
+            let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_in_date: true,
                 no_zero_date: false,
                 ignore_truncate: false,
@@ -1299,7 +1264,7 @@ mod tests {
 
         // Enable NO_ZERO_IN_DATE, STRICT_MODE and IGNORE_TRUNCATE.
         // If zero-date is encountered, an error is returned.
-        let mut ctx = EvalContext::from(DateTimeConfig {
+        let mut ctx = EvalContext::from(TimeEnv {
             no_zero_in_date: true,
             strict_mode: true,
             ignore_truncate: true,
@@ -1325,7 +1290,7 @@ mod tests {
         for &case in cases.iter() {
             // Enable both NO_ZERO_IN_DATE and STRICT_MODE,.
             // If zero-date is encountered, an error is returned.
-            let mut ctx = EvalContext::from(DateTimeConfig {
+            let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_in_date: true,
                 strict_mode: true,
                 no_zero_date: false,
