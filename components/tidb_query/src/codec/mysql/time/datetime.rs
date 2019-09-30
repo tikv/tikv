@@ -223,7 +223,7 @@ mod parser {
         }
     }
 
-    /// return an array that stores [year, month, day, hour, minute, second]
+    /// return an array that stores `[year, month, day, hour, minute, second]`
     fn parse_whole(input: &[u8]) -> Result<[u32; 6]> {
         let mut parts = [0u32; 6];
 
