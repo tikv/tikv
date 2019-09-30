@@ -336,8 +336,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         region_info_accessor.clone(),
         engines.kv.clone(),
     );
+    let backup_timer = backup_endpoint.new_timer();
     backup_worker
-        .start(backup_endpoint)
+        .start_with_timer(backup_endpoint, backup_timer)
         .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
     // Start auto gc

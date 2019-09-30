@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+use std::cmp;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
@@ -9,6 +11,7 @@ use engine::rocks::util::io_limiter::IOLimiter;
 use engine::DB;
 use external_storage::*;
 use futures::lazy;
+use futures::prelude::Future;
 use futures::sync::mpsc::*;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -18,14 +21,17 @@ use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::{Key, Statistics};
-use tikv_util::worker::Runnable;
+use tikv_util::timer::Timer;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 
 use crate::metrics::*;
 use crate::*;
 
 const WORKER_TAKE_RANGE: usize = 6;
-const WORKER_NUM: usize = 8;
+
+// if thread pool has been idle for such long time, we will shutdown it.
+const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 
 /// Backup task.
 pub struct Task {
@@ -33,10 +39,9 @@ pub struct Task {
     end_key: Vec<u8>,
     start_ts: u64,
     end_ts: u64,
-
     storage: LimitedStorage,
     pub(crate) resp: UnboundedSender<BackupResponse>,
-
+    concurrency: u32,
     cancel: Arc<AtomicBool>,
 }
 
@@ -88,6 +93,7 @@ impl Task {
                 end_ts: req.get_end_version(),
                 resp,
                 storage,
+                concurrency: req.get_concurrency(),
                 cancel: cancel.clone(),
             },
             cancel,
@@ -169,7 +175,8 @@ type BackupRes = (Vec<File>, Statistics);
 /// It coordinates backup tasks and dispatches them to different workers.
 pub struct Endpoint<E: Engine, R: RegionInfoProvider> {
     store_id: u64,
-    workers: ThreadPool,
+    pool: RefCell<ControlThreadPool>,
+    pool_idle_threshold: u64,
     db: Arc<DB>,
 
     pub(crate) engine: E,
@@ -267,19 +274,76 @@ impl<R: RegionInfoProvider> Progress<R> {
     }
 }
 
-impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
-    pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
+struct ControlThreadPool {
+    size: usize,
+    workers: Option<ThreadPool>,
+    last_active: Instant,
+}
+
+impl ControlThreadPool {
+    fn new() -> Self {
+        ControlThreadPool {
+            size: 0,
+            workers: None,
+            last_active: Instant::now(),
+        }
+    }
+
+    fn spawn<F>(&mut self, future: F)
+    where
+        F: Future<Item = (), Error = ()> + Send + 'static,
+    {
+        self.workers.as_ref().unwrap().spawn(future);
+    }
+
+    /// Lazily adjust the thread pool's size
+    ///
+    /// Resizing if the thread pool need to expend or there
+    /// are too many idle threads. Otherwise do nothing.
+    fn adjust_with(&mut self, new_size: usize) {
+        if self.size >= new_size && self.size - new_size <= 10 {
+            return;
+        }
         let workers = ThreadPoolBuilder::new()
             .name_prefix("backup-worker")
-            .pool_size(8) // TODO: make it configure.
+            .pool_size(new_size)
             .build();
+        let _ = self.workers.replace(workers);
+        self.size = new_size;
+        BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
+    }
+
+    fn heartbeat(&mut self) {
+        self.last_active = Instant::now();
+    }
+
+    /// Shutdown the thread pool if it has been idle for a long time.
+    fn check_active(&mut self, idle_threshold: Duration) {
+        if self.last_active.elapsed() >= idle_threshold {
+            self.size = 0;
+            if let Some(w) = self.workers.take() {
+                w.shutdown();
+            }
+        }
+    }
+}
+
+impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
+    pub fn new(store_id: u64, engine: E, region_info: R, db: Arc<DB>) -> Endpoint<E, R> {
         Endpoint {
             store_id,
             engine,
             region_info,
-            workers,
+            pool: RefCell::new(ControlThreadPool::new()),
+            pool_idle_threshold: IDLE_THREADPOOL_DURATION,
             db,
         }
+    }
+
+    pub fn new_timer(&self) -> Timer<()> {
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(self.pool_idle_threshold), ());
+        timer
     }
 
     fn spawn_backup_worker(
@@ -299,7 +363,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let db = self.db.clone();
         let store_id = self.store_id;
         // TODO: make it async.
-        self.workers.spawn(lazy(move || loop {
+        self.pool.borrow_mut().spawn(lazy(move || loop {
             let branges = prs.lock().unwrap().forward(WORKER_TAKE_RANGE);
             if branges.is_empty() {
                 return Ok(());
@@ -355,7 +419,9 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             end_key,
             self.region_info.clone(),
         )));
-        for _ in 0..WORKER_NUM {
+        let concurrency = cmp::max(1, task.concurrency) as usize;
+        self.pool.borrow_mut().adjust_with(concurrency);
+        for _ in 0..concurrency {
             self.spawn_backup_worker(
                 prs.clone(),
                 task.start_ts,
@@ -428,6 +494,7 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
         info!("run backup task"; "task" => %task);
         if task.start_ts == task.end_ts {
             self.handle_backup_task(task);
+            self.pool.borrow_mut().heartbeat();
         } else {
             // TODO: support incremental backup
             BACKUP_RANGE_ERROR_VEC
@@ -435,6 +502,14 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
                 .inc();
             error!("incremental backup is not supported yet");
         }
+    }
+}
+
+impl<E: Engine, R: RegionInfoProvider> RunnableWithTimer<Task, ()> for Endpoint<E, R> {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        let pool_idle_duration = Duration::from_millis(self.pool_idle_threshold);
+        self.pool.borrow_mut().check_active(pool_idle_duration);
+        timer.add_task(pool_idle_duration, ());
     }
 }
 
@@ -493,9 +568,10 @@ fn backup_file_name(store_id: u64, region: &Region) -> String {
 pub mod tests {
     use super::*;
     use external_storage::LocalStorage;
-    use futures::{Future, Stream};
+    use futures::{self, Future, Stream};
     use kvproto::metapb;
     use rand;
+    use std::thread;
     use tempfile::TempDir;
     use tikv::raftstore::coprocessor::RegionCollector;
     use tikv::raftstore::coprocessor::SeekRegionCallback;
@@ -504,6 +580,7 @@ pub mod tests {
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::SHORT_VALUE_MAX_LEN;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
+    use tikv_util::time::Instant;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -655,6 +732,7 @@ pub mod tests {
                     end_ts: 1,
                     resp: tx,
                     storage,
+                    concurrency: 4,
                     cancel: Arc::default(),
                 };
                 endpoint.handle_backup_task(task);
@@ -749,6 +827,7 @@ pub mod tests {
             req.set_end_key(vec![b'5']);
             req.set_start_version(ts);
             req.set_end_version(ts);
+            req.set_concurrency(4);
             let (tx, rx) = unbounded();
             // Empty path should return an error.
             Task::new(req.clone(), tx.clone()).unwrap_err();
@@ -814,6 +893,7 @@ pub mod tests {
         req.set_end_key(vec![b'5']);
         req.set_start_version(now);
         req.set_end_version(now);
+        req.set_concurrency(4);
         // Set an unique path to avoid AlreadyExists error.
         req.set_path(format!(
             "local://{}",
@@ -890,6 +970,7 @@ pub mod tests {
         req.set_end_key(vec![]);
         req.set_start_version(now);
         req.set_end_version(now);
+        req.set_concurrency(4);
         req.set_path(format!("local://{}", temp.path().display()));
 
         // Cancel the task before starting the task.
@@ -926,6 +1007,7 @@ pub mod tests {
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
+        req.set_concurrency(4);
         req.set_path("noop://foo".to_owned());
 
         let (tx, rx) = unbounded();
@@ -945,5 +1027,99 @@ pub mod tests {
         });
     }
 
+    #[test]
+    fn test_adjust_thread_pool_size() {
+        let (_tmp, endpoint) = new_endpoint();
+        endpoint
+            .region_info
+            .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
+
+        let mut req = BackupRequest::new();
+        req.set_start_key(vec![]);
+        req.set_end_key(vec![]);
+        req.set_start_version(1);
+        req.set_end_version(1);
+        req.set_path("noop://foo".to_owned());
+
+        let (tx, _) = unbounded();
+
+        // at lease spwan one thread
+        req.set_concurrency(0);
+        let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
+        endpoint.handle_backup_task(task);
+        assert!(endpoint.pool.borrow().size == 1);
+
+        // expand thread pool is needed
+        req.set_concurrency(15);
+        let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
+        endpoint.handle_backup_task(task);
+        assert!(endpoint.pool.borrow().size == 15);
+
+        // shrink thread pool only if there are too many idle threads
+        req.set_concurrency(10);
+        let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
+        endpoint.handle_backup_task(task);
+        assert!(endpoint.pool.borrow().size == 15);
+
+        req.set_concurrency(3);
+        let (task, _) = Task::new(req, tx).unwrap();
+        endpoint.handle_backup_task(task);
+        assert!(endpoint.pool.borrow().size == 3);
+    }
+
+    #[test]
+    fn test_thread_pool_shutdown_when_idle() {
+        let (_, mut endpoint) = new_endpoint();
+
+        // set the idle threshold to 100ms
+        endpoint.pool_idle_threshold = 100;
+        let mut backup_timer = endpoint.new_timer();
+        let endpoint = Arc::new(Mutex::new(endpoint));
+        let scheduler = {
+            let endpoint = endpoint.clone();
+            let (tx, rx) = tikv_util::mpsc::unbounded();
+            thread::spawn(move || loop {
+                let tick_time = backup_timer.next_timeout().unwrap();
+                let timeout = tick_time.checked_sub(Instant::now()).unwrap_or_default();
+                let task = match rx.recv_timeout(timeout) {
+                    Ok(Some(task)) => Some(task),
+                    _ => None,
+                };
+                if let Some(task) = task {
+                    let mut endpoint = endpoint.lock().unwrap();
+                    endpoint.run(task);
+                }
+                endpoint.lock().unwrap().on_timeout(&mut backup_timer, ());
+            });
+            tx
+        };
+
+        let mut req = BackupRequest::new();
+        req.set_start_key(vec![]);
+        req.set_end_key(vec![]);
+        req.set_start_version(1);
+        req.set_end_version(1);
+        req.set_concurrency(10);
+        req.set_path("noop://foo".to_owned());
+
+        let (tx, _) = futures::sync::mpsc::unbounded();
+        let (task, _) = Task::new(req, tx).unwrap();
+
+        // if no task arrive after create, the thread pool is empty
+        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
+
+        scheduler.send(Some(task)).unwrap();
+        // wait the task send to worker
+        thread::sleep(Duration::from_millis(10));
+        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
+
+        // thread pool not yet shutdown
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 10);
+
+        // thread pool shutdown if no task arrive for 100ms
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(endpoint.lock().unwrap().pool.borrow().size, 0);
+    }
     // TODO: region err in txn(engine(request))
 }
