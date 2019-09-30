@@ -13,7 +13,7 @@ use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
 use engine::Engines;
-use tikv::config::{CoprReadPoolConfig, StorageReadPoolConfig, TiKvConfig};
+use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -59,6 +59,7 @@ pub struct ServerCluster {
     addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
+    pub importers: HashMap<u64, Arc<SSTImporter>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
@@ -89,6 +90,7 @@ impl ServerCluster {
             pd_client,
             storages: HashMap::default(),
             region_info_accessors: HashMap::default(),
+            importers: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client,
             _stats_pool: stats_pool,
@@ -133,7 +135,7 @@ impl Simulator for ServerCluster {
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool = storage::readpool_impl::build_read_pool_for_test(
-            &StorageReadPoolConfig::default_for_test(),
+            &tikv::config::StorageReadPoolConfig::default_for_test(),
             raft_engine.clone(),
         );
         let store = create_raft_storage(
@@ -166,7 +168,7 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = coprocessor::readpool_impl::build_read_pool_for_test(
-            &CoprReadPoolConfig::default_for_test(),
+            &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         );
         let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
@@ -219,9 +221,6 @@ impl Simulator for ServerCluster {
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
 
-        self.region_info_accessors
-            .insert(node_id, region_info_accessor);
-
         node.start(
             engines.clone(),
             simulate_trans.clone(),
@@ -229,14 +228,16 @@ impl Simulator for ServerCluster {
             pd_worker,
             store_meta,
             coprocessor_host,
-            importer,
+            importer.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
             self.snap_paths.insert(node_id, tmp);
         }
-
+        self.region_info_accessors
+            .insert(node_id, region_info_accessor);
+        self.importers.insert(node_id, importer);
         server.start(server_cfg, security_mgr).unwrap();
 
         self.metas.insert(

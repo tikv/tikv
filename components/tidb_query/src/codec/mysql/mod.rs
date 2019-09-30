@@ -48,6 +48,7 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
     }
 }
 
+pub mod binary_literal;
 pub mod charset;
 pub mod decimal;
 pub mod duration;
