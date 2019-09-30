@@ -13,24 +13,33 @@ mod table_scan;
 mod top_n;
 mod util;
 
-fn main() {
-    let mut cpu_set = nix::sched::CpuSet::new();
-    cpu_set.set(0).unwrap();
-    nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set).unwrap();
-
-    let mut c = criterion::Criterion::default()
-        .with_measurement(criterion_papi::PapiMeasurement::new("PAPI_TOT_INS"))
-        .configure_from_args();
-
-    util::fixture::bench(&mut c);
-    table_scan::bench(&mut c);
-    index_scan::bench(&mut c);
-    selection::bench(&mut c);
-    simple_aggr::bench(&mut c);
-    hash_aggr::bench(&mut c);
-    stream_aggr::bench(&mut c);
-    top_n::bench(&mut c);
-    integrated::bench(&mut c);
+fn execute<M: criterion::measurement::Measurement + 'static>(c: &mut criterion::Criterion<M>) {
+    util::fixture::bench(c);
+    table_scan::bench(c);
+    index_scan::bench(c);
+    selection::bench(c);
+    simple_aggr::bench(c);
+    hash_aggr::bench(c);
+    stream_aggr::bench(c);
+    top_n::bench(c);
+    integrated::bench(c);
 
     c.final_summary();
+}
+
+fn main() {
+    let measurement = std::env::var("MEASUREMENT").unwrap_or_else(|_| String::from("CPU_TIME"));
+    if &measurement == "TOT_INS" {
+        let mut c = criterion::Criterion::default()
+            .with_measurement(criterion_papi::PapiMeasurement::new("PAPI_TOT_INS"))
+            .configure_from_args();
+        execute(&mut c);
+    } else if &measurement == "CPU_TIME" {
+        let mut c = criterion::Criterion::default()
+            .with_measurement(criterion_cpu_time::PosixTime::UserTime)
+            .configure_from_args();
+        execute(&mut c);
+    } else {
+        panic!("unknown measurement");
+    };
 }
