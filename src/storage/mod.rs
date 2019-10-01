@@ -146,6 +146,10 @@ impl ReadpoolCommand {
             ts: None,
         }
     }
+
+    pub fn request(&self) -> u64 {
+        self.req
+    }
 }
 
 /// Store Transaction scheduler commands.

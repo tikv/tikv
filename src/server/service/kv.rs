@@ -568,7 +568,6 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         request_id: u64,
         request: &mut batch_commands_request::request::Cmd,
     ) -> bool {
-        info!("ReadBatcher filter");
         match request {
             batch_commands_request::request::Cmd::Get(req) => self.filter_get(request_id, req),
             batch_commands_request::request::Cmd::RawGet(req) => {
@@ -585,7 +584,9 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
     ) {
         for (id, commands) in self.router.iter_mut() {
             let tx = tx.clone();
+            let tx2 = tx.clone();
             let commands = std::mem::replace(commands, vec![]);
+            let reqs: Vec<u64> = commands.iter().map(|cmd| cmd.request()).collect();
             match &id.cf {
                 Some(cf) => {
                     let res = storage
@@ -611,7 +612,22 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                                 }
                             }),
                         )
-                        .map_err(|e| error!("storage batch get failed"; "err" => ?e))
+                        .map_err(move |e| {
+                            let mut resp = RawGetResponse::default();
+                            let result = Err(e);
+                            if let Some(err) = extract_region_error::<()>(&result) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = result {
+                                resp.set_error(format!("{}", e));
+                            }
+                            let mut res = batch_commands_response::Response::default();
+                            res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                            for req in reqs {
+                                if tx2.send_and_notify((req, res.clone())).is_err() {
+                                    error!("KvService response batch commands fail");
+                                }
+                            }
+                        })
                         .and_then(|_| Ok(()));
                     poll_future_notify(res);
                 }
@@ -637,7 +653,22 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                                 }
                             }),
                         )
-                        .map_err(|e| error!("storage batch get failed"; "err" => ?e))
+                        .map_err(move |e| {
+                            let mut resp = GetResponse::default();
+                            let result = Err(e);
+                            if let Some(err) = extract_region_error::<()>(&result) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = result {
+                                resp.set_error(extract_key_error(&e));
+                            }
+                            let mut res = batch_commands_response::Response::default();
+                            res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                            for req in reqs {
+                                if tx2.send_and_notify((req, res.clone())).is_err() {
+                                    error!("KvService response batch commands fail");
+                                }
+                            }
+                        })
                         .and_then(|_| Ok(()));
                     poll_future_notify(res);
                 }
