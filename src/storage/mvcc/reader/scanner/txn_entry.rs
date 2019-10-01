@@ -390,9 +390,9 @@ mod tests {
             self.commit_ts = commit_ts;
             self
         }
-        fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
+        fn build_commit(&self, write_type: WriteType, is_short_value: bool) -> TxnEntry {
             let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
-            let (key, value, short) = if is_short_value {
+            let (key, value, short_value) = if is_short_value {
                 (vec![], vec![], Some(self.value.clone()))
             } else {
                 (
@@ -403,7 +403,12 @@ mod tests {
                     None,
                 )
             };
-            let write_value = Write::new(wt, self.start_ts, short);
+            let write_value = Write {
+                write_type,
+                start_ts: self.start_ts,
+                short_value,
+                for_update_ts: 0,
+            };
             TxnEntry::Commit {
                 default: (key, value),
                 write: (write_key.into_encoded(), write_value.to_bytes()),

@@ -237,9 +237,9 @@ mod tests {
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
         let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
         let write_value = if fill_short_value {
-            Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec()))
+            Write::commit(WriteType::Put, 0, Some(b"shortvalue".to_vec()))
         } else {
-            Write::new(WriteType::Put, 0, None)
+            Write::commit(WriteType::Put, 0, None)
         }
         .to_bytes();
 
@@ -368,7 +368,7 @@ mod tests {
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
             let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
-            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_v = Write::commit(WriteType::Put, 0, None).to_bytes();
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
             db.put_cf(write_cf, &key, &write_v).unwrap();
             db.flush_cf(write_cf, true).unwrap();
@@ -412,7 +412,7 @@ mod tests {
         let cases = [("a", 4194304), ("b", 4194304), ("c", 4194304)];
         for &(key, vlen) in &cases {
             let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
-            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_v = Write::commit(WriteType::Put, 0, None).to_bytes();
             db.put_cf(write_cf, &key, &write_v).unwrap();
 
             let default_v = vec![0; vlen as usize];

@@ -474,7 +474,8 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let write = Write::new(
+
+        let write = Write::commit(
             WriteType::from_lock_type(lock_type).unwrap(),
             self.start_ts,
             short_value,
@@ -546,14 +547,14 @@ impl<S: Snapshot> MvccTxn<S> {
                         }
 
                         // insert a Rollback to WriteCF when receives Rollback before Prewrite
-                        let write = Write::new(WriteType::Rollback, ts, None);
+                        let write = Write::rollback(ts, 0);
                         self.put_write(key, ts, write.to_bytes());
                         Ok(false)
                     }
                 };
             }
         };
-        let write = Write::new(WriteType::Rollback, self.start_ts, None);
+        let write = Write::rollback(self.start_ts, 0);
         let ts = self.start_ts;
         self.put_write(key.clone(), ts, write.to_bytes());
         self.unlock_key(key.clone());
