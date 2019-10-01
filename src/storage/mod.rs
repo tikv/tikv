@@ -998,42 +998,42 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         &self,
         gets: Vec<ReadpoolCommand>,
         callback: BatchCallback<Option<Vec<u8>>>,
-    ) -> Result<()> {
+    ) -> impl Future<Item = (), Error = Error> {
         const CMD: &str = "get";
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
             Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-                    tls_processing_read_observe_duration(CMD, || {
-                        let mut statistics = Statistics::default();
-                        let mut snap_store = SnapshotStore::new(
-                            snapshot,
-                            0,
-                            ctx.get_isolation_level(),
-                            !ctx.get_not_fill_cache(),
-                        );
-                        for get in gets {
-                            snap_store.set_start_ts(get.ts.unwrap());
-                            callback(
-                                get.req,
-                                snap_store
-                                    .get(&get.key, &mut statistics)
-                                    .map_err(Error::from),
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let mut statistics = Statistics::default();
+                            let mut snap_store = SnapshotStore::new(
+                                snapshot,
+                                0,
+                                ctx.get_isolation_level(),
+                                !ctx.get_not_fill_cache(),
                             );
-                        }
-                        Ok(())
+                            for get in gets {
+                                snap_store.set_start_ts(get.ts.unwrap());
+                                callback(
+                                    get.req,
+                                    snap_store
+                                        .get(&get.key, &mut statistics)
+                                        .map_err(Error::from),
+                                );
+                            }
+                            Ok(())
+                        })
                     })
-                })
+                    .then(|r| r)
             })
         });
         // uncaptured SchedTooBusy
-        if res.is_err() {
-            Err(Error::SchedTooBusy)
-        } else {
-            Ok(())
-        }
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Get values of a set of keys in a batch from the snapshot.
@@ -1620,38 +1620,41 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         cf: String,
         gets: Vec<ReadpoolCommand>,
         callback: BatchCallback<Option<Vec<u8>>>,
-    ) -> Result<()> {
+    ) -> impl Future<Item = (), Error = Error> {
         const CMD: &str = "raw_get";
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
             Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-                    tls_processing_read_observe_duration(CMD, || {
-                        let cf = match Self::rawkv_cf(&cf) {
-                            Ok(x) => x,
-                            _ => {
-                                for get in gets {
-                                    callback(get.req, Err(Error::InvalidCf(cf.to_owned())));
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let cf = match Self::rawkv_cf(&cf) {
+                                Ok(x) => x,
+                                _ => {
+                                    for get in gets {
+                                        callback(get.req, Err(Error::InvalidCf(cf.to_owned())));
+                                    }
+                                    return Ok(());
                                 }
-                                return Ok(());
+                            };
+                            for get in gets {
+                                callback(
+                                    get.req,
+                                    snapshot.get_cf(cf, &get.key).map_err(Error::from),
+                                );
                             }
-                        };
-                        for get in gets {
-                            callback(get.req, snapshot.get_cf(cf, &get.key).map_err(Error::from));
-                        }
-                        Ok(())
+                            Ok(())
+                        })
                     })
-                })
+                    .then(|r| r)
             })
         });
         // uncaptured SchedTooBusy
-        if res.is_err() {
-            Err(Error::SchedTooBusy)
-        } else {
-            Ok(())
-        }
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Get the values of some raw keys in a batch.

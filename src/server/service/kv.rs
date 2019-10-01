@@ -568,6 +568,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         request_id: u64,
         request: &mut batch_commands_request::request::Cmd,
     ) -> bool {
+        info!("ReadBatcher filter");
         match request {
             batch_commands_request::request::Cmd::Get(req) => self.filter_get(request_id, req),
             batch_commands_request::request::Cmd::RawGet(req) => {
@@ -587,55 +588,58 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
             let commands = std::mem::replace(commands, vec![]);
             match &id.cf {
                 Some(cf) => {
-                    let res = storage.batch_async_raw_get(
-                        cf.clone(),
-                        commands,
-                        Box::new(move |id, v: Result<Option<Vec<u8>>, storage::Error>| {
-                            let mut resp = RawGetResponse::default();
-                            if let Some(err) = extract_region_error(&v) {
-                                resp.set_region_error(err);
-                            } else {
-                                match v {
-                                    Ok(Some(val)) => resp.set_value(val),
-                                    Ok(None) => resp.set_not_found(true),
-                                    Err(e) => resp.set_error(format!("{}", e)),
+                    let res = storage
+                        .batch_async_raw_get(
+                            cf.clone(),
+                            commands,
+                            Box::new(move |id, v: Result<Option<Vec<u8>>, storage::Error>| {
+                                let mut resp = RawGetResponse::default();
+                                if let Some(err) = extract_region_error(&v) {
+                                    resp.set_region_error(err);
+                                } else {
+                                    match v {
+                                        Ok(Some(val)) => resp.set_value(val),
+                                        Ok(None) => resp.set_not_found(true),
+                                        Err(e) => resp.set_error(format!("{}", e)),
+                                    }
                                 }
-                            }
-                            let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                            if tx.send_and_notify((id, res)).is_err() {
-                                error!("KvService response batch commands fail");
-                            }
-                        }),
-                    );
-                    if let Err(e) = res {
-                        error!("storage batch raw_get failed"; "err" => ?e);
-                    }
+                                let mut res = batch_commands_response::Response::default();
+                                res.cmd =
+                                    Some(batch_commands_response::response::Cmd::RawGet(resp));
+                                if tx.send_and_notify((id, res)).is_err() {
+                                    error!("KvService response batch commands fail");
+                                }
+                            }),
+                        )
+                        .map_err(|e| error!("storage batch get failed"; "err" => ?e))
+                        .and_then(|_| Ok(()));
+                    poll_future_notify(res);
                 }
                 None => {
-                    let res = storage.batch_async_get(
-                        commands,
-                        Box::new(move |id, v: Result<Option<Value>, storage::Error>| {
-                            let mut resp = RawGetResponse::default();
-                            if let Some(err) = extract_region_error(&v) {
-                                resp.set_region_error(err);
-                            } else {
-                                match v {
-                                    Ok(Some(val)) => resp.set_value(val),
-                                    Ok(None) => resp.set_not_found(true),
-                                    Err(e) => resp.set_error(format!("{}", e)),
+                    let res = storage
+                        .batch_async_get(
+                            commands,
+                            Box::new(move |id, v: Result<Option<Value>, storage::Error>| {
+                                let mut resp = GetResponse::default();
+                                if let Some(err) = extract_region_error(&v) {
+                                    resp.set_region_error(err);
+                                } else {
+                                    match v {
+                                        Ok(Some(val)) => resp.set_value(val),
+                                        Ok(None) => resp.set_not_found(true),
+                                        Err(e) => resp.set_error(extract_key_error(&e)),
+                                    }
                                 }
-                            }
-                            let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                            if tx.send_and_notify((id, res)).is_err() {
-                                error!("KvService response batch commands fail");
-                            }
-                        }),
-                    );
-                    if let Err(e) = res {
-                        error!("storage batch raw_get failed"; "err" => ?e);
-                    }
+                                let mut res = batch_commands_response::Response::default();
+                                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                                if tx.send_and_notify((id, res)).is_err() {
+                                    error!("KvService response batch commands fail");
+                                }
+                            }),
+                        )
+                        .map_err(|e| error!("storage batch get failed"; "err" => ?e))
+                        .and_then(|_| Ok(()));
+                    poll_future_notify(res);
                 }
             }
         }
@@ -673,6 +677,10 @@ impl<E: Engine, L: LockMgr> MiniBatcher<E, L> {
                 Box::new(WriteBatcher::new(CommandKind::commit)),
             ),
         );
+        inners.insert(
+            "get".to_string(),
+            (BatchTimer::new(timeout), Box::new(ReadBatcher::new())),
+        );
         MiniBatcher { inners, tx }
     }
 
@@ -687,6 +695,8 @@ impl<E: Engine, L: LockMgr> MiniBatcher<E, L> {
                     self.inners.get_mut("prewrite")
                 }
                 batch_commands_request::request::Cmd::Commit(_) => self.inners.get_mut("commit"),
+                batch_commands_request::request::Cmd::Get(_)
+                | batch_commands_request::request::Cmd::RawGet(_) => self.inners.get_mut("get"),
                 _ => None,
             };
             if let Some(inner) = inner {
@@ -701,7 +711,7 @@ impl<E: Engine, L: LockMgr> MiniBatcher<E, L> {
 
     pub fn maybe_submit(&mut self, storage: &Storage<E, L>) {
         for inner in self.inners.values_mut() {
-            if inner.0.disabled() {
+            if inner.0.disabled() && !inner.1.is_empty() {
                 inner.1.submit(&self.tx, storage);
             }
         }
