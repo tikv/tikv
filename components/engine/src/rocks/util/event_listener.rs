@@ -5,6 +5,7 @@ use crate::rocks::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, WriteStallCondition,
     WriteStallInfo,
 };
+use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::set_panic_mark;
 
 pub struct EventListener {
@@ -69,9 +70,7 @@ impl engine_rocksdb::EventListener for EventListener {
     fn on_background_error(&self, reason: DBBackgroundErrorReason, result: Result<(), String>) {
         assert!(result.is_err());
         if let Err(err) = result {
-            STORE_ENGINE_EVENT_COUNTER_VEC
-                .with_label_values(&[&self.db_name, "db", "background_error"])
-                .inc();
+            CRITICAL_ERROR.with_label_values(&["rocksdb"]).inc();
             let r = match reason {
                 DBBackgroundErrorReason::Flush => "flush",
                 DBBackgroundErrorReason::Compaction => "compaction",
