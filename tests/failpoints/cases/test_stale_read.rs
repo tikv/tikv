@@ -225,7 +225,7 @@ fn test_stale_read_during_merging() {
     let election_timeout = configure_for_lease_read(&mut cluster, None, None);
     cluster.cfg.raft_store.right_derive_when_split = false;
     cluster.cfg.raft_store.pd_heartbeat_tick_interval =
-        cluster.cfg.raft_store.raft_base_tick_interval.clone();
+        cluster.cfg.raft_store.raft_base_tick_interval;
     debug!("max leader lease: {:?}", election_timeout);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
