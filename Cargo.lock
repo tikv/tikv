@@ -701,6 +701,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_rocks"
+version = "0.0.1"
+dependencies = [
+ "crc",
+ "engine",
+ "engine_traits",
+ "hex",
+ "kvproto",
+ "lazy_static",
+ "prometheus",
+ "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quick-error",
+ "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
+ "rocksdb",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "sys-info",
+ "tempfile",
+ "tikv_alloc",
+ "tikv_util",
+ "time",
+ "toml",
+]
+
+[[package]]
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
@@ -2951,6 +2978,7 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "engine",
+ "engine_rocks",
  "engine_traits",
  "fail",
  "failure",
