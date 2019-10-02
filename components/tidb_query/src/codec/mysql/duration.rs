@@ -2,11 +2,9 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::{i64, u64};
 
 use codec::prelude::*;
-use tikv_util::codec::number::NumberEncoder;
 
 use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
@@ -612,7 +610,7 @@ impl Duration {
 
     fn format(self, sep: &str) -> String {
         use std::fmt::Write;
-        let res_max_len = 1 + 6 + 2 * sep.len() + 1 + MAX_FSP as usize;
+        let res_max_len = 8 + 2 * sep.len() + MAX_FSP as usize;
         let mut string = String::with_capacity(res_max_len);
         if self.get_neg() {
             string.push('-');
@@ -772,12 +770,17 @@ impl Ord for Duration {
     }
 }
 
-impl<T: Write> DurationEncoder for T {}
+impl<T: BufferWriter> DurationEncoder for T {}
 
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: Duration) -> Result<()> {
-        self.encode_i64(v.to_nanos())?;
-        self.encode_i64(i64::from(v.get_fsp())).map_err(From::from)
+        self.write_i64(v.to_nanos())?;
+        self.write_i64(i64::from(v.get_fsp())).map_err(From::from)
+    }
+
+    fn encode_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
+        self.write_i64_le(v.to_nanos())?;
+        Ok(())
     }
 }
 
@@ -786,6 +789,11 @@ pub trait DurationDecoder: NumberDecoder {
     fn decode_duration(&mut self) -> Result<Duration> {
         let nanos = self.read_i64()?;
         let fsp = self.read_i64()?;
+        Duration::from_nanos(nanos, fsp as i8)
+    }
+
+    fn decode_duration_from_chunk(&mut self, fsp: isize) -> Result<Duration> {
+        let nanos = self.read_i64_le()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 }
@@ -1092,8 +1100,11 @@ mod tests {
         for (input, fsp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
-            buf.encode_duration(t).unwrap();
-            let got = buf.as_slice().decode_duration().unwrap();
+            buf.encode_duration_to_chunk(t).unwrap();
+            let got = buf
+                .as_slice()
+                .decode_duration_from_chunk(fsp as isize)
+                .unwrap();
             assert_eq!(t, got);
         }
     }
@@ -1238,7 +1249,7 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, fix these test case after Duration::from_f64
+            // TODO: fix these test case after Duration::from_f64
             //  had impl logic for num>=10000000000
             (
                 10000000000,
@@ -1478,8 +1489,12 @@ mod benches {
             for &duration in cases {
                 let t = test::black_box(duration);
                 let mut buf = vec![];
-                buf.encode_duration(t).unwrap();
-                let got = test::black_box(buf.as_slice().decode_duration().unwrap());
+                buf.encode_duration_to_chunk(t).unwrap();
+                let got = test::black_box(
+                    buf.as_slice()
+                        .decode_duration_from_chunk(t.fsp() as isize)
+                        .unwrap(),
+                );
                 assert_eq!(t, got);
             }
         })

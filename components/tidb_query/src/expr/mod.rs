@@ -338,7 +338,8 @@ mod tests {
     use crate::codec::mysql::json::JsonEncoder;
     use crate::codec::mysql::{charset, Decimal, DecimalEncoder, Duration, Json, Time};
     use crate::codec::{mysql, Datum};
-    use tikv_util::codec::number::{self, NumberEncoder};
+    use codec::prelude::NumberEncoder;
+    use tikv_util::codec::number;
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -383,7 +384,7 @@ mod tests {
         let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
         let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(col_id).unwrap();
+        buf.write_i64(col_id).unwrap();
         expr.set_val(buf);
         expr
     }
@@ -421,13 +422,13 @@ mod tests {
             Datum::I64(i) => {
                 expr.set_tp(ExprType::Int64);
                 let mut buf = Vec::with_capacity(number::I64_SIZE);
-                buf.encode_i64(i).unwrap();
+                buf.write_i64(i).unwrap();
                 expr.set_val(buf);
             }
             Datum::U64(u) => {
                 expr.set_tp(ExprType::Uint64);
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
-                buf.encode_u64(u).unwrap();
+                buf.write_u64(u).unwrap();
                 expr.set_val(buf);
                 expr.mut_field_type()
                     .as_mut_accessor()
@@ -442,13 +443,13 @@ mod tests {
             Datum::F64(f) => {
                 expr.set_tp(ExprType::Float64);
                 let mut buf = Vec::with_capacity(number::F64_SIZE);
-                buf.encode_f64(f).unwrap();
+                buf.write_f64(f).unwrap();
                 expr.set_val(buf);
             }
             Datum::Dur(d) => {
                 expr.set_tp(ExprType::MysqlDuration);
                 let mut buf = Vec::with_capacity(number::I64_SIZE);
-                buf.encode_i64(d.to_nanos()).unwrap();
+                buf.write_i64(d.to_nanos()).unwrap();
                 expr.set_val(buf);
             }
             Datum::Dec(d) => {
@@ -467,7 +468,7 @@ mod tests {
                 expr.set_field_type(ft);
                 let u = t.to_packed_u64();
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
-                buf.encode_u64(u).unwrap();
+                buf.write_u64(u).unwrap();
                 expr.set_val(buf);
             }
             Datum::Json(j) => {

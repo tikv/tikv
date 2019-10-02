@@ -3,17 +3,14 @@
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use byteorder::WriteBytesExt;
 use num;
 
 use codec::prelude::*;
-use tikv_util::codec::number::NumberEncoder;
 use tikv_util::escape;
 
 use crate::codec::convert::{self, ConvertTo};
@@ -86,7 +83,7 @@ impl<T> Res<T> {
             Res::Overflow(t) => if let Some(error) = overflow_err {
                 ctx.handle_overflow_err(error)
             } else {
-                ctx.handle_overflow(true)
+                ctx.handle_overflow_err(Error::overflow("DECIMAL", ""))
             }
             .map(|()| t),
         }
@@ -1109,7 +1106,7 @@ impl Decimal {
         self.word_buf[buf_from] /= TEN_POW[shift];
     }
 
-    // TODO, remove this after merge the `refactor ScalarFunc::builtin_cast`
+    // TODO: remove this after merge the `refactor ScalarFunc::builtin_cast`
     //
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
@@ -1930,7 +1927,7 @@ macro_rules! write_u8 {
         if $written == 0 {
             b ^= 0x80;
         }
-        $writer.write_all(&[b])?;
+        $writer.write_bytes(&[b])?;
         $written += 1;
     }};
 }
@@ -1954,7 +1951,7 @@ macro_rules! write_word {
         if $written == 0 {
             data[0] ^= 0x80;
         }
-        ($writer).write_all(&data[..size as usize])?;
+        ($writer).write_bytes(&data[..size as usize])?;
         $written += size;
     }};
 }
@@ -1963,7 +1960,7 @@ pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
-        self.write_all(&[prec, frac])?;
+        self.write_bytes(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
         let int_word_cnt = int_cnt / DIGITS_PER_WORD;
@@ -2078,13 +2075,13 @@ pub trait DecimalEncoder: NumberEncoder {
         self.write_u8(v.negative as u8)?;
         let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
         for id in 0..len as usize {
-            self.encode_i32_le(v.word_buf[id] as i32)?;
+            self.write_i32_le(v.word_buf[id] as i32)?;
         }
         Ok(())
     }
 }
 
-impl<T: Write> DecimalEncoder for T {}
+impl<T: BufferWriter> DecimalEncoder for T {}
 
 // Mark as `#[inline]` since in many cases `size` is a constant.
 #[inline]
