@@ -123,6 +123,14 @@ impl<S: Snapshot> PointGetter<S> {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
+    pub fn set_start_ts(&mut self, start_ts: u64) {
+        self.ts = start_ts;
+    }
+
+    pub fn set_isolation_level(&mut self, level: IsolationLevel) {
+        self.isolation_level = level;
+    }
+
     /// Get the value of a user key.
     ///
     /// If `multi == false`, this function must be called only once. Future calls return nothing.

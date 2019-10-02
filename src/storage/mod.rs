@@ -45,6 +45,7 @@ pub use self::kv::{
     Statistics, StatisticsSummary, TestEngineBuilder,
 };
 pub use self::lock_manager::{DummyLockMgr, LockMgr};
+use self::mvcc::PointGetterBuilder;
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 use self::txn::scheduler::Scheduler as TxnScheduler;
@@ -1000,7 +1001,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     pub fn batch_async_get(
         &self,
-        gets: Vec<ReadpoolCommand>,
+        mut gets: Vec<ReadpoolCommand>,
         callback: BatchCallback<Option<Vec<u8>>>,
     ) -> impl Future<Item = (), Error = Error> {
         const CMD: &str = "get";
@@ -1013,21 +1014,33 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
                             let mut statistics = Statistics::default();
-                            let mut snap_store = SnapshotStore::new(
-                                snapshot,
-                                0,
-                                ctx.get_isolation_level(),
-                                !ctx.get_not_fill_cache(),
-                            );
+                            // TODO: hide PointGetter
+                            gets.sort_by(|a, b| match a.key.cmp(&b.key) {
+                                cmp::Ordering::Equal => {
+                                    if a.ts == b.ts {
+                                        cmp::Ordering::Equal
+                                    } else if a.ts < b.ts {
+                                        cmp::Ordering::Greater
+                                    } else {
+                                        cmp::Ordering::Less
+                                    }
+                                }
+                                ord => ord,
+                            });
+                            let mut point_getter = PointGetterBuilder::new(snapshot.clone(), 0)
+                                .fill_cache(!ctx.get_not_fill_cache())
+                                .isolation_level(ctx.get_isolation_level())
+                                .multi(true)
+                                .build()?;
                             for get in gets {
-                                snap_store.set_start_ts(get.ts.unwrap());
-                                callback(
-                                    get.req,
-                                    snap_store
-                                        .get(&get.key, &mut statistics)
-                                        .map_err(Error::from),
-                                );
+                                point_getter.set_start_ts(get.ts.unwrap());
+                                point_getter.set_isolation_level(get.ctx.get_isolation_level());
+                                let value = point_getter
+                                    .get(&get.key)
+                                    .map_err(|e| Error::from(txn::Error::from(e)));
+                                callback(get.req, value);
                             }
+                            statistics.add(&point_getter.take_statistics());
                             Ok(())
                         })
                     })
@@ -1636,12 +1649,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                         tls_processing_read_observe_duration(CMD, || {
                             let cf = match Self::rawkv_cf(&cf) {
                                 Ok(x) => x,
-                                _ => {
-                                    for get in gets {
-                                        callback(get.req, Err(Error::InvalidCf(cf.to_owned())));
-                                    }
-                                    return Ok(());
-                                }
+                                Err(e) => return future::err(e),
                             };
                             for get in gets {
                                 callback(
@@ -1649,13 +1657,12 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                     snapshot.get_cf(cf, &get.key).map_err(Error::from),
                                 );
                             }
-                            Ok(())
+                            future::ok(())
                         })
                     })
                     .then(|r| r)
             })
         });
-        // uncaptured SchedTooBusy
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
             .flatten()
