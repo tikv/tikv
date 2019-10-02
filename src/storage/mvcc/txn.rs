@@ -432,7 +432,7 @@ impl<S: Snapshot> MvccTxn<S> {
         key: Key,
         iter: &mut Cursor<S::Iter>,
         key_equal: &mut bool,
-    ) -> Result<Option<StorageError>> {
+    ) -> Result<()> {
         let statistics = self.reader.mut_lock_statistics();
         let lock_key = iter.key(statistics);
         if lock_key == key.as_encoded().as_slice() {
@@ -444,25 +444,22 @@ impl<S: Snapshot> MvccTxn<S> {
             info.set_key(key.into_raw()?);
             info.set_lock_ttl(lock.ttl);
             info.set_txn_size(lock.txn_size);
-            Ok(Some(StorageError::Txn(txn::Error::Mvcc(
-                Error::KeyIsLocked(info),
-            ))))
+            Err(Error::KeyIsLocked(info))
         } else {
             *key_equal = false;
-            Ok(None)
+            Ok(())
         }
     }
 
     fn check_write(
         &mut self,
-        cid: u64,
         key: Key,
         ts: u64,
         is_insert: bool,
-        primary: Vec<u8>,
+        primary: &[u8],
         iter: &mut Cursor<S::Iter>,
         key_equal: &mut bool,
-    ) -> Result<Option<Msg>> {
+    ) -> Result<()> {
         let statistics = self.reader.mut_write_statistics();
         let write_key = iter.key(statistics);
         let commit_ts = Key::decode_ts_from(write_key)?;
@@ -470,28 +467,20 @@ impl<S: Snapshot> MvccTxn<S> {
             *key_equal = true;
             let mut write = Write::parse(iter.value(statistics))?;
             if commit_ts >= ts {
-                return Ok(Some(Msg::FinishedWithErr {
-                    cid,
-                    err: txn::Error::Mvcc(Error::WriteConflict {
-                        start_ts: ts,
-                        conflict_start_ts: write.start_ts,
-                        conflict_commit_ts: commit_ts,
-                        key: key.into_raw()?,
-                        primary: primary.to_vec(),
-                    }),
-                    tag: CommandKind::prewrite,
-                }));
+                return Err(Error::WriteConflict {
+                    start_ts: ts,
+                    conflict_start_ts: write.start_ts,
+                    conflict_commit_ts: commit_ts,
+                    key: key.into_raw()?,
+                    primary: primary.to_owned(),
+                });
             } else if is_insert {
                 // check data constraint using existing cursor
                 loop {
                     if write.write_type == WriteType::Delete {
                         break;
                     } else if write.write_type == WriteType::Put {
-                        return Ok(Some(Msg::FinishedWithErr {
-                            cid,
-                            err: txn::Error::Mvcc(Error::AlreadyExist { key: key.to_raw()? }),
-                            tag: CommandKind::prewrite,
-                        }));
+                        return Err(Error::AlreadyExist { key: key.to_raw()? });
                     }
                     write = if iter.next(statistics)
                         && Key::is_user_key_eq(iter.key(statistics), key.as_encoded())
@@ -506,7 +495,7 @@ impl<S: Snapshot> MvccTxn<S> {
         } else {
             *key_equal = false;
         }
-        Ok(None)
+        Ok(())
     }
 
     pub fn batch_prewrite<Sched: MsgScheduler>(
@@ -540,14 +529,9 @@ impl<S: Snapshot> MvccTxn<S> {
         let max_key = Key::from_encoded(upper);
 
         // initialize iterator over write/lock cf
-        let use_prefix_seek = false;
-        let mut _write_major = self
+        let mut write_cursor = self
             .reader
             .new_write_cursor(&min_key, u64::max_value(), &max_key, 0, false)
-            .unwrap();
-        let mut write_minor = self
-            .reader
-            .new_write_cursor(&min_key, u64::max_value(), &max_key, 0, use_prefix_seek)
             .unwrap();
         let mut lock_iter = self.reader.new_lock_cursor(&min_key, &max_key).unwrap();
         let mut key_equal = true;
@@ -578,13 +562,12 @@ impl<S: Snapshot> MvccTxn<S> {
                     break 'write_loop;
                 }
             };
-            write_minor.seek(
+            write_cursor.seek(
                 &min_key.clone().append_ts(u64::max_value()),
                 self.reader.mut_write_statistics(),
             )?;
-            if write_minor.valid()? {
-                if let Some(msg) = self.check_write(
-                    cid,
+            if write_cursor.valid()? {
+                if let Err(err) = self.check_write(
                     min_key,
                     min_ts,
                     if let Command::Prewrite { mutations, .. } = &commands[idx.0] {
@@ -593,50 +576,32 @@ impl<S: Snapshot> MvccTxn<S> {
                         unreachable!()
                     },
                     if let Command::Prewrite { primary, .. } = &commands[idx.0] {
-                        primary.clone()
+                        primary
                     } else {
                         unreachable!()
                     },
-                    &mut write_minor,
+                    &mut write_cursor,
                     &mut key_equal,
-                )? {
-                    scheduler.on_batch_msg(ids[idx.0], msg);
+                ) {
+                    scheduler.on_batch_msg(
+                        ids[idx.0],
+                        Msg::FinishedWithErr {
+                            cid,
+                            err: txn::Error::from(err),
+                            tag: CommandKind::prewrite,
+                        },
+                    );
                     ids[idx.0] = u64::max_value();
                 }
             }
-            if !use_prefix_seek {
-                // in total order
-                if !write_minor.valid()? {
-                    break;
-                } else if !key_equal {
-                    range = map.range::<Vec<u8>, _>(
-                        &Key::truncate_ts_for(
-                            write_minor.key(self.reader.mut_write_statistics()),
-                        )?
+            if !write_cursor.valid()? {
+                break;
+            } else if !key_equal {
+                range = map.range::<Vec<u8>, _>(
+                    &Key::truncate_ts_for(write_cursor.key(self.reader.mut_write_statistics()))?
                         .to_vec()..,
-                    );
-                }
+                );
             }
-            // two cursor implementation
-            // if !write_minor.valid()? {
-            //     // no write record for this key
-            //     // seek in total order
-            //     write_major.seek(
-            //         &min_key.clone().append_ts(0),
-            //         self.reader.mut_write_statistics(),
-            //     )?;
-            //     if write_major.valid()? {
-            //         range = map.range::<Vec<u8>, _>(
-            //             &Key::truncate_ts_for(
-            //                 write_major.key(self.reader.mut_write_statistics()),
-            //             )?
-            //             .to_vec()..,
-            //         );
-            //         continue;
-            //     } else {
-            //         break;
-            //     }
-            // }
         }
 
         range = map.range::<Vec<u8>, _>(..);
@@ -655,11 +620,12 @@ impl<S: Snapshot> MvccTxn<S> {
             if !lock_iter.valid()? {
                 break;
             }
-            if let Some(err) = self.check_lock(min_key, &mut lock_iter, &mut key_equal)? {
+            if let Err(err) = self.check_lock(min_key, &mut lock_iter, &mut key_equal) {
+                let result = StorageResult::Err(StorageError::from(txn::Error::from(err)));
                 if let Some(locks) = locks.get_mut(&idx.0) {
-                    locks.push(StorageResult::Err(err));
+                    locks.push(result);
                 } else {
-                    locks.insert(idx.0, vec![StorageResult::Err(err)]);
+                    locks.insert(idx.0, vec![result]);
                 }
             } else if lock_iter.valid()? {
                 // update range w.r.t. latest cursor value
@@ -801,39 +767,24 @@ impl<S: Snapshot> MvccTxn<S> {
                 ..
             } = &commands[i]
             {
-                if commit_ts <= lock_ts {
-                    scheduler.on_batch_msg(
-                        ids[i],
-                        Msg::FinishedWithErr {
-                            cid,
-                            err: txn::Error::InvalidTxnTso {
-                                start_ts: *lock_ts,
-                                commit_ts: *commit_ts,
+                self.start_ts = *lock_ts;
+                let checkpoint = (self.checkpoint(), rows);
+                for k in keys {
+                    if let Err(e) = self.commit(k.clone(), *commit_ts) {
+                        scheduler.on_batch_msg(
+                            ids[i],
+                            Msg::FinishedWithErr {
+                                cid,
+                                err: txn::Error::Mvcc(e),
+                                tag,
                             },
-                            tag,
-                        },
-                    );
-                    ids[i] = u64::max_value();
-                } else {
-                    self.start_ts = *lock_ts;
-                    let checkpoint = (self.checkpoint(), rows);
-                    for k in keys {
-                        if let Err(e) = self.commit(k.clone(), *commit_ts) {
-                            scheduler.on_batch_msg(
-                                ids[i],
-                                Msg::FinishedWithErr {
-                                    cid,
-                                    err: txn::Error::Mvcc(e),
-                                    tag,
-                                },
-                            );
-                            ids[i] = u64::max_value();
-                            self.reset(checkpoint.0);
-                            rows = checkpoint.1;
-                            break;
-                        }
-                        rows += 1;
+                        );
+                        ids[i] = u64::max_value();
+                        self.reset(checkpoint.0);
+                        rows = checkpoint.1;
+                        break;
                     }
+                    rows += 1;
                 }
             }
         }

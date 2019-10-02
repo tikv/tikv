@@ -477,7 +477,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
-    /// Calls the callback with an error.
+    /// One command in a batch exits with an error.
     fn batch_finish_with_err(&self, cid: u64, req: u64, err: Error) {
         debug!("write command finished with error"; "cid" => cid);
         let mut tasks = self.inner.peek_task_mutex(cid).lock();
@@ -491,25 +491,21 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         execute_batch_callback(&mut tctx.cb, req, pr);
     }
 
-    /// Event handler for the success of read.
-    ///
-    /// If a next command is present, continues to execute; otherwise, delivers the result to the
-    /// callback.
+    /// Event handler for the success of one read in a batch.
     fn on_batch_read_finished(&self, cid: u64, req: u64, pr: ProcessResult, tag: CommandKind) {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
         let mut tasks = self.inner.peek_task_mutex(cid).lock();
         let tctx = tasks.get_mut(&cid).unwrap();
-        // if let ProcessResult::NextCommand { cmd } = pr {
-        // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-        // self.schedule_command(cmd, tctx.cb);
-        // } else {
-        execute_batch_callback(&mut tctx.cb, req, pr);
-        // }
+        if let ProcessResult::NextCommand { .. } = pr {
+            panic!("batch command does not receive `NextCommand` result");
+        } else {
+            execute_batch_callback(&mut tctx.cb, req, pr);
+        }
     }
 
-    /// Event handler for the success of write.
+    /// Event handler for the success of one write in a batch.
     fn on_batch_write_finished(
         &self,
         cid: u64,
@@ -529,14 +525,14 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                 err: StorageError::from(e),
             },
         };
-        // if let ProcessResult::NextCommand { cmd } = pr {
-        // SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-        // self.schedule_command(cmd, tctx.cb);
-        // } else {
-        execute_batch_callback(&mut tctx.cb, req, pr);
-        // }
+        if let ProcessResult::NextCommand { .. } = pr {
+            panic!("batch command does not receive `NextCommand` result");
+        } else {
+            execute_batch_callback(&mut tctx.cb, req, pr);
+        }
     }
 
+    // Only called when all commands in batch are finished.
     fn batch_all_finished(&self, cid: u64) {
         let tctx = self.inner.dequeue_task_context(cid);
         self.release_lock(&tctx.lock, cid);

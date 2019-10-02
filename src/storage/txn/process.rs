@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{mem, thread, u64};
 
@@ -400,6 +401,29 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
         tag,
     } = cmd
     {
+        if tag == CommandKind::commit {
+            for i in 0..commands.len() {
+                match &commands[i] {
+                    Command::Commit {
+                        commit_ts, lock_ts, ..
+                    } if ids[i] < u64::max_value() && commit_ts <= lock_ts => {
+                        scheduler.on_batch_msg(
+                            ids[i],
+                            Msg::FinishedWithErr {
+                                cid,
+                                err: Error::InvalidTxnTso {
+                                    start_ts: *lock_ts,
+                                    commit_ts: *commit_ts,
+                                },
+                                tag,
+                            },
+                        );
+                        ids[i] = u64::max_value();
+                    }
+                    _ => {}
+                }
+            }
+        }
         let retrieve = match commands[0] {
             Command::Prewrite {
                 ref ctx, start_ts, ..
@@ -413,7 +437,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                 MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?,
                 ctx,
             )),
-            _ => None,
+            _ => unreachable!(),
         };
         if let Some((mut txn, ctx)) = retrieve {
             // check conflict
@@ -425,7 +449,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                     // assume optimistic txn
                     txn.batch_commit(cid, &commands, &mut ids, &scheduler)?
                 }
-                _ => 0,
+                _ => unreachable!(),
             };
             statistics.add(&txn.take_statistics());
             let modifies = txn.into_modifies();
@@ -447,17 +471,18 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                 }
                 scheduler.on_batch_finished(cid);
             } else {
+                let ids = Arc::new(ids);
                 let sched = scheduler.clone();
-                let id_copy = ids.clone();
+                let cloned_ids = ids.clone();
                 let engine_cb = Box::new(
                     move |(_, res): (kv::CbContext, std::result::Result<(), kv::Error>)| {
                         sched_pool
                             .pool
                             .spawn(move || {
-                                for i in id_copy {
-                                    if i < u64::max_value() {
+                                for i in cloned_ids.as_ref() {
+                                    if *i < u64::max_value() {
                                         sched.on_batch_msg(
-                                            i,
+                                            *i,
                                             Msg::WriteFinished {
                                                 cid,
                                                 pr: ProcessResult::MultiRes { results: vec![] },
@@ -484,10 +509,10 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                     SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                     info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                    for i in ids {
-                        if i < u64::max_value() {
+                    for i in ids.as_ref() {
+                        if *i < u64::max_value() {
                             scheduler.on_batch_msg(
-                                i,
+                                *i,
                                 Msg::FinishedWithErr {
                                     cid,
                                     err: Error::Engine(e.maybe_clone().unwrap()),
