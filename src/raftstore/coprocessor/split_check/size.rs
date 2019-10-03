@@ -3,6 +3,7 @@
 use std::collections::Bound::Excluded;
 use std::mem;
 use std::sync::Mutex;
+use std::marker::PhantomData;
 
 use engine::rocks;
 use engine::rocks::DB;
@@ -11,6 +12,7 @@ use engine::{util, Range};
 use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use engine_traits::KvEngine;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 
@@ -98,21 +100,23 @@ impl SplitChecker for Checker {
     }
 }
 
-pub struct SizeCheckObserver<C> {
+pub struct SizeCheckObserver<K, R, C> {
     region_max_size: u64,
     split_size: u64,
     split_limit: u64,
     router: Mutex<C>,
+    _phantom_k: PhantomData<K>,
+    _phantom_r: PhantomData<R>,
 }
 
-impl<C: CasualRouter> SizeCheckObserver<C> {
+impl<K: KvEngine, R: KvEngine, C: CasualRouter<K, R>> SizeCheckObserver<K, R, C> {
     pub fn new(
         region_max_size: u64,
         split_size: u64,
         split_limit: u64,
         router: C,
-    ) -> SizeCheckObserver<C> {
-        SizeCheckObserver {
+    ) -> Self {
+        Self {
             region_max_size,
             split_size,
             split_limit,
@@ -121,9 +125,9 @@ impl<C: CasualRouter> SizeCheckObserver<C> {
     }
 }
 
-impl<C> Coprocessor for SizeCheckObserver<C> {}
+impl<K, R, C> Coprocessor for SizeCheckObserver<K, R, C> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
+impl<K: KvEngine, R: KvEngine, C: CasualRouter<K, R> + Send> SplitCheckObserver for SizeCheckObserver<K, R, C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,

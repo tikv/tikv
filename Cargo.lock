@@ -687,7 +687,7 @@ dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
- "rocksdb 0.3.0 (git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master)",
+ "rocksdb",
  "serde",
  "serde_derive",
  "slog",
@@ -1338,14 +1338,14 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master#f370c2b6cb1db9b6ccdd5885a3e87713d4736f15"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
 dependencies = [
  "bzip2-sys",
  "cc",
  "cmake",
  "jemalloc-sys",
  "libc",
- "libtitan_sys 0.0.1 (git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master)",
+ "libtitan_sys",
  "libz-sys",
  "lz4-sys",
  "snappy-sys",
@@ -1355,7 +1355,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master#f370c2b6cb1db9b6ccdd5885a3e87713d4736f15"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2332,11 +2332,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master#f370c2b6cb1db9b6ccdd5885a3e87713d4736f15"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
 dependencies = [
  "crc",
  "libc",
- "librocksdb_sys 0.1.0 (git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master)",
+ "librocksdb_sys",
 ]
 
 [[package]]
@@ -2639,6 +2639,7 @@ version = "0.1.0"
 dependencies = [
  "crc",
  "engine",
+ "engine_traits",
  "futures",
  "grpcio",
  "keys",
@@ -3669,7 +3670,3 @@ dependencies = [
  "glob",
  "libc",
 ]
-
-"checksum librocksdb_sys 0.1.0 (git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master)" = "<none>"
-"checksum libtitan_sys 0.0.1 (git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master)" = "<none>"
-"checksum rocksdb 0.3.0 (git+https://github.com/yiwu-arbug/rust-rocksdb.git?branch=upgrade_master)" = "<none>"

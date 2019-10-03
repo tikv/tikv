@@ -5,6 +5,7 @@ use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
+use std::marker::PhantomData;
 
 use engine::rocks::DBIterator;
 use engine::{CfName, CF_WRITE, LARGE_CFS};
@@ -19,6 +20,7 @@ use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
+use engine_traits::KvEngine;
 
 use super::metrics::*;
 
@@ -147,15 +149,17 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<S> {
+pub struct Runner<K, R, S> {
     engine: Arc<DB>,
     router: S,
     coprocessor: Arc<CoprocessorHost>,
+    _phantom_k: PhantomData<K>,
+    _phantom_r: PhantomData<R>,
 }
 
-impl<S: CasualRouter> Runner<S> {
-    pub fn new(engine: Arc<DB>, router: S, coprocessor: Arc<CoprocessorHost>) -> Runner<S> {
-        Runner {
+impl<K: KvEngine, R: KvEngine, S: CasualRouter<K, R>> Runner<K, R, S> {
+    pub fn new(engine: Arc<DB>, router: S, coprocessor: Arc<CoprocessorHost>) -> Self {
+        Self {
             engine,
             router,
             coprocessor,
@@ -265,13 +269,13 @@ impl<S: CasualRouter> Runner<S> {
     }
 }
 
-impl<S: CasualRouter> Runnable<Task> for Runner<S> {
+impl<K: KvEngine, R: KvEngine, S: CasualRouter<K, R>> Runnable<Task> for Runner<K, R, S> {
     fn run(&mut self, task: Task) {
         self.check_split(task);
     }
 }
 
-fn new_split_region(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage {
+fn new_split_region<K: KvEngine, R: KvEngine>(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage<K, R> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

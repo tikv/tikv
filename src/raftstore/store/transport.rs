@@ -5,6 +5,7 @@ use crate::raftstore::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
+use engine_traits::KvEngine;
 
 /// Transports messages between different Raft peers.
 pub trait Transport: Send + Clone {
@@ -16,8 +17,8 @@ pub trait Transport: Send + Clone {
 /// Routes message to target region.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait CasualRouter {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()>;
+pub trait CasualRouter<K: KvEngine, R: KvEngine> {
+    fn send(&self, region_id: u64, msg: CasualMessage<K, R>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -32,9 +33,9 @@ pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
 
-impl CasualRouter for RaftRouter {
+impl<K: KvEngine, R: KvEngine> CasualRouter<K, R> for RaftRouter<K, R> {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage<K, R>) -> Result<()> {
         match RaftRouter::send(self, region_id, PeerMsg::CasualMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
@@ -43,14 +44,14 @@ impl CasualRouter for RaftRouter {
     }
 }
 
-impl ProposalRouter for RaftRouter {
+impl<K: KvEngine, R: KvEngine> ProposalRouter for RaftRouter<K, R> {
     #[inline]
     fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>> {
         self.send_raft_command(cmd)
     }
 }
 
-impl StoreRouter for RaftRouter {
+impl<K: KvEngine, R: KvEngine> StoreRouter for RaftRouter<K, R> {
     #[inline]
     fn send(&self, msg: StoreMsg) -> Result<()> {
         match self.send_control(msg) {
@@ -63,8 +64,8 @@ impl StoreRouter for RaftRouter {
     }
 }
 
-impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage)> {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+impl<K: KvEngine, R: KvEngine> CasualRouter<K, R> for mpsc::SyncSender<(u64, CasualMessage<K, R>)> {
+    fn send(&self, region_id: u64, msg: CasualMessage<K, R>) -> Result<()> {
         match self.try_send((region_id, msg)) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {

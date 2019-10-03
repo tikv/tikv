@@ -32,6 +32,7 @@ use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
+use engine_traits::KvEngine;
 
 use crate::raftstore::store::metrics::{
     INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
@@ -982,7 +983,7 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
-fn notify_stats(ch: Option<&RaftRouter>) {
+fn notify_stats<K: KvEngine, R: KvEngine>(ch: Option<&RaftRouter<K, R>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
             error!(
@@ -995,16 +996,16 @@ fn notify_stats(ch: Option<&RaftRouter>) {
 
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
-pub struct SnapManager {
+pub struct SnapManager<K: KvEngine, R: KvEngine> {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
-    router: Option<RaftRouter>,
+    router: Option<RaftRouter<K, R>>,
     limiter: Option<Arc<IOLimiter>>,
     max_total_size: u64,
 }
 
-impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> SnapManager {
+impl<K: KvEngine + 'static, R: KvEngine + 'static> SnapManager<K, R> {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter<K, R>>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1282,7 +1283,7 @@ impl SnapManager {
     }
 }
 
-impl SnapshotDeleter for SnapManager {
+impl<K: KvEngine, R: KvEngine> SnapshotDeleter for SnapManager<K, R> {
     fn delete_snapshot(&self, key: &SnapKey, snap: &dyn Snapshot, check_entry: bool) -> bool {
         let core = self.core.rl();
         if check_entry {
@@ -1323,7 +1324,7 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
+    pub fn build<T: Into<String>, K: KvEngine, R: KvEngine>(&self, path: T, router: Option<RaftRouter<K, R>>) -> SnapManager<K, R> {
         let limiter = if self.max_write_bytes_per_sec > 0 {
             Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
         } else {

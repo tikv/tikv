@@ -14,6 +14,7 @@ use crate::raftstore::Result;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use engine_traits::KvEngine;
 
 /// Snapshot of a region.
 ///
@@ -25,16 +26,16 @@ pub struct RegionSnapshot {
 }
 
 impl RegionSnapshot {
-    pub fn new(ps: &PeerStorage) -> RegionSnapshot {
+    pub fn new<K: KvEngine, R: KvEngine>(ps: &PeerStorage<K, R>) -> Self {
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
-    pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
+    pub fn from_raw(db: Arc<DB>, region: Region) -> Self {
         RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
     }
 
-    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
-        RegionSnapshot {
+    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> Self {
+        Self {
             snap,
             region: Arc::new(region),
         }
@@ -123,7 +124,7 @@ impl RegionSnapshot {
 
 impl Clone for RegionSnapshot {
     fn clone(&self) -> Self {
-        RegionSnapshot {
+        Self {
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
         }

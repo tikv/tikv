@@ -6,6 +6,7 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use std::mem;
 
+use engine_traits::KvEngine;
 use crate::raftstore::store::CasualRouter;
 
 use super::*;
@@ -119,7 +120,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: CasualRouter + Clone + Send + 'static>(cfg: Config, ch: C) -> CoprocessorHost {
+    pub fn new<C: CasualRouter<K, R> + Clone + Send + 'static, K: KvEngine, R: KvEngine>(cfg: Config, ch: C) -> Self {
         let mut registry = Registry::default();
         let split_size_check_observer = SizeCheckObserver::new(
             cfg.region_max_size.0,
@@ -145,7 +146,7 @@ impl CoprocessorHost {
         if cfg.split_region_on_table {
             registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
         }
-        CoprocessorHost { registry }
+        Self { registry }
     }
 
     /// Call all prepose hooks until bypass is set to true.

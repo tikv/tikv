@@ -8,12 +8,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
+use engine_traits::{KvEngine, Mutable, Peekable, Iterable, KvEngines, CF_RAFT};
 use engine::rocks;
 use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
 use engine::rocks::{DBOptions, Writable};
-use engine::Engines;
-use engine::CF_RAFT;
-use engine::{Iterable, Mutable, Peekable};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -227,11 +225,11 @@ impl CacheQueryStats {
     }
 }
 
-pub trait HandleRaftReadyContext {
-    fn kv_wb(&self) -> &WriteBatch;
-    fn kv_wb_mut(&mut self) -> &mut WriteBatch;
-    fn raft_wb(&self) -> &WriteBatch;
-    fn raft_wb_mut(&mut self) -> &mut WriteBatch;
+pub trait HandleRaftReadyContext<K: KvEngine, R: KvEngine> {
+    fn kv_wb(&self) -> &K::Batch;
+    fn kv_wb_mut(&mut self) -> &mut K::Batch;
+    fn raft_wb(&self) -> &R::Batch;
+    fn raft_wb_mut(&mut self) -> &mut R::Batch;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -269,8 +267,8 @@ pub struct InvokeContext {
 }
 
 impl InvokeContext {
-    pub fn new(store: &PeerStorage) -> InvokeContext {
-        InvokeContext {
+    pub fn new<K: KvEngine, R: KvEngine>(store: &PeerStorage<K, R>) -> Self {
+        Self {
             region_id: store.get_region_id(),
             raft_state: store.raft_state.clone(),
             apply_state: store.apply_state.clone(),
@@ -324,9 +322,9 @@ impl InvokeContext {
     }
 }
 
-pub fn recover_from_applying_state(
-    engines: &Engines,
-    raft_wb: &WriteBatch,
+pub fn recover_from_applying_state<K: KvEngine, R: KvEngine>(
+    engines: &KvEngines<K, R>,
+    raft_wb: &K::Batch,
     region_id: u64,
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
@@ -360,7 +358,7 @@ pub fn recover_from_applying_state(
     Ok(())
 }
 
-pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalState> {
+pub fn init_raft_state<K: KvEngine, R: KvEngine>(engines: &KvEngines<K, R>, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
     Ok(match engines.raft.get_msg(&state_key)? {
         Some(s) => s,
@@ -378,7 +376,7 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
     })
 }
 
-pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyState> {
+pub fn init_apply_state<K: KvEngine, R: KvEngine>(engines: &KvEngines<K, R>, region: &Region) -> Result<RaftApplyState> {
     Ok(
         match engines
             .kv
@@ -399,8 +397,8 @@ pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyS
     )
 }
 
-fn init_last_term(
-    engines: &Engines,
+fn init_last_term<K: KvEngine, R: KvEngine>(
+    engines: &KvEngines<K, R>,
     region: &Region,
     raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
@@ -427,8 +425,8 @@ fn init_last_term(
     }
 }
 
-pub struct PeerStorage {
-    pub engines: Engines,
+pub struct PeerStorage<K: KvEngine, R: KvEngine> {
+    pub engines: KvEngines<K, R>,
 
     peer_id: u64,
     region: metapb::Region,
@@ -439,7 +437,7 @@ pub struct PeerStorage {
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask>,
+    region_sched: Scheduler<RegionTask<K, R>>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
@@ -448,7 +446,7 @@ pub struct PeerStorage {
     pub tag: String,
 }
 
-impl Storage for PeerStorage {
+impl<K: KvEngine, R: KvEngine> Storage for PeerStorage<K, R> {
     fn initial_state(&self) -> raft::Result<RaftState> {
         self.initial_state()
     }
@@ -479,14 +477,14 @@ impl Storage for PeerStorage {
     }
 }
 
-impl PeerStorage {
+impl<K: KvEngine, R: KvEngine> PeerStorage<K, R> {
     pub fn new(
-        engines: Engines,
+        engines: KvEngines<K, R>,
         region: &metapb::Region,
-        region_sched: Scheduler<RegionTask>,
+        region_sched: Scheduler<RegionTask<K, R>>,
         peer_id: u64,
         tag: String,
-    ) -> Result<PeerStorage> {
+    ) -> Result<Self> {
         debug!(
             "creating storage on specified path";
             "region_id" => region.get_id(),
@@ -505,7 +503,7 @@ impl PeerStorage {
         }
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
 
-        Ok(PeerStorage {
+        Ok(Self {
             engines,
             peer_id,
             region: region.clone(),
@@ -814,7 +812,7 @@ impl PeerStorage {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append<H: HandleRaftReadyContext>(
+    pub fn append<H: HandleRaftReadyContext<K, R>>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
         entries: &[Entry],
@@ -1114,7 +1112,7 @@ impl PeerStorage {
     /// to update the memory states properly.
     // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
     // a requirement to advance the ready object properly later.
-    pub fn handle_raft_ready<H: HandleRaftReadyContext>(
+    pub fn handle_raft_ready<H: HandleRaftReadyContext<K, R>>(
         &mut self,
         ready_ctx: &mut H,
         ready: &Ready,
@@ -1300,17 +1298,16 @@ pub fn fetch_entries_to(
 }
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
-pub fn clear_meta(
-    engines: &Engines,
-    kv_wb: &WriteBatch,
-    raft_wb: &WriteBatch,
+pub fn clear_meta<K: KvEngine, R: KvEngine>(
+    engines: &KvEngines<K, R>,
+    kv_wb: &K::Batch,
+    raft_wb: &R::Batch,
     region_id: u64,
     raft_state: &RaftLocalState,
 ) -> Result<()> {
     let t = Instant::now();
-    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    box_try!(kv_wb.delete_cf(handle, &keys::region_state_key(region_id)));
-    box_try!(kv_wb.delete_cf(handle, &keys::apply_state_key(region_id)));
+    box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
+    box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
 
     let last_index = last_index(raft_state);
     let mut first_index = last_index + 1;
@@ -1339,8 +1336,8 @@ pub fn clear_meta(
     Ok(())
 }
 
-pub fn do_snapshot(
-    mgr: SnapManager,
+pub fn do_snapshot<K: KvEngine, R: KvEngine>(
+    mgr: SnapManager<K, R>,
     raft_snap: DbSnapshot,
     kv_snap: DbSnapshot,
     region_id: u64,
@@ -1441,8 +1438,8 @@ pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Resu
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region apply state first.
-pub fn write_initial_apply_state<T: Mutable>(
-    kv_engine: &DB,
+pub fn write_initial_apply_state<T: Mutable, E: KvEngine>(
+    kv_engine: &E,
     kv_wb: &T,
     region_id: u64,
 ) -> Result<()> {
@@ -1455,14 +1452,13 @@ pub fn write_initial_apply_state<T: Mutable>(
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
 
-    let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
-    kv_wb.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
+    kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
     Ok(())
 }
 
-pub fn write_peer_state<T: Mutable>(
-    kv_engine: &DB,
-    kv_wb: &T,
+pub fn write_peer_state<T: Mutable, E: KvEngine>(
+    kv_engine: &E,
+    kv_wb: &E::Batch,
     region: &metapb::Region,
     state: PeerState,
     merge_state: Option<MergeState>,
@@ -1490,8 +1486,8 @@ pub fn write_peer_state<T: Mutable>(
 /// For backward compatibility, it needs to check whether there are any
 /// meta data in the raft cf of the kv engine, if there are, it moves them
 /// into raft engine.
-pub fn maybe_upgrade_from_2_to_3(
-    raft_engine: &DB,
+pub fn maybe_upgrade_from_2_to_3<R: KvEngine>(
+    raft_engine: &R,
     kv_path: &str,
     kv_db_opts: DBOptions,
     kv_cfg: &config::DbConfig,
@@ -1653,10 +1649,11 @@ mod tests {
     use std::time::Duration;
     use tempfile::{Builder, TempDir};
     use tikv_util::worker::{Scheduler, Worker};
+    use engine_rocks::Rocks;
 
     use super::*;
 
-    fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
+    fn new_storage(sched: Scheduler<RegionTask<Rocks>>, path: &TempDir) -> PeerStorage<Rocks> {
         let kv_db =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
@@ -1672,23 +1669,23 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct ReadyContext {
-        kv_wb: WriteBatch,
-        raft_wb: WriteBatch,
+    struct ReadyContext<K: KvEngine, R: KvEngine> {
+        kv_wb: K::Batch,
+        raft_wb: R::Batch,
         sync_log: bool,
     }
 
-    impl HandleRaftReadyContext for ReadyContext {
-        fn kv_wb(&self) -> &WriteBatch {
+    impl<K: KvEngine, R: KvEngine> HandleRaftReadyContext<K, R> for ReadyContext {
+        fn kv_wb(&self) -> &K::Batch {
             &self.kv_wb
         }
-        fn kv_wb_mut(&mut self) -> &mut WriteBatch {
+        fn kv_wb_mut(&mut self) -> &mut K::Batch {
             &mut self.kv_wb
         }
-        fn raft_wb(&self) -> &WriteBatch {
+        fn raft_wb(&self) -> &R::Batch {
             &self.raft_wb
         }
-        fn raft_wb_mut(&mut self) -> &mut WriteBatch {
+        fn raft_wb_mut(&mut self) -> &mut R::Batch {
             &mut self.raft_wb
         }
         fn sync_log(&self) -> bool {
@@ -1700,10 +1697,10 @@ mod tests {
     }
 
     fn new_storage_from_ents(
-        sched: Scheduler<RegionTask>,
+        sched: Scheduler<RegionTask<Rocks, Rocks>>,
         path: &TempDir,
         ents: &[Entry],
-    ) -> PeerStorage {
+    ) -> PeerStorage<Rocks, Rocks> {
         let mut store = new_storage(sched, path);
         let mut kv_wb = WriteBatch::default();
         let mut ctx = InvokeContext::new(&store);
@@ -1726,7 +1723,7 @@ mod tests {
         store
     }
 
-    fn append_ents(store: &mut PeerStorage, ents: &[Entry]) {
+    fn append_ents(store: &mut PeerStorage<Rocks, Rocks>, ents: &[Entry]) {
         let mut ctx = InvokeContext::new(store);
         let mut ready_ctx = ReadyContext::default();
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
@@ -1735,7 +1732,7 @@ mod tests {
         store.raft_state = ctx.raft_state;
     }
 
-    fn validate_cache(store: &PeerStorage, exp_ents: &[Entry]) {
+    fn validate_cache(store: &PeerStorage<Rocks, Rocks>, exp_ents: &[Entry]) {
         assert_eq!(store.cache.cache, exp_ents);
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
@@ -1779,7 +1776,7 @@ mod tests {
         }
     }
 
-    fn get_meta_key_count(store: &PeerStorage) -> usize {
+    fn get_meta_key_count(store: &PeerStorage<Rocks>) -> usize {
         let region_id = store.get_region_id();
         let mut count = 0;
         let (meta_start, meta_end) = (

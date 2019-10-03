@@ -23,6 +23,7 @@ use crate::raftstore::Result;
 use engine::DB;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
+use engine_traits::KvEngine;
 
 use super::metrics::*;
 use crate::raftstore::store::fsm::store::StoreMeta;
@@ -42,11 +43,11 @@ pub struct ReadDelegate {
 }
 
 impl ReadDelegate {
-    pub fn from_peer(peer: &Peer) -> ReadDelegate {
+    pub fn from_peer<K: KvEngine, R: KvEngine>(peer: &Peer<K, R>) -> Self {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
-        ReadDelegate {
+        Self {
             region,
             peer_id,
             term: peer.term(),
@@ -167,9 +168,9 @@ pub struct LocalReader<C: ProposalRouter> {
     tag: String,
 }
 
-impl LocalReader<RaftRouter> {
-    pub fn new(kv_engine: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter) -> Self {
-        LocalReader {
+impl<K: KvEngine, R: KvEngine> LocalReader<RaftRouter<K, R>> {
+    pub fn new(kv_engine: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter<K, R>) -> Self {
+        Self {
             store_meta,
             kv_engine,
             router,

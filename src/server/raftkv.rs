@@ -4,6 +4,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
+use std::marker::PhantomData;
 
 use engine::rocks::TablePropertiesCollection;
 use engine::CfName;
@@ -26,6 +27,7 @@ use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
 use crate::storage::{self, kv, Key, Value};
+use engine_traits::KvEngine;
 
 quick_error! {
     #[derive(Debug)]
@@ -103,8 +105,10 @@ impl From<RaftServerError> for kv::Error {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S: RaftStoreRouter + 'static> {
+pub struct RaftKv<K: KvEngine, R: KvEngine, S: RaftStoreRouter<K, R> + 'static> {
     router: S,
+    _phantom_k: PhantomData<K>,
+    _phantom_r: PhantomData<R>,
 }
 
 pub enum CmdRes {
@@ -155,10 +159,10 @@ fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Re
     }
 }
 
-impl<S: RaftStoreRouter> RaftKv<S> {
+impl<K: KvEngine, R: KvEngine, S: RaftStoreRouter<K, R>> RaftKv<K, R, S> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S) -> RaftKv<S> {
-        RaftKv { router }
+    pub fn new(router: S) -> Self {
+        Self { router }
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -231,19 +235,19 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S: RaftStoreRouter> Display for RaftKv<S> {
+impl<K: KvEngine, R: KvEngine, S: RaftStoreRouter<K, R>> Display for RaftKv<K, R, S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter> Debug for RaftKv<S> {
+impl<K: KvEngine, R: KvEngine, S: RaftStoreRouter<K, R>> Debug for RaftKv<K, R, S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter> Engine for RaftKv<S> {
+impl<K: KvEngine + 'static, R: KvEngine + 'static, S: RaftStoreRouter<K, R>> Engine for RaftKv<K, R, S> {
     type Snap = RegionSnapshot;
 
     fn async_write(

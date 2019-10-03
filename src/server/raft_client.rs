@@ -5,6 +5,7 @@ use std::i64;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::marker::PhantomData;
 
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
@@ -22,6 +23,7 @@ use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
+use engine_traits::KvEngine;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -37,7 +39,7 @@ struct Conn {
 }
 
 impl Conn {
-    fn new<T: RaftStoreRouter + 'static>(
+    fn new<K: KvEngine, R: KvEngine, T: RaftStoreRouter<K, R> + 'static>(
         env: Arc<Environment>,
         router: T,
         addr: &str,
@@ -140,7 +142,7 @@ impl Conn {
 }
 
 /// `RaftClient` is used for sending raft messages to other stores.
-pub struct RaftClient<T: 'static> {
+pub struct RaftClient<K, R, T: 'static> {
     env: Arc<Environment>,
     router: Mutex<T>,
     conns: HashMap<(String, usize), Conn>,
@@ -154,9 +156,11 @@ pub struct RaftClient<T: 'static> {
     // it can put a tokio_timer::Delay to the runtime.
     stats_pool: tokio_threadpool::Sender,
     timer: Handle,
+    _phantom_r: PhantomData<R>,
+    _phantom_k: PhantomData<K>,
 }
 
-impl<T: RaftStoreRouter> RaftClient<T> {
+impl<K: KvEngine, R: KvEngine, T: RaftStoreRouter<K, R>> RaftClient<K, R, T> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
@@ -164,8 +168,8 @@ impl<T: RaftStoreRouter> RaftClient<T> {
         router: T,
         grpc_thread_load: Arc<ThreadLoad>,
         stats_pool: tokio_threadpool::Sender,
-    ) -> RaftClient<T> {
-        RaftClient {
+    ) -> Self {
+        Self {
             env,
             router: Mutex::new(router),
             conns: HashMap::default(),

@@ -12,10 +12,10 @@ use std::u64;
 use engine::rocks;
 use engine::rocks::Writable;
 use engine::WriteBatch;
-use engine::CF_RAFT;
 use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use engine_traits::{KvEngine, CF_RAFT};
 
 use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
@@ -44,11 +44,11 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task {
+pub enum Task<K: KvEngine, R: KvEngine> {
     Gen {
         region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
+        raft_snap: R::Snap,
+        kv_snap: K::Snap,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -65,9 +65,9 @@ pub enum Task {
     },
 }
 
-impl Task {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
-        Task::Destroy {
+impl<K: KvEngine, R: KvEngine> Task<K, R> {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Self {
+        Self::Destroy {
             region_id,
             start_key,
             end_key,
@@ -75,12 +75,12 @@ impl Task {
     }
 }
 
-impl Display for Task {
+impl<K: KvEngine, R: KvEngine> Display for Task<K, R> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
-            Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
-            Task::Destroy {
+            Self::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
+            Self::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
+            Self::Destroy {
                 region_id,
                 ref start_key,
                 ref end_key,
@@ -203,16 +203,16 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext {
+struct SnapContext<K: KvEngine, R: KvEngine> {
     engines: Engines,
     batch_size: usize,
-    mgr: SnapManager,
+    mgr: SnapManager<K, R>,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
 }
 
-impl SnapContext {
+impl<K: KvEngine, R: KvEngine> SnapContext<K, R> {
     /// Generates the snapshot of the Region.
     fn generate_snap(
         &self,
@@ -245,8 +245,8 @@ impl SnapContext {
     fn handle_gen(
         &self,
         region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
+        raft_snap: R::Snap,
+        kv_snap: K::Snap,
         notifier: SyncSender<RaftSnapshot>,
     ) {
         SNAP_COUNTER_VEC
@@ -518,24 +518,24 @@ impl SnapContext {
     }
 }
 
-pub struct Runner {
+pub struct Runner<K: KvEngine, R: KvEngine> {
     pool: ThreadPool<DefaultContext>,
-    ctx: SnapContext,
+    ctx: SnapContext<K, R>,
 
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task>,
+    pending_applies: VecDeque<Task<K, R>>,
 }
 
-impl Runner {
+impl<K: KvEngine, R: KvEngine> Runner<K, R> {
     pub fn new(
         engines: Engines,
-        mgr: SnapManager,
+        mgr: SnapManager<K, R>,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
-    ) -> Runner {
-        Runner {
+    ) -> Self {
+        Self {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
                 .thread_count(GENERATE_POOL_SIZE)
                 .build(),
@@ -579,8 +579,8 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
+impl<K: KvEngine, R: KvEngine> Runnable<Task<K, R>> for Runner<K, R> {
+    fn run(&mut self, task: Task<K, R>) {
         match task {
             Task::Gen {
                 region_id,
@@ -637,7 +637,7 @@ pub enum Event {
     CheckApply,
 }
 
-impl RunnableWithTimer<Task, Event> for Runner {
+impl<K: KvEngine, R: KvEngine> RunnableWithTimer<Task<K, R>, Event> for Runner<K, R> {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {

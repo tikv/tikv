@@ -67,7 +67,7 @@ quick_error! {
             display("{:?}", err)
         }
 
-        // Following is for From other errors.
+        // The following is for From other errors.
         Io(err: io::Error) {
             from()
             cause(err)
@@ -75,6 +75,11 @@ quick_error! {
             display("Io {}", err)
         }
         Engine(err: engine::Error) {
+            from()
+            description("Engine error")
+            display("Engine {:?}", err)
+        }
+        EngineTraits(err: engine_traits::Error) {
             from()
             description("Engine error")
             display("Engine {:?}", err)

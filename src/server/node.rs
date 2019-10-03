@@ -27,22 +27,25 @@ use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use tikv_util::future_pool::FuturePool;
 use tikv_util::worker::FutureWorker;
+use engine_traits::{KvEngine, KvEngines};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S>(
-    engine: RaftKv<S>,
+pub fn create_raft_storage<S, K, R>(
+    engine: RaftKv<K, R, S>,
     cfg: &StorageConfig,
     read_pools: Vec<FuturePool>,
     local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
+    raft_store_router: Option<ServerRaftStoreRouter<K, R>>,
     lock_mgr: Option<LockManager>,
-) -> Result<Storage<RaftKv<S>, LockManager>>
+) -> Result<Storage<RaftKv<K, R, S>, LockManager, K, R>>
 where
-    S: RaftStoreRouter + 'static,
+    K: KvEngine + 'static,
+    R: KvEngine + 'static,
+    S: RaftStoreRouter<K, R> + 'static,
 {
     let store = Storage::from_engine(
         engine,
@@ -57,27 +60,27 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<C: PdClient + 'static, K: KvEngine, R: KvEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
-    system: RaftBatchSystem,
+    system: RaftBatchSystem<K, R>,
     has_started: bool,
 
     pd_client: Arc<C>,
 }
 
-impl<C> Node<C>
+impl<C, K: KvEngine, R: KvEngine> Node<C, K, R>
 where
     C: PdClient,
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem,
+        system: RaftBatchSystem<K, R>,
         cfg: &ServerConfig,
         store_cfg: &StoreConfig,
         pd_client: Arc<C>,
-    ) -> Node<C> {
+    ) -> Self {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -96,7 +99,7 @@ where
         }
         store.set_labels(labels.into());
 
-        Node {
+        Self {
             cluster_id: cfg.cluster_id,
             store,
             store_cfg: store_cfg.clone(),
@@ -114,7 +117,7 @@ where
         &mut self,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
+        snap_mgr: SnapManager<K, R>,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
@@ -122,6 +125,8 @@ where
     ) -> Result<()>
     where
         T: Transport + 'static,
+        K: KvEngine,
+        R: KvEngine,
     {
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
@@ -169,7 +174,7 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_router(&self) -> RaftRouter {
+    pub fn get_router(&self) -> RaftRouter<K, R> {
         self.system.router()
     }
 
@@ -315,9 +320,9 @@ where
     fn start_store<T>(
         &mut self,
         store_id: u64,
-        engines: Engines,
+        engines: KvEngines<K, R>,
         trans: T,
-        snap_mgr: SnapManager,
+        snap_mgr: SnapManager<K, R>,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,

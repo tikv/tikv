@@ -1,31 +1,32 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 use kvproto::metapb::Region;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use engine::CF_RAFT;
-use engine::{Iterable, Peekable, Snapshot};
+use engine::{Iterable, Peekable};
 use tikv_util::worker::Runnable;
+use engine_traits::{KvEngine, CF_RAFT};
 
 use super::metrics::*;
 use crate::raftstore::store::metrics::*;
 
 /// Consistency checking task.
-pub enum Task {
+pub enum Task<K: KvEngine> {
     ComputeHash {
         index: u64,
         region: Region,
-        snap: Snapshot,
+        snap: K::Snap,
     },
 }
 
-impl Task {
-    pub fn compute_hash(region: Region, index: u64, snap: Snapshot) -> Task {
-        Task::ComputeHash {
+impl<K: KvEngine> Task<K> {
+    pub fn compute_hash(region: Region, index: u64, snap: K::Snap) -> Self {
+        Self::ComputeHash {
             region,
             index,
             snap,
@@ -33,27 +34,29 @@ impl Task {
     }
 }
 
-impl Display for Task {
+impl<K: KvEngine> Display for Task<K> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Task::ComputeHash {
+            Self::ComputeHash {
                 ref region, index, ..
             } => write!(f, "Compute Hash Task for {:?} at {}", region, index),
         }
     }
 }
 
-pub struct Runner<C: CasualRouter> {
+pub struct Runner<K: KvEngine, R: KvEngine, C: CasualRouter<K, R>> {
     router: C,
+    _phantom_k: PhantomData<K>,
+    _phantom_r: PhantomData<R>,
 }
 
-impl<C: CasualRouter> Runner<C> {
-    pub fn new(router: C) -> Runner<C> {
-        Runner { router }
+impl<K: KvEngine, R: KvEngine, C: CasualRouter<K, R>> Runner<K, R, C> {
+    pub fn new(router: C) -> Self {
+        Self { router }
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
+    fn compute_hash(&mut self, region: Region, index: u64, snap: K::Snap) {
         let region_id = region.get_id();
         info!(
             "computing hash";
@@ -128,8 +131,8 @@ impl<C: CasualRouter> Runner<C> {
     }
 }
 
-impl<C: CasualRouter> Runnable<Task> for Runner<C> {
-    fn run(&mut self, task: Task) {
+impl<K: KvEngine, R: KvEngine, C: CasualRouter<K, R>> Runnable<Task<K>> for Runner<K, R, C> {
+    fn run(&mut self, task: Task<K>) {
         match task {
             Task::ComputeHash {
                 region,

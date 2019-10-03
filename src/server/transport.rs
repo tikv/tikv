@@ -5,6 +5,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use std::sync::{Arc, RwLock};
+use std::marker::PhantomData;
 
 use super::metrics::*;
 use super::resolve::StoreAddrResolver;
@@ -20,9 +21,10 @@ use raft::SnapshotStatus;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
 use tikv_util::HandyRwLock;
+use engine_traits::KvEngine;
 
 /// Routes messages to the raftstore.
-pub trait RaftStoreRouter: Send + Clone {
+pub trait RaftStoreRouter<K: KvEngine, R: KvEngine>: Send + Clone {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
@@ -62,13 +64,13 @@ pub trait RaftStoreRouter: Send + Clone {
         )
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage) -> RaftStoreResult<()>;
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<K, R>) -> RaftStoreResult<()>;
 }
 
 #[derive(Clone)]
 pub struct RaftStoreBlackHole;
 
-impl RaftStoreRouter for RaftStoreBlackHole {
+impl<K: KvEngine, R: KvEngine> RaftStoreRouter<K, R> for RaftStoreBlackHole {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
         Ok(())
@@ -86,22 +88,22 @@ impl RaftStoreRouter for RaftStoreBlackHole {
 
     fn broadcast_unreachable(&self, _: u64) {}
 
-    fn casual_send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
+    fn casual_send(&self, _: u64, _: CasualMessage<K, R>) -> RaftStoreResult<()> {
         Ok(())
     }
 }
 
 /// A router that routes messages to the raftstore
 #[derive(Clone)]
-pub struct ServerRaftStoreRouter {
-    router: RaftRouter,
-    local_reader: LocalReader<RaftRouter>,
+pub struct ServerRaftStoreRouter<K: KvEngine, R: KvEngine> {
+    router: RaftRouter<K, R>,
+    local_reader: LocalReader<RaftRouter<K, R>>,
 }
 
-impl ServerRaftStoreRouter {
+impl<K: KvEngine, R: KvEngine> ServerRaftStoreRouter<K, R> {
     /// Creates a new router.
-    pub fn new(router: RaftRouter, local_reader: LocalReader<RaftRouter>) -> ServerRaftStoreRouter {
-        ServerRaftStoreRouter {
+    pub fn new(router: RaftRouter<K, R>, local_reader: LocalReader<RaftRouter<K, R>>) -> Self {
+        Self {
             router,
             local_reader,
         }
@@ -125,7 +127,7 @@ fn handle_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
     }
 }
 
-impl RaftStoreRouter for ServerRaftStoreRouter {
+impl<K: KvEngine, R: KvEngine> RaftStoreRouter<K, R> for ServerRaftStoreRouter<K, R> {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
         self.router
@@ -135,7 +137,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
-        if LocalReader::<RaftRouter>::acceptable(&cmd.request) {
+        if LocalReader::<RaftRouter<K, R>>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd);
             Ok(())
         } else {
@@ -159,7 +161,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         Ok(())
     }
 
-    fn casual_send(&self, region_id: u64, msg: CasualMessage) -> RaftStoreResult<()> {
+    fn casual_send(&self, region_id: u64, msg: CasualMessage<K, R>) -> RaftStoreResult<()> {
         self.router
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_error(region_id, e))
@@ -172,25 +174,29 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 }
 
-pub struct ServerTransport<T, S>
+pub struct ServerTransport<T, S, K, R>
 where
-    T: RaftStoreRouter + 'static,
+    K: KvEngine,
+    R: KvEngine,
+    T: RaftStoreRouter<K, R> + 'static,
     S: StoreAddrResolver + 'static,
 {
-    raft_client: Arc<RwLock<RaftClient<T>>>,
+    raft_client: Arc<RwLock<RaftClient<K, R, T>>>,
     snap_scheduler: Scheduler<SnapTask>,
     pub raft_router: T,
     resolving: Arc<RwLock<HashSet<u64>>>,
     resolver: S,
 }
 
-impl<T, S> Clone for ServerTransport<T, S>
+impl<T, S, K, R> Clone for ServerTransport<T, S, K, R>
 where
-    T: RaftStoreRouter + 'static,
+    K: KvEngine,
+    R: KvEngine,
+    T: RaftStoreRouter<K, R> + 'static,
     S: StoreAddrResolver + 'static,
 {
     fn clone(&self) -> Self {
-        ServerTransport {
+        Self {
             raft_client: Arc::clone(&self.raft_client),
             snap_scheduler: self.snap_scheduler.clone(),
             raft_router: self.raft_router.clone(),
@@ -200,14 +206,14 @@ where
     }
 }
 
-impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
+impl<T: RaftStoreRouter<K, R> + 'static, S: StoreAddrResolver + 'static, K: KvEngine + 'static, R: KvEngine + 'static> ServerTransport<T, S, K, R> {
     pub fn new(
-        raft_client: Arc<RwLock<RaftClient<T>>>,
+        raft_client: Arc<RwLock<RaftClient<K, R, T>>>,
         snap_scheduler: Scheduler<SnapTask>,
         raft_router: T,
         resolver: S,
-    ) -> ServerTransport<T, S> {
-        ServerTransport {
+    ) -> Self {
+        Self {
             raft_client,
             snap_scheduler,
             raft_router,
@@ -343,7 +349,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         }
     }
 
-    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<T> {
+    fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter<K, R, T> {
         let region_id = msg.get_region_id();
         let to_peer_id = msg.get_to_peer().get_id();
         let to_store_id = msg.get_to_peer().get_store_id();
@@ -383,9 +389,11 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
     }
 }
 
-impl<T, S> Transport for ServerTransport<T, S>
+impl<T, S, K, R> Transport for ServerTransport<T, S, K, R>
 where
-    T: RaftStoreRouter + 'static,
+    K: KvEngine,
+    R: KvEngine,
+    T: RaftStoreRouter<K, R> + 'static,
     S: StoreAddrResolver + 'static,
 {
     fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
@@ -399,14 +407,16 @@ where
     }
 }
 
-struct SnapshotReporter<T: RaftStoreRouter + 'static> {
+struct SnapshotReporter<K: KvEngine, R: KvEngine, T: RaftStoreRouter<K, R> + 'static> {
     raft_router: T,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
+    _phantom_k: PhantomData<K>,
+    _phantom_r: PhantomData<R>,
 }
 
-impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
+impl<K: KvEngine, R: KvEngine, T: RaftStoreRouter<K, R> + 'static> SnapshotReporter<K, R, T> {
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
             "send snapshot";

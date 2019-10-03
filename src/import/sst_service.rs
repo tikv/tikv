@@ -10,6 +10,7 @@ use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
+use std::marker::PhantomData;
 
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
@@ -17,6 +18,7 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
+use engine_traits::KvEngine;
 
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
@@ -28,38 +30,42 @@ use sst_importer::{Config, Error, SSTImporter};
 /// It saves the SST sent from client to a file and then sends a command to
 /// raftstore to trigger the ingest process.
 #[derive(Clone)]
-pub struct ImportSSTService<Router> {
+pub struct ImportSSTService<K, R, Router> {
     cfg: Config,
     router: Router,
     engine: Arc<DB>,
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
+    _phantom_k: PhantomData<K>,
+    _phantom_r: PhantomData<R>,
 }
 
-impl<Router: RaftStoreRouter> ImportSSTService<Router> {
+impl<K: KvEngine, R: KvEngine, Router: RaftStoreRouter<K, R>> ImportSSTService<K, R, Router> {
     pub fn new(
         cfg: Config,
         router: Router,
         engine: Arc<DB>,
         importer: Arc<SSTImporter>,
-    ) -> ImportSSTService<Router> {
+    ) -> Self {
         let threads = Builder::new()
             .name_prefix("sst-importer")
             .pool_size(cfg.num_threads)
             .create();
-        ImportSSTService {
+        Self {
             cfg,
             router,
             engine,
             threads,
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
+            _phantom_k: PhantomData,
+            _phantom_r: PhantomData,
         }
     }
 }
 
-impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
+impl<K: KvEngine, R: KvEngine, Router: RaftStoreRouter<K, R>> ImportSst for ImportSSTService<K, R, Router> {
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,

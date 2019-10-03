@@ -8,7 +8,9 @@ use engine::CF_WRITE;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::Mutex;
+use std::marker::PhantomData;
 
+use engine_traits::KvEngine;
 use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::properties::{get_range_entries_and_versions, RangeProperties};
@@ -81,21 +83,23 @@ impl SplitChecker for Checker {
     }
 }
 
-pub struct KeysCheckObserver<C> {
+pub struct KeysCheckObserver<K, R, C> {
     region_max_keys: u64,
     split_keys: u64,
     batch_split_limit: u64,
     router: Mutex<C>,
+    _phantom_k: PhantomData<K>,
+    _phantom_r: PhantomData<R>,
 }
 
-impl<C: CasualRouter> KeysCheckObserver<C> {
+impl<K: KvEngine, R: KvEngine, C: CasualRouter<K, R>> KeysCheckObserver<K, R, C> {
     pub fn new(
         region_max_keys: u64,
         split_keys: u64,
         batch_split_limit: u64,
         router: C,
-    ) -> KeysCheckObserver<C> {
-        KeysCheckObserver {
+    ) -> Self {
+        Self {
             region_max_keys,
             split_keys,
             batch_split_limit,
@@ -104,9 +108,9 @@ impl<C: CasualRouter> KeysCheckObserver<C> {
     }
 }
 
-impl<C> Coprocessor for KeysCheckObserver<C> {}
+impl<K, R, C> Coprocessor for KeysCheckObserver<K, R, C> {}
 
-impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<K: KvEngine, R: KvEngine, C: CasualRouter<K, R> + Send> SplitCheckObserver for KeysCheckObserver<K, R, C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,

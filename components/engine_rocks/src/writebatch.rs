@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{self, Error, Mutable, Result, WriteOptions};
+use engine_traits::{self, Error, Mutable, Result, WriteOptions, KvEngine};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::util::get_cf_handle;
@@ -27,15 +27,6 @@ impl WriteBatch {
         }
     }
 
-    pub fn with_capacity(db: Arc<DB>, cap: usize) -> WriteBatch {
-        let wb = if cap == 0 {
-            RawWriteBatch::default()
-        } else {
-            RawWriteBatch::with_capacity(cap)
-        };
-        WriteBatch { db, wb }
-    }
-
     pub fn from_raw(db: Arc<DB>, wb: RawWriteBatch) -> WriteBatch {
         WriteBatch { db, wb }
     }
@@ -45,7 +36,18 @@ impl WriteBatch {
     }
 }
 
-impl engine_traits::WriteBatch for WriteBatch {
+impl<E: KvEngine> engine_traits::WriteBatch<E> for WriteBatch 
+    where E: AsRef<Arc<DB>> {
+    fn with_capacity(engine: &E, cap: usize) -> Self {
+        let wb = if cap == 0 {
+            RawWriteBatch::default()
+        } else {
+            RawWriteBatch::with_capacity(cap)
+        };
+        let db: Arc<DB> = Arc::clone(engine.as_ref());
+        Self { db, wb }
+    }
+
     fn data_size(&self) -> usize {
         self.wb.data_size()
     }

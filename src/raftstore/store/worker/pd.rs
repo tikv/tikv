@@ -34,6 +34,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::time_now_sec;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use engine_traits::{KvEngine};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -282,10 +283,10 @@ impl StatsMonitor {
     }
 }
 
-pub struct Runner<T: PdClient> {
+pub struct Runner<T: PdClient, K: KvEngine, R: KvEngine> {
     store_id: u64,
     pd_client: Arc<T>,
-    router: RaftRouter,
+    router: RaftRouter<K, R>,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -300,24 +301,24 @@ pub struct Runner<T: PdClient> {
     stats_monitor: StatsMonitor,
 }
 
-impl<T: PdClient> Runner<T> {
+impl<T: PdClient, K: KvEngine + 'static, R: KvEngine + 'static> Runner<T, K, R> {
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        router: RaftRouter,
+        router: RaftRouter<K, R>,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
-    ) -> Runner<T> {
+    ) -> Self {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start() {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        Runner {
+        Self {
             store_id,
             pd_client,
             router,
@@ -776,7 +777,7 @@ impl<T: PdClient> Runner<T> {
     }
 }
 
-impl<T: PdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient, K: KvEngine +'static, R: KvEngine + 'static> Runnable<Task> for Runner<T, K, R> {
     fn run(&mut self, task: Task, handle: &Handle) {
         debug!("executing task"; "task" => %task);
 
@@ -955,8 +956,8 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req
 }
 
-fn send_admin_request(
-    router: &RaftRouter,
+fn send_admin_request<K: KvEngine, R: KvEngine>(
+    router: &RaftRouter<K, R>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -981,7 +982,7 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::Peer) {
+fn send_merge_fail<K: KvEngine, R: KvEngine>(router: &RaftRouter<K, R>, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
     if let Err(e) = router.send(
         source_region_id,
@@ -998,8 +999,8 @@ fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::P
 }
 
 /// Sends a raft message to destroy the specified stale Peer
-fn send_destroy_peer_message(
-    router: &RaftRouter,
+fn send_destroy_peer_message<K: KvEngine, R: KvEngine>(
+    router: &RaftRouter<K, R>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,

@@ -17,6 +17,7 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
 use crate::storage::kv::CompactedEvent;
 use tikv_util::escape;
+use engine_traits::KvEngine;
 
 use super::RegionSnapshot;
 
@@ -164,7 +165,7 @@ pub enum SignificantMsg {
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
-pub enum CasualMessage {
+pub enum CasualMessage<K: KvEngine, R: KvEngine> {
     /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
@@ -213,49 +214,49 @@ pub enum CasualMessage {
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
-    Test(Box<dyn FnOnce(&mut PeerFsm) + Send + 'static>),
+    Test(Box<dyn FnOnce(&mut PeerFsm<K, R>) + Send + 'static>),
 }
 
-impl fmt::Debug for CasualMessage {
+impl<K: KvEngine, R: KvEngine> fmt::Debug for CasualMessage<K, R> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CasualMessage::ComputeHashResult { index, ref hash } => write!(
+            Self::ComputeHashResult { index, ref hash } => write!(
                 fmt,
                 "ComputeHashResult [index: {}, hash: {}]",
                 index,
                 escape(hash)
             ),
-            CasualMessage::SplitRegion { ref split_keys, .. } => write!(
+            Self::SplitRegion { ref split_keys, .. } => write!(
                 fmt,
                 "Split region with {}",
                 KeysInfoFormatter(split_keys.iter())
             ),
-            CasualMessage::RegionApproximateSize { size } => {
+            Self::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
             }
-            CasualMessage::RegionApproximateKeys { keys } => {
+            Self::RegionApproximateKeys { keys } => {
                 write!(fmt, "Region's approximate keys [keys: {:?}]", keys)
             }
-            CasualMessage::CompactionDeclinedBytes { bytes } => {
+            Self::CompactionDeclinedBytes { bytes } => {
                 write!(fmt, "compaction declined bytes {}", bytes)
             }
-            CasualMessage::HalfSplitRegion { .. } => write!(fmt, "Half Split"),
-            CasualMessage::MergeResult { target, stale } => write! {
+            Self::HalfSplitRegion { .. } => write!(fmt, "Half Split"),
+            Self::MergeResult { target, stale } => write! {
                 fmt,
                 "target: {:?}, successful: {}",
                 target, stale
             },
-            CasualMessage::GcSnap { ref snaps } => write! {
+            Self::GcSnap { ref snaps } => write! {
                 fmt,
                 "gc snaps {:?}",
                 snaps
             },
-            CasualMessage::ClearRegionSize => write! {
+            Self::ClearRegionSize => write! {
                 fmt,
                 "clear region size"
             },
-            CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
-            CasualMessage::Test(_) => write!(fmt, "Test"),
+            Self::RegionOverlapped => write!(fmt, "RegionOverlapped"),
+            Self::Test(_) => write!(fmt, "Test"),
         }
     }
 }
@@ -281,7 +282,7 @@ impl RaftCommand {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg {
+pub enum PeerMsg<K: KvEngine, R: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -294,7 +295,7 @@ pub enum PeerMsg {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes },
+    ApplyRes { res: ApplyTaskRes<K> },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
@@ -303,12 +304,12 @@ pub enum PeerMsg {
     /// A message only used to notify a peer.
     Noop,
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage),
+    CasualMessage(CasualMessage<K, R>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
 }
 
-impl fmt::Debug for PeerMsg {
+impl<K: KvEngine, R: KvEngine> fmt::Debug for PeerMsg<K, R> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
@@ -381,7 +382,7 @@ impl fmt::Debug for StoreMsg {
 
 // TODO: remove this enum and utilize the actual message instead.
 #[derive(Debug)]
-pub enum Msg {
-    PeerMsg(PeerMsg),
+pub enum Msg<K: KvEngine, R: KvEngine> {
+    PeerMsg(PeerMsg<K, R>),
     StoreMsg(StoreMsg),
 }

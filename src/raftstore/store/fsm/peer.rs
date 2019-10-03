@@ -9,9 +9,6 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use crate::raftstore::{Error, Result};
-use engine::Engines;
-use engine::CF_RAFT;
-use engine::{Peekable, Snapshot as EngineSnapshot};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -33,6 +30,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
+use engine_traits::{KvEngine, KvEngines, CF_RAFT};
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
@@ -80,8 +78,8 @@ pub enum GroupState {
     Idle,
 }
 
-pub struct PeerFsm {
-    pub peer: Peer,
+pub struct PeerFsm<K: KvEngine, R: KvEngine> {
+    pub peer: Peer<K, R>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     /// Ticks for speed up campaign in chaos state.
@@ -95,11 +93,11 @@ pub struct PeerFsm {
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
-    mailbox: Option<BasicMailbox<PeerFsm>>,
-    pub receiver: Receiver<PeerMsg>,
+    mailbox: Option<BasicMailbox<Self>>,
+    pub receiver: Receiver<PeerMsg<K, R>>,
 }
 
-impl Drop for PeerFsm {
+impl<K: KvEngine, R: KvEngine> Drop for PeerFsm<K, R> {
     fn drop(&mut self) {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
@@ -119,17 +117,17 @@ impl Drop for PeerFsm {
     }
 }
 
-impl PeerFsm {
+impl<K: KvEngine, R: KvEngine> PeerFsm<K, R> {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask>,
-        engines: Engines,
+        sched: Scheduler<RegionTask<K, R>>,
+        engines: KvEngines<K, R>,
         region: &metapb::Region,
-    ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
+    ) -> Result<(LooseBoundedSender<PeerMsg<K, R>>, Box<Self>)> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
@@ -168,11 +166,11 @@ impl PeerFsm {
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask>,
-        engines: Engines,
+        sched: Scheduler<RegionTask<K, R>>,
+        engines: KvEngines<K, R>,
         region_id: u64,
         peer: metapb::Peer,
-    ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
+    ) -> Result<(LooseBoundedSender<PeerMsg<K, R>>, Box<Self>)> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
@@ -186,7 +184,7 @@ impl PeerFsm {
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
             tx,
-            Box::new(PeerFsm {
+            Box::new(Self {
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -205,7 +203,7 @@ impl PeerFsm {
     }
 
     #[inline]
-    pub fn get_peer(&self) -> &Peer {
+    pub fn get_peer(&self) -> &Peer<K, R> {
         &self.peer
     }
 
@@ -232,8 +230,8 @@ impl PeerFsm {
     }
 }
 
-impl Fsm for PeerFsm {
-    type Message = PeerMsg;
+impl<K: KvEngine, R: KvEngine> Fsm for PeerFsm<K, R> {
+    type Message = PeerMsg<K, R>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -260,17 +258,17 @@ impl Fsm for PeerFsm {
     }
 }
 
-pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
-    fsm: &'a mut PeerFsm,
-    ctx: &'a mut PollContext<T, C>,
+pub struct PeerFsmDelegate<'a, T: 'static, C: 'static, K: KvEngine, R: KvEngine> {
+    fsm: &'a mut PeerFsm<K, R>,
+    ctx: &'a mut PollContext<T, C, K, R>,
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    pub fn new(fsm: &'a mut PeerFsm, ctx: &'a mut PollContext<T, C>) -> PeerFsmDelegate<'a, T, C> {
-        PeerFsmDelegate { fsm, ctx }
+impl<'a, T: Transport, C: PdClient, K: KvEngine + 'static, R: KvEngine + 'static> PeerFsmDelegate<'a, T, C, K, R> {
+    pub fn new(fsm: &'a mut PeerFsm<K, R>, ctx: &'a mut PollContext<T, C, K, R>) -> Self {
+        Self { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg>) {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<K, R>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -312,7 +310,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage) {
+    fn on_casual_msg(&mut self, msg: CasualMessage<K, R>) {
         match msg {
             CasualMessage::SplitRegion {
                 region_epoch,
@@ -811,7 +809,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes) {
+    fn on_apply_res(&mut self, res: ApplyTaskRes<K>) {
         match res {
             ApplyTaskRes::Apply(mut res) => {
                 debug!(
@@ -2168,7 +2166,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult>,
+        exec_results: &mut VecDeque<ExecResult<K>>,
         metrics: &ApplyMetrics,
     ) -> Option<Arc<AtomicBool>> {
         // handle executing committed log results
@@ -2855,8 +2853,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+impl<'a, T: Transport, C: PdClient, K: KvEngine + 'static, R: KvEngine + 'static> PeerFsmDelegate<'a, T, C, K, R> {
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: K::Snap) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!(
@@ -3052,7 +3050,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
+impl<'a, T: Transport, C: PdClient, K: KvEngine, R: KvEngine> PeerFsmDelegate<'a, T, C, K, R> {
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current

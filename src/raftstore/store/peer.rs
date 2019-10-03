@@ -8,8 +8,7 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
-use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
-use engine::{Engines, Peekable};
+use engine::rocks::{Snapshot, SyncSnapshot, DB};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -44,6 +43,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 use tikv_util::MustConsumeVec;
+use engine_traits::{KvEngine, KvEngines, Peekable, WriteOptions};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -251,15 +251,15 @@ pub struct CheckTickResult {
 /// When handling the apply result of a `CommitMerge`, the source peer may have
 /// not handle the apply result of the `PrepareMerge`, so the target peer has
 /// to abort current handle process and wait for it asynchronously.
-pub struct WaitApplyResultState {
+pub struct WaitApplyResultState<E: KvEngine> {
     /// The following apply results waiting to be handled, including the `CommitMerge`.
     /// These will be handled once `ready_to_merge` is true.
-    pub results: Vec<ApplyTaskRes>,
+    pub results: Vec<ApplyTaskRes<E>>,
     /// It is used by target peer to check whether the apply result of `PrepareMerge` is handled.
     pub ready_to_merge: Arc<AtomicBool>,
 }
 
-pub struct Peer {
+pub struct Peer<K: KvEngine, R: KvEngine> {
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
     // TODO: remove it once panic!() support slog fields.
@@ -269,7 +269,7 @@ pub struct Peer {
     pub peer: metapb::Peer,
 
     /// The Raft state machine of this Peer.
-    pub raft_group: RawNode<PeerStorage>,
+    pub raft_group: RawNode<PeerStorage<K, R>>,
     /// The cache of meta information for Region's other Peers.
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
@@ -333,7 +333,7 @@ pub struct Peer {
     /// The merge related state. It indicates this Peer is in merging.
     pub pending_merge_state: Option<MergeState>,
     /// The state to wait for `PrepareMerge` apply result.
-    pub pending_merge_apply_result: Option<WaitApplyResultState>,
+    pub pending_merge_apply_result: Option<WaitApplyResultState<K>>,
     /// source region is catching up logs for merge
     pub catch_up_logs: Option<Arc<AtomicU64>>,
 
@@ -341,15 +341,15 @@ pub struct Peer {
     pub peer_stat: PeerStat,
 }
 
-impl Peer {
+impl<K: KvEngine, R: KvEngine> Peer<K, R> {
     pub fn new(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask>,
-        engines: Engines,
+        sched: Scheduler<RegionTask<K, R>>,
+        engines: KvEngines<K, R>,
         region: &metapb::Region,
         peer: metapb::Peer,
-    ) -> Result<Peer> {
+    ) -> Result<Self> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }
@@ -377,7 +377,7 @@ impl Peer {
         };
 
         let raft_group = RawNode::with_logger(&raft_cfg, ps, &slog_global::get_global())?;
-        let mut peer = Peer {
+        let mut peer = Self {
             peer,
             region_id: region.get_id(),
             raft_group,
@@ -429,7 +429,7 @@ impl Peer {
 
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
+    pub fn activate<T, C>(&self, ctx: &PollContext<T, C, K, R>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
 
@@ -534,7 +534,7 @@ impl Peer {
     /// 1. Set the region to tombstone;
     /// 2. Clear data;
     /// 3. Notify all pending requests.
-    pub fn destroy<T, C>(&mut self, ctx: &PollContext<T, C>, keep_data: bool) -> Result<()> {
+    pub fn destroy<T, C>(&mut self, ctx: &PollContext<T, C, K, R>, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
@@ -546,8 +546,8 @@ impl Peer {
         );
 
         // Set Tombstone state explicitly
-        let kv_wb = WriteBatch::default();
-        let raft_wb = WriteBatch::default();
+        let kv_wb = &ctx.engines.kv.write_batch();
+        let raft_wb = &ctx.engines.raft.write_batch();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
         write_peer_state(
             &ctx.engines.kv,
@@ -712,12 +712,12 @@ impl Peer {
     }
 
     #[inline]
-    pub fn get_store(&self) -> &PeerStorage {
+    pub fn get_store(&self) -> &PeerStorage<K, R> {
         self.raft_group.get_store()
     }
 
     #[inline]
-    pub fn mut_store(&mut self) -> &mut PeerStorage {
+    pub fn mut_store(&mut self) -> &mut PeerStorage<K, R> {
         self.raft_group.mut_store()
     }
 
@@ -955,7 +955,7 @@ impl Peer {
         false
     }
 
-    pub fn check_stale_state<T, C>(&mut self, ctx: &mut PollContext<T, C>) -> StaleState {
+    pub fn check_stale_state<T, C>(&mut self, ctx: &mut PollContext<T, C, K, R>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
             //
@@ -995,7 +995,7 @@ impl Peer {
         }
     }
 
-    fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
+    fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<T, C, K, R>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
             match ss.raft_state {
@@ -1141,7 +1141,7 @@ impl Peer {
 
     pub fn handle_raft_ready_append<T: Transport, C>(
         &mut self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
     ) -> Option<(Ready, InvokeContext)> {
         if self.pending_remove {
             return None;
@@ -1271,7 +1271,7 @@ impl Peer {
 
     pub fn post_raft_ready_append<T: Transport, C>(
         &mut self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         ready: &mut Ready,
         invoke_ctx: InvokeContext,
     ) -> Option<ApplySnapResult> {
@@ -1326,7 +1326,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply<T, C>(&mut self, ctx: &mut PollContext<T, C>, mut ready: Ready) {
+    pub fn handle_raft_ready_apply<T, C>(&mut self, ctx: &mut PollContext<T, C, K, R>, mut ready: Ready) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -1423,7 +1423,7 @@ impl Peer {
     }
 
     /// Responses to the ready read index request on the replica, the replica is not a leader.
-    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
+    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C, K, R>) {
         if self.pending_reads.ready_cnt > 0 {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
@@ -1465,7 +1465,7 @@ impl Peer {
         }
     }
 
-    fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
+    fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C, K, R>, ready: &Ready) {
         let mut propose_time = None;
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
@@ -1524,7 +1524,7 @@ impl Peer {
 
     pub fn post_apply<T, C>(
         &mut self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         apply_state: RaftApplyState,
         applied_index_term: u64,
         apply_metrics: &ApplyMetrics,
@@ -1592,7 +1592,7 @@ impl Peer {
     fn maybe_renew_leader_lease<T, C>(
         &mut self,
         ts: Timespec,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
@@ -1682,7 +1682,7 @@ impl Peer {
     /// Return true means the request has been proposed successfully.
     pub fn propose<T, C>(
         &mut self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         cb: Callback,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
@@ -1740,7 +1740,7 @@ impl Peer {
 
     fn post_propose<T, C>(
         &mut self,
-        poll_ctx: &mut PollContext<T, C>,
+        poll_ctx: &mut PollContext<T, C, K, R>,
         mut meta: ProposalMeta,
         is_conf_change: bool,
         cb: Callback,
@@ -1792,7 +1792,7 @@ impl Peer {
     ///    the peer to be removed should not be the leader.
     fn check_conf_change<T, C>(
         &self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         cmd: &RaftCmdRequest,
     ) -> Result<()> {
         let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
@@ -1890,7 +1890,7 @@ impl Peer {
 
     fn ready_to_transfer_leader<T, C>(
         &self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         peer: &metapb::Peer,
     ) -> bool {
         let peer_id = peer.get_id();
@@ -1927,7 +1927,7 @@ impl Peer {
         last_index <= progress.get(peer_id).unwrap().matched + ctx.cfg.leader_transfer_max_log_lag
     }
 
-    fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
+    fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C, K, R>, req: RaftCmdRequest, cb: Callback) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
     }
@@ -1959,7 +1959,7 @@ impl Peer {
     // 3. There is already a read request proposed in the current lease;
     fn read_index<T, C>(
         &mut self,
-        poll_ctx: &mut PollContext<T, C>,
+        poll_ctx: &mut PollContext<T, C, K, R>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         cb: Callback,
@@ -2090,7 +2090,7 @@ impl Peer {
 
     fn pre_propose_prepare_merge<T, C>(
         &self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
@@ -2144,7 +2144,7 @@ impl Peer {
 
     fn pre_propose<T, C>(
         &self,
-        poll_ctx: &mut PollContext<T, C>,
+        poll_ctx: &mut PollContext<T, C, K, R>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
         poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
@@ -2173,7 +2173,7 @@ impl Peer {
 
     fn propose_normal<T, C>(
         &mut self,
-        poll_ctx: &mut PollContext<T, C>,
+        poll_ctx: &mut PollContext<T, C, K, R>,
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
         if self.pending_merge_state.is_some()
@@ -2230,7 +2230,7 @@ impl Peer {
     // Return true to if the transfer leader request is accepted.
     fn propose_transfer_leader<T, C>(
         &mut self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         req: RaftCmdRequest,
         cb: Callback,
     ) -> bool {
@@ -2266,7 +2266,7 @@ impl Peer {
     // 4. The conf change is dropped by raft group internally.
     fn propose_conf_change<T, C>(
         &mut self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         req: &RaftCmdRequest,
     ) -> Result<u64> {
         if self.pending_merge_state.is_some() {
@@ -2321,7 +2321,7 @@ impl Peer {
 
     fn handle_read<T, C>(
         &mut self,
-        ctx: &mut PollContext<T, C>,
+        ctx: &mut PollContext<T, C, K, R>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -2350,7 +2350,7 @@ impl Peer {
     }
 }
 
-impl Peer {
+impl<K: KvEngine, R: KvEngine> Peer<K, R> {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
@@ -2379,7 +2379,7 @@ impl Peer {
         None
     }
 
-    pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
+    pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C, K, R>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
             region: self.region().clone(),
@@ -2553,7 +2553,7 @@ pub trait RequestInspector {
     }
 }
 
-impl RequestInspector for Peer {
+impl<K: KvEngine, R: KvEngine> RequestInspector for Peer<K, R> {
     fn has_applied_to_current_term(&mut self) -> bool {
         self.get_store().applied_index_term() == self.term()
     }
