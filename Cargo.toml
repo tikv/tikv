@@ -14,7 +14,7 @@ publish = false
 [features]
 default = ["jemalloc"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
-jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
@@ -123,6 +123,7 @@ keys = { path = "components/keys" }
 engine_traits = { path = "components/engine_traits" }
 sst_importer = { path = "components/sst_importer" }
 storage_types = { path = "components/storage_types" }
+engine_rocks = { path = "components/engine_rocks" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
