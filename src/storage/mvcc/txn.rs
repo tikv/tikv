@@ -474,7 +474,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let write = Write::new(
+        let write = Write::new_unprotected(
             WriteType::from_lock_type(lock_type).unwrap(),
             self.start_ts,
             short_value,
@@ -485,7 +485,11 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
-        self.cleanup(key, 0)
+        // There are only two cases when a key is rolled back:
+        // 1) A failed transaction rolls back its prewritten keys
+        // 2) Other transactions roll back the secondary locks
+        // In both cases the rollback record needn't be protected from being collapsed.
+        self.cleanup(key, 0, false)
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
@@ -493,7 +497,7 @@ impl<S: Snapshot> MvccTxn<S> {
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
-    pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
+    pub fn cleanup(&mut self, key: Key, current_ts: u64, protected: bool) -> Result<bool> {
         let is_pessimistic_txn = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
@@ -546,14 +550,15 @@ impl<S: Snapshot> MvccTxn<S> {
                         }
 
                         // insert a Rollback to WriteCF when receives Rollback before Prewrite
-                        let write = Write::new(WriteType::Rollback, ts, None);
+                        let write = Write::new_rollback(ts, protected);
                         self.put_write(key, ts, write.to_bytes());
                         Ok(false)
                     }
                 };
             }
         };
-        let write = Write::new(WriteType::Rollback, self.start_ts, None);
+        // Only rollbacks of pessimistic transactions need to be protected.
+        let write = Write::new_rollback(self.start_ts, protected & is_pessimistic_txn);
         let ts = self.start_ts;
         self.put_write(key.clone(), ts, write.to_bytes());
         self.unlock_key(key.clone());
@@ -897,11 +902,11 @@ mod tests {
         must_locked(&engine, k, ts(10, 0));
 
         // Try to cleanup another transaction's lock. Does nothing.
-        must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
+        must_cleanup(&engine, k, ts(10, 1), ts(120, 0), false);
         must_locked(&engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
-        must_cleanup(&engine, k, ts(10, 0), ts(120, 0));
+        must_cleanup(&engine, k, ts(10, 0), ts(120, 0), false);
         must_unlocked(&engine, k);
         must_get_rollback_ts(&engine, k, ts(10, 0));
     }

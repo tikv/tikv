@@ -403,7 +403,7 @@ mod tests {
                     None,
                 )
             };
-            let write_value = Write::new(wt, self.start_ts, short);
+            let write_value = Write::new_unprotected(wt, self.start_ts, short);
             TxnEntry::Commit {
                 default: (key, value),
                 write: (write_key.into_encoded(), write_value.to_bytes()),

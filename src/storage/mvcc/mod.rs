@@ -546,11 +546,18 @@ pub mod tests {
         assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
 
-    pub fn must_cleanup<E: Engine>(engine: &E, key: &[u8], start_ts: u64, current_ts: u64) {
+    pub fn must_cleanup<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        current_ts: u64,
+        protected: bool,
+    ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        txn.cleanup(Key::from_raw(key), current_ts).unwrap();
+        txn.cleanup(Key::from_raw(key), current_ts, protected)
+            .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -558,7 +565,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        assert!(txn.cleanup(Key::from_raw(key), current_ts).is_err());
+        assert!(txn.cleanup(Key::from_raw(key), current_ts, false).is_err());
     }
 
     pub fn must_txn_heart_beat<E: Engine>(

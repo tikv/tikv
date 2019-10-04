@@ -12,7 +12,7 @@ use tikv_util::config::*;
 fn gen_mvcc_put_kv(k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) -> (Vec<u8>, Vec<u8>) {
     let k = MvccKey::from_encoded(data_key(k));
     let k = k.append_ts(commit_ts);
-    let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
+    let w = Write::new_unprotected(WriteType::Put, start_ts, Some(v.to_vec()));
     (k.as_encoded().clone(), w.to_bytes())
 }
 

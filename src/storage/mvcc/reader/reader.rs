@@ -891,31 +891,43 @@ mod tests {
         let k = Key::from_raw(k);
         let (commit_ts, write) = reader.seek_write(&k, 30).unwrap().unwrap();
         assert_eq!(commit_ts, 25);
-        assert_eq!(write, Write::new(WriteType::Put, 23, Some(v.to_vec())));
+        assert_eq!(
+            write,
+            Write::new_unprotected(WriteType::Put, 23, Some(v.to_vec()))
+        );
 
         let (commit_ts, write) = reader.seek_write(&k, 25).unwrap().unwrap();
         assert_eq!(commit_ts, 25);
-        assert_eq!(write, Write::new(WriteType::Put, 23, Some(v.to_vec())));
+        assert_eq!(
+            write,
+            Write::new_unprotected(WriteType::Put, 23, Some(v.to_vec()))
+        );
 
         let (commit_ts, write) = reader.seek_write(&k, 20).unwrap().unwrap();
         assert_eq!(commit_ts, 20);
-        assert_eq!(write, Write::new(WriteType::Lock, 10, None));
+        assert_eq!(write, Write::new_unprotected(WriteType::Lock, 10, None));
 
         let (commit_ts, write) = reader.seek_write(&k, 19).unwrap().unwrap();
         assert_eq!(commit_ts, 17);
-        assert_eq!(write, Write::new(WriteType::Put, 15, Some(v.to_vec())));
+        assert_eq!(
+            write,
+            Write::new_unprotected(WriteType::Put, 15, Some(v.to_vec()))
+        );
 
         let (commit_ts, write) = reader.seek_write(&k, 3).unwrap().unwrap();
         assert_eq!(commit_ts, 3);
-        assert_eq!(write, Write::new(WriteType::Rollback, 3, None));
+        assert_eq!(write, Write::new_unprotected(WriteType::Rollback, 3, None));
 
         let (commit_ts, write) = reader.seek_write(&k, 16).unwrap().unwrap();
         assert_eq!(commit_ts, 7);
-        assert_eq!(write, Write::new(WriteType::Rollback, 7, None));
+        assert_eq!(write, Write::new_unprotected(WriteType::Rollback, 7, None));
 
         let (commit_ts, write) = reader.seek_write(&k, 6).unwrap().unwrap();
         assert_eq!(commit_ts, 5);
-        assert_eq!(write, Write::new(WriteType::Put, 1, Some(v.to_vec())));
+        assert_eq!(
+            write,
+            Write::new_unprotected(WriteType::Put, 1, Some(v.to_vec()))
+        );
 
         assert!(reader.seek_write(&k, 2).unwrap().is_none());
 
@@ -930,7 +942,10 @@ mod tests {
 
         let (commit_ts, write) = reader.seek_write(&Key::from_raw(k2), 3).unwrap().unwrap();
         assert_eq!(commit_ts, 2);
-        assert_eq!(write, Write::new(WriteType::Put, 1, Some(v2.to_vec())));
+        assert_eq!(
+            write,
+            Write::new_unprotected(WriteType::Put, 1, Some(v2.to_vec()))
+        );
 
         assert!(reader.seek_write(&k, 2).unwrap().is_none());
 
