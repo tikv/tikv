@@ -25,6 +25,7 @@ pub trait RegionInfoProvider: Send + Clone + 'static {
 }
 
 quick_error! {
+    /// Error type for RegionInfoProvider (i.e. Rip)
     #[derive(Debug)]
     pub enum RipError {
         Other(err: Box<dyn error::Error + Send + Sync>) {
@@ -36,4 +37,5 @@ quick_error! {
     }
 }
 
+/// Result type for RegionInfoProvider (i.e. Rip)
 pub type RipResult<T> = std::result::Result<T, RipError>;
