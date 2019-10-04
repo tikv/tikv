@@ -1,5 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// FIXME: Ideally, the storage mod/crate would not know about region info, only
+// raftstore; but currently the storage GC requires this trait. Try to refactor
+// the storage GC and move this into raftstore.
+
 use kvproto::metapb::Region;
 use raft::StateRole;
 use std::error;
