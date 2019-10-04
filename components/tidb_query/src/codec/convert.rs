@@ -997,7 +997,7 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<
     } else {
         valid_float
     };
-    // TODO, may here we can use Cow to avoid some copy below
+    // TODO: may here we can use Cow to avoid some copy below
     let int_str = if valid_float.starts_with('-') {
         if dot_idx == 0 {
             "-0"
