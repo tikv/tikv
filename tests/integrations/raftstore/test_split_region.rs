@@ -153,7 +153,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.coprocessor.region_max_size = ReadableSize(REGION_MAX_SIZE);
     cluster.cfg.coprocessor.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
 
-    let check_size_diff = cluster.cfg.raft_store.region_split_check_diff.0;
+    let check_size_diff = cluster.cfg.raft_store.region_split_check_size_diff.0;
     let mut range = 1..;
 
     cluster.run();
@@ -545,11 +545,48 @@ fn test_server_split_with_stale_peer() {
     test_split_with_stale_peer(&mut cluster);
 }
 
+fn test_split_region_diff_keys_check<T: Simulator>(cluster: &mut Cluster<T>) {
+    let region_max_keys = 200;
+    let region_split_keys = 100;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_keys_diff = 10;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
+    cluster.cfg.coprocessor.region_max_keys = region_max_keys;
+    cluster.cfg.coprocessor.region_split_keys = region_split_keys;
+
+    let mut range = 1..;
+
+    cluster.run();
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    for _ in 0..10 {
+        put_kvs(cluster, region_max_keys, &mut range);
+    }
+
+    let min_region_cnt = (region_max_keys * 10 - region_max_keys) / region_split_keys + 1;
+    let mut try_cnt = 0;
+    loop {
+        sleep_ms(20);
+        let region_cnt = pd_client.get_split_count() + 1;
+        if region_cnt >= min_region_cnt as usize {
+            return;
+        }
+        try_cnt += 1;
+        if try_cnt == 500 {
+            panic!(
+                "expect split cnt {}, but got {}",
+                min_region_cnt, region_cnt
+            );
+        }
+    }
+}
+
 fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
     let region_max_size = 2000;
     let region_split_size = 1000;
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_split_check_diff = ReadableSize(10);
+    cluster.cfg.raft_store.region_split_check_size_diff = ReadableSize(10);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(20);
     cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size);
     cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
@@ -594,6 +631,8 @@ fn test_server_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     test_split_region_diff_check(&mut cluster);
+    cluster = new_server_cluster(0, count);
+    test_split_region_diff_keys_check(&mut cluster);
 }
 
 #[test]
@@ -601,6 +640,8 @@ fn test_node_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_node_cluster(0, count);
     test_split_region_diff_check(&mut cluster);
+    cluster = new_node_cluster(0, count);
+    test_split_region_diff_keys_check(&mut cluster);
 }
 
 fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {

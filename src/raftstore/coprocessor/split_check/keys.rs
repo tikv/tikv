@@ -4,7 +4,7 @@ use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine::util;
-use engine::CF_WRITE;
+use engine::{CfName, CF_DEFAULT, CF_WRITE};
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::Mutex;
@@ -22,6 +22,7 @@ pub struct Checker {
     split_keys: Vec<Vec<u8>>,
     batch_split_limit: u64,
     policy: CheckPolicy,
+    cf: CfName,
 }
 
 impl Checker {
@@ -30,6 +31,7 @@ impl Checker {
         split_threshold: u64,
         batch_split_limit: u64,
         policy: CheckPolicy,
+        cf: CfName,
     ) -> Checker {
         Checker {
             max_keys_count,
@@ -38,13 +40,16 @@ impl Checker {
             split_keys: Vec::with_capacity(1),
             batch_split_limit,
             policy,
+            cf,
         }
     }
 }
 
 impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
-        if !key.is_commit_version() {
+        // For txn, only check keys difference in write cf.
+        // For rawkv, write cf should be empty so only default cf will be checked.
+        if self.cf == CF_WRITE && !key.is_commit_version() {
             return false;
         }
         self.current_count += 1;
@@ -116,8 +121,8 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     ) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_keys = match get_region_approximate_keys(engine, region) {
-            Ok(keys) => keys,
+        let (cf, region_keys) = match get_region_approximate_keys(engine, region) {
+            Ok((cf, keys)) => (cf, keys),
             Err(e) => {
                 warn!(
                     "failed to get approximate keys";
@@ -130,6 +135,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
                     self.split_keys,
                     self.batch_split_limit,
                     policy,
+                    CF_DEFAULT,
                 )));
                 return;
             }
@@ -158,6 +164,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
                 self.split_keys,
                 self.batch_split_limit,
                 policy,
+                cf,
             )));
         } else {
             // Does not need to check keys.
@@ -171,24 +178,33 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     }
 }
 
-/// Get the approximate number of keys in the range.
-pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
-    // try to get from RangeProperties first.
-    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
-        Ok(v) => {
-            return Ok(v);
+/// Get approximate number of keys in the range.
+/// For Txn, Return result of CF_WRITE derectly if it's not empty.
+/// For RawKV, return result of CF_DEFAULT.
+pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<(CfName, u64)> {
+    let cfs = vec![CF_WRITE, CF_DEFAULT];
+    for cf in cfs {
+        // try to get from RangeProperties first.
+        let num_keys_cf = match get_region_approximate_keys_cf(db, cf, region) {
+            Ok(v) => v,
+            Err(e) => {
+                debug!(
+                    "failed to get keys from RangeProperties";
+                    "err" => ?e,
+                );
+                let start = keys::enc_start_key(region);
+                let end = keys::enc_end_key(region);
+                let cf_handle = box_try!(rocks::util::get_cf_handle(db, cf));
+                get_range_entries_and_versions(db, cf_handle, &start, &end)
+                    .unwrap_or_default()
+                    .1
+            }
+        };
+        if num_keys_cf > 0 {
+            return Ok((cf, num_keys_cf));
         }
-        Err(e) => debug!(
-            "failed to get keys from RangeProperties";
-            "err" => ?e,
-        ),
     }
-
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let cf = box_try!(rocks::util::get_cf_handle(db, CF_WRITE));
-    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
-    Ok(keys)
+    Ok((CF_DEFAULT, 0))
 }
 
 pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
@@ -349,6 +365,11 @@ mod tests {
 
     #[test]
     fn test_region_approximate_keys() {
+        test_region_approximate_keys_impl(true /*txn*/);
+        test_region_approximate_keys_impl(false /*raw*/);
+    }
+
+    fn test_region_approximate_keys_impl(is_txn: bool) {
         let path = Builder::new()
             .prefix("_test_region_approximate_keys")
             .tempdir()
@@ -368,10 +389,12 @@ mod tests {
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
             let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
-            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
-            let write_cf = db.cf_handle(CF_WRITE).unwrap();
-            db.put_cf(write_cf, &key, &write_v).unwrap();
-            db.flush_cf(write_cf, true).unwrap();
+            if is_txn {
+                let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+                let write_cf = db.cf_handle(CF_WRITE).unwrap();
+                db.put_cf(write_cf, &key, &write_v).unwrap();
+                db.flush_cf(write_cf, true).unwrap();
+            }
 
             let default_v = vec![0; vlen as usize];
             let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
@@ -381,8 +404,9 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let (cf, range_keys) = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
+        assert_eq!(cf, if is_txn { CF_WRITE } else { CF_DEFAULT });
     }
 
     #[test]
@@ -428,13 +452,13 @@ mod tests {
         region.set_start_key(b"b1".to_vec());
         region.set_end_key(b"b2".to_vec());
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let (_, range_keys) = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, 0);
 
         // range properties get 1, mvcc properties get 3
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"c".to_vec());
-        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        let (_, range_keys) = get_region_approximate_keys(&db, &region).unwrap();
         assert_eq!(range_keys, 1);
     }
 }

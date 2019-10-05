@@ -299,6 +299,11 @@ pub struct Peer {
     /// An inaccurate difference in region size since last reset.
     /// It is used to decide whether split check is needed.
     pub size_diff_hint: u64,
+
+    /// An inaccurate difference in region keys number since last reset.
+    /// It is used to decide whether split check is needed.
+    pub keys_diff_hint: u64,
+
     /// The count of deleted keys since last reset.
     delete_keys_hint: u64,
     /// An inaccurate difference in region size after compaction.
@@ -390,6 +395,7 @@ impl Peer {
             down_peer_ids: vec![],
             recent_conf_change_time: Instant::now(),
             size_diff_hint: 0,
+            keys_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
             approximate_keys: None,
@@ -1545,8 +1551,18 @@ impl Peer {
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
         self.delete_keys_hint += apply_metrics.delete_keys_hint;
-        let diff = self.size_diff_hint as i64 + apply_metrics.size_diff_hint;
-        self.size_diff_hint = cmp::max(diff, 0) as u64;
+        let size_diff = self.size_diff_hint as i64 + apply_metrics.size_diff_hint;
+        self.size_diff_hint = cmp::max(size_diff, 0) as u64;
+        // A kv could be written to both default cf and write cf, we only record keys diff once.
+        // For rawkv, all kvs are written to default cf so we record diff in default cf.
+        // For txn, some small kvs would be written to write cf directly, so we record diff in write cf.
+        let keys_diff = self.keys_diff_hint as i64
+            + if apply_metrics.keys_diff_hint_write_cf == 0 {
+                apply_metrics.keys_diff_hint_default_cf
+            } else {
+                apply_metrics.keys_diff_hint_write_cf
+            };
+        self.keys_diff_hint = cmp::max(keys_diff, 0) as u64;
 
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
             has_ready = true;
@@ -1586,6 +1602,7 @@ impl Peer {
         // Reset delete_keys_hint and size_diff_hint.
         self.delete_keys_hint = 0;
         self.size_diff_hint = 0;
+        self.keys_diff_hint = 0;
     }
 
     /// Try to renew leader lease.

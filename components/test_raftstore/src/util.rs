@@ -129,7 +129,8 @@ pub fn new_store_cfg() -> Config {
         abnormal_leader_missing_duration: ReadableDuration::millis(1500),
         peer_stale_state_check_interval: ReadableDuration::secs(1),
         pd_heartbeat_tick_interval: ReadableDuration::millis(20),
-        region_split_check_diff: ReadableSize(10000),
+        region_split_check_size_diff: ReadableSize(10000),
+        region_split_check_keys_diff: 1000,
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(250),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(0),
@@ -597,6 +598,41 @@ pub fn configure_for_lease_read<T: Simulator>(
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
+}
+
+/// Putting num random kvs
+pub fn put_kvs<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    num: u64,
+    range: &mut dyn Iterator<Item = u64>,
+) -> Vec<u8> {
+    put_cf_kvs(cluster, CF_DEFAULT, num, range)
+}
+
+pub fn put_cf_kvs<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    cf: &'static str,
+    num: u64,
+    range: &mut dyn Iterator<Item = u64>,
+) -> Vec<u8> {
+    assert!(num > 0);
+    let mut rng = rand::thread_rng();
+    let mut key = vec![];
+    let mut n = 0;
+    while n < num {
+        let key_id = range.next().unwrap();
+        let key_str = format!("{:09}", key_id);
+        key = key_str.into_bytes();
+        let mut value = vec![0; 8];
+        rng.fill_bytes(&mut value);
+        cluster.must_put_cf(cf, &key, &value);
+        n += 1;
+        if n % 100 == 0 {
+            cluster.must_flush_cf(cf, true);
+        }
+    }
+    cluster.must_flush_cf(cf, true);
+    key
 }
 
 /// Keep putting random kvs until specified size limit is reached.

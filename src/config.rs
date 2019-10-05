@@ -1318,7 +1318,8 @@ impl TiKvConfig {
         self.readpool.validate()?;
         self.storage.validate()?;
 
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
+        self.raft_store.region_split_check_size_diff = self.coprocessor.region_split_size / 16;
+        self.raft_store.region_split_check_keys_diff = self.coprocessor.region_split_keys / 16;
         self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
             config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
         } else {
@@ -1390,6 +1391,23 @@ impl TiKvConfig {
                 self.coprocessor.region_split_size = self.raft_store.region_split_size;
             }
             self.raft_store.region_split_size = default_raft_store.region_split_size;
+        }
+        if self.raft_store.region_split_check_diff != default_raft_store.region_split_check_diff {
+            warn!(
+                "deprecated configuration, \
+                raftstore.region-split-check-diff has been replaced with raftstore.region-split-check-size-diff",
+            );
+            if self.raft_store.region_split_check_size_diff
+                == default_raft_store.region_split_check_size_diff
+            {
+                warn!(
+                    "override raftstore.region-split-check-size-diff with raftstore.region-split-check-diff, {:?}",
+                    self.raft_store.region_split_check_diff
+                );
+                self.raft_store.region_split_check_size_diff =
+                    self.raft_store.region_split_check_diff;
+            }
+            self.raft_store.region_split_check_diff = default_raft_store.region_split_check_diff;
         }
         if self.server.end_point_concurrency.is_some() {
             warn!(
