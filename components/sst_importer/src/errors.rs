@@ -60,6 +60,19 @@ quick_error! {
             display("Invalid SST path {:?}", path)
         }
         InvalidChunk {}
+        CannotReadExternalStorage(url: String, name: String, err: IoError) {
+            cause(err)
+            display("Cannot read {}/{}", url, name)
+        }
+        KeyTooShortForRewrite(key: Vec<u8>, prefix_len: usize) {
+            display("\
+                Key in SST is too short for rewriting: \
+                key {} has length {} which is less than prefix length {}",
+                hex::encode_upper(&key),
+                key.len(),
+                prefix_len,
+            )
+        }
     }
 }
 

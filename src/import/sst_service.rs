@@ -143,6 +143,34 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         )
     }
 
+    /// Downloads the file and performs key-rewrite for later ingesting.
+    fn download(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: DownloadRequest,
+        sink: UnarySink<DownloadResponse>,
+    ) {
+        let label = "download";
+        let timer = Instant::now_coarse();
+        let importer = Arc::clone(&self.importer);
+
+        ctx.spawn(self.threads.spawn_fn(move || {
+            let res = importer.download(
+                req.get_sst(),
+                req.get_url(),
+                req.get_name(),
+                req.get_old_key_prefix_length() as usize,
+                req.get_new_key_prefix(),
+                req.get_speed_limit(),
+            );
+
+            future::result(res)
+                .map_err(Error::from)
+                .map(|_| DownloadResponse::default())
+                .then(move |res| send_rpc_response!(res, sink, label, timer))
+        }));
+    }
+
     /// Ingest the file by sending a raft command to raftstore.
     ///
     /// If the ingestion fails because the region is not found or the epoch does

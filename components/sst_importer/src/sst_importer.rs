@@ -4,13 +4,16 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
+use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
 use engine::rocks::util::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use engine::rocks::{IngestExternalFileOptions, DB};
+use engine::rocks::{IngestExternalFileOptions, SeekKey, SstReader, SstWriterBuilder, DB};
+use external_storage::create_storage;
 
 use super::{Error, Result};
 
@@ -63,6 +66,76 @@ impl SSTImporter {
                 Err(e)
             }
         }
+    }
+
+    pub fn download(
+        &self,
+        meta: &SstMeta,
+        url: &str,
+        name: &str,
+        old_prefix_len: usize,
+        new_prefix: &[u8],
+        speed_limit: u64,
+    ) -> Result<()> {
+        let path = self.dir.join(meta)?;
+
+        // open the external storage and limit the read speed.
+        let limiter = if speed_limit > 0 {
+            Some(Arc::new(IOLimiter::new(speed_limit)))
+        } else {
+            None
+        };
+
+        // prepare to download the file from the external_storage
+        let ext_storage = create_storage(url)?;
+        let mut ext_reader = ext_storage
+            .read(name)
+            .map_err(|e| Error::CannotReadExternalStorage(url.to_owned(), name.to_owned(), e))?;
+        let mut ext_reader = LimitReader::new(limiter, &mut ext_reader);
+
+        // do the I/O copy from external_storage to the local file.
+        {
+            let mut file_writer = File::create(&path.temp)?;
+            let file_length = std::io::copy(&mut ext_reader, &mut file_writer)?;
+            if meta.length != 0 && meta.length != file_length {
+                let reason = format!("length {}, expect {}", file_length, meta.length);
+                return Err(Error::FileCorrupted(path.temp, reason));
+            }
+            file_writer.sync_data()?;
+        }
+
+        // now validate the SST file.
+        let path_str = path.temp.to_str().unwrap();
+        let sst_reader = SstReader::open(path_str)?;
+        sst_reader.verify_checksum()?;
+
+        if old_prefix_len == 0 && new_prefix.is_empty() {
+            // if key-rewrite is not needed, just move the SST file into the final directory.
+            // TODO: what about encrypted SSTs?
+            fs::rename(&path.temp, &path.save)?;
+        } else {
+            // otherwise, perform the key rewrite.
+            let mut sst_writer = SstWriterBuilder::new().build(path.save.to_str().unwrap())?;
+            let mut key = new_prefix.to_vec();
+
+            let mut iter = sst_reader.iter();
+            iter.seek(SeekKey::Start);
+            while iter.valid() {
+                let old_key = iter.key();
+                let key_suffix = old_key.get(old_prefix_len..).ok_or_else(|| {
+                    Error::KeyTooShortForRewrite(old_key.to_vec(), old_prefix_len)
+                })?;
+                key.truncate(new_prefix.len());
+                key.extend_from_slice(key_suffix);
+                sst_writer.put(&key, iter.value())?;
+                iter.next();
+            }
+            sst_writer.finish()?;
+
+            let _ = fs::remove_file(&path.temp);
+        }
+
+        Ok(())
     }
 
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
@@ -145,7 +218,14 @@ impl ImportDir {
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
         prepare_sst_for_ingestion(&path.save, &path.clone)?;
-        validate_sst_for_ingestion(db, cf, &path.clone, meta.get_length(), meta.get_crc32())?;
+        let length = meta.get_length();
+        let crc32 = meta.get_crc32();
+        if length != 0 || crc32 != 0 {
+            // we only validate if the length and CRC32 are explicitly provided.
+            validate_sst_for_ingestion(db, cf, &path.clone, length, crc32)?;
+        } else {
+            debug!("skipping SST validation since length and crc32 are both 0");
+        }
 
         let handle = get_cf_handle(db, cf)?;
         let mut opts = IngestExternalFileOptions::new();
@@ -447,5 +527,157 @@ mod tests {
 
         let new_meta = path_to_sst_meta(path).unwrap();
         assert_eq!(meta, new_meta);
+    }
+
+    fn create_sample_external_sst_file() -> Result<(tempfile::TempDir, SstMeta)> {
+        let ext_sst_dir = tempfile::tempdir()?;
+        let mut sst_writer = SstWriterBuilder::new()
+            .build(ext_sst_dir.path().join("sample.sst").to_str().unwrap())?;
+        sst_writer.put(b"t123_r01", b"abc")?;
+        sst_writer.put(b"t123_r04", b"xyz")?;
+        sst_writer.put(b"t123_r07", b"pqrst")?;
+        // sst_writer.delete(b"t123_r10")?; // FIXME: can't handle DELETE ops yet.
+        sst_writer.put(b"t123_r13", b"www")?;
+        let sst_info = sst_writer.finish()?;
+
+        // make up the SST meta for downloading.
+        let mut meta = SstMeta::default();
+        let uuid = Uuid::new_v4();
+        meta.set_uuid(uuid.as_bytes().to_vec());
+        meta.set_cf_name("default".to_owned());
+        meta.set_length(sst_info.file_size());
+        meta.set_region_id(4);
+        meta.mut_region_epoch().set_conf_ver(5);
+        meta.mut_region_epoch().set_version(6);
+
+        Ok((ext_sst_dir, meta))
+    }
+
+    #[test]
+    fn test_download_sst_no_key_rewrite() {
+        // creates a sample SST file.
+        let (ext_sst_dir, meta) = create_sample_external_sst_file().unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir).unwrap();
+
+        importer
+            .download(
+                &meta,
+                &format!("local://{}", ext_sst_dir.path().display()),
+                "sample.sst",
+                0,
+                b"",
+                0,
+            )
+            .unwrap();
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+        assert_eq!(sst_file_metadata.len(), meta.get_length());
+
+        // verifies the SST content is correct.
+        let sst_reader = SstReader::open(sst_file_path.to_str().unwrap()).unwrap();
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start);
+        assert_eq!(iter.kv(), Some((b"t123_r01".to_vec(), b"abc".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t123_r04".to_vec(), b"xyz".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t123_r07".to_vec(), b"pqrst".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t123_r13".to_vec(), b"www".to_vec())));
+        assert!(!iter.next());
+    }
+
+    #[test]
+    fn test_download_sst_with_key_rewrite() {
+        // creates a sample SST file.
+        let (ext_sst_dir, meta) = create_sample_external_sst_file().unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir).unwrap();
+
+        importer
+            .download(
+                &meta,
+                &format!("local://{}", ext_sst_dir.path().display()),
+                "sample.sst",
+                4,
+                b"t567",
+                0,
+            )
+            .unwrap();
+
+        // verifies that the file is saved to the correct place.
+        // (the file size may be changed, so not going to check the file size)
+        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        assert!(sst_file_path.is_file());
+
+        // verifies the SST content is correct.
+        let sst_reader = SstReader::open(sst_file_path.to_str().unwrap()).unwrap();
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter();
+        iter.seek(SeekKey::Start);
+        assert_eq!(iter.kv(), Some((b"t567_r01".to_vec(), b"abc".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t567_r04".to_vec(), b"xyz".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t567_r07".to_vec(), b"pqrst".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t567_r13".to_vec(), b"www".to_vec())));
+        assert!(!iter.next());
+    }
+
+    #[test]
+    fn test_download_sst_then_ingest() {
+        // creates a sample SST file.
+        let (ext_sst_dir, mut meta) = create_sample_external_sst_file().unwrap();
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir).unwrap();
+
+        importer
+            .download(
+                &meta,
+                &format!("local://{}", ext_sst_dir.path().display()),
+                "sample.sst",
+                4,
+                b"t9102",
+                0,
+            )
+            .unwrap();
+
+        // performs the ingest
+        let ingest_dir = tempfile::tempdir().unwrap();
+        let db = new_engine(
+            ingest_dir.path().to_str().unwrap(),
+            None,
+            &["default"],
+            None,
+        )
+        .unwrap();
+
+        meta.set_length(0); // disable validation.
+        meta.set_crc32(0);
+        importer.ingest(&meta, &db).unwrap();
+
+        // verifies the DB content is correct.
+        let mut iter = db.iter();
+        iter.seek(SeekKey::Start);
+        assert_eq!(iter.kv(), Some((b"t9102_r01".to_vec(), b"abc".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t9102_r04".to_vec(), b"xyz".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t9102_r07".to_vec(), b"pqrst".to_vec())));
+        assert!(iter.next());
+        assert_eq!(iter.kv(), Some((b"t9102_r13".to_vec(), b"www".to_vec())));
+        assert!(!iter.next());
     }
 }
