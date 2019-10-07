@@ -493,7 +493,8 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
-    /// cleanup the lock without checking TTL.
+    /// cleanup the lock without checking TTL. If `protected` is `true`, the rollback record is
+    /// protected from being collapsed.
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
@@ -583,7 +584,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-            if write.write_type == WriteType::Rollback {
+            if write.write_type == WriteType::Rollback && !write.protected {
                 self.delete_write(key, commit_ts);
             }
         }
@@ -902,11 +903,11 @@ mod tests {
         must_locked(&engine, k, ts(10, 0));
 
         // Try to cleanup another transaction's lock. Does nothing.
-        must_cleanup(&engine, k, ts(10, 1), ts(120, 0), false);
+        must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
         must_locked(&engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
-        must_cleanup(&engine, k, ts(10, 0), ts(120, 0), false);
+        must_cleanup(&engine, k, ts(10, 0), ts(120, 0));
         must_unlocked(&engine, k);
         must_get_rollback_ts(&engine, k, ts(10, 0));
     }
@@ -1387,12 +1388,12 @@ mod tests {
         // Lock conflict
         must_prewrite_put(&engine, k, v, k, 3);
         must_acquire_pessimistic_lock_err(&engine, k, k, 4, 4);
-        must_rollback(&engine, k, 3);
+        must_cleanup(&engine, k, 3, 0);
         must_unlocked(&engine, k);
         must_acquire_pessimistic_lock(&engine, k, k, 5, 5);
         must_prewrite_lock_err(&engine, k, k, 6);
         must_acquire_pessimistic_lock_err(&engine, k, k, 6, 6);
-        must_rollback(&engine, k, 5);
+        must_cleanup(&engine, k, 5, 0);
         must_unlocked(&engine, k);
 
         // Data conflict
@@ -1409,7 +1410,7 @@ mod tests {
         // Rollback
         must_acquire_pessimistic_lock(&engine, k, k, 11, 11);
         must_pessimistic_locked(&engine, k, 11, 11);
-        must_rollback(&engine, k, 11);
+        must_cleanup(&engine, k, 11, 0);
         must_acquire_pessimistic_lock_err(&engine, k, k, 11, 11);
         must_pessimistic_prewrite_put_err(&engine, k, v, k, 11, 11, true);
         must_prewrite_lock_err(&engine, k, k, 11);
@@ -1418,7 +1419,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 12, 12);
         must_pessimistic_prewrite_put(&engine, k, v, k, 12, 12, true);
         must_locked(&engine, k, 12);
-        must_rollback(&engine, k, 12);
+        must_cleanup(&engine, k, 12, 0);
         must_acquire_pessimistic_lock_err(&engine, k, k, 12, 12);
         must_pessimistic_prewrite_put_err(&engine, k, v, k, 12, 12, true);
         must_prewrite_lock_err(&engine, k, k, 12);
@@ -1462,7 +1463,7 @@ mod tests {
         must_prewrite_put(&engine, k, v, k, 23);
         must_locked(&engine, k, 23);
         must_acquire_pessimistic_lock_err(&engine, k, k, 23, 23);
-        must_rollback(&engine, k, 23);
+        must_cleanup(&engine, k, 23, 0);
         must_acquire_pessimistic_lock(&engine, k, k, 24, 24);
         must_pessimistic_locked(&engine, k, 24, 24);
         must_commit_err(&engine, k, 24, 25);
@@ -1563,8 +1564,17 @@ mod tests {
         // there won't be conflicts. So this case is also not checked, and prewrite will succeeed.
         must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, false);
         must_locked(&engine, k, 47);
-        must_rollback(&engine, k, 47);
+        must_cleanup(&engine, k, 47, 0);
         must_unlocked(&engine, k);
+
+        // Cleanups are not collapsed
+        must_acquire_pessimistic_lock(&engine, k, k, 49, 60);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 49, 60, true);
+        must_locked(&engine, k, 49);
+        must_cleanup(&engine, k, 49, 0);
+        must_prewrite_put(&engine, k, v, k, 51);
+        must_rollback_collapsed(&engine, k, 51);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 49, 60);
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {

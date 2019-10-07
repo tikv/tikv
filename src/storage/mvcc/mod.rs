@@ -546,18 +546,11 @@ pub mod tests {
         assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
 
-    pub fn must_cleanup<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: u64,
-        current_ts: u64,
-        protected: bool,
-    ) {
+    pub fn must_cleanup<E: Engine>(engine: &E, key: &[u8], start_ts: u64, current_ts: u64) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        txn.cleanup(Key::from_raw(key), current_ts, protected)
-            .unwrap();
+        txn.cleanup(Key::from_raw(key), current_ts, true).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
