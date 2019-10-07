@@ -904,12 +904,26 @@ mod tests {
 
         // Try to cleanup another transaction's lock. Does nothing.
         must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
+        // Transactions of unknown type should be protected
+        must_get_rollback_protected(&engine, k, ts(10, 1), true);
         must_locked(&engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
         must_cleanup(&engine, k, ts(10, 0), ts(120, 0));
         must_unlocked(&engine, k);
+        // Rollbacks of optimistic transactions needn't be protected
+        must_get_rollback_protected(&engine, k, ts(10, 0), false);
         must_get_rollback_ts(&engine, k, ts(10, 0));
+
+        // Rollbacks of pessimistic transactions should be protected
+        must_acquire_pessimistic_lock(&engine, k, k, ts(11, 1), ts(12, 1));
+        must_cleanup(&engine, k, ts(11, 1), ts(120, 0));
+        must_get_rollback_protected(&engine, k, ts(11, 1), true);
+
+        must_acquire_pessimistic_lock(&engine, k, k, ts(13, 1), ts(14, 1));
+        must_pessimistic_prewrite_put(&engine, k, v, k, ts(13, 1), ts(14, 1), true);
+        must_cleanup(&engine, k, ts(13, 1), ts(120, 0));
+        must_get_rollback_protected(&engine, k, ts(13, 1), true);
     }
 
     #[test]
