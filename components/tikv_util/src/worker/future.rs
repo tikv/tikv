@@ -12,6 +12,7 @@ use futures::Stream;
 use tokio_core::reactor::{Core, Handle};
 
 use super::metrics::*;
+use crate::metrics::ThreadSpawnWrapper;
 
 pub struct Stopped<T>(pub T);
 
@@ -137,7 +138,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = receiver.take().unwrap();
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx))?;
+            .spawn_wrapper(move || poll(runner, rx))?;
 
         self.handle = Some(h);
         Ok(())

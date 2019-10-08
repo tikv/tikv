@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crate::rocks::util::engine_metrics::*;
 use crate::rocks::DB;
 use crate::Engines;
+use tikv_util::metrics::ThreadSpawnWrapper;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
@@ -39,7 +40,7 @@ impl MetricsFlusher {
         self.sender = Some(tx);
         let h = Builder::new()
             .name("rocksdb-metrics".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 let mut last_reset = Instant::now();
                 let reset_interval = Duration::from_millis(DEFAULT_FLUSHER_RESET_INTERVAL);
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {

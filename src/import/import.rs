@@ -10,6 +10,7 @@ use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
 use crate::pd::RegionInfo;
+use tikv_util::metrics::ThreadSpawnWrapper;
 use tikv_util::time::Instant;
 
 use super::client::*;
@@ -120,7 +121,7 @@ impl<Client: ImportClient> ImportJob<Client> {
 
         thread::Builder::new()
             .name("import-job".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 let job = SubImportJob::new(id, rx, client, engine, counter, speed_limit);
                 job.run(retry_ranges)
             })
@@ -141,7 +142,7 @@ impl<Client: ImportClient> ImportJob<Client> {
 
         thread::Builder::new()
             .name("dispatch-job".to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 'NEXT_RANGE: while let Ok(range) = range_rx.recv() {
                     'RETRY: for _ in 0..MAX_RETRY_TIMES {
                         let cfg = cfg.clone();

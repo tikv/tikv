@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::metrics::ThreadSpawnWrapper;
 use crate::time::{monotonic_raw_now, Instant};
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
@@ -87,7 +88,7 @@ fn start_global_timer() -> Handle {
     let (tx, rx) = mpsc::channel();
     Builder::new()
         .name(thd_name!("timer"))
-        .spawn(move || {
+        .spawn_wrapper(move || {
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
             loop {
@@ -184,7 +185,7 @@ fn start_global_steady_timer() -> SteadyTimer {
     let clock_ = clock.clone();
     Builder::new()
         .name(thd_name!("steady-timer"))
-        .spawn(move || {
+        .spawn_wrapper(move || {
             let c = Clock::new_with_now(clock_);
             let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), c);
             tx.send(timer.handle()).unwrap();

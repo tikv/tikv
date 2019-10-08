@@ -27,6 +27,7 @@ use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
+use tikv_util::metrics::ThreadSpawnWrapper;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 
@@ -711,7 +712,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         self.gc_manager_ctx.set_stop_signal_receiver(rx);
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 self.run();
             })
             .map_err(|e| box_err!("failed to start gc manager: {:?}", e));

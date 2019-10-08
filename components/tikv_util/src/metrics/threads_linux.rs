@@ -1,14 +1,18 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
+use nix::unistd::gettid;
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
+use std::{fs, thread};
 
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
 
 use procinfo::pid;
+
+use super::ThreadSpawnWrapper;
 
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
@@ -61,7 +65,7 @@ impl ThreadsCollector {
             ).namespace(ns.clone()),
             &["name", "tid", "io"],
         )
-        .unwrap();
+            .unwrap();
         descs.extend(io_totals.desc().into_iter().cloned());
         let voluntary_ctxt_switches = IntCounterVec::new(
             Opts::new(
@@ -113,7 +117,12 @@ impl Collector for ThreadsCollector {
                 // Threads CPU time.
                 let total = cpu_total(&stat);
                 // sanitize thread name before push metrics.
-                let name = sanitize_thread_name(tid, &stat.command);
+                let name: String;
+                if let Some(thread_name) = THREAD_NAME_HASHMAP.lock().unwrap().get(&tid) {
+                    name = sanitize_thread_name(tid, thread_name);
+                } else {
+                    name = sanitize_thread_name(tid, &stat.command);
+                }
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
@@ -285,6 +294,28 @@ lazy_static! {
             libc::sysconf(libc::_SC_CLK_TCK) as f64
         }
     };
+    static ref THREAD_NAME_HASHMAP: Mutex<HashMap<pid_t, String>> = Mutex::new(HashMap::new());
+}
+
+impl ThreadSpawnWrapper for thread::Builder {
+    fn spawn_wrapper<F, T>(self, f: F) -> Result<thread::JoinHandle<T>>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static,
+    {
+        self.spawn(|| {
+            if let Some(name) = thread::current().name() {
+                let tid = pid_t::from(gettid());
+                THREAD_NAME_HASHMAP
+                    .lock()
+                    .unwrap()
+                    .insert(tid, name.to_string());
+                debug!("tid {} thread name is {}", tid, name);
+            }
+            f()
+        })
+    }
 }
 
 #[cfg(test)]

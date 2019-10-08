@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::io;
 use std::thread;
 use std::time::Duration;
 
@@ -33,7 +34,7 @@ pub fn run_prometheus(
     let address = address.to_owned();
     let handler = thread::Builder::new()
         .name("promepusher".to_owned())
-        .spawn(move || loop {
+        .spawn_wrapper(move || loop {
             let metric_familys = prometheus::gather();
 
             let res = prometheus::push_metrics(
@@ -72,4 +73,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+}
+
+pub trait ThreadSpawnWrapper {
+    fn spawn_wrapper<F, T>(self, f: F) -> io::Result<thread::JoinHandle<T>>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static;
 }

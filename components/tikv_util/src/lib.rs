@@ -27,6 +27,7 @@ extern crate serde_derive;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
+extern crate nix;
 #[cfg(test)]
 extern crate test;
 
@@ -40,6 +41,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, slice, thread, u64};
 
+use crate::metrics::ThreadSpawnWrapper;
 use protobuf::Message;
 use rand;
 use rand::rngs::ThreadRng;
@@ -475,7 +477,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     // Caching is slow, spawn it in another thread to speed up.
     thread::Builder::new()
         .name(thd_name!("backtrace-loader"))
-        .spawn(::backtrace::Backtrace::new)
+        .spawn_wrapper(::backtrace::Backtrace::new)
         .unwrap();
 
     let data_dir = data_dir.to_string();

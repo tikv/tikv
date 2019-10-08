@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::metrics::ThreadSpawnWrapper;
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::marker::PhantomData;
@@ -210,7 +211,7 @@ where
                 tb = tb.stack_size(stack_size);
             }
             let thread = tb
-                .spawn(move || {
+                .spawn_wrapper(move || {
                     let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
                     worker.run();
                 })

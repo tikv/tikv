@@ -28,6 +28,7 @@ use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
+use crate::metrics::ThreadSpawnWrapper;
 use crate::mpsc::{self, Receiver, Sender};
 use crate::time::{Instant, SlowTimer};
 use crate::timer::Timer;
@@ -342,7 +343,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         let batch_size = self.batch_size;
         let h = ThreadBuilder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size, timer))?;
+            .spawn_wrapper(move || poll(runner, rx, counter, batch_size, timer))?;
         self.handle = Some(h);
         Ok(())
     }
