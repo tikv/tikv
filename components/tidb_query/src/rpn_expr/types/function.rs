@@ -167,7 +167,7 @@ pub trait Evaluator {
 pub struct ArgConstructor<A: Evaluable, E: Evaluator> {
     arg_index: usize,
     inner: E,
-    marker: PhantomData<A>,
+    _marker: PhantomData<A>,
 }
 
 impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
@@ -176,7 +176,7 @@ impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
         ArgConstructor {
             arg_index,
             inner,
-            marker: PhantomData,
+            _marker: PhantomData,
         }
     }
 }
@@ -192,38 +192,24 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
     ) -> Result<VectorValue> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
-                if let Some(v) = A::try_borrow_scalar_value(value) {
-                    let new_def = Arg {
-                        arg: ScalarArg(v),
-                        rem: def,
-                    };
-                    self.inner.eval(new_def, ctx, output_rows, args, extra)
-                } else {
-                    // TODO: Should print fn name as well
-                    panic!(
-                        "Cannot apply {:?} at argument postion {}",
-                        value, self.arg_index
-                    );
-                }
+                let v = A::borrow_scalar_value(value);
+                let new_def = Arg {
+                    arg: ScalarArg(v),
+                    rem: def,
+                };
+                self.inner.eval(new_def, ctx, output_rows, args, extra)
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
-                if let Some(v) = A::try_borrow_vector_value(value.as_ref()) {
-                    let new_def = Arg {
-                        arg: VectorArg {
-                            physical_col: v,
-                            logical_rows,
-                        },
-                        rem: def,
-                    };
-                    self.inner.eval(new_def, ctx, output_rows, args, extra)
-                } else {
-                    // TODO: Should print fn name as well
-                    panic!(
-                        "Cannot apply {:?} at argument postion {}",
-                        value, self.arg_index
-                    );
-                }
+                let v = A::borrow_vector_value(value.as_ref());
+                let new_def = Arg {
+                    arg: VectorArg {
+                        physical_col: v,
+                        logical_rows,
+                    },
+                    rem: def,
+                };
+                self.inner.eval(new_def, ctx, output_rows, args, extra)
             }
         }
     }
