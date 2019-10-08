@@ -393,18 +393,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     // Although `schema()` can be deeply nested, it is ok since we process data in
                     // batch.
                     match self.encode_type {
-                        EncodeType::TypeDefault => {
-                            data.reserve(result.physical_columns.maximum_encoded_size(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                            )?);
-                            result.physical_columns.encode(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                                self.out_most_executor.schema(),
-                                data,
-                            )?;
-                        }
                         EncodeType::TypeArrow => {
                             data.reserve(result.physical_columns.maximum_encoded_size_arrow(
                                 &result.logical_rows,
@@ -418,6 +406,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 &self.config.tz,
                             )?;
                         }
+                        _ => {
+                            data.reserve(result.physical_columns.maximum_encoded_size(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                            )?);
+                            result.physical_columns.encode(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                                self.out_most_executor.schema(),
+                                data,
+                            )?;
+                        }
                     }
                     chunks.push(chunk);
                 }
@@ -429,8 +429,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
-                sel_resp.set_encode_type(self.encode_type);
-
+                match self.encode_type {
+                    EncodeType::TypeArrow => {
+                        sel_resp.set_encode_type(EncodeType::TypeArrow);
+                    }
+                    _ => {
+                        sel_resp.set_encode_type(EncodeType::TypeDefault);
+                    }
+                }
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
                     self.exec_stats
