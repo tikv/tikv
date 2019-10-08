@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::util::get_fastest_supported_compression_type;
 use super::{ColumnFamilyOptions, DBCompressionType, Env, EnvOptions, ExternalSstFileInfo, DB};
 use crate::{CfName, CF_DEFAULT};
-use engine_rocksdb::SstFileWriter;
+use rocksdb::SstFileWriter;
 
 /// A builder builds a SstWriter.
 pub struct SstWriterBuilder {

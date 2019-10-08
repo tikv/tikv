@@ -83,7 +83,7 @@ impl Default for BlockCacheConfig {
             capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
-            high_pri_pool_ratio: 0.0,
+            high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
         }
     }
