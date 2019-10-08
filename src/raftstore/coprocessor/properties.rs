@@ -620,6 +620,10 @@ impl RangeProperties {
             Err(next_idx) => next_idx - 1,
         };
 
+        if start_offset > end_offset {
+            return vec![];
+        }
+
         self.offsets.drain(start_offset..=end_offset).collect()
     }
 
@@ -1108,6 +1112,8 @@ mod tests {
                 keys
             );
         }
+
+        assert!(props.take_excluded_range(b"c", b"c").is_empty());
     }
 
     #[test]
