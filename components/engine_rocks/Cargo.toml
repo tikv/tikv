@@ -1,5 +1,5 @@
 [package]
-name = "engine"
+name = "engine_rocks"
 version = "0.0.1"
 edition = "2018"
 publish = false
@@ -26,6 +26,7 @@ serde_derive = "1.0"
 toml = "0.4"
 hex = "0.3"
 tikv_util = { path = "../tikv_util" }
+engine_traits = { path = "../engine_traits" }
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
@@ -38,3 +39,4 @@ package = "rocksdb"
 
 [dev-dependencies]
 tempfile = "3.0"
+engine = { path = "../engine" }
