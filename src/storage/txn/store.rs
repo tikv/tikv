@@ -474,6 +474,7 @@ mod tests {
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &Options::default(),
+                        false,
                     )
                     .unwrap();
                 }

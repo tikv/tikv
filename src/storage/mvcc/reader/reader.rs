@@ -506,7 +506,7 @@ mod tests {
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
-            txn.prewrite(m, pk, &Options::default()).unwrap();
+            txn.prewrite(m, pk, &Options::default(), false).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -514,7 +514,8 @@ mod tests {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             let options = Options::default();
-            txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
+            txn.pessimistic_prewrite(m, pk, true, &options, false)
+                .unwrap();
             self.write(txn.into_modifies());
         }
 

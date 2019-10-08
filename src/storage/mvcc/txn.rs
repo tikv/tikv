@@ -317,6 +317,7 @@ impl<S: Snapshot> MvccTxn<S> {
         primary: &[u8],
         is_pessimistic_lock: bool,
         options: &Options,
+        skip_kv: bool,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
         let (key, value) = mutation.into_key_value();
@@ -359,6 +360,11 @@ impl<S: Snapshot> MvccTxn<S> {
             });
         }
 
+        // Skip `prewrite_key_value` means some former keys have been locked.
+        if skip_kv {
+            return Ok(());
+        }
+
         // No need to check data constraint, it's resolved by pessimistic locks.
         self.prewrite_key_value(key, lock_type, primary.to_vec(), value, options);
         Ok(())
@@ -369,6 +375,7 @@ impl<S: Snapshot> MvccTxn<S> {
         mutation: Mutation,
         primary: &[u8],
         options: &Options,
+        skip_kv: bool,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
         // For the insert operation, the old key should not be in the system.
@@ -416,6 +423,11 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+            return Ok(());
+        }
+
+        // Skip `prewrite_key_value` means some former keys have been locked.
+        if skip_kv {
             return Ok(());
         }
 
@@ -1172,6 +1184,7 @@ mod tests {
             Mutation::Put((key.clone(), v.to_vec())),
             pk,
             &Options::default(),
+            false,
         )
         .unwrap();
         assert!(txn.write_size() > 0);
@@ -1207,7 +1220,8 @@ mod tests {
             .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
                 key,
-                &Options::default()
+                &Options::default(),
+                false,
             )
             .is_err());
 
@@ -1220,7 +1234,8 @@ mod tests {
             .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
                 key,
-                &opt
+                &opt,
+                false,
             )
             .is_ok());
     }

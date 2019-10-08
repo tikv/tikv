@@ -25,6 +25,7 @@ where
             Mutation::Put((Key::from_raw(&k), v.clone())),
             &k.clone(),
             &option,
+            false,
         )
         .unwrap();
     }
@@ -52,7 +53,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
-                txn.prewrite(mutation, &primary, option).unwrap();
+                txn.prewrite(mutation, &primary, option, false).unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }

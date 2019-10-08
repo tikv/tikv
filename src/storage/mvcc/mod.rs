@@ -266,6 +266,7 @@ pub mod tests {
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             pk,
             &Options::default(),
+            false,
         )?;
         write(engine, &ctx, txn.into_modifies());
         Ok(())
@@ -287,9 +288,9 @@ pub mod tests {
         options.for_update_ts = for_update_ts;
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts == 0 {
-            txn.prewrite(mutation, pk, &options).unwrap();
+            txn.prewrite(mutation, pk, &options, false).unwrap();
         } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options, false)
                 .unwrap();
         }
         write(engine, &ctx, txn.into_modifies());
@@ -335,9 +336,9 @@ pub mod tests {
         options.for_update_ts = for_update_ts;
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts == 0 {
-            txn.prewrite(mutation, pk, &options).unwrap_err();
+            txn.prewrite(mutation, pk, &options, false).unwrap_err();
         } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options, false)
                 .unwrap_err();
         }
     }
@@ -387,9 +388,9 @@ pub mod tests {
         options.for_update_ts = for_update_ts;
         let mutation = Mutation::Delete(Key::from_raw(key));
         if for_update_ts == 0 {
-            txn.prewrite(mutation, pk, &options).unwrap();
+            txn.prewrite(mutation, pk, &options, false).unwrap();
         } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options, false)
                 .unwrap();
         }
         engine.write(&ctx, txn.into_modifies()).unwrap();
@@ -425,9 +426,9 @@ pub mod tests {
         options.for_update_ts = for_update_ts;
         let mutation = Mutation::Lock(Key::from_raw(key));
         if for_update_ts == 0 {
-            txn.prewrite(mutation, pk, &options).unwrap();
+            txn.prewrite(mutation, pk, &options, false).unwrap();
         } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options, false)
                 .unwrap();
         }
         engine.write(&ctx, txn.into_modifies()).unwrap();
@@ -442,7 +443,12 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         assert!(txn
-            .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
+            .prewrite(
+                Mutation::Lock(Key::from_raw(key)),
+                pk,
+                &Options::default(),
+                false
+            )
             .is_err());
     }
 

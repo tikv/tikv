@@ -523,13 +523,17 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             let mut locks = vec![];
             let rows = mutations.len();
 
+            // We should not call `prewrite_key_value` anymore if any key has been locked
+            let mut skip_kv = false;
+
             // If `options.for_update_ts` is 0, the transaction is optimistic
             // or else pessimistic.
             if options.for_update_ts == 0 {
                 for m in mutations {
-                    match txn.prewrite(m, &primary, &options) {
+                    match txn.prewrite(m, &primary, &options, skip_kv) {
                         Ok(_) => {}
                         e @ Err(MvccError::KeyIsLocked { .. }) => {
+                            skip_kv = true;
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         }
                         Err(e) => return Err(Error::from(e)),
@@ -542,9 +546,11 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                         &primary,
                         options.is_pessimistic_lock[i],
                         &options,
+                        skip_kv,
                     ) {
                         Ok(_) => {}
                         e @ Err(MvccError::KeyIsLocked { .. }) => {
+                            skip_kv = true;
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         }
                         Err(e) => return Err(Error::from(e)),

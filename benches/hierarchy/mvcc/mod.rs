@@ -29,6 +29,7 @@ where
             Mutation::Put((Key::from_raw(&k), v.clone())),
             &k.clone(),
             &Options::default(),
+            false,
         )
         .unwrap();
     }
@@ -60,7 +61,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
         |(mutations, snapshot, option)| {
             for (mutation, primary) in mutations {
                 let mut txn = MvccTxn::new(snapshot.clone(), 1, true).unwrap();
-                txn.prewrite(mutation, &primary, option).unwrap();
+                txn.prewrite(mutation, &primary, option, false).unwrap();
             }
         },
         BatchSize::SmallInput,
