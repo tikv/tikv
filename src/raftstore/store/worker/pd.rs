@@ -844,7 +844,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                             .send(region.get_id(), PeerMsg::CasualMessage(res))
                         {
                             warn!(
-                                "failed to send approximate region size";
+                                "failed to send approximate region keys";
                                 "region_id" => region.get_id(),
                                 "err" => %e,
                             );
