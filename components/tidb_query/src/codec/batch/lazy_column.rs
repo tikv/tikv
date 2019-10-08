@@ -268,15 +268,15 @@ mod tests {
         }
 
         let mut datum_raw_1 = Vec::new();
-        DatumEncoder::encode(&mut datum_raw_1, &[Datum::U64(32)], false).unwrap();
+        datum_raw_1.write_datum(&[Datum::U64(32)], false).unwrap();
         col.mut_raw().push(&datum_raw_1);
 
         let mut datum_raw_2 = Vec::new();
-        DatumEncoder::encode(&mut datum_raw_2, &[Datum::U64(7)], true).unwrap();
+        datum_raw_2.write_datum(&[Datum::U64(7)], true).unwrap();
         col.mut_raw().push(&datum_raw_2);
 
         let mut datum_raw_3 = Vec::new();
-        DatumEncoder::encode(&mut datum_raw_3, &[Datum::U64(10)], true).unwrap();
+        datum_raw_3.write_datum(&[Datum::U64(10)], true).unwrap();
         col.mut_raw().push(&datum_raw_3);
 
         assert!(col.is_raw());
@@ -354,7 +354,9 @@ mod benches {
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
         let mut datum_raw: Vec<u8> = Vec::new();
-        DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
+        datum_raw
+            .write_datum(&[Datum::U64(0xDEADBEEF)], true)
+            .unwrap();
 
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
@@ -381,7 +383,9 @@ mod benches {
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
         let mut datum_raw: Vec<u8> = Vec::new();
-        DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
+        datum_raw
+            .write_datum(&[Datum::U64(0xDEADBEEF)], true)
+            .unwrap();
 
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
@@ -410,7 +414,9 @@ mod benches {
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
         let mut datum_raw: Vec<u8> = Vec::new();
-        DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
+        datum_raw
+            .write_datum(&[Datum::U64(0xDEADBEEF)], true)
+            .unwrap();
 
         for _ in 0..1000 {
             column.mut_raw().push(datum_raw.as_slice());
