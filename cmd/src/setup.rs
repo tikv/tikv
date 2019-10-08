@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono;
 use clap::ArgMatches;
 
-use crate::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
+use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
@@ -15,11 +15,11 @@ pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 #[macro_export]
 macro_rules! fatal {
-    ($lvl:expr, $($arg:tt)+) => ({
-        if $crate::binutil::setup::LOG_INITIALIZED.load(::std::sync::atomic::Ordering::SeqCst) {
-            crit!($lvl, $($arg)+);
+    ($lvl:expr $(, $arg:expr)*) => ({
+        if $crate::setup::LOG_INITIALIZED.load(::std::sync::atomic::Ordering::SeqCst) {
+            crit!($lvl $(, $arg)*);
         } else {
-            eprintln!($lvl, $($arg)+);
+            eprintln!($lvl $(, $arg)*);
         }
         slog_global::clear_global();
         ::std::process::exit(1)

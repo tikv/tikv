@@ -2,36 +2,43 @@
 
 use super::setup::*;
 use super::signal_handler;
-use crate::binutil::setup::initial_logger;
-use crate::config::TiKvConfig;
-use crate::coprocessor;
 use crate::fatal;
-use crate::import::{ImportSSTService, SSTImporter};
-use crate::pd::{PdClient, RpcClient};
-use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use crate::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use crate::raftstore::store::{fsm, LocalReader};
-use crate::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
-use crate::server::resolve;
-use crate::server::status_server::StatusServer;
-use crate::server::transport::ServerRaftStoreRouter;
-use crate::server::DEFAULT_CLUSTER_ID;
-use crate::server::{create_raft_storage, Node, Server};
-use crate::storage::lock_manager::{
-    register_detector_role_change_observer, Detector, DetectorScheduler,
-    Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
-};
-use crate::storage::{self, AutoGCConfig, RaftKv, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::setup::initial_logger;
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use kvproto::backup_grpc::create_backup;
+use kvproto::deadlock_grpc::create_deadlock;
+use kvproto::debugpb_grpc::create_debug;
+use kvproto::import_sstpb_grpc::create_import_sst;
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use tikv::config::TiKvConfig;
+use tikv::coprocessor;
+use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::pd::PdClient;
+use tikv::pd::RpcClient;
+use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use tikv::raftstore::store::{fsm, LocalReader};
+use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
+use tikv::server::resolve;
+use tikv::server::service::DebugService;
+use tikv::server::status_server::StatusServer;
+use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::DEFAULT_CLUSTER_ID;
+use tikv::server::{create_raft_storage, Node, Server};
+use tikv::storage::lock_manager::register_detector_role_change_observer;
+use tikv::storage::lock_manager::{
+    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
+};
+use tikv::storage::RaftKv;
+use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
@@ -47,7 +54,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     // Print version information.
-    super::log_tikv_info();
+    tikv::log_tikv_info();
     info!(
         "using config";
         "config" => serde_json::to_string(&config).unwrap(),
@@ -224,6 +231,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             Some(router.clone()),
         );
 
+    let server_cfg = Arc::new(cfg.server.clone());
+
+    // Create coprocessor endpoint.
+    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
+        &cfg.readpool.coprocessor.build_config(),
+        pd_sender.clone(),
+        engine.clone(),
+    );
+    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
+
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
     let import_service = ImportSSTService::new(
         cfg.import.clone(),
@@ -232,14 +249,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::clone(&importer),
     );
 
-    let server_cfg = Arc::new(cfg.server.clone());
+    // Create Debug service.
+    let debug_service = DebugService::new(engines.clone(), raft_router.clone());
+
+    // Create Backup service.
+    let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");
+    let backup_scheduler = backup_worker.scheduler();
+    let backup_service = backup::Service::new(backup_scheduler);
+
     // Create server
-    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-        &cfg.readpool.coprocessor.build_config(),
-        pd_sender.clone(),
-        engine.clone(),
-    );
-    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
@@ -248,11 +266,37 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router,
         resolver.clone(),
         snap_mgr.clone(),
-        Some(engines.clone()),
-        Some(import_service),
-        deadlock_service,
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
+
+    // Register services.
+    if server
+        .register_service(create_import_sst(import_service))
+        .is_some()
+    {
+        fatal!("failed to register import service");
+    }
+    if server
+        .register_service(create_debug(debug_service))
+        .is_some()
+    {
+        fatal!("failed to register debug service");
+    }
+    if let Some(deadlock_service) = deadlock_service {
+        if server
+            .register_service(create_deadlock(deadlock_service))
+            .is_some()
+        {
+            fatal!("failed to register deadlock service");
+        }
+    }
+    if server
+        .register_service(create_backup(backup_service))
+        .is_some()
+    {
+        fatal!("failed to register backup service");
+    }
+
     let trans = server.transport();
 
     // Create node.
@@ -284,6 +328,18 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     )
     .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
     initial_metric(&cfg.metric, Some(node.id()));
+
+    // Start backup endpoint.
+    let backup_endpoint = backup::Endpoint::new(
+        node.id(),
+        engine.clone(),
+        region_info_accessor.clone(),
+        engines.kv.clone(),
+    );
+    let backup_timer = backup_endpoint.new_timer();
+    backup_worker
+        .start_with_timer(backup_endpoint, backup_timer)
+        .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
     // Start auto gc
     let auto_gc_cfg = AutoGCConfig::new(
@@ -336,6 +392,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Run server.
     server
+        .build_and_bind()
+        .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
+    server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
 
@@ -357,7 +416,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     signal_handler::handle_signal(Some(engines));
 
-    // Stop.
+    // Stop backup worker.
+    if let Some(j) = backup_worker.stop() {
+        j.join()
+            .unwrap_or_else(|e| fatal!("failed to stop backup: {:?}", e))
+    }
+
+    // Stop server.
     server
         .stop()
         .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
