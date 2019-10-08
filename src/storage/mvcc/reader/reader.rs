@@ -114,30 +114,6 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    pub fn new_lock_cursor(&mut self, lo: &Key, hi: &Key) -> Option<Cursor<S::Iter>> {
-        let iter_opt = IterOption::new(
-            Some(KeyBuilder::from_slice(
-                lo.clone().as_encoded().as_slice(),
-                DATA_KEY_PREFIX_LEN,
-                0,
-            )),
-            Some(KeyBuilder::from_slice(
-                hi.clone().as_encoded().as_slice(),
-                DATA_KEY_PREFIX_LEN,
-                0,
-            )),
-            self.fill_cache,
-        );
-        if let Ok(iter) = self
-            .snapshot
-            .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))
-        {
-            Some(iter)
-        } else {
-            None
-        }
-    }
-
     pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
         if self.key_only {
             return Ok(Some(vec![]));
