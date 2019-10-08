@@ -596,9 +596,9 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.9.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcfbcb0c5961907597a7d1148e3af036268f2b773886b8bb3eeb1e1281d3d3d6"
+checksum = "3fe629a532efad5526454efb0700f86d5ad7ff001acb37e431c8bf017a432a8e"
 dependencies = [
  "darling_core",
  "darling_macro",
@@ -606,27 +606,27 @@ dependencies = [
 
 [[package]]
 name = "darling_core"
-version = "0.9.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6afc018370c3bff3eb51f89256a6bdb18b4fdcda72d577982a14954a7a0b402c"
+checksum = "ee54512bec54b41cf2337a22ddfadb53c7d4c738494dc2a186d7b037ad683b85"
 dependencies = [
  "fnv",
  "ident_case",
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "strsim 0.7.0",
- "syn 0.15.44",
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "strsim 0.9.2",
+ "syn 1.0.5",
 ]
 
 [[package]]
 name = "darling_macro"
-version = "0.9.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6d8dac1c6f1d29a41c4712b4400f878cb4fcc4c7628f298dd75038e024998d1"
+checksum = "0cd3e432e52c0810b72898296a69d66b1d78d1517dff6cde7a130557a55a62c1"
 dependencies = [
  "darling_core",
- "quote 0.6.13",
- "syn 0.15.44",
+ "quote 1.0.2",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -1338,7 +1338,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#84451e36e69443df497c2d5ba71c0a3994384a4a"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1355,7 +1355,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#84451e36e69443df497c2d5ba71c0a3994384a4a"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2332,7 +2332,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#84451e36e69443df497c2d5ba71c0a3994384a4a"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
 dependencies = [
  "crc",
  "libc",
@@ -2694,15 +2694,15 @@ dependencies = [
 
 [[package]]
 name = "strsim"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb4f380125926a99e52bc279241539c018323fab05ad6368b56f93d9369ff550"
-
-[[package]]
-name = "strsim"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
+
+[[package]]
+name = "strsim"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "032c03039aae92b350aad2e3779c352e104d919cb192ba2fabbd7b831ce4f0f6"
 
 [[package]]
 name = "structopt"
@@ -2948,9 +2948,9 @@ version = "0.0.1"
 dependencies = [
  "darling",
  "heck",
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "syn 0.15.44",
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -3663,7 +3663,7 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.13+zstd.1.4.3"
-source = "git+https://github.com/gyscos/zstd-rs.git#7f77d0984a746a944588f41045a14dd60b5f496b"
+source = "git+https://github.com/gyscos/zstd-rs.git#64f9263ae02ca52babfd6f5b3888fcf0c6fad413"
 dependencies = [
  "cc",
  "glob",
