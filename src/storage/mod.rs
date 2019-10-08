@@ -2595,8 +2595,8 @@ mod tests {
                 ts(110, 0),
                 ts(120, 0),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info))) => {
-                        assert_eq!(info.get_lock_ttl(), 100)
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ttl, .. })) => {
+                        assert_eq!(ttl, 100)
                     }
                     e => panic!("unexpected error chain: {:?}", e),
                 }),

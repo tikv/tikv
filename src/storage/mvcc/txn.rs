@@ -505,13 +505,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     // The `lock.primary` field will not be accessed again. Use mem::replace to
                     // avoid cloning.
                     let primary = ::std::mem::replace(&mut lock.primary, Default::default());
-                    let mut info = kvproto::kvrpcpb::LockInfo::default();
-                    info.set_primary_lock(primary);
-                    info.set_lock_version(lock.ts);
-                    info.set_key(key.into_raw()?);
-                    info.set_lock_ttl(lock.ttl);
-                    info.set_txn_size(lock.txn_size);
-                    return Err(Error::KeyIsLocked(info));
+                    return Err(Error::KeyIsLocked {
+                        key: key.into_raw()?,
+                        primary,
+                        ts: lock.ts,
+                        ttl: lock.ttl,
+                        txn_size: lock.txn_size,
+                    });
                 }
 
                 // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
