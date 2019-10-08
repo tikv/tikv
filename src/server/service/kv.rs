@@ -1533,6 +1533,7 @@ fn future_cleanup<E: Engine>(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_start_version(),
+        req.get_current_ts(),
         cb,
     );
 
