@@ -442,16 +442,16 @@ impl<E: Engine> AssertionStorage<E> {
         self.expect_invalid_tso_err(resp, start_ts, commit_ts);
     }
 
-    pub fn cleanup_ok(&self, key: &[u8], start_ts: u64) {
+    pub fn cleanup_ok(&self, key: &[u8], start_ts: u64, current_ts: u64) {
         self.store
-            .cleanup(self.ctx.clone(), Key::from_raw(key), start_ts)
+            .cleanup(self.ctx.clone(), Key::from_raw(key), start_ts, current_ts)
             .unwrap();
     }
 
-    pub fn cleanup_err(&self, key: &[u8], start_ts: u64) {
+    pub fn cleanup_err(&self, key: &[u8], start_ts: u64, current_ts: u64) {
         assert!(self
             .store
-            .cleanup(self.ctx.clone(), Key::from_raw(key), start_ts)
+            .cleanup(self.ctx.clone(), Key::from_raw(key), start_ts, current_ts)
             .is_err());
     }
 
