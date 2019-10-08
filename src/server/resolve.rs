@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use kvproto::metapb;
 
-use pd_client::{get_engine_address, PdClient};
+use pd_client::{get_peer_address, PdClient};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -76,7 +76,7 @@ impl<T: PdClient> Runner<T> {
                 .inc();
             return Err(box_err!("store {} has been removed", store_id));
         }
-        let addr = get_engine_address(&s);
+        let addr = get_peer_address(&s);
         // In some tests, we use empty address for store first,
         // so we should ignore here.
         // TODO: we may remove this check after we refactor the test.
@@ -274,9 +274,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_store_engine_addr() {
+    fn test_resolve_store_peer_addr() {
         let mut store = new_store("127.0.0.1:12345", metapb::StoreState::Up);
-        store.set_engine_address("127.0.0.1:22345".to_string());
+        store.set_peer_address("127.0.0.1:22345".to_string());
         let runner = new_runner(store);
         assert_eq!(
             runner.get_address(0).unwrap(),

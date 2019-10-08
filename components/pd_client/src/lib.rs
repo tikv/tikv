@@ -193,10 +193,10 @@ pub trait PdClient: Send + Sync {
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
 
-/// Gets the engine address (for sending raft messages) of a store.
-pub fn get_engine_address(store: &metapb::Store) -> String {
-    if !store.get_engine_address().is_empty() {
-        store.get_engine_address().to_string()
+/// Gets the peer address (for sending raft messages) of a store.
+pub fn get_peer_address(store: &metapb::Store) -> String {
+    if !store.get_peer_address().is_empty() {
+        store.get_peer_address().to_string()
     } else {
         store.get_address().to_string()
     }
