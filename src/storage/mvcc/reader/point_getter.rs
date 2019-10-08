@@ -11,6 +11,7 @@ use crate::storage::{CF_DEFAULT, CF_WRITE};
 pub struct PointGetterBuilder<S: Snapshot> {
     snapshot: S,
     multi: bool,
+    prefix_seek: bool,
     fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
@@ -23,6 +24,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         Self {
             snapshot,
             multi: true,
+            prefix_seek: false,
             fill_cache: true,
             omit_value: false,
             isolation_level: IsolationLevel::Si,
@@ -36,6 +38,12 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     #[inline]
     pub fn multi(mut self, multi: bool) -> Self {
         self.multi = multi;
+        self
+    }
+
+    #[inline]
+    pub fn prefix_seek(mut self, prefix_seek: bool) -> Self {
+        self.prefix_seek = prefix_seek;
         self
     }
 
@@ -74,7 +82,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         // If we only want to get single value, we can use prefix seek.
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
-            .prefix_seek(!self.multi)
+            .prefix_seek(self.prefix_seek || !self.multi)
             .build()?;
 
         Ok(PointGetter {
@@ -121,14 +129,6 @@ impl<S: Snapshot> PointGetter<S> {
     #[inline]
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
-    }
-
-    pub fn set_start_ts(&mut self, start_ts: u64) {
-        self.ts = start_ts;
-    }
-
-    pub fn set_isolation_level(&mut self, level: IsolationLevel) {
-        self.isolation_level = level;
     }
 
     /// Get the value of a user key.

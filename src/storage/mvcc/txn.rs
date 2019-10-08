@@ -598,8 +598,10 @@ impl<S: Snapshot> MvccTxn<S> {
                     info.set_lock_version(lock.ts);
                     info.set_key(min_key.into_raw()?);
                     info.set_lock_ttl(lock.ttl);
-                    info.set_txn_size(lock.txn_size);    
-                    let result = StorageResult::Err(StorageError::from(txn::Error::from(Error::KeyIsLocked(info))));
+                    info.set_txn_size(lock.txn_size);
+                    let result = StorageResult::Err(StorageError::from(txn::Error::from(
+                        Error::KeyIsLocked(info),
+                    )));
                     if let Some(locks) = locks.get_mut(&idx.0) {
                         locks.push(result);
                     } else {

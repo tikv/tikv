@@ -253,8 +253,14 @@ impl<S: Snapshot> SnapshotStore<S> {
         }
     }
 
+    #[inline]
     pub fn set_start_ts(&mut self, start_ts: u64) {
         self.start_ts = start_ts;
+    }
+
+    #[inline]
+    pub fn set_isolation_level(&mut self, isolation_level: IsolationLevel) {
+        self.isolation_level = isolation_level;
     }
 
     fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {

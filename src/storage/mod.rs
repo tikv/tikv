@@ -45,7 +45,6 @@ pub use self::kv::{
     Statistics, StatisticsSummary, TestEngineBuilder,
 };
 pub use self::lock_manager::{DummyLockMgr, LockMgr};
-use self::mvcc::PointGetterBuilder;
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 use self::txn::scheduler::Scheduler as TxnScheduler;
@@ -1001,7 +1000,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     pub fn batch_async_get(
         &self,
-        mut gets: Vec<ReadpoolCommand>,
+        gets: Vec<ReadpoolCommand>,
         callback: BatchCallback<Option<Vec<u8>>>,
     ) -> impl Future<Item = (), Error = Error> {
         const CMD: &str = "get";
@@ -1014,33 +1013,22 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
                             let mut statistics = Statistics::default();
-                            // TODO: hide PointGetter
-                            gets.sort_by(|a, b| match a.key.cmp(&b.key) {
-                                cmp::Ordering::Equal => {
-                                    if a.ts == b.ts {
-                                        cmp::Ordering::Equal
-                                    } else if a.ts < b.ts {
-                                        cmp::Ordering::Greater
-                                    } else {
-                                        cmp::Ordering::Less
-                                    }
-                                }
-                                ord => ord,
-                            });
-                            let mut point_getter = PointGetterBuilder::new(snapshot.clone(), 0)
-                                .fill_cache(!ctx.get_not_fill_cache())
-                                .isolation_level(ctx.get_isolation_level())
-                                .multi(true)
-                                .build()?;
+                            let mut snap_store = SnapshotStore::new(
+                                snapshot,
+                                0,
+                                ctx.get_isolation_level(),
+                                !ctx.get_not_fill_cache(),
+                            );
                             for get in gets {
-                                point_getter.set_start_ts(get.ts.unwrap());
-                                point_getter.set_isolation_level(get.ctx.get_isolation_level());
-                                let value = point_getter
-                                    .get(&get.key)
-                                    .map_err(|e| Error::from(txn::Error::from(e)));
-                                callback(get.req, value);
+                                snap_store.set_start_ts(get.ts.unwrap());
+                                snap_store.set_isolation_level(get.ctx.get_isolation_level());
+                                callback(
+                                    get.req,
+                                    snap_store
+                                        .get(&get.key, &mut statistics)
+                                        .map_err(Error::from),
+                                );
                             }
-                            statistics.add(&point_getter.take_statistics());
                             Ok(())
                         })
                     })
