@@ -907,8 +907,8 @@ mod tests {
 
         // Try to cleanup another transaction's lock. Does nothing.
         must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
-        // Transactions of unknown type should be protected
-        must_get_rollback_protected(&engine, k, ts(10, 1), true);
+        // If there is no exisiting lock when cleanup, the rollback needn't be protected.
+        must_get_rollback_protected(&engine, k, ts(10, 1), false);
         must_locked(&engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
