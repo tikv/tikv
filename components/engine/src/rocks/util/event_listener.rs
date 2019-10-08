@@ -81,11 +81,6 @@ impl rocksdb::EventListener for EventListener {
             if err.starts_with("Corruption") {
                 set_panic_mark();
             }
-            crit!("rocksdb background error.";
-                  "db_name" => self.db_name.as_str(),
-                  "reason" => r,
-                  "error" => err.as_str(),
-            );
             panic!(
                 "rocksdb background error. db: {}, reason: {}, error: {}",
                 self.db_name, r, err
