@@ -427,30 +427,6 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    fn check_lock(
-        &mut self,
-        key: Key,
-        iter: &mut Cursor<S::Iter>,
-        key_equal: &mut bool,
-    ) -> Result<()> {
-        let statistics = self.reader.mut_lock_statistics();
-        let lock_key = iter.key(statistics);
-        if lock_key == key.as_encoded().as_slice() {
-            *key_equal = true;
-            let lock = Lock::parse(iter.value(statistics))?;
-            let mut info = kvproto::kvrpcpb::LockInfo::default();
-            info.set_primary_lock(lock.primary);
-            info.set_lock_version(lock.ts);
-            info.set_key(key.into_raw()?);
-            info.set_lock_ttl(lock.ttl);
-            info.set_txn_size(lock.txn_size);
-            Err(Error::KeyIsLocked(info))
-        } else {
-            *key_equal = false;
-            Ok(())
-        }
-    }
-
     fn check_write(
         &mut self,
         key: Key,
@@ -533,7 +509,6 @@ impl<S: Snapshot> MvccTxn<S> {
             .reader
             .new_write_cursor(&min_key, u64::max_value(), &max_key, 0, false)
             .unwrap();
-        let mut lock_iter = self.reader.new_lock_cursor(&min_key, &max_key).unwrap();
         let mut key_equal = true;
 
         let mut range = map.range::<Vec<u8>, _>(..);
@@ -616,24 +591,21 @@ impl<S: Snapshot> MvccTxn<S> {
                     break 'lock_loop;
                 }
             };
-            lock_iter.seek(&min_key, self.reader.mut_lock_statistics())?;
-            if !lock_iter.valid()? {
-                break;
-            }
-            if let Err(err) = self.check_lock(min_key, &mut lock_iter, &mut key_equal) {
-                let result = StorageResult::Err(StorageError::from(txn::Error::from(err)));
-                if let Some(locks) = locks.get_mut(&idx.0) {
-                    locks.push(result);
-                } else {
-                    locks.insert(idx.0, vec![result]);
+            if let Some(lock) = self.reader.load_lock(&min_key)? {
+                if lock.ts != self.start_ts {
+                    let mut info = kvproto::kvrpcpb::LockInfo::default();
+                    info.set_primary_lock(lock.primary);
+                    info.set_lock_version(lock.ts);
+                    info.set_key(min_key.into_raw()?);
+                    info.set_lock_ttl(lock.ttl);
+                    info.set_txn_size(lock.txn_size);    
+                    let result = StorageResult::Err(StorageError::from(txn::Error::from(Error::KeyIsLocked(info))));
+                    if let Some(locks) = locks.get_mut(&idx.0) {
+                        locks.push(result);
+                    } else {
+                        locks.insert(idx.0, vec![result]);
+                    }
                 }
-            } else if lock_iter.valid()? {
-                // update range w.r.t. latest cursor value
-                range = map.range::<Vec<u8>, _>(
-                    &lock_iter.key(self.reader.mut_lock_statistics()).to_vec()..,
-                );
-            } else {
-                break;
             }
         }
 

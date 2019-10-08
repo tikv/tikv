@@ -396,12 +396,12 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) {
-        let commands = self.take_commands();
-        if !commands.is_empty() {
+        if !self.commands.is_empty() {
             self.report();
         } else {
             return;
         }
+        let commands = self.take_commands();
         let mut max_ratio = 1;
         match self.tag {
             CommandKind::prewrite => {
