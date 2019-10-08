@@ -474,7 +474,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let write = Write::new_unprotected(
+        let write = Write::new(
             WriteType::from_lock_type(lock_type).unwrap(),
             self.start_ts,
             short_value,
@@ -493,8 +493,9 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
-    /// cleanup the lock without checking TTL. If `protected` is `true`, the rollback record is
-    /// protected from being collapsed.
+    /// cleanup the lock without checking TTL. If `protected` is `true` and we cannot make sure the
+    /// lock belongs to an optimistic transaction, the rollback record is protected from being
+    /// collapsed.
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.

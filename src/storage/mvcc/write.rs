@@ -82,25 +82,8 @@ impl std::fmt::Debug for Write {
 }
 
 impl Write {
-    pub fn new(
-        write_type: WriteType,
-        start_ts: u64,
-        short_value: Option<Value>,
-        protected: bool,
-    ) -> Write {
-        Write {
-            write_type,
-            start_ts,
-            short_value,
-            protected,
-        }
-    }
-
-    pub fn new_unprotected(
-        write_type: WriteType,
-        start_ts: u64,
-        short_value: Option<Value>,
-    ) -> Write {
+    /// Creates a new `Write` record. If the type is rollback, it is not protected by default.
+    pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
         Write {
             write_type,
             start_ts,
@@ -140,7 +123,7 @@ impl Write {
         let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
         let start_ts = number::decode_var_u64(&mut b)?;
         if b.is_empty() {
-            return Ok(Write::new_unprotected(write_type, start_ts, None));
+            return Ok(Write::new(write_type, start_ts, None));
         }
 
         let flag = b.read_u8()?;
@@ -154,11 +137,7 @@ impl Write {
                         b.len()
                     );
                 }
-                Ok(Write::new_unprotected(
-                    write_type,
-                    start_ts,
-                    Some(b.to_vec()),
-                ))
+                Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
             }
             FLAG_PROTECTED => {
                 if write_type != WriteType::Rollback {
@@ -216,10 +195,10 @@ mod tests {
     fn test_write() {
         // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
         let mut writes = vec![
-            Write::new_unprotected(WriteType::Put, 0, Some(b"short_value".to_vec())),
-            Write::new_unprotected(WriteType::Delete, 1 << 20, None),
+            Write::new(WriteType::Put, 0, Some(b"short_value".to_vec())),
+            Write::new(WriteType::Delete, 1 << 20, None),
             Write::new_rollback(1 << 40, false),
-            Write::new_unprotected(WriteType::Rollback, 1 << 41, None),
+            Write::new(WriteType::Rollback, 1 << 41, None),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.to_bytes();
@@ -231,7 +210,7 @@ mod tests {
         // Test `Write::parse()` handles incorrect input.
         assert!(Write::parse(b"").is_err());
 
-        let lock = Write::new_unprotected(WriteType::Lock, 1, Some(b"short_value".to_vec()));
+        let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
         let v = lock.to_bytes();
         assert!(Write::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);

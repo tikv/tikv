@@ -793,7 +793,7 @@ mod tests {
         for &(key, ts, write_type, entry_type) in &cases {
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.as_encoded());
-            let v = Write::new_unprotected(write_type, ts, None).to_bytes();
+            let v = Write::new(write_type, ts, None).to_bytes();
             collector.add(&k, &v, entry_type, 0, 0);
         }
         let result = UserProperties(collector.finish());
@@ -816,7 +816,7 @@ mod tests {
             let s = format!("{:032}", i);
             let k = Key::from_raw(s.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.as_encoded());
-            let w = Write::new_unprotected(WriteType::Put, ts, Some(s.as_bytes().to_owned()));
+            let w = Write::new(WriteType::Put, ts, Some(s.as_bytes().to_owned()));
             entries.push((k, w.to_bytes()));
         }
 
@@ -838,7 +838,7 @@ mod tests {
             let k1 = keys::data_key(k1.as_encoded());
             let k2 = Key::from_raw(key.as_bytes()).append_ts(1);
             let k2 = keys::data_key(k2.as_encoded());
-            let v = Write::new_unprotected(WriteType::Put, 0, None).to_bytes();
+            let v = Write::new(WriteType::Put, 0, None).to_bytes();
             collector.add(&k1, &v, DBEntryType::Put, 0, 0);
             collector.add(&k2, &v, DBEntryType::Put, 0, 0);
         }

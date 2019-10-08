@@ -1807,7 +1807,7 @@ mod tests {
         for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
             let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let write = Write::new_unprotected(tp, start_ts, None);
+            let write = Write::new(tp, start_ts, None);
             let value = write.to_bytes();
             engine
                 .put_cf(write_cf, key.as_slice(), value.as_slice())
@@ -2187,7 +2187,7 @@ mod tests {
             } else {
                 None
             };
-            let write = Write::new_unprotected(tp, start_ts, v);
+            let write = Write::new(tp, start_ts, v);
             kv.push((
                 CF_WRITE,
                 Key::from_raw(key).append_ts(commit_ts),
