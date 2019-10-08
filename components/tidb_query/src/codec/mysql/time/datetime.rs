@@ -1,7 +1,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use crate::codec;
-use crate::codec::mysql;
+use crate::codec::mysql::{check_fsp, Tz};
 use crate::codec::TEN_POW;
 use crate::codec::{Error, Result};
 use crate::expr::{EvalContext, Flag, SqlMode};
@@ -35,8 +35,30 @@ fn assert(expected: bool) -> Result<()> {
     }
 }
 
+#[inline]
+fn chrono_datetime<T: TimeZone>(
+    time_zone: &T,
+    year: u32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    micro: u32,
+) -> Result<DateTime<T>> {
+    use chrono::Duration;
+    // NOTE: We are not using `tz::from_ymd_opt` as suggested in chrono's README due to
+    // chronotope/chrono-tz #23.
+    // As a workaround, we first build a NaiveDate, then attach time zone information to it.
+    NaiveDate::from_ymd_opt(year as i32, month, day)
+        .and_then(|date| date.and_hms_opt(hour, minute, second))
+        .and_then(|t| t.checked_add_signed(Duration::microseconds(i64::from(micro))))
+        .and_then(|datetime| time_zone.from_local_datetime(&datetime).earliest())
+        .ok_or_else(|| Error::truncated())
+}
+
 fn round_frac(frac: u32, fsp: u8) -> (bool, u32) {
-    assert!(frac < 100_000_000 && fsp < 7);
+    debug_assert!(frac < 100_000_000 && fsp < 7);
     let fsp = usize::from(fsp);
     let width = if frac >= 1_000_000 { 7 } else { 6 };
     let mask = TEN_POW[width - fsp - 1];
@@ -169,7 +191,7 @@ mod parser {
     fn split_components(input: &str) -> Result<Vec<&[u8]>> {
         let mut buffer = input.as_bytes();
 
-        assert!(
+        debug_assert!(
             !buffer.is_empty()
                 && !buffer.first().unwrap().is_ascii_whitespace()
                 && !buffer.last().unwrap().is_ascii_whitespace()
@@ -197,18 +219,17 @@ mod parser {
                 else if rest[0].is_ascii_punctuation() {
                     rest = &rest[1..];
                 } else {
-                    assert(false)?;
+                    return Err(Error::truncated());
                 }
             }
 
             buffer = rest;
         }
 
-        if (components.len() == 7 || components.len() == 2)
-            && input.as_bytes()[input.len() - components.last().unwrap().len() - 1] != b'.'
-        {
-            assert(false)?;
-        }
+        assert(
+            (components.len() != 7 && components.len() != 2)
+                || input.as_bytes()[input.len() - components.last().unwrap().len() - 1] == b'.',
+        )?;
 
         Ok(components)
     }
@@ -302,9 +323,7 @@ mod parser {
         round: bool,
     ) -> Result<Time> {
         let trimmed = input.trim();
-        if trimmed.is_empty() {
-            assert(false)?;
-        }
+        assert(!trimmed.is_empty())?;
 
         let components = split_components(trimmed)?;
         match components.len() {
@@ -364,7 +383,7 @@ impl Time {
         fsp: i8,
         round: bool,
     ) -> Result<Time> {
-        parser::parse(ctx, input, time_type, mysql::check_fsp(fsp)?, round)
+        parser::parse(ctx, input, time_type, check_fsp(fsp)?, round)
             .map_err(|_| Error::incorrect_datetime_value(input))
     }
 }
@@ -381,14 +400,11 @@ macro_rules! handle_zero_date {
         let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
 
         let datetime: TimeArgs = $datetime;
-        assert!(datetime.is_zero_date());
+        debug_assert!(datetime.is_zero_date());
         if no_zero_date {
-            if strict_mode && !ignore_truncate {
-                return Err(Error::truncated());
-            } else {
-                ctx.warnings.append_warning(Error::truncated());
-                return Ok(datetime);
-            }
+            assert(!strict_mode || ignore_truncate)?;
+            ctx.warnings.append_warning(Error::truncated());
+            return Ok(datetime);
         }
         datetime
     }};
@@ -406,17 +422,14 @@ macro_rules! handle_zero_in_date {
         let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
 
         let mut datetime: TimeArgs = $datetime;
-        assert!(datetime.month == 0 || datetime.day == 0);
+        debug_assert!(datetime.month == 0 || datetime.day == 0);
         if no_zero_in_date {
             // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
             // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
-            if strict_mode && !ignore_truncate {
-                return Err(Error::truncated());
-            } else {
-                ctx.warnings.append_warning(Error::truncated());
-                datetime.clear();
-                return Ok(handle_zero_date!(datetime, ctx));
-            }
+            assert(!strict_mode || ignore_truncate)?;
+            ctx.warnings.append_warning(Error::truncated());
+            datetime.clear();
+            return Ok(handle_zero_date!(datetime, ctx));
         }
         datetime
     }};
@@ -430,12 +443,9 @@ macro_rules! handle_invalid_date {
         let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
 
         let mut datetime: TimeArgs = $datetime;
-        if allow_invalid_date {
-            datetime.clear();
-            return Ok(handle_zero_date!(datetime, ctx));
-        } else {
-            return Err(Error::truncated());
-        }
+        assert(allow_invalid_date)?;
+        datetime.clear();
+        return Ok(handle_zero_date!(datetime, ctx));
     }};
 }
 
@@ -454,16 +464,31 @@ pub struct TimeArgs {
     minute: u32,
     second: u32,
     micro: u32,
-    fsp: u8,
+    fsp: i8,
     time_type: TimeType,
 }
 
 impl TimeArgs {
     fn check(self, ctx: &mut EvalContext) -> Result<TimeArgs> {
+        check_fsp(self.fsp)?;
         match self.time_type {
             TimeType::Date => self.check_date(ctx),
             TimeType::DateTime => self.check_datetime(ctx),
             TimeType::TimeStamp => self.check_timestamp(ctx),
+        }
+    }
+
+    pub fn zero(fsp: i8, time_type: TimeType) -> TimeArgs {
+        TimeArgs {
+            year: 0,
+            month: 0,
+            day: 0,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            micro: 0,
+            fsp,
+            time_type,
         }
     }
 
@@ -527,36 +552,30 @@ impl TimeArgs {
         Ok(datetime)
     }
 
-    fn check_timestamp(mut self, ctx: &mut EvalContext) -> Result<Self> {
+    fn check_timestamp(self, ctx: &mut EvalContext) -> Result<Self> {
         if self.is_zero_date() {
-            self = handle_zero_date!(self, ctx);
-            return Ok(self);
+            return Ok(handle_zero_date!(self, ctx));
         }
 
-        let date = NaiveDate::from_ymd_opt(self.year as i32, self.month, self.day);
+        let datetime = chrono_datetime(
+            &ctx.cfg.tz,
+            self.year,
+            self.month,
+            self.day,
+            self.hour,
+            self.minute,
+            self.second,
+            self.micro,
+        );
 
-        if date.is_none() {
+        if datetime.is_err() {
             handle_invalid_date!(self, ctx);
         }
 
-        let datetime =
-            date.unwrap()
-                .and_hms_micro_opt(self.hour, self.minute, self.second, self.micro);
-
-        if datetime.is_none() {
-            handle_invalid_date!(self, ctx);
-        }
-
-        let datetime = ctx.cfg.tz.from_local_datetime(&datetime.unwrap()).single();
-
-        if datetime.is_none() {
-            handle_invalid_date!(self, ctx);
-        }
-
-        let datetime = datetime.unwrap().timestamp();
+        let ts = datetime.unwrap().timestamp();
 
         // Out of range
-        if datetime < MIN_TIMESTAMP || datetime > MAX_TIMESTAMP {
+        if ts < MIN_TIMESTAMP || ts > MAX_TIMESTAMP {
             handle_invalid_date!(self, ctx);
         }
 
@@ -585,9 +604,44 @@ impl Time {
                 minute,
                 second,
                 micro,
+                fsp: fsp as i8,
+                time_type,
+            },
+        )
+    }
+
+    pub fn try_from_chrono_datetime<T: Datelike + Timelike>(
+        ctx: &mut EvalContext,
+        datetime: T,
+        fsp: i8,
+        time_type: TimeType,
+    ) -> Result<Self> {
+        Time::new(
+            ctx,
+            TimeArgs {
+                year: datetime.year() as u32,
+                month: datetime.month(),
+                day: datetime.day(),
+                hour: datetime.hour(),
+                minute: datetime.minute(),
+                second: datetime.second(),
+                micro: datetime.nanosecond() / 1000,
                 fsp,
                 time_type,
             },
+        )
+    }
+
+    pub fn try_into_chrono_datetime(self, ctx: &mut EvalContext) -> Result<DateTime<Tz>> {
+        chrono_datetime(
+            &ctx.cfg.tz,
+            self.year(),
+            self.month(),
+            self.day(),
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.micro(),
         )
     }
 
@@ -611,7 +665,7 @@ impl Time {
         time.set_minute(minute);
         time.set_second(second);
         time.set_micro(micro);
-        time.set_fsp(fsp);
+        time.set_fsp(fsp as u8);
         time.set_time_type(time_type);
         time
     }
@@ -646,10 +700,6 @@ impl Time {
         }
 
         Ok(())
-    }
-
-    pub fn zero() -> Self {
-        Time(0)
     }
 
     pub fn is_zero(mut self) -> bool {
@@ -713,34 +763,78 @@ impl Time {
         time_type: TimeType,
         fsp: i8,
     ) -> Result<Time> {
-        let fsp = mysql::check_fsp(fsp)?;
+        if value == 0 {
+            return Time::new(ctx, TimeArgs::zero(fsp, time_type));
+        }
+
+        let fsp = check_fsp(fsp)?;
         let ymdhms = value >> 24;
         let ymd = ymdhms >> 17;
         let ym = ymd >> 5;
-        let hms = ymdhms & !(1 << 17);
+        let hms = ymdhms & ((1 << 17) - 1);
 
-        let day = (ymd & !(1 << 5)) as u32;
+        let day = (ymd & ((1 << 5) - 1)) as u32;
         let month = (ym % 13) as u32;
         let year = (ym / 13) as u32;
-        let second = (hms & !(1 << 6)) as u32;
-        let minute = ((hms >> 6) & !(1 << 6)) as u32;
+        let second = (hms & ((1 << 6) - 1)) as u32;
+        let minute = ((hms >> 6) & ((1 << 6) - 1)) as u32;
         let hour = (hms >> 12) as u32;
-        let micro = (value & !(1 << 24)) as u32;
+        let micro = (value & ((1 << 24) - 1)) as u32;
 
-        Time::new(
-            ctx,
-            TimeArgs {
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-                micro,
-                fsp,
-                time_type,
-            },
-        )
+        if time_type == TimeType::TimeStamp {
+            let utc = chrono_datetime(&Utc, year, month, day, hour, minute, second, micro)?;
+            let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
+            Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), fsp as i8, time_type)
+        } else {
+            Time::new(
+                ctx,
+                TimeArgs {
+                    year,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                    micro,
+                    fsp: fsp as i8,
+                    time_type,
+                },
+            )
+        }
+    }
+
+    pub fn to_packed_u64(mut self, ctx: &mut EvalContext) -> Result<u64> {
+        if self.is_zero() {
+            return Ok(0);
+        }
+
+        if self.get_time_type() == TimeType::TimeStamp {
+            let ts = self.try_into_chrono_datetime(ctx)?;
+            self = Time::try_from_chrono_datetime(
+                ctx,
+                ts.naive_utc(),
+                self.fsp() as i8,
+                self.get_time_type(),
+            )?;
+        }
+
+        let ymd =
+            ((u64::from(self.year()) * 13 + u64::from(self.month())) << 5) | u64::from(self.day());
+        let hms = (u64::from(self.hour()) << 12)
+            | (u64::from(self.minute()) << 6)
+            | u64::from(self.second());
+
+        Ok((((ymd << 17) | hms) << 24) | u64::from(self.micro()))
+    }
+}
+
+impl PartialEq for Time {
+    fn eq(&self, other: &Self) -> bool {
+        let mut a = *self;
+        let mut b = *other;
+        a.set_fsp_tt(0);
+        b.set_fsp_tt(0);
+        a.0 == b.0
     }
 }
 
@@ -799,7 +893,7 @@ impl std::fmt::Debug for Time {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::mysql::Tz;
+    use crate::codec::mysql::{MAX_FSP, UNSPECIFIED_FSP};
     use crate::expr::EvalConfig;
 
     use std::sync::Arc;
@@ -812,6 +906,19 @@ mod tests {
         allow_invalid_date: bool,
         ignore_truncate: bool,
         time_zone: Option<Tz>,
+    }
+
+    impl Default for TimeEnv {
+        fn default() -> TimeEnv {
+            TimeEnv {
+                strict_mode: false,
+                no_zero_in_date: false,
+                no_zero_date: false,
+                allow_invalid_date: false,
+                ignore_truncate: false,
+                time_zone: None,
+            }
+        }
     }
 
     impl From<TimeEnv> for EvalContext {
@@ -1066,12 +1173,8 @@ mod tests {
 
         for (expected, actual) in cases {
             let mut ctx = EvalContext::from(TimeEnv {
-                strict_mode: false,
-                no_zero_in_date: false,
-                no_zero_date: false,
                 allow_invalid_date: true,
-                ignore_truncate: false,
-                time_zone: None,
+                ..TimeEnv::default()
             });
             assert_eq!(
                 expected,
@@ -1084,12 +1187,8 @@ mod tests {
     #[test]
     fn test_invalid_datetime() -> Result<()> {
         let mut ctx = EvalContext::from(TimeEnv {
-            strict_mode: false,
-            no_zero_in_date: false,
-            no_zero_date: false,
             allow_invalid_date: true,
-            ignore_truncate: false,
-            time_zone: None,
+            ..TimeEnv::default()
         });
 
         let cases = vec![
@@ -1110,12 +1209,8 @@ mod tests {
     #[test]
     fn test_allow_invalid_timestamp() -> Result<()> {
         let mut ctx = EvalContext::from(TimeEnv {
-            strict_mode: false,
-            no_zero_in_date: false,
-            no_zero_date: false,
             allow_invalid_date: true,
-            ignore_truncate: false,
-            time_zone: None,
+            ..TimeEnv::default()
         });
 
         let ok_cases = vec![
@@ -1136,12 +1231,9 @@ mod tests {
         ];
         for (timestamp, time_zone) in dsts {
             let mut ctx = EvalContext::from(TimeEnv {
-                strict_mode: false,
-                no_zero_in_date: false,
-                no_zero_date: false,
-                ignore_truncate: false,
                 allow_invalid_date: true,
                 time_zone: Tz::from_tz_name(time_zone),
+                ..TimeEnv::default()
             });
             assert_eq!(
                 "0000-00-00 00:00:00",
@@ -1157,11 +1249,7 @@ mod tests {
         // Enable NO_ZERO_DATE only. If zero-date is encountered, a warning is produced.
         let mut ctx = EvalContext::from(TimeEnv {
             no_zero_date: true,
-            no_zero_in_date: false,
-            ignore_truncate: false,
-            allow_invalid_date: false,
-            strict_mode: false,
-            time_zone: None,
+            ..TimeEnv::default()
         });
 
         let _ = Time::parse(
@@ -1179,10 +1267,7 @@ mod tests {
         let mut ctx = EvalContext::from(TimeEnv {
             no_zero_date: true,
             strict_mode: true,
-            no_zero_in_date: false,
-            ignore_truncate: false,
-            allow_invalid_date: false,
-            time_zone: None,
+            ..TimeEnv::default()
         });
 
         assert!(Time::parse(
@@ -1200,9 +1285,7 @@ mod tests {
             no_zero_date: true,
             strict_mode: true,
             ignore_truncate: true,
-            no_zero_in_date: false,
-            allow_invalid_date: false,
-            time_zone: None,
+            ..TimeEnv::default()
         });
 
         assert_eq!(
@@ -1231,10 +1314,7 @@ mod tests {
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_date: true,
                 strict_mode: true,
-                ignore_truncate: false,
-                allow_invalid_date: true,
-                no_zero_in_date: false,
-                time_zone: None,
+                ..TimeEnv::default()
             });
             assert!(Time::parse(&mut ctx, case, TimeType::DateTime, 0, false).is_err());
         }
@@ -1250,11 +1330,7 @@ mod tests {
             // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is produced.
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_in_date: true,
-                no_zero_date: false,
-                ignore_truncate: false,
-                allow_invalid_date: false,
-                strict_mode: false,
-                time_zone: None,
+                ..TimeEnv::default()
             });
 
             let _ = Time::parse(&mut ctx, case, TimeType::DateTime, 0, false)?;
@@ -1268,9 +1344,7 @@ mod tests {
             no_zero_in_date: true,
             strict_mode: true,
             ignore_truncate: true,
-            no_zero_date: false,
-            allow_invalid_date: false,
-            time_zone: None,
+            ..TimeEnv::default()
         });
 
         assert_eq!(
@@ -1293,12 +1367,80 @@ mod tests {
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_in_date: true,
                 strict_mode: true,
-                no_zero_date: false,
-                ignore_truncate: false,
-                allow_invalid_date: false,
-                time_zone: None,
+                ..TimeEnv::default()
             });
             assert!(Time::parse(&mut ctx, case, TimeType::DateTime, 0, false).is_err());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_codec_datetime() -> Result<()> {
+        let cases = vec![
+            ("2010-10-10 10:11:11", 0),
+            ("2017-01-01 00:00:00", 0),
+            ("2004-01-01 00:00:00", UNSPECIFIED_FSP),
+            ("2013-01-01 00:00:00.000000", MAX_FSP),
+            ("2019-01-01 00:00:00.123456", MAX_FSP),
+            ("2001-01-01 00:00:00.123456", MAX_FSP),
+            ("2007-06-01 00:00:00.999999", MAX_FSP),
+            // Invalid cases
+            ("0000-00-00 00:00:00", 0),
+            ("2007-00-01 00:00:00.999999", MAX_FSP),
+            ("2017-01-00 00:00:00.999999", MAX_FSP),
+            ("2027-00-00 00:00:00.999999", MAX_FSP),
+            ("2027-04-31 00:00:00.999999", MAX_FSP),
+        ];
+
+        for (case, fsp) in cases {
+            let mut ctx = EvalContext::from(TimeEnv {
+                allow_invalid_date: true,
+                ..TimeEnv::default()
+            });
+            let time = Time::parse(&mut ctx, case, TimeType::DateTime, fsp, false)?;
+
+            let packed = time.to_packed_u64(&mut ctx)?;
+            let reverted_datetime =
+                Time::from_packed_u64(&mut ctx, packed, TimeType::DateTime, fsp)?;
+
+            assert_eq!(time, reverted_datetime);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_codec_timestamp() -> Result<()> {
+        let tz_table = vec!["Etc/GMT+11", "Etc/GMT0", "Etc/GMT-5", "UTC", "Universal"];
+
+        let cases = vec![
+            ("0000-00-00 00:00:00", 0),
+            ("2010-10-10 10:11:11", 0),
+            ("2017-01-01 00:00:00", 0),
+            ("2004-01-01 00:00:00", UNSPECIFIED_FSP),
+            ("2019-07-01 12:13:14.999", MAX_FSP),
+            ("2013-01-01 00:00:00.000000", MAX_FSP),
+            ("2019-04-01 00:00:00.123456", MAX_FSP),
+            ("2001-01-01 00:00:00.123456", MAX_FSP),
+            ("2007-08-01 00:00:00.999999", MAX_FSP),
+        ];
+
+        for tz in tz_table {
+            for &(case, fsp) in cases.iter() {
+                let mut ctx = EvalContext::from(TimeEnv {
+                    time_zone: Tz::from_tz_name(tz),
+                    ..TimeEnv::default()
+                });
+
+                let time = Time::parse(&mut ctx, case, TimeType::TimeStamp, fsp, false)?;
+
+                let packed = time.to_packed_u64(&mut ctx)?;
+                let reverted_datetime =
+                    Time::from_packed_u64(&mut ctx, packed, TimeType::TimeStamp, fsp)?;
+
+                assert_eq!(time, reverted_datetime);
+            }
         }
 
         Ok(())
