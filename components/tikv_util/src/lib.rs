@@ -27,7 +27,6 @@ extern crate serde_derive;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
-extern crate nix;
 #[cfg(test)]
 extern crate test;
 
