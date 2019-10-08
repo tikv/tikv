@@ -394,6 +394,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     // batch.
                     match self.encode_type {
                         EncodeType::TypeArrow => {
+                            self.encode_type = EncodeType::TypeArrow;
                             data.reserve(result.physical_columns.maximum_encoded_size_arrow(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -407,6 +408,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                             )?;
                         }
                         _ => {
+                            // For the default or unsupported encode type, use datum format.
+                            self.encode_type = EncodeType::TypeDefault;
                             data.reserve(result.physical_columns.maximum_encoded_size(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -429,14 +432,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
-                match self.encode_type {
-                    EncodeType::TypeArrow => {
-                        sel_resp.set_encode_type(EncodeType::TypeArrow);
-                    }
-                    _ => {
-                        sel_resp.set_encode_type(EncodeType::TypeDefault);
-                    }
-                }
+                sel_resp.set_encode_type(self.encode_type);
+
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
                     self.exec_stats
