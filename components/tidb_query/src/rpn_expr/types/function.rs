@@ -21,6 +21,7 @@
 //! `components/tidb_query_codegen/src/rpn_function`.
 
 use std::convert::TryFrom;
+use std::marker::PhantomData;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
@@ -163,19 +164,24 @@ pub trait Evaluator {
     ) -> Result<VectorValue>;
 }
 
-pub struct ArgConstructor<E: Evaluator> {
+pub struct ArgConstructor<A: Evaluable, E: Evaluator> {
     arg_index: usize,
     inner: E,
+    _marker: PhantomData<A>,
 }
 
-impl<E: Evaluator> ArgConstructor<E> {
+impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
     #[inline]
     pub fn new(arg_index: usize, inner: E) -> Self {
-        ArgConstructor { arg_index, inner }
+        ArgConstructor {
+            arg_index,
+            inner,
+            _marker: PhantomData,
+        }
     }
 }
 
-impl<E: Evaluator> Evaluator for ArgConstructor<E> {
+impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
     fn eval(
         self,
         def: impl ArgDef,
@@ -186,34 +192,24 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
     ) -> Result<VectorValue> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
-                match_template_evaluable! {
-                    TT, match value {
-                        ScalarValue::TT(v) => {
-                            let new_def = Arg {
-                                arg: ScalarArg(v),
-                                rem: def,
-                            };
-                            self.inner.eval(new_def, ctx, output_rows, args, extra)
-                        }
-                    }
-                }
+                let v = A::borrow_scalar_value(value);
+                let new_def = Arg {
+                    arg: ScalarArg(v),
+                    rem: def,
+                };
+                self.inner.eval(new_def, ctx, output_rows, args, extra)
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
-                match_template_evaluable! {
-                    TT, match value.as_ref() {
-                        VectorValue::TT(ref v) => {
-                            let new_def = Arg {
-                                arg: VectorArg {
-                                    physical_col: v,
-                                    logical_rows,
-                                },
-                                rem: def,
-                            };
-                            self.inner.eval(new_def, ctx, output_rows, args, extra)
-                        }
-                    }
-                }
+                let v = A::borrow_vector_value(value.as_ref());
+                let new_def = Arg {
+                    arg: VectorArg {
+                        physical_col: v,
+                        logical_rows,
+                    },
+                    rem: def,
+                };
+                self.inner.eval(new_def, ctx, output_rows, args, extra)
             }
         }
     }
