@@ -212,4 +212,16 @@ mod tests {
         assert!(Write::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
     }
+
+    #[test]
+    fn test_is_protected() {
+        assert!(Write::new_rollback(1, true).is_protected());
+        assert!(!Write::new_rollback(2, false).is_protected());
+        assert!(!Write::new(
+            WriteType::Put,
+            3,
+            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
+        )
+        .is_protected());
+    }
 }
