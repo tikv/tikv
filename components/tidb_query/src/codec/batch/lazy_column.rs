@@ -199,6 +199,14 @@ impl LazyBatchColumn {
         }
     }
 
+    /// Returns maximum encoded size in arrow format.
+    pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
+        match self {
+            LazyBatchColumn::Raw(v) => Ok(v.total_len()),
+            LazyBatchColumn::Decoded(v) => v.maximum_encoded_size_arrow(logical_rows),
+        }
+    }
+
     /// Encodes into binary format.
     // FIXME: Use BufferWriter.
     pub fn encode(
