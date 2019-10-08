@@ -493,13 +493,12 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
-    /// cleanup the lock without checking TTL. If `protected` is `true` and we cannot make sure the
-    /// lock belongs to an optimistic transaction, the rollback record is protected from being
-    /// collapsed.
+    /// cleanup the lock without checking TTL. If `protect_rollback` is `true` and the lock belongs
+    /// to a pessimistic transaction, the rollback record is protected from being collapsed.
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
-    pub fn cleanup(&mut self, key: Key, current_ts: u64, protected: bool) -> Result<bool> {
+    pub fn cleanup(&mut self, key: Key, current_ts: u64, protect_rollback: bool) -> Result<bool> {
         let is_pessimistic_txn = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
@@ -551,8 +550,11 @@ impl<S: Snapshot> MvccTxn<S> {
                             self.collapse_prev_rollback(key.clone())?;
                         }
 
-                        // insert a Rollback to WriteCF when receives Rollback before Prewrite
-                        let write = Write::new_rollback(ts, protected);
+                        // Insert a Rollback to Write CF in case that a stale prewrite command
+                        // is received after a cleanup command.
+                        // During cleanup, when there is no lock, it cannot be the primary key
+                        // of a pessimistic transaction, so the rollback needn't be protected.
+                        let write = Write::new_rollback(ts, false);
                         self.put_write(key, ts, write.to_bytes());
                         Ok(false)
                     }
@@ -560,7 +562,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         };
         // Only rollbacks of pessimistic transactions need to be protected.
-        let write = Write::new_rollback(self.start_ts, protected & is_pessimistic_txn);
+        let write = Write::new_rollback(self.start_ts, protect_rollback & is_pessimistic_txn);
         let ts = self.start_ts;
         self.put_write(key.clone(), ts, write.to_bytes());
         self.unlock_key(key.clone());
@@ -585,7 +587,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-            if write.write_type == WriteType::Rollback && !write.protected {
+            if write.write_type == WriteType::Rollback && !write.is_protected() {
                 self.delete_write(key, commit_ts);
             }
         }

@@ -729,7 +729,7 @@ pub mod tests {
             .unwrap();
         assert_eq!(ts, start_ts);
         assert_eq!(write.write_type, WriteType::Rollback);
-        assert_eq!(write.protected, protected);
+        assert_eq!(write.is_protected(), protected);
     }
 
     pub fn must_scan_keys<E: Engine>(

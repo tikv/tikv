@@ -20,7 +20,8 @@ const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
-const FLAG_PROTECTED: u8 = b'p';
+/// The short value for rollback records which are protected from being collapsed.
+const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"protected";
 
 impl WriteType {
     pub fn from_lock_type(tp: LockType) -> Option<WriteType> {
@@ -57,10 +58,6 @@ pub struct Write {
     pub write_type: WriteType,
     pub start_ts: u64,
     pub short_value: Option<Value>,
-
-    /// Whether the entry is protected from being collapsed.
-    /// It is only valid when its type is rollback.
-    pub protected: bool,
 }
 
 impl std::fmt::Debug for Write {
@@ -76,28 +73,31 @@ impl std::fmt::Debug for Write {
                     .map(|v| hex::encode_upper(v))
                     .unwrap_or_else(|| "None".to_owned()),
             )
-            .field("protected", &self.protected)
             .finish()
     }
 }
 
 impl Write {
-    /// Creates a new `Write` record. If the type is rollback, it is not protected by default.
+    /// Creates a new `Write` record.
     pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
         Write {
             write_type,
             start_ts,
             short_value,
-            protected: false,
         }
     }
 
     pub fn new_rollback(start_ts: u64, protected: bool) -> Write {
+        let short_value = if protected {
+            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
+        } else {
+            None
+        };
+
         Write {
             write_type: WriteType::Rollback,
             start_ts,
-            short_value: None,
-            protected,
+            short_value,
         }
     }
 
@@ -109,9 +109,6 @@ impl Write {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);
             b.extend_from_slice(v);
-        }
-        if self.protected {
-            b.push(FLAG_PROTECTED);
         }
         b
     }
@@ -127,30 +124,30 @@ impl Write {
         }
 
         let flag = b.read_u8()?;
-        match flag {
-            SHORT_VALUE_PREFIX => {
-                let len = b.read_u8()?;
-                if len as usize != b.len() {
-                    panic!(
-                        "short value len [{}] not equal to content len [{}]",
-                        len,
-                        b.len()
-                    );
-                }
-                Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
-            }
-            FLAG_PROTECTED => {
-                if write_type != WriteType::Rollback {
-                    panic!("only rollback record can be protected");
-                }
-                Ok(Write::new_rollback(start_ts, true))
-            }
-            _ => panic!("invalid flag [{}] in write", flag),
+        assert_eq!(flag, SHORT_VALUE_PREFIX, "invalid flag [{}] in write", flag);
+
+        let len = b.read_u8()?;
+        if len as usize != b.len() {
+            panic!(
+                "short value len [{}] not equal to content len [{}]",
+                len,
+                b.len()
+            );
         }
+        Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
     }
 
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
         WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
+    }
+
+    pub fn is_protected(&self) -> bool {
+        self.write_type == WriteType::Rollback
+            && self
+                .short_value
+                .as_ref()
+                .map(|v| *v == PROTECTED_ROLLBACK_SHORT_VALUE)
+                .unwrap_or_default()
     }
 }
 
@@ -197,7 +194,7 @@ mod tests {
         let mut writes = vec![
             Write::new(WriteType::Put, 0, Some(b"short_value".to_vec())),
             Write::new(WriteType::Delete, 1 << 20, None),
-            Write::new_rollback(1 << 40, false),
+            Write::new_rollback(1 << 40, true),
             Write::new(WriteType::Rollback, 1 << 41, None),
         ];
         for (i, write) in writes.drain(..).enumerate() {
