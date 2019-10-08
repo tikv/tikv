@@ -617,7 +617,13 @@ impl RangeProperties {
                     idx - 1
                 }
             }
-            Err(next_idx) => next_idx - 1,
+            Err(next_idx) => {
+                if next_idx == 0 {
+                    return vec![];
+                } else {
+                    next_idx - 1
+                }
+            }
         };
 
         if start_offset > end_offset {
@@ -1091,16 +1097,17 @@ mod tests {
         assert_eq!(o.keys, 12 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
         let empty = RangeOffsets::default();
         let cases = [
-            (" ", "k", k, &empty),
-            (" ", " ", &empty, &empty),
-            ("k", "k", k, k),
-            ("a", "k", k, a),
-            ("a", "i", i, a),
-            ("e", "h", e, e),
-            ("b", "h", e, a),
-            ("g", "g", i, i),
+            (" ", "k", k, &empty, 3),
+            (" ", " ", &empty, &empty, 0),
+            ("k", "k", k, k, 0),
+            ("a", "k", k, a, 2),
+            ("a", "i", i, a, 1),
+            ("e", "h", e, e, 0),
+            ("b", "h", e, a, 1),
+            ("g", "g", i, i, 0),
         ];
-        for &(start, end, end_idx, start_idx) in &cases {
+        for &(start, end, end_idx, start_idx, count) in &cases {
+            let props = RangeProperties::decode(&result).unwrap();
             let size = end_idx.size - start_idx.size;
             assert_eq!(
                 props.get_approximate_size_in_range(start.as_bytes(), end.as_bytes()),
@@ -1111,9 +1118,13 @@ mod tests {
                 props.get_approximate_keys_in_range(start.as_bytes(), end.as_bytes()),
                 keys
             );
+            assert_eq!(
+                props
+                    .take_excluded_range(start.as_bytes(), end.as_bytes())
+                    .len(),
+                count
+            );
         }
-
-        assert!(props.take_excluded_range(b"c", b"c").is_empty());
     }
 
     #[test]
