@@ -26,7 +26,7 @@ fn tag_write_stall_condition(e: WriteStallCondition) -> &'static str {
     }
 }
 
-impl engine_rocksdb::EventListener for EventListener {
+impl rocksdb::EventListener for EventListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "flush"])

@@ -12,11 +12,11 @@ quick_error! {
             display("RocksDb {}", msg)
         }
         // FIXME: It should not know Region.
-        NotInRange( key: Vec<u8>, regoin_id: u64, start: Vec<u8>, end: Vec<u8>) {
+        NotInRange( key: Vec<u8>, region_id: u64, start: Vec<u8>, end: Vec<u8>) {
             description("Key is out of range")
             display(
                 "Key {} is out of [region {}] [{}, {})",
-                hex::encode_upper(&key), regoin_id, hex::encode_upper(&start), hex::encode_upper(&end)
+                hex::encode_upper(&key), region_id, hex::encode_upper(&start), hex::encode_upper(&end)
             )
         }
         Protobuf(err: protobuf::ProtobufError) {
