@@ -5,7 +5,6 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ## [3.0.4]
 
 + Fix the issue that the approximate keys is not correct when region is empty [#5414](https://github.com/tikv/tikv/pull/5414).
-+ Fix the unstable test `test_region_heartbeat_timestamp` [#5426](https://github.com/tikv/tikv/pull/5426).
 + Make the config support rocksdb doubly skiplist to optimize `reverse-scan` [#5368](https://github.com/tikv/tikv/pull/5368).
 + Optimize point-get in coprocessor [#5463](https://github.com/tikv/tikv/pull/5463).
 + Support batch-split command and empty batch command [#5470](https://github.com/tikv/tikv/pull/5470).
