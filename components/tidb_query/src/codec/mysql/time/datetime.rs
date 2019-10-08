@@ -1,3 +1,5 @@
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::convert::{TryFrom, TryInto};
 
 use crate::codec;
@@ -9,6 +11,7 @@ use crate::expr::{EvalContext, Flag, SqlMode};
 use tidb_query_datatype::FieldTypeTp;
 
 use bitfield::bitfield;
+use boolinator::Boolinator;
 use chrono::prelude::*;
 
 const MIN_TIMESTAMP: i64 = 0;
@@ -24,14 +27,6 @@ fn last_day_of_month(year: u32, month: u32) -> u32 {
         4 | 6 | 9 | 11 => 30,
         2 => is_leap_year(year) as u32 + 28,
         _ => 31,
-    }
-}
-
-fn assert(expected: bool) -> Result<()> {
-    if expected {
-        Ok(())
-    } else {
-        Err(Error::truncated())
     }
 }
 
@@ -159,36 +154,35 @@ impl Time {
 
 mod parser {
     use super::*;
-    fn bytes_to_u32(input: &[u8]) -> Result<u32> {
+    fn bytes_to_u32(input: &[u8]) -> Option<u32> {
         input.iter().try_fold(0u32, |acc, d| {
-            assert(d.is_ascii_digit())?;
+            d.is_ascii_digit().as_option()?;
             acc.checked_mul(10)
                 .and_then(|t| t.checked_add(u32::from(d - b'0')))
-                .ok_or_else(Error::truncated)
         })
     }
 
-    fn digit1(input: &[u8]) -> Result<(&[u8], &[u8])> {
+    fn digit1(input: &[u8]) -> Option<(&[u8], &[u8])> {
         let end = input
             .iter()
             .position(|&c| !c.is_ascii_digit())
             .unwrap_or_else(|| input.len());
-        assert(end != 0)?;
-        Ok((&input[end..], &input[..end]))
+        (end != 0).as_option()?;
+        Some((&input[end..], &input[..end]))
     }
 
-    fn space1(input: &[u8]) -> Result<&[u8]> {
+    fn space1(input: &[u8]) -> Option<&[u8]> {
         let end = input
             .iter()
             .position(|&c| !c.is_ascii_whitespace())
             .unwrap_or_else(|| input.len());
 
-        assert(end < input.len())?;
-        Ok(&input[end..])
+        (end < input.len()).as_option()?;
+        Some(&input[end..])
     }
 
     /// We assume that the `input` is trimmed and is not empty.
-    fn split_components(input: &str) -> Result<Vec<&[u8]>> {
+    fn split_components(input: &str) -> Option<Vec<&[u8]>> {
         let mut buffer = input.as_bytes();
 
         debug_assert!(
@@ -197,7 +191,7 @@ mod parser {
                 && !buffer.last().unwrap().is_ascii_whitespace()
         );
 
-        let mut components = vec![];
+        let mut components = Vec::with_capacity(7);
 
         while !buffer.is_empty() {
             let (mut rest, digits): (&[u8], &[u8]) = digit1(buffer)?;
@@ -207,31 +201,30 @@ mod parser {
             if !rest.is_empty() {
                 // If a whitespace is acquired, we expect we have already collected ymd.
                 if rest[0].is_ascii_whitespace() {
-                    assert(components.len() == 3)?;
+                    (components.len() == 3).as_option()?;
                     rest = space1(rest)?;
                 }
                 // If a 'T' is acquired, we expect we have already collected ymd.
                 else if rest[0] == b'T' {
-                    assert(components.len() == 3)?;
+                    (components.len() == 3).as_option()?;
                     rest = &rest[1..];
                 }
                 // If a punctuation is acquired, move forward the pointer.
                 else if rest[0].is_ascii_punctuation() {
                     rest = &rest[1..];
                 } else {
-                    return Err(Error::truncated());
+                    return None;
                 }
             }
 
             buffer = rest;
         }
 
-        assert(
-            (components.len() != 7 && components.len() != 2)
-                || input.as_bytes()[input.len() - components.last().unwrap().len() - 1] == b'.',
-        )?;
+        ((components.len() != 7 && components.len() != 2)
+            || input.as_bytes()[input.len() - components.last().unwrap().len() - 1] == b'.')
+            .as_option()?;
 
-        Ok(components)
+        Some(components)
     }
 
     fn adjust_year(year: u32) -> u32 {
@@ -245,13 +238,13 @@ mod parser {
     }
 
     /// return an array that stores `[year, month, day, hour, minute, second]`
-    fn parse_whole(input: &[u8]) -> Result<[u32; 6]> {
+    fn parse_whole(input: &[u8]) -> Option<[u32; 6]> {
         let mut parts = [0u32; 6];
 
         let year_digits = match input.len() {
             14 | 8 => 4,
             9..=12 | 5..=7 => 2,
-            _ => return Err(Error::truncated()),
+            _ => return None,
         };
 
         parts[0] = bytes_to_u32(&input[..year_digits])?;
@@ -264,7 +257,7 @@ mod parser {
             parts[i + 1] = bytes_to_u32(chunk)?;
         }
 
-        Ok(parts)
+        Some(parts)
     }
 
     fn concat_components(components: Vec<&[u32]>) -> Vec<u32> {
@@ -275,7 +268,7 @@ mod parser {
             .collect::<Vec<_>>()
     }
 
-    fn parse_frac(input: &[u8], fsp: u8, round: bool) -> Result<(bool, u32)> {
+    fn parse_frac(input: &[u8], fsp: u8, round: bool) -> Option<(bool, u32)> {
         let fsp = usize::from(fsp);
         let len = input.len();
 
@@ -287,15 +280,15 @@ mod parser {
 
         let frac = bytes_to_u32(input)? * TEN_POW[MICRO_WIDTH.checked_sub(len).unwrap_or(0)];
 
-        Ok(if round {
+        Some(if round {
             round_frac(frac, fsp as u8)
         } else {
             (false, frac)
         })
     }
 
-    fn round_components(parts: &mut [u32]) -> Result<()> {
-        assert(parts.len() == 7)?;
+    fn round_components(parts: &mut [u32]) -> Option<()> {
+        (parts.len() == 7).as_option()?;
         let modulus = [
             0,
             12,
@@ -312,7 +305,7 @@ mod parser {
                 parts[i - 1] += 1;
             }
         }
-        Ok(())
+        Some(())
     }
 
     pub fn parse(
@@ -321,9 +314,9 @@ mod parser {
         time_type: TimeType,
         fsp: u8,
         round: bool,
-    ) -> Result<Time> {
+    ) -> Option<Time> {
         let trimmed = input.trim();
-        assert(!trimmed.is_empty())?;
+        (!trimmed.is_empty()).as_option()?;
 
         let components = split_components(trimmed)?;
         match components.len() {
@@ -334,7 +327,7 @@ mod parser {
                     // If we have a fractional part,
                     // we expect the `whole` is in format: `yymmddhhmmss/yyyymmddhhmmss`.
                     // Otherwise, the fractional part is meaningless.
-                    assert(components[0].len() == 12 || components[0].len() == 14)?;
+                    (components[0].len() == 12 || components[0].len() == 14).as_option()?;
                     parse_frac(frac, fsp, round)?
                 } else {
                     (false, 0)
@@ -342,7 +335,7 @@ mod parser {
 
                 let mut parts = concat_components(vec![&whole, &[frac]]);
                 if carry {
-                    assert(round_components(&mut parts).is_ok())?;
+                    round_components(&mut parts)?;
                 }
 
                 Time::from_slice(ctx, &parts, time_type, fsp)
@@ -352,9 +345,9 @@ mod parser {
                 let mut parts: Vec<_> =
                     components[..whole]
                         .iter()
-                        .try_fold(vec![], |mut acc, part| -> Result<_> {
+                        .try_fold(vec![], |mut acc, part| -> Option<_> {
                             acc.push(bytes_to_u32(part)?);
-                            Ok(acc)
+                            Some(acc)
                         })?;
                 parts.resize(6, 0);
 
@@ -366,11 +359,11 @@ mod parser {
                 parts.push(frac);
 
                 if carry {
-                    assert(round_components(&mut parts).is_ok())?;
+                    round_components(&mut parts)?;
                 }
                 Time::from_slice(ctx, &parts, time_type, fsp)
             }
-            _ => Err(Error::truncated()),
+            _ => None,
         }
     }
 }
@@ -384,7 +377,7 @@ impl Time {
         round: bool,
     ) -> Result<Time> {
         parser::parse(ctx, input, time_type, check_fsp(fsp)?, round)
-            .map_err(|_| Error::incorrect_datetime_value(input))
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 }
 
@@ -402,9 +395,9 @@ macro_rules! handle_zero_date {
         let datetime: TimeArgs = $datetime;
         debug_assert!(datetime.is_zero_date());
         if no_zero_date {
-            assert(!strict_mode || ignore_truncate)?;
+            (!strict_mode || ignore_truncate).as_option()?;
             ctx.warnings.append_warning(Error::truncated());
-            return Ok(datetime);
+            return Some(datetime);
         }
         datetime
     }};
@@ -426,10 +419,10 @@ macro_rules! handle_zero_in_date {
         if no_zero_in_date {
             // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
             // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
-            assert(!strict_mode || ignore_truncate)?;
+            (!strict_mode || ignore_truncate).as_option()?;
             ctx.warnings.append_warning(Error::truncated());
             datetime.clear();
-            return Ok(handle_zero_date!(datetime, ctx));
+            return Some(handle_zero_date!(datetime, ctx));
         }
         datetime
     }};
@@ -443,9 +436,9 @@ macro_rules! handle_invalid_date {
         let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
 
         let mut datetime: TimeArgs = $datetime;
-        assert(allow_invalid_date)?;
+        allow_invalid_date.as_option()?;
         datetime.clear();
-        return Ok(handle_zero_date!(datetime, ctx));
+        return Some(handle_zero_date!(datetime, ctx));
     }};
 }
 
@@ -455,7 +448,7 @@ macro_rules! handle_invalid_date {
 /// For example, the size of `month` field is 5 bits. If we get a value 16 for
 /// `month` and set it, we will got 0 (16 % 16 == 0) instead 16 which is definitely
 /// an invalid value. So we need a larger range for validation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TimeArgs {
     year: u32,
     month: u32,
@@ -469,8 +462,8 @@ pub struct TimeArgs {
 }
 
 impl TimeArgs {
-    fn check(self, ctx: &mut EvalContext) -> Result<TimeArgs> {
-        check_fsp(self.fsp)?;
+    fn check(self, ctx: &mut EvalContext) -> Option<TimeArgs> {
+        check_fsp(self.fsp).ok()?;
         match self.time_type {
             TimeType::Date => self.check_date(ctx),
             TimeType::DateTime => self.check_datetime(ctx),
@@ -502,11 +495,21 @@ impl TimeArgs {
         self.micro = 0;
     }
 
+    pub fn is_zero(&self) -> bool {
+        self.year == 0
+            && self.month == 0
+            && self.day == 0
+            && self.hour == 0
+            && self.minute == 0
+            && self.second == 0
+            && self.micro == 0
+    }
+
     pub fn is_zero_date(&self) -> bool {
         self.year == 0 && self.month == 0 && self.day == 0
     }
 
-    fn check_date(mut self, ctx: &mut EvalContext) -> Result<Self> {
+    fn check_date(mut self, ctx: &mut EvalContext) -> Option<Self> {
         let Self {
             year, month, day, ..
         } = self;
@@ -521,20 +524,14 @@ impl TimeArgs {
             self = handle_zero_in_date!(self, ctx);
         }
 
-        if year > 9999 {
+        if year > 9999 || Time::check_month_and_day(year, month, day, is_relaxed).is_err() {
             handle_invalid_date!(self, ctx);
         }
 
-        let result = Time::check_month_and_day(year, month, day, is_relaxed);
-
-        if result.is_err() {
-            handle_invalid_date!(self, ctx);
-        }
-
-        Ok(self)
+        Some(self)
     }
 
-    fn check_datetime(self, ctx: &mut EvalContext) -> Result<Self> {
+    fn check_datetime(self, ctx: &mut EvalContext) -> Option<Self> {
         let datetime = self.check_date(ctx)?;
 
         let Self {
@@ -549,12 +546,12 @@ impl TimeArgs {
             handle_invalid_date!(datetime, ctx);
         }
 
-        Ok(datetime)
+        Some(datetime)
     }
 
-    fn check_timestamp(self, ctx: &mut EvalContext) -> Result<Self> {
-        if self.is_zero_date() {
-            return Ok(handle_zero_date!(self, ctx));
+    fn check_timestamp(self, ctx: &mut EvalContext) -> Option<Self> {
+        if self.is_zero() {
+            return Some(handle_zero_date!(self, ctx));
         }
 
         let datetime = chrono_datetime(
@@ -579,7 +576,7 @@ impl TimeArgs {
             handle_invalid_date!(self, ctx);
         }
 
-        Ok(self)
+        Some(self)
     }
 }
 
@@ -590,9 +587,8 @@ impl Time {
         parts: &[u32],
         time_type: TimeType,
         fsp: u8,
-    ) -> Result<Self> {
-        let [year, month, day, hour, minute, second, micro]: [u32; 7] =
-            parts.try_into().map_err(|_| Error::truncated())?;
+    ) -> Option<Self> {
+        let [year, month, day, hour, minute, second, micro]: [u32; 7] = parts.try_into().ok()?;
 
         Time::new(
             ctx,
@@ -608,6 +604,7 @@ impl Time {
                 time_type,
             },
         )
+        .ok()
     }
 
     pub fn try_from_chrono_datetime<T: Datelike + Timelike>(
@@ -678,7 +675,11 @@ impl Time {
             config.micro = 0;
             config.fsp = 0;
         }
-        Ok(Self::unchecked_new(config.check(ctx)?))
+
+        let unchecked_time = Self::unchecked_new(config.clone());
+        Ok(Self::unchecked_new(config.check(ctx).ok_or_else(|| {
+            Error::incorrect_datetime_value(unchecked_time)
+        })?))
     }
 
     fn check_month_and_day(
