@@ -37,5 +37,6 @@ git = "https://github.com/Connor1996/rust-rocksdb.git"
 package = "rocksdb"
 branch = "flush-hotfix"
 
+
 [dev-dependencies]
 tempdir = "0.3"
