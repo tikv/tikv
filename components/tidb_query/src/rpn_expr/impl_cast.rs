@@ -239,8 +239,6 @@ fn cast_string_as_int_or_uint(
             // TODO: in TiDB, if `b.args[0].GetType().Hybrid()` || `IsBinaryLiteral(b.args[0])`,
             //  then it will return res from EvalInt() directly.
             let is_unsigned = extra.ret_field_type.is_unsigned();
-            // FIXME: if the err get_valid_utf8_prefix returned is overflow err,
-            //  it should be ERR_TRUNCATE_WRONG_VALUE but not others.
             let val = get_valid_utf8_prefix(ctx, val.as_slice())?;
             let val = val.trim();
             let is_str_neg = val.starts_with('-');
