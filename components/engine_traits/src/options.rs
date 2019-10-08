@@ -31,6 +31,10 @@ impl WriteOptions {
     pub fn set_sync(&mut self, sync: bool) {
         self.sync = sync;
     }
+
+    pub fn sync(&self) -> bool {
+        self.sync
+    }
 }
 
 impl Default for WriteOptions {
@@ -56,8 +60,8 @@ impl Default for CFOptions {
 
 #[derive(Clone)]
 pub struct IterOptions {
-    lower_bound: Option<KeyBuilder>,
-    upper_bound: Option<KeyBuilder>,
+    pub lower_bound: Option<KeyBuilder>,
+    pub upper_bound: Option<KeyBuilder>,
     prefix_same_as_start: bool,
     fill_cache: bool,
     key_only: bool,
@@ -93,8 +97,16 @@ impl IterOptions {
         self.fill_cache = v;
     }
 
+    pub fn fill_cache(&self) -> bool {
+        self.fill_cache
+    }
+
     pub fn set_key_only(&mut self, v: bool) {
         self.key_only = v;
+    }
+
+    pub fn key_only(&self) -> bool {
+        self.key_only
     }
 
     pub fn lower_bound(&self) -> Option<&[u8]> {
@@ -138,6 +150,10 @@ impl IterOptions {
     pub fn set_prefix_same_as_start(&mut self, enable: bool) {
         self.prefix_same_as_start = enable;
     }
+
+    pub fn prefix_same_as_start(&self) -> bool {
+        self.prefix_same_as_start
+    }
 }
 
 impl Default for IterOptions {
@@ -151,11 +167,4 @@ impl Default for IterOptions {
             seek_mode: SeekMode::TotalOrder,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-pub enum DeleteRangeType {
-    WriteBatch,
-    DeleteFiles,
-    DeleteRange,
 }

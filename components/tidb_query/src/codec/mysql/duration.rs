@@ -610,7 +610,7 @@ impl Duration {
 
     fn format(self, sep: &str) -> String {
         use std::fmt::Write;
-        let res_max_len = 1 + 6 + 2 * sep.len() + 1 + MAX_FSP as usize;
+        let res_max_len = 8 + 2 * sep.len() + MAX_FSP as usize;
         let mut string = String::with_capacity(res_max_len);
         if self.get_neg() {
             string.push('-');
@@ -1249,7 +1249,7 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, fix these test case after Duration::from_f64
+            // TODO: fix these test case after Duration::from_f64
             //  had impl logic for num>=10000000000
             (
                 10000000000,
