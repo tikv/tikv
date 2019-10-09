@@ -1266,7 +1266,7 @@ mod tests {
             false,
         )?;
 
-        assert!(ctx.warnings.warning_cnt == 1);
+        assert!(ctx.warnings.warning_cnt > 0);
 
         // Enable both NO_ZERO_DATE and STRICT_MODE.
         // If zero-date is encountered, an error is returned.
@@ -1306,7 +1306,7 @@ mod tests {
             .to_string()
         );
 
-        assert!(ctx.warnings.warning_cnt == 1);
+        assert!(ctx.warnings.warning_cnt > 0);
 
         let cases = vec![
             "2019-12-31 24:23:22",
@@ -1341,7 +1341,7 @@ mod tests {
 
             let _ = Time::parse(&mut ctx, case, TimeType::DateTime, 0, false)?;
 
-            assert!(ctx.warnings.warning_cnt == 1);
+            assert!(ctx.warnings.warning_cnt > 0);
         }
 
         // Enable NO_ZERO_IN_DATE, STRICT_MODE and IGNORE_TRUNCATE.

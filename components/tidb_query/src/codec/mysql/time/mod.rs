@@ -895,7 +895,7 @@ impl<T: BufferWriter> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
-    fn encode_time(&mut self, v: &Time) -> Result<()> {
+    fn write_time(&mut self, v: &Time) -> Result<()> {
         if !v.is_zero() {
             self.write_u32_le(v.time.hour() as u32)?;
             self.write_u32_le(v.time.nanosecond() / 1000)?;
@@ -921,8 +921,8 @@ pub trait TimeEncoder: NumberEncoder {
 }
 
 pub trait TimeDecoder: NumberDecoder {
-    /// Decodes time encoded by `encode_time` for Chunk format.
-    fn decode_time(&mut self) -> Result<Time> {
+    /// Decodes time encoded by `write_time` for Chunk format.
+    fn read_time(&mut self) -> Result<Time> {
         let hour = self.read_u32_le()?;
         let nanoseconds = 1000 * self.read_u32_le()?;
         let year = i32::from(self.read_u16_le()?);
@@ -1681,8 +1681,8 @@ mod tests {
         for (s, fsp) in cases {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
             let mut buf = vec![];
-            buf.encode_time(&t).unwrap();
-            let got = buf.as_slice().decode_time().unwrap();
+            buf.write_time(&t).unwrap();
+            let got = buf.as_slice().read_time().unwrap();
             assert_eq!(got, t);
         }
     }
