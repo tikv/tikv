@@ -278,14 +278,14 @@ fn cast_string_as_int_or_uint(
                 } else {
                     valid_int_prefix.parse::<i64>()
                 };
-                // In TiDB, they only handle overflow using ctx when `sc.InSelectStmt` is true,
-                // However, according to https://github.com/pingcap/tidb/blob/e173c7f5c1041b3c7e67507889d50a7bdbcdfc01/executor/executor.go#L153,
-                // when InSelectStmt, OverflowAsWarning is always true,
-                // and when not InSelectStmt, OverflowAsWarning is always not true.
-                // So we needn't to check `sc.InSelectStmt` and can handle it using ctx directly.
+                // The `OverflowAsWarning` is true just if in `SELECT` statement context, e.g:
+                // 1. SELECT * FROM t  => OverflowAsWarning = true
+                // 2. INSERT INTO t VALUE (...) => OverflowAsWarning = false
+                // 3. INSERT INTO t SELECT * FROM t2 => OverflowAsWarning = false
+                // (according to https://github.com/pingcap/tidb/blob/e173c7f5c1041b3c7e67507889d50a7bdbcdfc01/executor/executor.go#L1452)
                 //
-                // Be careful that, if this flag(OverflowAsWarning)'s setting had changed,
-                // then here's behavior will change, so it may make some bug different to find.
+                // NOTE: if this flag(OverflowAsWarning)'s setting had changed,
+                // then here's behavior should be changed to keep consistent with TiDB.
                 match parse_res {
                     Ok(x) => {
                         if !is_str_neg {
