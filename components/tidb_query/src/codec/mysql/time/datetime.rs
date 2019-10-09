@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 
 use crate::codec;
@@ -41,13 +42,12 @@ fn chrono_datetime<T: TimeZone>(
     second: u32,
     micro: u32,
 ) -> Result<DateTime<T>> {
-    use chrono::Duration;
     // NOTE: We are not using `tz::from_ymd_opt` as suggested in chrono's README due to
     // chronotope/chrono-tz #23.
     // As a workaround, we first build a NaiveDate, then attach time zone information to it.
     NaiveDate::from_ymd_opt(year as i32, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
-        .and_then(|t| t.checked_add_signed(Duration::microseconds(i64::from(micro))))
+        .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
         .and_then(|datetime| time_zone.from_local_datetime(&datetime).earliest())
         .ok_or_else(|| Error::truncated())
 }
@@ -381,65 +381,54 @@ impl Time {
     }
 }
 
-macro_rules! handle_zero_date {
-    ($datetime:expr, $ctx:expr) => {{
-        let ctx: &mut EvalContext = $ctx;
-        let sql_mode = ctx.cfg.sql_mode;
-        let flags = ctx.cfg.flag;
+fn handle_zero_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
+    let sql_mode = ctx.cfg.sql_mode;
+    let flags = ctx.cfg.flag;
+    let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
+        | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
+    let no_zero_date = sql_mode.contains(SqlMode::NO_ZERO_DATE);
+    let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
 
-        let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
-            | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
-        let no_zero_date = sql_mode.contains(SqlMode::NO_ZERO_DATE);
-        let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
+    debug_assert!(args.is_zero());
 
-        let datetime: TimeArgs = $datetime;
-        debug_assert!(datetime.is_zero_date());
-        if no_zero_date {
-            (!strict_mode || ignore_truncate).as_option()?;
-            ctx.warnings.append_warning(Error::truncated());
-            return Some(datetime);
-        }
-        datetime
-    }};
+    if no_zero_date {
+        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+        ctx.warnings.append_warning(Error::truncated());
+        args.clear();
+        return Ok(None);
+    }
+    Ok(Some(args))
 }
 
-macro_rules! handle_zero_in_date {
-    ($datetime:expr, $ctx:expr) => {{
-        let ctx: &mut EvalContext = $ctx;
-        let sql_mode = ctx.cfg.sql_mode;
-        let flags = ctx.cfg.flag;
+fn handle_zero_in_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
+    let sql_mode = ctx.cfg.sql_mode;
+    let flags = ctx.cfg.flag;
 
-        let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
-            | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
-        let no_zero_in_date = sql_mode.contains(SqlMode::NO_ZERO_IN_DATE);
-        let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
+    let strict_mode = sql_mode.contains(SqlMode::STRICT_ALL_TABLES)
+        | sql_mode.contains(SqlMode::STRICT_TRANS_TABLES);
+    let no_zero_in_date = sql_mode.contains(SqlMode::NO_ZERO_IN_DATE);
+    let ignore_truncate = flags.contains(Flag::IGNORE_TRUNCATE);
 
-        let mut datetime: TimeArgs = $datetime;
-        debug_assert!(datetime.month == 0 || datetime.day == 0);
-        if no_zero_in_date {
-            // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
-            // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
-            (!strict_mode || ignore_truncate).as_option()?;
-            ctx.warnings.append_warning(Error::truncated());
-            datetime.clear();
-            return Some(handle_zero_date!(datetime, ctx));
-        }
-        datetime
-    }};
+    debug_assert!(args.month == 0 || args.day == 0);
+
+    if no_zero_in_date {
+        // If we are in NO_ZERO_IN_DATE + STRICT_MODE, zero-in-date produces and error.
+        // Otherwise, we reset the datetime value and check if we enabled NO_ZERO_DATE.
+        (!strict_mode || ignore_truncate).ok_or(Error::truncated())?;
+        ctx.warnings.append_warning(Error::truncated());
+        args.clear();
+        return handle_zero_date(ctx, args);
+    }
+
+    Ok(Some(args))
 }
 
-macro_rules! handle_invalid_date {
-    ($datetime:expr, $ctx:expr) => {{
-        let ctx: &mut EvalContext = $ctx;
-        let sql_mode = ctx.cfg.sql_mode;
-
-        let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
-
-        let mut datetime: TimeArgs = $datetime;
-        allow_invalid_date.as_option()?;
-        datetime.clear();
-        return Some(handle_zero_date!(datetime, ctx));
-    }};
+fn handle_invalid_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Option<TimeArgs>> {
+    let sql_mode = ctx.cfg.sql_mode;
+    let allow_invalid_date = sql_mode.contains(SqlMode::INVALID_DATES);
+    allow_invalid_date.ok_or(Error::truncated())?;
+    args.clear();
+    handle_zero_date(ctx, args)
 }
 
 /// A validator that verify each field for the `Time`
@@ -464,11 +453,14 @@ pub struct TimeArgs {
 impl TimeArgs {
     fn check(self, ctx: &mut EvalContext) -> Option<TimeArgs> {
         check_fsp(self.fsp).ok()?;
+        let (fsp, time_type) = (self.fsp, self.time_type);
         match self.time_type {
             TimeType::Date => self.check_date(ctx),
             TimeType::DateTime => self.check_datetime(ctx),
             TimeType::TimeStamp => self.check_timestamp(ctx),
         }
+        .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
+        .ok()
     }
 
     pub fn zero(fsp: i8, time_type: TimeType) -> TimeArgs {
@@ -505,34 +497,30 @@ impl TimeArgs {
             && self.micro == 0
     }
 
-    pub fn is_zero_date(&self) -> bool {
-        self.year == 0 && self.month == 0 && self.day == 0
-    }
-
-    fn check_date(mut self, ctx: &mut EvalContext) -> Option<Self> {
+    fn check_date(mut self, ctx: &mut EvalContext) -> Result<Option<Self>> {
         let Self {
             year, month, day, ..
         } = self;
 
         let is_relaxed = ctx.cfg.sql_mode.contains(SqlMode::INVALID_DATES);
 
-        if self.is_zero_date() {
-            self = handle_zero_date!(self, ctx);
+        if self.is_zero() {
+            self = try_opt!(handle_zero_date(ctx, self));
         }
 
         if month == 0 || day == 0 {
-            self = handle_zero_in_date!(self, ctx);
+            self = try_opt!(handle_zero_in_date(ctx, self));
         }
 
         if year > 9999 || Time::check_month_and_day(year, month, day, is_relaxed).is_err() {
-            handle_invalid_date!(self, ctx);
+            return handle_invalid_date(ctx, self);
         }
 
-        Some(self)
+        Ok(Some(self))
     }
 
-    fn check_datetime(self, ctx: &mut EvalContext) -> Option<Self> {
-        let datetime = self.check_date(ctx)?;
+    fn check_datetime(self, ctx: &mut EvalContext) -> Result<Option<Self>> {
+        let datetime = try_opt!(self.check_date(ctx));
 
         let Self {
             hour,
@@ -543,15 +531,15 @@ impl TimeArgs {
         } = datetime;
 
         if hour > 23 || minute > 59 || second > 59 || micro > 999999 {
-            handle_invalid_date!(datetime, ctx);
+            return handle_invalid_date(ctx, datetime);
         }
 
-        Some(datetime)
+        Ok(Some(datetime))
     }
 
-    fn check_timestamp(self, ctx: &mut EvalContext) -> Option<Self> {
+    fn check_timestamp(self, ctx: &mut EvalContext) -> Result<Option<Self>> {
         if self.is_zero() {
-            return Some(handle_zero_date!(self, ctx));
+            return handle_zero_date(ctx, self);
         }
 
         let datetime = chrono_datetime(
@@ -566,17 +554,17 @@ impl TimeArgs {
         );
 
         if datetime.is_err() {
-            handle_invalid_date!(self, ctx);
+            return handle_invalid_date(ctx, self);
         }
 
         let ts = datetime.unwrap().timestamp();
 
         // Out of range
         if ts < MIN_TIMESTAMP || ts > MAX_TIMESTAMP {
-            handle_invalid_date!(self, ctx);
+            return handle_invalid_date(ctx, self);
         }
 
-        Some(self)
+        Ok(Some(self))
     }
 }
 
@@ -757,7 +745,6 @@ impl Time {
         self.set_fsp_tt(mask);
     }
 
-    // TODO: Add some tests for it.
     pub fn from_packed_u64(
         ctx: &mut EvalContext,
         value: u64,
@@ -836,6 +823,24 @@ impl PartialEq for Time {
         a.set_fsp_tt(0);
         b.set_fsp_tt(0);
         a.0 == b.0
+    }
+}
+
+impl Eq for Time {}
+
+impl PartialOrd for Time {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Time {
+    fn cmp(&self, right: &Self) -> Ordering {
+        let mut a = *self;
+        let mut b = *right;
+        a.set_fsp_tt(0);
+        b.set_fsp_tt(0);
+        a.0.cmp(&b.0)
     }
 }
 
@@ -1444,6 +1449,28 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_compare() -> Result<()> {
+        let cases = vec![
+            (
+                "2019-03-17 12:13:14.11",
+                "2019-03-17 12:13:14.11",
+                Ordering::Equal,
+            ),
+            ("2019-4-1 1:2:3", "2019-3-31 23:59:59", Ordering::Greater),
+            ("2019-09-16 1:2:3", "2019-10-01 1:2:1", Ordering::Less),
+            ("0000-00-00", "0000-00-00", Ordering::Equal),
+        ];
+
+        for (left, right, expected) in cases {
+            let mut ctx = EvalContext::default();
+            let left = Time::parse(&mut ctx, left, TimeType::DateTime, MAX_FSP, false)?;
+            let right = Time::parse(&mut ctx, right, TimeType::DateTime, MAX_FSP, false)?;
+            assert_eq!(expected, left.cmp(&right));
+        }
         Ok(())
     }
 }
