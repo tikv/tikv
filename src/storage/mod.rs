@@ -146,6 +146,15 @@ impl ReadpoolCommand {
         }
     }
 
+    pub fn from_key_ts(request_id: u64, key: Key, ts: Option<u64>) -> Self {
+        ReadpoolCommand {
+            req: request_id,
+            ctx: Context::default(),
+            key,
+            ts,
+        }
+    }
+
     pub fn request(&self) -> u64 {
         self.req
     }
@@ -2405,6 +2414,26 @@ mod tests {
                 )
                 .wait(),
         );
+        storage
+            .batch_async_get(
+                vec![
+                    ReadpoolCommand::from_key_ts(1, Key::from_raw(b"c"), Some(1)),
+                    ReadpoolCommand::from_key_ts(2, Key::from_raw(b"d"), Some(1)),
+                ],
+                Box::new(move |_, x| {
+                    expect_error(
+                        |e| match e {
+                            Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(
+                                EngineError::Request(..),
+                            ))) => (),
+                            e => panic!("unexpected error chain: {:?}", e),
+                        },
+                        x,
+                    );
+                }),
+            )
+            .wait()
+            .unwrap();
     }
 
     #[test]
@@ -2694,6 +2723,79 @@ mod tests {
                 )
                 .wait(),
         );
+    }
+
+    #[test]
+    fn test_batch_async_get() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                ],
+                b"a".to_vec(),
+                1,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .batch_async_get(
+                vec![
+                    ReadpoolCommand::from_key_ts(1, Key::from_raw(b"c"), Some(2)),
+                    ReadpoolCommand::from_key_ts(2, Key::from_raw(b"d"), Some(2)),
+                ],
+                Box::new(|r, x| match r {
+                    1 => expect_error(
+                        |e| match e {
+                            Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(..))) => (),
+                            e => panic!("unexpected error chain: {:?}", e),
+                        },
+                        x,
+                    ),
+                    2 => assert_eq!(x.unwrap(), None),
+                    _ => panic!("unexpected request id"),
+                }),
+            )
+            .wait()
+            .unwrap();
+        storage
+            .async_commit(
+                Context::default(),
+                vec![
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"b"),
+                    Key::from_raw(b"c"),
+                ],
+                1,
+                2,
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .batch_async_get(
+                vec![
+                    ReadpoolCommand::from_key_ts(1, Key::from_raw(b"c"), Some(5)),
+                    ReadpoolCommand::from_key_ts(2, Key::from_raw(b"x"), Some(5)),
+                    ReadpoolCommand::from_key_ts(3, Key::from_raw(b"a"), Some(5)),
+                    ReadpoolCommand::from_key_ts(4, Key::from_raw(b"b"), Some(5)),
+                ],
+                Box::new(move |r, x| match r {
+                    1 => assert_eq!(x.unwrap(), Some(b"cc".to_vec())),
+                    2 => assert_eq!(x.unwrap(), None),
+                    3 => assert_eq!(x.unwrap(), Some(b"aa".to_vec())),
+                    4 => assert_eq!(x.unwrap(), Some(b"bb".to_vec())),
+                    _ => panic!("unexpected request id"),
+                }),
+            )
+            .wait()
+            .unwrap();
     }
 
     #[test]
@@ -3276,6 +3378,59 @@ mod tests {
                 .async_raw_batch_get(Context::default(), "".to_string(), keys)
                 .wait(),
         );
+    }
+
+    #[test]
+    fn test_batch_raw_get() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+        ];
+
+        // Write key-value pairs one by one
+        for &(ref key, ref value) in &test_data {
+            storage
+                .async_raw_put(
+                    Context::default(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+        rx.recv().unwrap();
+
+        // Verify pairs in a batch
+        let cmds = test_data
+            .iter()
+            .enumerate()
+            .map(|(i, &(ref k, _))| {
+                ReadpoolCommand::from_key_ts(i as u64, Key::from_encoded(k.clone()), Some(0))
+            })
+            .collect();
+        let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
+        storage
+            .batch_async_raw_get(
+                "".to_string(),
+                cmds,
+                Box::new(move |r, x| {
+                    let r = r as usize;
+                    if r >= results.len() {
+                        panic!("request id out of bound");
+                    } else {
+                        assert_eq!(x.unwrap(), results[r]);
+                    }
+                }),
+            )
+            .wait()
+            .unwrap();
     }
 
     #[test]
