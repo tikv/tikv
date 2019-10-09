@@ -165,7 +165,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(300));
 
     let target = pd_client.get_region(&last_key).unwrap();
 
@@ -178,7 +178,11 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         &mut range,
     );
 
-    thread::sleep(Duration::from_secs(1));
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    if left == right {
+        cluster.wait_region_split(&region);
+    }
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
@@ -879,7 +883,8 @@ fn test_server_split_region_restart() {
 }
 
 fn test_split_region_restart<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::secs(5);
+    // make sure split check is not triggered temporarily
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::secs(50);
     cluster.cfg.coprocessor.region_max_size = ReadableSize(REGION_MAX_SIZE);
     cluster.cfg.coprocessor.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
 
@@ -900,6 +905,11 @@ fn test_split_region_restart<T: Simulator>(cluster: &mut Cluster<T>) {
         REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
         &mut range,
     );
+
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    assert_eq!(left, right);
+
     cluster.shutdown();
 
     // let update approximate size and keys in pd_worker first, then in split_checker
@@ -909,9 +919,9 @@ fn test_split_region_restart<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
-    assert_eq!(left, right);
-
-    thread::sleep(Duration::from_millis(800));
+    if left == right {
+        cluster.wait_region_split(&left);
+    }
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
