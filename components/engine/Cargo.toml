@@ -34,6 +34,7 @@ features = ["nightly", "push", "process"]
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
+branch = "dump-err-detail"
 package = "rocksdb"
 
 [dev-dependencies]
