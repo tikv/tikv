@@ -2805,7 +2805,7 @@ mod tests {
             (Json::Double(10.4), "10.4".to_string()),
             (Json::Double(-10.4), "-10.4".to_string()),
             (Json::Double(-10.5), "-10.5".to_string()),
-            (Json::String(String::from("10.0")), "\"10.0\"".to_string()),
+            (Json::String(String::from("10.0")), r#""10.0""#.to_string()),
             (Json::Boolean(true), "true".to_string()),
             (Json::Boolean(false), "false".to_string()),
             (Json::None, "null".to_string()),
