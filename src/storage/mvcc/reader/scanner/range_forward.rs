@@ -7,7 +7,6 @@ use tikv_util::buffer_vec::BufferVec;
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::reader::util::CheckLockResult;
 use crate::storage::mvcc::write2::Write2;
 use crate::storage::mvcc::{Lock, WriteType};
 use crate::storage::{Cursor, RangeScanner, Snapshot, Statistics};
@@ -106,18 +105,11 @@ impl<S: Snapshot> RangeForwardScanner<S> {
                 Lock::parse(lock_value)?
             };
             // TODO: Avoid allocation
-            match super::super::util::check_lock(
+            super::super::util::check_lock(
                 &Key::from_encoded_slice(self.lock_cursor.key(&mut self.statistics.lock)),
                 self.cfg.ts,
                 &lock,
-            )? {
-                CheckLockResult::NotLocked => {}
-                CheckLockResult::Locked(e) => return Err(e.into()),
-                // We don't support scanning latest version (specified by using MAX_U64 as the
-                // timestamp) in the scanner.
-                // TODO: Better to check ts beforehand.
-                CheckLockResult::Ignored(_) => return Err(format_err!("Invalid timestamp")),
-            }
+            )?;
 
             if !self.lock_cursor.next(&mut self.statistics.lock) {
                 return Ok(());
@@ -402,8 +394,7 @@ mod tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::Scanner;
-    use crate::storage::{Engine, Key, TestEngineBuilder};
+    use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 

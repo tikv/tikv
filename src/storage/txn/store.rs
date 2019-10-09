@@ -6,7 +6,7 @@ use tikv_util::buffer_vec::BufferVec;
 use crate::storage::metrics::*;
 use crate::storage::mvcc::PointGetterBuilder;
 use crate::storage::mvcc::{EntryScanner, RangeForwardScanner};
-use crate::storage::mvcc::{Error as MvccError, MvccReader};
+use crate::storage::mvcc::Error as MvccError;
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
