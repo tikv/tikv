@@ -331,8 +331,8 @@ impl<E: Engine, L: LockMgr> MiniBatcher<E, L> {
                 | batch_commands_request::request::Cmd::RawGet(_) => self.inners.get_mut("get"),
                 _ => None,
             };
-            if let Some(inner) = inner {
-                inner.1.filter(request_id, cmd)
+            if let Some((_, batcher)) = inner {
+                batcher.filter(request_id, cmd)
             } else {
                 false
             }
@@ -342,26 +342,26 @@ impl<E: Engine, L: LockMgr> MiniBatcher<E, L> {
     }
 
     pub fn maybe_submit(&mut self, storage: &Storage<E, L>) {
-        for inner in self.inners.values_mut() {
-            if inner.0.disabled() && !inner.1.is_empty() {
-                inner.1.submit(&self.tx, storage);
+        for (timer, batcher) in self.inners.values_mut() {
+            if timer.disabled() && !batcher.is_empty() {
+                batcher.submit(&self.tx, storage);
             }
         }
     }
 
     pub fn should_submit(&mut self, storage: &Storage<E, L>) {
         let now = Instant::now();
-        for inner in self.inners.values_mut() {
-            if inner.0.is_timeout(now) && !inner.1.is_empty() {
-                inner.0.set_now(now);
-                inner.1.submit(&self.tx, storage);
+        for (timer, batcher) in self.inners.values_mut() {
+            if timer.is_timeout(now) && !batcher.is_empty() {
+                timer.set_now(now);
+                batcher.submit(&self.tx, storage);
             }
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        for inner in self.inners.values() {
-            if !inner.1.is_empty() {
+        for (_, batcher) in self.inners.values() {
+            if !batcher.is_empty() {
                 return false;
             }
         }

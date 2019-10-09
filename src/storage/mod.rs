@@ -1030,7 +1030,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                     .then(|r| r)
             })
         });
-        // uncaptured SchedTooBusy
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
             .flatten()

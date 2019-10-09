@@ -110,7 +110,7 @@
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
 
-## Max wait time before one mini batch is submitted
+## Wait duration before each mini-batch is processed
 # minibatch-wait-duration = "0ms"
 
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
