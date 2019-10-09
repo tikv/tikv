@@ -90,7 +90,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router.clone(),
             snap_worker.scheduler(),
             Arc::clone(&thread_load),
-            cfg.minibatch_wait_duration.as_millis(),
+            cfg.enable_request_batch,
+            if cfg.enable_request_batch && cfg.request_batch_enable_cross_command {
+                Some(cfg.request_batch_wait_duration.as_millis())
+            } else {
+                None
+            },
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;

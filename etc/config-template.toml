@@ -110,8 +110,14 @@
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
 
-## Wait duration before each mini-batch is processed
-# minibatch-wait-duration = "0ms"
+## Whether to enable request batch.
+# enable-request-batch = true
+
+## Whether to collect batch cross commands. When disabled, wait duration is ignored.
+# request-batch-enable-cross-command = false
+
+## Wait duration before each mini-batch is processed.
+# request-batch-wait-duration = "0ms"
 
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}

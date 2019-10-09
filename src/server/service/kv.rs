@@ -58,8 +58,9 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
 
     thread_load: Arc<ThreadLoad>,
 
-    // timeout set to 0 means batch is collected without crossing commands
-    minibatch_wait_millis: u64,
+    enable_req_batch: bool,
+
+    req_batch_wait_millis: Option<u64>,
 
     timer_pool: Arc<Mutex<ThreadPool>>,
 }
@@ -67,16 +68,27 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
     region: u64,
-    epoch: u64,
+    conf_ver: u64,
+    version: u64,
+}
+
+impl RegionVerId {
+    fn from_context(ctx: &Context) -> Self {
+        RegionVerId {
+            region: ctx.get_region_id(),
+            conf_ver: ctx.get_region_epoch().get_conf_ver(),
+            version: ctx.get_region_epoch().get_version(),
+        }
+    }
 }
 
 struct BatchTimer {
-    timeout: u64,
+    timeout: Option<u64>,
     timestamp: Instant,
 }
 
 impl BatchTimer {
-    fn new(timeout: u64) -> Self {
+    fn new(timeout: Option<u64>) -> Self {
         BatchTimer {
             timeout,
             timestamp: Instant::now(),
@@ -84,11 +96,15 @@ impl BatchTimer {
     }
 
     fn disabled(&self) -> bool {
-        self.timeout == 0
+        self.timeout.is_none()
     }
 
     fn is_timeout(&self, now: Instant) -> bool {
-        now - self.timestamp >= Duration::from_millis(self.timeout)
+        if let Some(timeout) = self.timeout {
+            now - self.timestamp >= Duration::from_millis(timeout)
+        } else {
+            true
+        }
     }
 
     fn set_now(&mut self, now: Instant) {
@@ -125,20 +141,15 @@ struct ReadBatcher {
 }
 
 impl ReadBatcher {
-    #[allow(dead_code)]
     fn new() -> Self {
         ReadBatcher {
             router: HashMap::default(),
         }
     }
 
-    fn filter_get(&mut self, request_id: u64, request: &mut GetRequest) -> bool {
-        let id = RegionVerId {
-            region: request.get_context().get_region_id(),
-            epoch: request.get_context().get_region_epoch().get_version(),
-        };
+    fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {
         let id = ReadId {
-            region: id,
+            region: RegionVerId::from_context(request.get_context()),
             priority: storage::get_priority_code(request.get_context().get_priority()),
             cf: None,
         };
@@ -151,16 +162,11 @@ impl ReadBatcher {
                 self.router.insert(id, vec![command]);
             }
         }
-        true
     }
 
-    fn filter_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) -> bool {
-        let id = RegionVerId {
-            region: request.get_context().get_region_id(),
-            epoch: request.get_context().get_region_epoch().get_version(),
-        };
+    fn add_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) {
         let id = ReadId {
-            region: id,
+            region: RegionVerId::from_context(request.get_context()),
             priority: storage::get_priority_code(request.get_context().get_priority()),
             cf: Some(request.take_cf()),
         };
@@ -173,7 +179,6 @@ impl ReadBatcher {
                 self.router.insert(id, vec![command]);
             }
         }
-        true
     }
 }
 
@@ -184,9 +189,13 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         request: &mut batch_commands_request::request::Cmd,
     ) -> bool {
         match request {
-            batch_commands_request::request::Cmd::Get(req) => self.filter_get(request_id, req),
+            batch_commands_request::request::Cmd::Get(req) => {
+                self.add_get(request_id, req);
+                true
+            }
             batch_commands_request::request::Cmd::RawGet(req) => {
-                self.filter_raw_get(request_id, req)
+                self.add_raw_get(request_id, req);
+                true
             }
             _ => false,
         }
@@ -297,23 +306,23 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
     }
 }
 
-type MiniBatcherInner<E, L> = (BatchTimer, Box<dyn Batcher<E, L>>);
+type ReqBatcherInner<E, L> = (BatchTimer, Box<dyn Batcher<E, L>>);
 
-struct MiniBatcher<E: Engine, L: LockMgr> {
-    inners: BTreeMap<String, MiniBatcherInner<E, L>>,
+struct ReqBatcher<E: Engine, L: LockMgr> {
+    inners: BTreeMap<String, ReqBatcherInner<E, L>>,
     tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
-unsafe impl<E: Engine, L: LockMgr> Send for MiniBatcher<E, L> {}
+unsafe impl<E: Engine, L: LockMgr> Send for ReqBatcher<E, L> {}
 
-impl<E: Engine, L: LockMgr> MiniBatcher<E, L> {
-    pub fn new(tx: Sender<(u64, batch_commands_response::Response)>, timeout: u64) -> Self {
-        let mut inners = BTreeMap::<String, MiniBatcherInner<E, L>>::default();
+impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
+    pub fn new(tx: Sender<(u64, batch_commands_response::Response)>, timeout: Option<u64>) -> Self {
+        let mut inners = BTreeMap::<String, ReqBatcherInner<E, L>>::default();
         inners.insert(
             "get".to_string(),
             (BatchTimer::new(timeout), Box::new(ReadBatcher::new())),
         );
-        MiniBatcher { inners, tx }
+        ReqBatcher { inners, tx }
     }
 
     pub fn filter(
@@ -377,12 +386,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         thread_load: Arc<ThreadLoad>,
-        minibatch_wait_millis: u64,
+        enable_req_batch: bool,
+        req_batch_wait_millis: Option<u64>,
     ) -> Self {
         let timer_pool = Arc::new(Mutex::new(
             ThreadPoolBuilder::new()
                 .pool_size(1)
-                .name_prefix("minibatch_timer_guard")
+                .name_prefix("req_batch_timer_guard")
                 .build(),
         ));
         Service {
@@ -392,7 +402,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
             snap_scheduler,
             thread_load,
             timer_pool,
-            minibatch_wait_millis,
+            enable_req_batch,
+            req_batch_wait_millis,
         }
     }
 
@@ -1323,53 +1334,66 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-        let minibatcher = MiniBatcher::new(tx.clone(), self.minibatch_wait_millis);
-        let stopped = Arc::new(AtomicBool::new(false));
-        let minibatcher = Arc::new(Mutex::new(minibatcher));
-        if self.minibatch_wait_millis > 0 {
-            let storage = storage.clone();
-            let minibatcher = minibatcher.clone();
-            let minibatcher2 = minibatcher.clone();
-            let stopped = Arc::clone(&stopped);
-            let start = Instant::now() + Duration::from_millis(100);
-            let timer = GLOBAL_TIMER_HANDLE.clone();
-            self.timer_pool.lock().unwrap().spawn(
-                timer
-                    .interval(start, Duration::from_millis(self.minibatch_wait_millis))
-                    .take_while(move |_| {
-                        future::ok(
-                            !stopped.load(Ordering::Relaxed)
-                                || !minibatcher2.lock().unwrap().is_empty(),
-                        )
-                    })
-                    .for_each(move |_| {
-                        minibatcher.lock().unwrap().should_submit(&storage);
+        if self.enable_req_batch {
+            let stopped = Arc::new(AtomicBool::new(false));
+            let req_batcher = ReqBatcher::new(tx.clone(), self.req_batch_wait_millis);
+            let req_batcher = Arc::new(Mutex::new(req_batcher));
+            if let Some(millis) = self.req_batch_wait_millis {
+                let storage = storage.clone();
+                let req_batcher = req_batcher.clone();
+                let req_batcher2 = req_batcher.clone();
+                let stopped = Arc::clone(&stopped);
+                let start = Instant::now() + Duration::from_millis(100);
+                let timer = GLOBAL_TIMER_HANDLE.clone();
+                self.timer_pool.lock().unwrap().spawn(
+                    timer
+                        .interval(start, Duration::from_millis(millis))
+                        .take_while(move |_| {
+                            future::ok(
+                                !stopped.load(Ordering::Relaxed)
+                                    || !req_batcher2.lock().unwrap().is_empty(),
+                            )
+                        })
+                        .for_each(move |_| {
+                            req_batcher.lock().unwrap().should_submit(&storage);
+                            Ok(())
+                        })
+                        .map_err(|e| error!("batch_commands timer errored"; "err" => ?e)),
+                );
+            }
+            let request_handler = stream.for_each(move |mut req| {
+                let request_ids = req.take_request_ids();
+                let requests: Vec<_> = req.take_requests().into();
+                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+                for (id, mut req) in request_ids.into_iter().zip(requests) {
+                    if !req_batcher.lock().unwrap().filter(id, &mut req) {
+                        handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
+                    }
+                }
+                req_batcher.lock().unwrap().maybe_submit(&storage);
+                future::ok(())
+            });
+            ctx.spawn(
+                request_handler
+                    .map_err(|e| error!("batch_commands error"; "err" => %e))
+                    .and_then(move |_| {
+                        // signal timer guard to stop polling
+                        stopped.store(true, Ordering::Relaxed);
                         Ok(())
-                    })
-                    .map_err(|e| error!("batch_commands timer errored"; "err" => ?e)),
-            )
-        }
-        let request_handler = stream.for_each(move |mut req| {
-            let request_ids = req.take_request_ids();
-            let requests: Vec<_> = req.take_requests().into();
-            GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-            for (id, mut req) in request_ids.into_iter().zip(requests) {
-                if !minibatcher.lock().unwrap().filter(id, &mut req) {
+                    }),
+            );
+        } else {
+            let request_handler = stream.for_each(move |mut req| {
+                let request_ids = req.take_request_ids();
+                let requests: Vec<_> = req.take_requests().into();
+                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+                for (id, req) in request_ids.into_iter().zip(requests) {
                     handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
                 }
-            }
-            minibatcher.lock().unwrap().maybe_submit(&storage);
-            future::ok(())
-        });
-
-        ctx.spawn(
-            request_handler
-                .map_err(|e| error!("batch_commands error"; "err" => %e))
-                .and_then(move |_| {
-                    stopped.store(true, Ordering::Relaxed);
-                    Ok(())
-                }),
-        );
+                future::ok(())
+            });
+            ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
+        };
 
         let thread_load = Arc::clone(&self.thread_load);
         let response_retriever = BatchReceiver::new(

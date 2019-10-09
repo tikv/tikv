@@ -146,6 +146,8 @@ impl ReadpoolCommand {
         }
     }
 
+    /// Only used in tests.
+    #[cfg(test)]
     pub fn from_key_ts(request_id: u64, key: Key, ts: Option<u64>) -> Self {
         ReadpoolCommand {
             req: request_id,
