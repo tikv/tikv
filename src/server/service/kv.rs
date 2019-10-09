@@ -1,7 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
 use std::iter::{self, FromIterator};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::store::{Callback, CasualMessage};
@@ -14,7 +17,7 @@ use crate::storage::kv::Error as EngineError;
 use crate::storage::lock_manager::LockMgr;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
-use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
+use crate::storage::{self, Engine, Key, Mutation, Options, ReadpoolCommand, Storage, Value};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -31,7 +34,9 @@ use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
+use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
@@ -52,6 +57,316 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     snap_scheduler: Scheduler<SnapTask>,
 
     thread_load: Arc<ThreadLoad>,
+
+    // timeout set to 0 means batch is collected without crossing commands
+    minibatch_wait_millis: u64,
+
+    timer_pool: Arc<Mutex<ThreadPool>>,
+}
+
+#[derive(Hash, PartialEq, Eq, Debug)]
+struct RegionVerId {
+    region: u64,
+    epoch: u64,
+}
+
+struct BatchTimer {
+    timeout: u64,
+    timestamp: Instant,
+}
+
+impl BatchTimer {
+    fn new(timeout: u64) -> Self {
+        BatchTimer {
+            timeout,
+            timestamp: Instant::now(),
+        }
+    }
+
+    fn disabled(&self) -> bool {
+        self.timeout == 0
+    }
+
+    fn is_timeout(&self, now: Instant) -> bool {
+        now - self.timestamp >= Duration::from_millis(self.timeout)
+    }
+
+    fn set_now(&mut self, now: Instant) {
+        self.timestamp = now;
+    }
+}
+
+trait Batcher<E: Engine, L: LockMgr> {
+    fn filter(
+        &mut self,
+        request_id: u64,
+        request: &mut batch_commands_request::request::Cmd,
+    ) -> bool;
+
+    fn submit(
+        &mut self,
+        tx: &Sender<(u64, batch_commands_response::Response)>,
+        storage: &Storage<E, L>,
+    );
+
+    fn is_empty(&self) -> bool;
+}
+
+#[derive(Hash, PartialEq, Eq, Debug)]
+struct ReadId {
+    region: RegionVerId,
+    priority: u8,
+    // None for txn read
+    cf: Option<String>,
+}
+
+struct ReadBatcher {
+    router: HashMap<ReadId, Vec<ReadpoolCommand>>,
+}
+
+impl ReadBatcher {
+    #[allow(dead_code)]
+    fn new() -> Self {
+        ReadBatcher {
+            router: HashMap::default(),
+        }
+    }
+
+    fn filter_get(&mut self, request_id: u64, request: &mut GetRequest) -> bool {
+        let id = RegionVerId {
+            region: request.get_context().get_region_id(),
+            epoch: request.get_context().get_region_epoch().get_version(),
+        };
+        let id = ReadId {
+            region: id,
+            priority: storage::get_priority_code(request.get_context().get_priority()),
+            cf: None,
+        };
+        let command = ReadpoolCommand::from_get(request_id, request);
+        match self.router.get_mut(&id) {
+            Some(commands) => {
+                commands.push(command);
+            }
+            None => {
+                self.router.insert(id, vec![command]);
+            }
+        }
+        true
+    }
+
+    fn filter_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) -> bool {
+        let id = RegionVerId {
+            region: request.get_context().get_region_id(),
+            epoch: request.get_context().get_region_epoch().get_version(),
+        };
+        let id = ReadId {
+            region: id,
+            priority: storage::get_priority_code(request.get_context().get_priority()),
+            cf: Some(request.take_cf()),
+        };
+        let command = ReadpoolCommand::from_raw_get(request_id, request);
+        match self.router.get_mut(&id) {
+            Some(commands) => {
+                commands.push(command);
+            }
+            None => {
+                self.router.insert(id, vec![command]);
+            }
+        }
+        true
+    }
+}
+
+impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
+    fn filter(
+        &mut self,
+        request_id: u64,
+        request: &mut batch_commands_request::request::Cmd,
+    ) -> bool {
+        match request {
+            batch_commands_request::request::Cmd::Get(req) => self.filter_get(request_id, req),
+            batch_commands_request::request::Cmd::RawGet(req) => {
+                self.filter_raw_get(request_id, req)
+            }
+            _ => false,
+        }
+    }
+
+    fn submit(
+        &mut self,
+        tx: &Sender<(u64, batch_commands_response::Response)>,
+        storage: &Storage<E, L>,
+    ) {
+        for (id, commands) in self.router.iter_mut() {
+            let tx = tx.clone();
+            let tx2 = tx.clone();
+            let commands = std::mem::replace(commands, vec![]);
+            let reqs: Vec<u64> = commands.iter().map(|cmd| cmd.request()).collect();
+            match &id.cf {
+                Some(cf) => {
+                    let res = storage
+                        .batch_async_raw_get(
+                            cf.clone(),
+                            commands,
+                            Box::new(move |id, v: Result<Option<Vec<u8>>, storage::Error>| {
+                                let mut resp = RawGetResponse::default();
+                                if let Some(err) = extract_region_error(&v) {
+                                    resp.set_region_error(err);
+                                } else {
+                                    match v {
+                                        Ok(Some(val)) => resp.set_value(val),
+                                        Ok(None) => resp.set_not_found(true),
+                                        Err(e) => resp.set_error(format!("{}", e)),
+                                    }
+                                }
+                                let mut res = batch_commands_response::Response::default();
+                                res.cmd =
+                                    Some(batch_commands_response::response::Cmd::RawGet(resp));
+                                if tx.send_and_notify((id, res)).is_err() {
+                                    error!("KvService response batch commands fail");
+                                }
+                            }),
+                        )
+                        .map_err(move |e| {
+                            let mut resp = RawGetResponse::default();
+                            let result = Err(e);
+                            if let Some(err) = extract_region_error::<()>(&result) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = result {
+                                resp.set_error(format!("{}", e));
+                            }
+                            let mut res = batch_commands_response::Response::default();
+                            res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                            for req in reqs {
+                                if tx2.send_and_notify((req, res.clone())).is_err() {
+                                    error!("KvService response batch commands fail");
+                                }
+                            }
+                        })
+                        .and_then(|_| Ok(()));
+                    poll_future_notify(res);
+                }
+                None => {
+                    let res = storage
+                        .batch_async_get(
+                            commands,
+                            Box::new(move |id, v: Result<Option<Value>, storage::Error>| {
+                                let mut resp = GetResponse::default();
+                                if let Some(err) = extract_region_error(&v) {
+                                    resp.set_region_error(err);
+                                } else {
+                                    match v {
+                                        Ok(Some(val)) => resp.set_value(val),
+                                        Ok(None) => resp.set_not_found(true),
+                                        Err(e) => resp.set_error(extract_key_error(&e)),
+                                    }
+                                }
+                                let mut res = batch_commands_response::Response::default();
+                                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                                if tx.send_and_notify((id, res)).is_err() {
+                                    error!("KvService response batch commands fail");
+                                }
+                            }),
+                        )
+                        .map_err(move |e| {
+                            let mut resp = GetResponse::default();
+                            let result = Err(e);
+                            if let Some(err) = extract_region_error::<()>(&result) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = result {
+                                resp.set_error(extract_key_error(&e));
+                            }
+                            let mut res = batch_commands_response::Response::default();
+                            res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                            for req in reqs {
+                                if tx2.send_and_notify((req, res.clone())).is_err() {
+                                    error!("KvService response batch commands fail");
+                                }
+                            }
+                        })
+                        .and_then(|_| Ok(()));
+                    poll_future_notify(res);
+                }
+            }
+        }
+        self.router.clear();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.router.is_empty()
+    }
+}
+
+type MiniBatcherInner<E, L> = (BatchTimer, Box<dyn Batcher<E, L>>);
+
+struct MiniBatcher<E: Engine, L: LockMgr> {
+    inners: BTreeMap<String, MiniBatcherInner<E, L>>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+}
+
+unsafe impl<E: Engine, L: LockMgr> Send for MiniBatcher<E, L> {}
+
+impl<E: Engine, L: LockMgr> MiniBatcher<E, L> {
+    pub fn new(tx: Sender<(u64, batch_commands_response::Response)>, timeout: u64) -> Self {
+        let mut inners = BTreeMap::<String, MiniBatcherInner<E, L>>::default();
+        inners.insert(
+            "get".to_string(),
+            (BatchTimer::new(timeout), Box::new(ReadBatcher::new())),
+        );
+        MiniBatcher { inners, tx }
+    }
+
+    pub fn filter(
+        &mut self,
+        request_id: u64,
+        request: &mut batch_commands_request::Request,
+    ) -> bool {
+        if let Some(ref mut cmd) = request.cmd {
+            let inner = match cmd {
+                batch_commands_request::request::Cmd::Prewrite(_) => {
+                    self.inners.get_mut("prewrite")
+                }
+                batch_commands_request::request::Cmd::Commit(_) => self.inners.get_mut("commit"),
+                batch_commands_request::request::Cmd::Get(_)
+                | batch_commands_request::request::Cmd::RawGet(_) => self.inners.get_mut("get"),
+                _ => None,
+            };
+            if let Some(inner) = inner {
+                inner.1.filter(request_id, cmd)
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    pub fn maybe_submit(&mut self, storage: &Storage<E, L>) {
+        for inner in self.inners.values_mut() {
+            if inner.0.disabled() && !inner.1.is_empty() {
+                inner.1.submit(&self.tx, storage);
+            }
+        }
+    }
+
+    pub fn should_submit(&mut self, storage: &Storage<E, L>) {
+        let now = Instant::now();
+        for inner in self.inners.values_mut() {
+            if inner.0.is_timeout(now) && !inner.1.is_empty() {
+                inner.0.set_now(now);
+                inner.1.submit(&self.tx, storage);
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        for inner in self.inners.values() {
+            if !inner.1.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
@@ -62,13 +377,22 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         thread_load: Arc<ThreadLoad>,
+        minibatch_wait_millis: u64,
     ) -> Self {
+        let timer_pool = Arc::new(Mutex::new(
+            ThreadPoolBuilder::new()
+                .pool_size(1)
+                .name_prefix("minibatch_timer_guard")
+                .build(),
+        ));
         Service {
             storage,
             cop,
             ch,
             snap_scheduler,
             thread_load,
+            timer_pool,
+            minibatch_wait_millis,
         }
     }
 
@@ -999,18 +1323,53 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
-
+        let minibatcher = MiniBatcher::new(tx.clone(), self.minibatch_wait_millis);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let minibatcher = Arc::new(Mutex::new(minibatcher));
+        if self.minibatch_wait_millis > 0 {
+            let storage = storage.clone();
+            let minibatcher = minibatcher.clone();
+            let minibatcher2 = minibatcher.clone();
+            let stopped = Arc::clone(&stopped);
+            let start = Instant::now() + Duration::from_millis(100);
+            let timer = GLOBAL_TIMER_HANDLE.clone();
+            self.timer_pool.lock().unwrap().spawn(
+                timer
+                    .interval(start, Duration::from_millis(self.minibatch_wait_millis))
+                    .take_while(move |_| {
+                        future::ok(
+                            !stopped.load(Ordering::Relaxed)
+                                || !minibatcher2.lock().unwrap().is_empty(),
+                        )
+                    })
+                    .for_each(move |_| {
+                        minibatcher.lock().unwrap().should_submit(&storage);
+                        Ok(())
+                    })
+                    .map_err(|e| error!("batch_commands timer errored"; "err" => ?e)),
+            )
+        }
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-            for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
+            for (id, mut req) in request_ids.into_iter().zip(requests) {
+                if !minibatcher.lock().unwrap().filter(id, &mut req) {
+                    handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
+                }
             }
-            future::ok::<_, _>(())
+            minibatcher.lock().unwrap().maybe_submit(&storage);
+            future::ok(())
         });
 
-        ctx.spawn(request_handler.map_err(|e| error!("batch commands error"; "err" => %e)));
+        ctx.spawn(
+            request_handler
+                .map_err(|e| error!("batch_commands error"; "err" => %e))
+                .and_then(move |_| {
+                    stopped.store(true, Ordering::Relaxed);
+                    Ok(())
+                }),
+        );
 
         let thread_load = Arc::clone(&self.thread_load);
         let response_retriever = BatchReceiver::new(

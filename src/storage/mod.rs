@@ -26,7 +26,7 @@ use engine::rocks::DB;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
@@ -52,6 +52,7 @@ pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+pub type BatchCallback<T> = Box<dyn Fn(u64, Result<T>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -110,11 +111,44 @@ impl Mutation {
 
 pub enum StorageCb {
     Boolean(Callback<()>),
+    BatchBoolean(BatchCallback<()>),
     Booleans(Callback<Vec<Result<()>>>),
+    BatchBooleans(BatchCallback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
     TxnStatus(Callback<(u64, u64)>),
+}
+
+pub struct ReadpoolCommand {
+    req: u64,
+    ctx: Context,
+    key: Key,
+    ts: Option<u64>,
+}
+
+impl ReadpoolCommand {
+    pub fn from_get(request_id: u64, request: &mut GetRequest) -> Self {
+        ReadpoolCommand {
+            req: request_id,
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: Some(request.get_version()),
+        }
+    }
+
+    pub fn from_raw_get(request_id: u64, request: &mut RawGetRequest) -> Self {
+        ReadpoolCommand {
+            req: request_id,
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: None,
+        }
+    }
+
+    pub fn request(&self) -> u64 {
+        self.req
+    }
 }
 
 /// Store Transaction scheduler commands.
@@ -422,6 +456,14 @@ pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
         CommandPri::Low => CommandPriority::low,
         CommandPri::Normal => CommandPriority::normal,
         CommandPri::High => CommandPriority::high,
+    }
+}
+
+pub fn get_priority_code(priority: CommandPri) -> u8 {
+    match priority {
+        CommandPri::Low => 1,
+        CommandPri::Normal => 2,
+        CommandPri::High => 3,
     }
 }
 
@@ -937,6 +979,49 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             })
         });
 
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
+    }
+
+    pub fn batch_async_get(
+        &self,
+        gets: Vec<ReadpoolCommand>,
+        callback: BatchCallback<Option<Vec<u8>>>,
+    ) -> impl Future<Item = (), Error = Error> {
+        const CMD: &str = "get";
+        let ctx = gets[0].ctx.clone();
+        let priority = get_priority_tag(ctx.get_priority());
+        let res = self.get_read_pool(priority).spawn_handle(move || {
+            tls_collect_command_count(CMD, priority);
+            Self::with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let mut statistics = Statistics::default();
+                            let mut snap_store = SnapshotStore::new(
+                                snapshot,
+                                0,
+                                ctx.get_isolation_level(),
+                                !ctx.get_not_fill_cache(),
+                            );
+                            for get in gets {
+                                snap_store.set_start_ts(get.ts.unwrap());
+                                snap_store.set_isolation_level(get.ctx.get_isolation_level());
+                                callback(
+                                    get.req,
+                                    snap_store
+                                        .get(&get.key, &mut statistics)
+                                        .map_err(Error::from),
+                                );
+                            }
+                            Ok(())
+                        })
+                    })
+                    .then(|r| r)
+            })
+        });
+        // uncaptured SchedTooBusy
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
             .flatten()
@@ -1473,6 +1558,42 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             })
         });
 
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
+    }
+
+    pub fn batch_async_raw_get(
+        &self,
+        cf: String,
+        gets: Vec<ReadpoolCommand>,
+        callback: BatchCallback<Option<Vec<u8>>>,
+    ) -> impl Future<Item = (), Error = Error> {
+        const CMD: &str = "raw_get";
+        let ctx = gets[0].ctx.clone();
+        let priority = get_priority_tag(ctx.get_priority());
+        let res = self.get_read_pool(priority).spawn_handle(move || {
+            tls_collect_command_count(CMD, priority);
+            Self::with_tls_engine(|engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let cf = match Self::rawkv_cf(&cf) {
+                                Ok(x) => x,
+                                Err(e) => return future::err(e),
+                            };
+                            for get in gets {
+                                callback(
+                                    get.req,
+                                    snapshot.get_cf(cf, &get.key).map_err(Error::from),
+                                );
+                            }
+                            future::ok(())
+                        })
+                    })
+                    .then(|r| r)
+            })
+        });
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
             .flatten()
