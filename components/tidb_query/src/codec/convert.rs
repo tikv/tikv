@@ -2618,10 +2618,10 @@ mod tests {
                             if let Error::Eval(_, d) = r.err().unwrap() {
                                 assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
                             } else {
-                                panic!("unreachable path, {}", log);
+                                unreachable!("{}", log)
                             }
                         }
-                        _ => panic!("unreachable path, {}", log),
+                        _ => unreachable!("{}", log),
                     },
                 }
 

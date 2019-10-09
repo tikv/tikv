@@ -1908,7 +1908,6 @@ impl ToString for Decimal {
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         let mut dec = self.clone();
-        // TODO: why there is rounding here?
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();

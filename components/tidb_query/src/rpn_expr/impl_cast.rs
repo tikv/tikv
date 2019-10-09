@@ -936,9 +936,7 @@ mod tests {
         if truncate_as_warning {
             flag |= Flag::TRUNCATE_AS_WARNING;
         }
-        for i in flags {
-            flag |= i;
-        }
+        let flag = flags.into_iter().fold(flag, |acc, x| (acc | x));
         let cfg = Arc::new(EvalConfig::from_flag(flag));
         EvalContext::new(cfg)
     }
