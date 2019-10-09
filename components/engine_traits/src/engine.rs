@@ -32,27 +32,16 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone {
     fn snapshot(&self) -> Self::Snap;
     fn sync(&self) -> Result<()>;
     fn cf_names(&self) -> Vec<&str>;
-    fn delete_all_in_range(
-        &self,
-        t: DeleteRangeType,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> Result<()> {
+    fn delete_all_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
         if start_key >= end_key {
             return Ok(());
         }
         for cf in self.cf_names() {
-            self.delete_all_in_range_cf(t, cf, start_key, end_key)?;
+            self.delete_all_in_range_cf(cf, start_key, end_key)?;
         }
         Ok(())
     }
-    fn delete_all_in_range_cf(
-        &self,
-        t: DeleteRangeType,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> Result<()>;
+    fn delete_all_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<()>;
 
     fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()>;
     fn validate_file_for_ingestion<P: AsRef<Path>>(
