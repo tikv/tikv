@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 
 use crate::codec;
-use crate::codec::mysql::{check_fsp, Tz};
+use crate::codec::mysql::{check_fsp, Duration, Tz};
 use crate::codec::TEN_POW;
 use crate::codec::{Error, Result};
 use crate::expr::{EvalContext, Flag, SqlMode};
@@ -598,8 +598,8 @@ impl Time {
     pub fn try_from_chrono_datetime<T: Datelike + Timelike>(
         ctx: &mut EvalContext,
         datetime: T,
-        fsp: i8,
         time_type: TimeType,
+        fsp: i8,
     ) -> Result<Self> {
         Time::new(
             ctx,
@@ -772,7 +772,7 @@ impl Time {
         if time_type == TimeType::TimeStamp {
             let utc = chrono_datetime(&Utc, year, month, day, hour, minute, second, micro)?;
             let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
-            Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), fsp as i8, time_type)
+            Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
         } else {
             Time::new(
                 ctx,
@@ -801,8 +801,8 @@ impl Time {
             self = Time::try_from_chrono_datetime(
                 ctx,
                 ts.naive_utc(),
-                self.fsp() as i8,
                 self.get_time_type(),
+                self.fsp() as i8,
             )?;
         }
 
@@ -813,6 +813,23 @@ impl Time {
             | u64::from(self.second());
 
         Ok((((ymd << 17) | hms) << 24) | u64::from(self.micro()))
+    }
+
+    pub fn from_duration(
+        ctx: &mut EvalContext,
+        duration: Duration,
+        time_type: TimeType,
+    ) -> Result<Self> {
+        let dur = chrono::Duration::nanoseconds(duration.to_nanos());
+
+        let time = Utc::today()
+            .and_hms(0, 0, 0)
+            .checked_add_signed(dur)
+            .map(|utc| utc.with_timezone(&ctx.cfg.tz));
+
+        let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
+
+        Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
     }
 }
 
@@ -1470,6 +1487,31 @@ mod tests {
             let left = Time::parse(&mut ctx, left, TimeType::DateTime, MAX_FSP, false)?;
             let right = Time::parse(&mut ctx, right, TimeType::DateTime, MAX_FSP, false)?;
             assert_eq!(expected, left.cmp(&right));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_duration() -> Result<()> {
+        let cases = vec!["11:30:45.123456", "-35:30:46"];
+        let tz = Tz::utc();
+        for case in cases {
+            let mut ctx = EvalContext::default();
+            let duration = Duration::parse(case.as_bytes(), MAX_FSP)?;
+
+            let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
+            let today = actual
+                .try_into_chrono_datetime(&mut ctx)?
+                .checked_sub_signed(chrono::Duration::nanoseconds(duration.to_nanos()))
+                .unwrap();
+
+            let now = Utc::now();
+            assert_eq!(today.year(), now.year());
+            assert_eq!(today.month(), now.month());
+            assert_eq!(today.day(), now.day());
+            assert_eq!(today.hour(), 0);
+            assert_eq!(today.minute(), 0);
+            assert_eq!(today.second(), 0);
         }
         Ok(())
     }
