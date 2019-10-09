@@ -74,6 +74,73 @@ impl Ceil for CeilIntToInt {
     }
 }
 
+pub trait Floor {
+    type Input: Evaluable;
+    type Output: Evaluable;
+    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
+}
+
+#[rpn_fn(capture = [ctx])]
+pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: &Option<T::Input>) -> Result<Option<T::Output>> {
+    if let Some(arg) = arg {
+        T::floor(ctx, arg)
+    } else {
+        Ok(None)
+    }
+}
+
+pub struct FloorReal;
+
+impl Floor for FloorReal {
+    type Input = Real;
+    type Output = Real;
+
+    #[inline]
+    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(Some(Real::from(arg.floor())))
+    }
+}
+
+pub struct FloorDecToInt;
+
+impl Floor for FloorDecToInt {
+    type Input = Decimal;
+    type Output = Int;
+
+    #[inline]
+    fn floor(ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(arg
+            .floor()
+            .into_result(ctx)
+            .and_then(|decimal| decimal.as_i64_with_ctx(ctx))
+            .map(Some)?)
+    }
+}
+
+pub struct FloorDecToDec;
+
+impl Floor for FloorDecToDec {
+    type Input = Decimal;
+    type Output = Decimal;
+
+    #[inline]
+    fn floor(ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(arg.floor().into_result(ctx).map(Some)?)
+    }
+}
+
+pub struct FloorIntToInt;
+
+impl Floor for FloorIntToInt {
+    type Input = Int;
+    type Output = Int;
+
+    #[inline]
+    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(Some(*arg))
+    }
+}
+
 #[rpn_fn]
 #[inline]
 fn abs_int(arg: &Option<Int>) -> Result<Option<Int>> {
@@ -248,6 +315,9 @@ mod tests {
         let cases = vec![
             (1, 1),
             (2, 2),
+            (666, 666),
+            (-3, -3),
+            (-233, -233),
             (std::i64::MAX, std::i64::MAX),
             (std::i64::MIN, std::i64::MIN),
         ];
@@ -260,5 +330,110 @@ mod tests {
                 .unwrap();
             assert_eq!(expected, output);
         }
+    }
+
+    fn test_unary_func_ok_none<I: Evaluable, O: Evaluable>(sig: ScalarFuncSig)
+    where
+        O: PartialEq,
+        Option<I>: Into<ScalarValue>,
+        Option<O>: From<ScalarValue>,
+    {
+        assert_eq!(
+            None,
+            RpnFnScalarEvaluator::new()
+                .push_param(Option::<I>::None)
+                .evaluate::<O>(sig)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_floor_real() {
+        let cases = vec![
+            (3.5, 3.0),
+            (3.7, 3.0),
+            (3.45, 3.0),
+            (3.1, 3.0),
+            (-3.45, -4.0),
+            (-0.1, -1.0),
+            (16140901064495871255.0, 16140901064495871255.0),
+            (std::f64::MAX, std::f64::MAX),
+            (std::f64::MIN, std::f64::MIN),
+        ];
+        for (input, expected) in cases {
+            let arg = Real::from(input);
+            let expected = Real::new(expected).ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Real>(ScalarFuncSig::FloorReal)
+                .unwrap();
+            assert_eq!(expected, output);
+        }
+
+        test_unary_func_ok_none::<Real, Real>(ScalarFuncSig::FloorReal);
+    }
+
+    #[test]
+    fn test_floor_dec_to_dec() {
+        let cases = vec![
+            ("9223372036854775808", "9223372036854775808"),
+            ("123.456", "123"),
+            ("-123.456", "-124"),
+        ];
+
+        for (input, expected) in cases {
+            let arg = input.parse::<Decimal>().ok();
+            let expected = expected.parse::<Decimal>().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Decimal>(ScalarFuncSig::FloorDecToDec)
+                .unwrap();
+            assert_eq!(expected, output);
+        }
+
+        test_unary_func_ok_none::<Decimal, Decimal>(ScalarFuncSig::FloorDecToDec);
+    }
+
+    #[test]
+    fn test_floor_dec_to_int() {
+        let cases = vec![
+            ("123.456", 123),
+            ("1.23", 1),
+            ("-1.23", -2),
+            ("-9223372036854775808", std::i64::MIN),
+        ];
+        for (input, expected) in cases {
+            let arg = input.parse::<Decimal>().ok();
+            let expected = Some(expected);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Int>(ScalarFuncSig::FloorDecToInt)
+                .unwrap();
+            assert_eq!(expected, output);
+        }
+
+        test_unary_func_ok_none::<Decimal, Int>(ScalarFuncSig::FloorDecToInt);
+    }
+
+    #[test]
+    fn test_floor_int_to_int() {
+        let cases = vec![
+            (1, 1),
+            (2, 2),
+            (-3, -3),
+            (std::i64::MAX, std::i64::MAX),
+            (std::i64::MIN, std::i64::MIN),
+        ];
+
+        for (expected, input) in cases {
+            let expected = Some(expected);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate::<Int>(ScalarFuncSig::FloorIntToInt)
+                .unwrap();
+            assert_eq!(expected, output);
+        }
+
+        test_unary_func_ok_none::<Int, Int>(ScalarFuncSig::FloorIntToInt);
     }
 }
