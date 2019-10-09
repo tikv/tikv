@@ -66,7 +66,7 @@ fn bench_encode_binary(b: &mut Bencher) {
     b.iter(|| {
         for j in &jsons {
             buf.clear();
-            buf.encode_json(j).unwrap();
+            buf.write_json(j).unwrap();
         }
     });
 }
@@ -108,13 +108,13 @@ fn bench_decode_binary(b: &mut Bencher) {
         .map(|t| t.parse::<Json>().unwrap())
         .map(|j| {
             let mut buf = Vec::new();
-            buf.encode_json(&j).unwrap();
+            buf.write_json(&j).unwrap();
             buf
         })
         .collect::<Vec<Vec<u8>>>();
     b.iter(|| {
         for binary in &binaries {
-            binary.as_slice().decode_json().unwrap();
+            binary.as_slice().read_json().unwrap();
         }
     });
 }
