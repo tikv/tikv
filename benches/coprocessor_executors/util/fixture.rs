@@ -259,7 +259,7 @@ impl FixtureBuilder {
                 let mut c = LazyBatchColumn::raw_with_capacity(datums.len());
                 for datum in datums {
                     let mut v = vec![];
-                    DatumEncoder::encode(&mut v, &[datum], false).unwrap();
+                    v.write_datum(&[datum], false).unwrap();
                     c.mut_raw().push(v);
                 }
                 c
@@ -298,7 +298,7 @@ impl FixtureBuilder {
             let mut data = RowColsDict::new(HashMap::default(), Vec::new());
             for col_index in 0..self.columns.len() {
                 let mut v = vec![];
-                DatumEncoder::encode(&mut v, &[self.columns[col_index][row_index].clone()], false)
+                v.write_datum(&[self.columns[col_index][row_index].clone()], false)
                     .unwrap();
                 data.append(col_index as i64, &mut v);
             }

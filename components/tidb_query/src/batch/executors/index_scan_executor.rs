@@ -164,8 +164,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::codec::{datum, table};
-        use byteorder::{BigEndian, ReadBytesExt};
-        use tikv_util::codec::number;
+        use codec::prelude::NumberDecoder;
 
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
@@ -183,9 +182,10 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 // This is a unique index, and we should look up PK handle in value.
 
                 // NOTE: it is not `number::decode_i64`.
-                value
-                    .read_i64::<BigEndian>()
-                    .map_err(|_| other_err!("Failed to decode handle in value as i64"))?
+                (value
+                    .read_u64()
+                    .map_err(|_| other_err!("Failed to decode handle in value as i64"))?)
+                    as i64
             } else {
                 // This is a normal index. The remaining payload part is the PK handle.
                 // Let's decode it and put in the column.
@@ -197,10 +197,11 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 // receiving optional time zone first.
 
                 match flag {
-                    datum::INT_FLAG => number::decode_i64(&mut val)
+                    datum::INT_FLAG => val
+                        .read_i64()
                         .map_err(|_| other_err!("Failed to decode handle in key as i64"))?,
                     datum::UINT_FLAG => {
-                        (number::decode_u64(&mut val)
+                        (val.read_u64()
                             .map_err(|_| other_err!("Failed to decode handle in key as u64"))?)
                             as i64
                     }
@@ -225,8 +226,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use byteorder::{BigEndian, WriteBytesExt};
-
+    use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tipb::ColumnInfo;
@@ -415,7 +415,7 @@ mod tests {
                     // PK handle in the value
                     let mut value = vec![];
                     value
-                        .write_i64::<BigEndian>(datums[2].as_int().unwrap().unwrap())
+                        .write_u64(datums[2].as_int().unwrap().unwrap() as u64)
                         .unwrap();
                     (key, value)
                 })
