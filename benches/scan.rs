@@ -30,7 +30,7 @@ use std::sync::Arc;
 use engine::{CF_LOCK, CF_WRITE, DB};
 use test_storage::*;
 use test_util::*;
-use tikv::storage::mvcc::{RangeForwardScanner, ScannerConfig, ScannerBuilder};
+use tikv::storage::mvcc::{RangeForwardScanner, ScannerBuilder, ScannerConfig};
 use tikv::storage::{CFStatistics, CursorBuilder, Engine, Key, Mutation, RocksEngine};
 
 //region Config
@@ -118,7 +118,8 @@ fn bench_mvcc_forward_scan(b: &mut Bencher, input: &Input) {
         CallgrindClientRequest::start();
         let snapshot = input.engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, input.max_ts, false)
-            .build().unwrap();
+            .build()
+            .unwrap();
         let mut n = 0;
         loop {
             let kv = scanner.next().unwrap();
@@ -587,32 +588,28 @@ fn main() {
         bench_range_forward_scanner_1024,
         inputs.clone(),
     );
-//    criterion.bench_function_over_inputs("iter_forward", bench_iter_forward, inputs.clone());
-//    criterion.bench_function_over_inputs(
-//        "iter_forward_3_cf",
-//        bench_iter_forward_3_cf,
-//        inputs.clone(),
-//    );
+    //    criterion.bench_function_over_inputs("iter_forward", bench_iter_forward, inputs.clone());
+    //    criterion.bench_function_over_inputs(
+    //        "iter_forward_3_cf",
+    //        bench_iter_forward_3_cf,
+    //        inputs.clone(),
+    //    );
     criterion.bench_function_over_inputs(
         "iter_forward_with_value",
         bench_iter_forward_with_value,
         inputs.clone(),
     );
-//    criterion.bench_function_over_inputs(
-//        "iter_forward_alloc_vec_for_kv",
-//        bench_iter_forward_alloc_vec_for_kv,
-//        inputs.clone(),
-//    );
-    criterion.bench_function_over_inputs(
-        "cursor_forward",
-        bench_cursor_forward,
-        inputs.clone(),
-    );
-//    criterion.bench_function_over_inputs(
-//        "cursor_forward_alloc_vec_for_kv",
-//        bench_cursor_forward_alloc_vec_for_kv,
-//        inputs.clone(),
-//    );
+    //    criterion.bench_function_over_inputs(
+    //        "iter_forward_alloc_vec_for_kv",
+    //        bench_iter_forward_alloc_vec_for_kv,
+    //        inputs.clone(),
+    //    );
+    criterion.bench_function_over_inputs("cursor_forward", bench_cursor_forward, inputs.clone());
+    //    criterion.bench_function_over_inputs(
+    //        "cursor_forward_alloc_vec_for_kv",
+    //        bench_cursor_forward_alloc_vec_for_kv,
+    //        inputs.clone(),
+    //    );
 
     //    criterion.bench_function("eq_key", bench_eq_key);
     //    criterion.bench_function("eq_naive", bench_eq_naive);
