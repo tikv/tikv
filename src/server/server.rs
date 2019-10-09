@@ -92,7 +92,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&thread_load),
             cfg.enable_request_batch,
             if cfg.enable_request_batch && cfg.request_batch_enable_cross_command {
-                Some(cfg.request_batch_wait_duration.as_millis())
+                Some(Duration::from(cfg.request_batch_wait_duration))
             } else {
                 None
             },
