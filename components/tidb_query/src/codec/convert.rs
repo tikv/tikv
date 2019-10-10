@@ -2090,8 +2090,8 @@ mod tests {
             // (InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning, truncate_as_warning
             // )
             //
-            // why there is origin_flen, origin_decimal here?
-            // to make let the programmer clearly know what the flen and decimal of the decimal is.
+            // The origin_flen, origin_decimal field is to
+            // let the programmer clearly know what the flen and decimal of the decimal is.
 
             // res_flen and res_decimal isn't UNSPECIFIED_LENGTH
             // flen < decimal

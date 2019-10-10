@@ -843,6 +843,7 @@ mod tests {
     };
     use crate::codec::mysql::charset::*;
     use crate::codec::mysql::{Decimal, Duration, Json, Time, TimeType, MAX_FSP, MIN_FSP};
+    use crate::codec::Error;
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
@@ -3014,15 +3015,13 @@ mod tests {
         }
     }
 
-    fn test_as_duration_helper<T: Clone, FnToCastStr, FnToDebugStr, FnCast>(
+    fn test_as_duration_helper<T: Clone, FnCast>(
         base_cs: Vec<T>,
-        func_to_cast_str: FnToCastStr,
-        func_to_debug_str: FnToDebugStr,
+        func_to_cast_str: impl Fn(&T) -> String,
+        func_to_debug_str: impl Fn(&T) -> String,
         func_cast: FnCast,
         func_name: &str,
     ) where
-        FnToCastStr: Fn(&T) -> String,
-        FnToDebugStr: Fn(&T) -> String,
         FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<T>) -> Result<Option<Duration>>,
     {
         // cast_real_as_duration call Duration::parse directly,
