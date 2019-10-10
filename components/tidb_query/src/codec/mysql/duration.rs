@@ -773,26 +773,26 @@ impl Ord for Duration {
 impl<T: BufferWriter> DurationEncoder for T {}
 
 pub trait DurationEncoder: NumberEncoder {
-    fn encode_duration(&mut self, v: Duration) -> Result<()> {
+    fn write_duration(&mut self, v: Duration) -> Result<()> {
         self.write_i64(v.to_nanos())?;
         self.write_i64(i64::from(v.get_fsp())).map_err(From::from)
     }
 
-    fn encode_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
+    fn write_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
         self.write_i64_le(v.to_nanos())?;
         Ok(())
     }
 }
 
 pub trait DurationDecoder: NumberDecoder {
-    /// `decode_duration` decodes duration encoded by `encode_duration`.
-    fn decode_duration(&mut self) -> Result<Duration> {
+    /// `read_duration` decodes duration encoded by `write_duration`.
+    fn read_duration(&mut self) -> Result<Duration> {
         let nanos = self.read_i64()?;
         let fsp = self.read_i64()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 
-    fn decode_duration_from_chunk(&mut self, fsp: isize) -> Result<Duration> {
+    fn read_duration_from_chunk(&mut self, fsp: isize) -> Result<Duration> {
         let nanos = self.read_i64_le()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
@@ -1100,10 +1100,10 @@ mod tests {
         for (input, fsp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
-            buf.encode_duration_to_chunk(t).unwrap();
+            buf.write_duration_to_chunk(t).unwrap();
             let got = buf
                 .as_slice()
-                .decode_duration_from_chunk(fsp as isize)
+                .read_duration_from_chunk(fsp as isize)
                 .unwrap();
             assert_eq!(t, got);
         }
@@ -1489,10 +1489,10 @@ mod benches {
             for &duration in cases {
                 let t = test::black_box(duration);
                 let mut buf = vec![];
-                buf.encode_duration_to_chunk(t).unwrap();
+                buf.write_duration_to_chunk(t).unwrap();
                 let got = test::black_box(
                     buf.as_slice()
-                        .decode_duration_from_chunk(t.fsp() as isize)
+                        .read_duration_from_chunk(t.fsp() as isize)
                         .unwrap(),
                 );
                 assert_eq!(t, got);
