@@ -676,10 +676,38 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 approximate_keys,
             } => {
                 let approximate_size = approximate_size.unwrap_or_else(|| {
-                    get_region_approximate_size(&self.db, &region).unwrap_or_default()
+                    if let Ok(size) = get_region_approximate_size(&self.db, &region) {
+                        // send it to raftstore to update region approximate size
+                        if let Err(e) = self.ch.try_send(Msg::RegionApproximateSize {
+                            region_id: region.get_id(),
+                            size,
+                        }) {
+                            warn!(
+                                "[region {}] failed to send approximate region size: {:?}",
+                                region.get_id(),
+                                e
+                            );
+                        }
+                        return size;
+                    }
+                    0
                 });
                 let approximate_keys = approximate_keys.unwrap_or_else(|| {
-                    get_region_approximate_keys(&self.db, &region).unwrap_or_default()
+                    if let Ok(keys) = get_region_approximate_keys(&self.db, &region) {
+                        // send it to raftstore to update region approximate size
+                        if let Err(e) = self.ch.try_send(Msg::RegionApproximateKeys {
+                            region_id: region.get_id(),
+                            keys,
+                        }) {
+                            warn!(
+                                "[region {}] failed to send approximate region keys: {:?}",
+                                region.get_id(),
+                                e
+                            );
+                        }
+                        return keys;
+                    }
+                    0
                 });
                 let (
                     read_bytes_delta,

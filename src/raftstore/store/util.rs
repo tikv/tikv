@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::Bound::Excluded;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -476,9 +475,9 @@ pub fn get_region_approximate_middle_cf(
         let props = RangeProperties::decode(v.user_collected_properties())?;
         keys.extend(
             props
-                .offsets
-                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
-                .map(|(k, _)| k.to_owned()),
+                .take_excluded_range(start.as_slice(), end.as_slice())
+                .into_iter()
+                .map(|(k, _)| k),
         );
     }
     if keys.is_empty() {
@@ -551,9 +550,9 @@ pub fn get_region_approximate_split_keys_cf(
         total_size += props.get_approximate_size_in_range(&start, &end);
         keys.extend(
             props
-                .offsets
-                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
-                .map(|(k, _)| k.to_owned()),
+                .take_excluded_range(start.as_slice(), end.as_slice())
+                .into_iter()
+                .map(|(k, _)| k),
         );
     }
     if keys.len() == 1 {

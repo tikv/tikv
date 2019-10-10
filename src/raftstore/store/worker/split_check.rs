@@ -262,11 +262,31 @@ impl<C: Sender<Msg>> Runner<C> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         MergedIterator::new(self.engine.as_ref(), LARGE_CFS, start_key, end_key, false).map(
             |mut iter| {
+                let mut size = 0;
+                let mut keys = 0;
                 while let Some(e) = iter.next() {
                     if host.on_kv(region, &e) {
-                        break;
+                        return;
                     }
+                    size += e.entry_size() as u64;
+                    keys += 1;
                 }
+
+                // if we scan the whole range, we can update approximate size and keys with accurate value.
+                info!(
+                    "[region {}] update approximate size and keys with accurate value {} and {}",
+                    region.get_id(),
+                    size,
+                    keys
+                );
+                let _ = self.ch.try_send(Msg::RegionApproximateSize {
+                    region_id: region.get_id(),
+                    size,
+                });
+                let _ = self.ch.try_send(Msg::RegionApproximateKeys {
+                    region_id: region.get_id(),
+                    keys,
+                });
             },
         )?;
         timer.observe_duration();

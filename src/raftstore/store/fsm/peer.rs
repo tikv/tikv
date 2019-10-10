@@ -1830,13 +1830,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if !peer.is_leader() {
                 continue;
             }
-            // When restart, the approximate size will be None. The
-            // split check will first check the region size, and then
-            // check whether the region should split.  This should
-            // work even if we change the region max size.
-            // If peer says should update approximate size, update region
-            // size and check whether the region should split.
+            // When restart, the approximate size will be None. The split check will first
+            // check the region size, and then check whether the region should split. This
+            // should work even if we change the region max size.
+            // If peer says should update approximate size, update region size and check
+            // whether the region should split.
             if peer.approximate_size.is_some()
+                && peer.approximate_size.unwrap() < self.cfg.region_max_size.0
                 && peer.compaction_declined_bytes < self.cfg.region_split_check_diff.0
                 && peer.size_diff_hint < self.cfg.region_split_check_diff.0
             {
