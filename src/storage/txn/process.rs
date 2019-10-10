@@ -73,7 +73,6 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
-        _ => panic!("callback type mismatch"),
     }
 }
 

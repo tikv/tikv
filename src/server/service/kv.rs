@@ -86,10 +86,11 @@ impl RegionVerId {
 struct BatchLimiter {
     timeout: Option<Duration>,
     last_submit_time: Instant,
+    // Statistics
     input_since_last_submit: u64,
     input_since_last_tick: u64,
     output_since_last_tick: u64,
-    // batch size is restrained below this limit.
+    // Batch size is restrained below this limit.
     input_limit: u64,
 }
 
@@ -147,7 +148,7 @@ impl BatchLimiter {
         self.input_since_last_tick += size;
     }
 
-    /// Observe the time and output size of one batch submit
+    /// Observe the time and output size of one batch submit.
     #[inline]
     fn observe_submit(&mut self, now: Instant, size: u64) {
         self.last_submit_time = now;
@@ -276,7 +277,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                                     if reqs.len() != v.len() {
                                         error!("KvService batch response size mismatch");
                                     }
-                                    for (id, v) in reqs.into_iter().zip(v.into_iter()) {
+                                    for (req, v) in reqs.into_iter().zip(v.into_iter()) {
                                         let mut resp = RawGetResponse::default();
                                         if let Some(err) = extract_region_error(&v) {
                                             resp.set_region_error(err);
@@ -291,7 +292,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                                         res.cmd = Some(
                                             batch_commands_response::response::Cmd::RawGet(resp),
                                         );
-                                        if tx.send_and_notify((id, res)).is_err() {
+                                        if tx.send_and_notify((req, res)).is_err() {
                                             error!("KvService response batch commands fail");
                                         }
                                     }
@@ -321,7 +322,10 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                     let res = storage.batch_async_get(commands).then(move |v| {
                         match v {
                             Ok(v) => {
-                                for (id, v) in reqs.into_iter().zip(v.into_iter()) {
+                                if reqs.len() != v.len() {
+                                    error!("KvService batch response size mismatch");
+                                }
+                                for (req, v) in reqs.into_iter().zip(v.into_iter()) {
                                     let mut resp = GetResponse::default();
                                     if let Some(err) = extract_region_error(&v) {
                                         resp.set_region_error(err);
@@ -335,7 +339,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                                     let mut res = batch_commands_response::Response::default();
                                     res.cmd =
                                         Some(batch_commands_response::response::Cmd::Get(resp));
-                                    if tx.send_and_notify((id, res)).is_err() {
+                                    if tx.send_and_notify((req, res)).is_err() {
                                         error!("KvService response batch commands fail");
                                     }
                                 }

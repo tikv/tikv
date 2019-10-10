@@ -52,7 +52,6 @@ pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
-pub type BatchCallback<T> = Box<dyn FnOnce(Vec<Result<T>>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -111,9 +110,7 @@ impl Mutation {
 
 pub enum StorageCb {
     Boolean(Callback<()>),
-    BatchBoolean(BatchCallback<()>),
     Booleans(Callback<Vec<Result<()>>>),
-    BatchBooleans(BatchCallback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
@@ -2426,7 +2423,8 @@ mod tests {
         for v in x {
             expect_error(
                 |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                    }
                     e => panic!("unexpected error chain: {:?}", e),
                 },
                 v,
