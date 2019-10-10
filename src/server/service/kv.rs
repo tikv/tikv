@@ -73,6 +73,7 @@ struct RegionVerId {
 }
 
 impl RegionVerId {
+    #[inline]
     fn from_context(ctx: &Context) -> Self {
         RegionVerId {
             region: ctx.get_region_id(),
@@ -82,48 +83,95 @@ impl RegionVerId {
     }
 }
 
-struct BatchTimer {
+struct BatchLimiter {
     timeout: Option<Duration>,
-    timestamp: Instant,
+    last_submit_time: Instant,
+    input_since_last_submit: u64,
+    input_since_last_tick: u64,
+    output_since_last_tick: u64,
+    // batch size is restrained below this limit.
+    input_limit: u64,
 }
 
-impl BatchTimer {
+impl BatchLimiter {
     fn new(timeout: Option<Duration>) -> Self {
-        BatchTimer {
+        BatchLimiter {
             timeout,
-            timestamp: Instant::now(),
+            last_submit_time: Instant::now(),
+            input_since_last_submit: 0,
+            input_since_last_tick: 0,
+            output_since_last_tick: 0,
+            input_limit: 1,
         }
     }
 
+    #[inline]
     fn disabled(&self) -> bool {
         self.timeout.is_none()
     }
 
-    fn is_timeout(&self, now: Instant) -> bool {
+    /// Whether the batch is due to be submitted in a timely manner.
+    #[inline]
+    fn due(&self, now: Instant) -> bool {
         if let Some(timeout) = self.timeout {
-            now - self.timestamp >= timeout
+            now - self.last_submit_time >= timeout
         } else {
             true
         }
     }
 
-    fn set_now(&mut self, now: Instant) {
-        self.timestamp = now;
+    /// Whether the batch is ready to be submitted.
+    #[inline]
+    fn ready(&self) -> bool {
+        self.input_since_last_submit >= self.input_limit
+    }
+
+    /// Observe a tick from timer guard. Limiter will update statistics at this point.
+    #[inline]
+    fn observe_tick(&mut self) {
+        // naive strategy: fallback to quick submit when request stream is cold.
+        self.input_limit = if self.input_since_last_tick < 5 {
+            1
+        } else {
+            u64::max_value()
+        };
+        self.input_since_last_tick = 0;
+        self.output_since_last_tick = 0;
+    }
+
+    /// Observe the size of commands been examined by batcher.
+    /// Command may not be batched but must have the valid type for this batch.
+    #[inline]
+    fn observe_input(&mut self, size: u64) {
+        self.input_since_last_submit += size;
+        self.input_since_last_tick += size;
+    }
+
+    /// Observe the time and output size of one batch submit
+    #[inline]
+    fn observe_submit(&mut self, now: Instant, size: u64) {
+        self.last_submit_time = now;
+        self.input_since_last_submit = 0;
+        self.output_since_last_tick += size;
     }
 }
 
 trait Batcher<E: Engine, L: LockMgr> {
+    /// Try to batch single batch_command request, returns whether the request is stashed.
+    /// One batcher must only process requests from one unique command stream.
     fn filter(
         &mut self,
         request_id: u64,
         request: &mut batch_commands_request::request::Cmd,
     ) -> bool;
 
+    /// Submit all batched requests to store. `is_empty` always returns true after this operation.
+    /// Returns number of fused commands been submitted.
     fn submit(
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
-    );
+    ) -> u64;
 
     fn is_empty(&self) -> bool;
 }
@@ -132,8 +180,19 @@ trait Batcher<E: Engine, L: LockMgr> {
 struct ReadId {
     region: RegionVerId,
     priority: u8,
-    // None for txn read
+    // None in this field stands for txn read.
     cf: Option<String>,
+}
+
+impl ReadId {
+    #[inline]
+    fn from_context_cf(ctx: &Context, cf: Option<String>) -> Self {
+        ReadId {
+            region: RegionVerId::from_context(ctx),
+            priority: storage::get_priority_code(ctx.get_priority()),
+            cf,
+        }
+    }
 }
 
 struct ReadBatcher {
@@ -148,11 +207,7 @@ impl ReadBatcher {
     }
 
     fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {
-        let id = ReadId {
-            region: RegionVerId::from_context(request.get_context()),
-            priority: storage::get_priority_code(request.get_context().get_priority()),
-            cf: None,
-        };
+        let id = ReadId::from_context_cf(request.get_context(), None);
         let command = ReadpoolCommand::from_get(request);
         match self.router.get_mut(&id) {
             Some((reqs, commands)) => {
@@ -166,11 +221,8 @@ impl ReadBatcher {
     }
 
     fn add_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) {
-        let id = ReadId {
-            region: RegionVerId::from_context(request.get_context()),
-            priority: storage::get_priority_code(request.get_context().get_priority()),
-            cf: Some(request.take_cf()),
-        };
+        let cf = Some(request.take_cf());
+        let id = ReadId::from_context_cf(request.get_context(), cf);
         let command = ReadpoolCommand::from_raw_get(request);
         match self.router.get_mut(&id) {
             Some((reqs, commands)) => {
@@ -207,67 +259,68 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
-    ) {
+    ) -> u64 {
+        let mut output = 0;
         for (id, (reqs, commands)) in self.router.iter_mut() {
             let tx = tx.clone();
-            let tx2 = tx.clone();
             let commands = std::mem::replace(commands, vec![]);
+            output += commands.len();
             let reqs = std::mem::replace(reqs, vec![]);
-            let reqs2 = reqs.clone();
             match &id.cf {
                 Some(cf) => {
                     let res = storage
-                        .batch_async_raw_get(
-                            cf.clone(),
-                            commands,
-                            Box::new(move |v: Vec<Result<Option<Vec<u8>>, storage::Error>>| {
-                                if reqs.len() != v.len() {
-                                    error!("KvService batch response size mismatch");
-                                }
-                                for (id, v) in reqs.into_iter().zip(v.into_iter()) {
-                                    let mut resp = RawGetResponse::default();
-                                    if let Some(err) = extract_region_error(&v) {
-                                        resp.set_region_error(err);
-                                    } else {
-                                        match v {
-                                            Ok(Some(val)) => resp.set_value(val),
-                                            Ok(None) => resp.set_not_found(true),
-                                            Err(e) => resp.set_error(format!("{}", e)),
+                        .batch_async_raw_get(cf.clone(), commands)
+                        .then(move |v| {
+                            match v {
+                                Ok(v) => {
+                                    if reqs.len() != v.len() {
+                                        error!("KvService batch response size mismatch");
+                                    }
+                                    for (id, v) in reqs.into_iter().zip(v.into_iter()) {
+                                        let mut resp = RawGetResponse::default();
+                                        if let Some(err) = extract_region_error(&v) {
+                                            resp.set_region_error(err);
+                                        } else {
+                                            match v {
+                                                Ok(Some(val)) => resp.set_value(val),
+                                                Ok(None) => resp.set_not_found(true),
+                                                Err(e) => resp.set_error(format!("{}", e)),
+                                            }
                                         }
+                                        let mut res = batch_commands_response::Response::default();
+                                        res.cmd = Some(
+                                            batch_commands_response::response::Cmd::RawGet(resp),
+                                        );
+                                        if tx.send_and_notify((id, res)).is_err() {
+                                            error!("KvService response batch commands fail");
+                                        }
+                                    }
+                                }
+                                e => {
+                                    let mut resp = RawGetResponse::default();
+                                    if let Some(err) = extract_region_error(&e) {
+                                        resp.set_region_error(err);
+                                    } else if let Err(e) = e {
+                                        resp.set_error(format!("{}", e));
                                     }
                                     let mut res = batch_commands_response::Response::default();
                                     res.cmd =
                                         Some(batch_commands_response::response::Cmd::RawGet(resp));
-                                    if tx.send_and_notify((id, res)).is_err() {
-                                        error!("KvService response batch commands fail");
+                                    for req in reqs {
+                                        if tx.send_and_notify((req, res.clone())).is_err() {
+                                            error!("KvService response batch commands fail");
+                                        }
                                     }
                                 }
-                            }),
-                        )
-                        .map_err(move |e| {
-                            let mut resp = RawGetResponse::default();
-                            let result = Err(e);
-                            if let Some(err) = extract_region_error::<()>(&result) {
-                                resp.set_region_error(err);
-                            } else if let Err(e) = result {
-                                resp.set_error(format!("{}", e));
                             }
-                            let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                            for req in reqs2 {
-                                if tx2.send_and_notify((req, res.clone())).is_err() {
-                                    error!("KvService response batch commands fail");
-                                }
-                            }
-                        })
-                        .and_then(|_| Ok(()));
+                            Ok(())
+                        });
                     poll_future_notify(res);
                 }
                 None => {
-                    let res = storage
-                        .batch_async_get(
-                            commands,
-                            Box::new(move |v: Vec<Result<Option<Value>, storage::Error>>| {
+                    let res = storage.batch_async_get(commands).then(move |v| {
+                        match v {
+                            Ok(v) => {
                                 for (id, v) in reqs.into_iter().zip(v.into_iter()) {
                                     let mut resp = GetResponse::default();
                                     if let Some(err) = extract_region_error(&v) {
@@ -286,38 +339,40 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                                         error!("KvService response batch commands fail");
                                     }
                                 }
-                            }),
-                        )
-                        .map_err(move |e| {
-                            let mut resp = GetResponse::default();
-                            let result = Err(e);
-                            if let Some(err) = extract_region_error::<()>(&result) {
-                                resp.set_region_error(err);
-                            } else if let Err(e) = result {
-                                resp.set_error(extract_key_error(&e));
                             }
-                            let mut res = batch_commands_response::Response::default();
-                            res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                            for req in reqs2 {
-                                if tx2.send_and_notify((req, res.clone())).is_err() {
-                                    error!("KvService response batch commands fail");
+                            e => {
+                                let mut resp = GetResponse::default();
+                                if let Some(err) = extract_region_error(&e) {
+                                    resp.set_region_error(err);
+                                } else if let Err(e) = e {
+                                    resp.set_error(extract_key_error(&e));
+                                }
+                                let mut res = batch_commands_response::Response::default();
+                                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                                for req in reqs {
+                                    if tx.send_and_notify((req, res.clone())).is_err() {
+                                        error!("KvService response batch commands fail");
+                                    }
                                 }
                             }
-                        })
-                        .and_then(|_| Ok(()));
+                        }
+                        Ok(())
+                    });
                     poll_future_notify(res);
                 }
             }
         }
         self.router.clear();
+        output as u64
     }
 
+    #[inline]
     fn is_empty(&self) -> bool {
         self.router.is_empty()
     }
 }
 
-type ReqBatcherInner<E, L> = (BatchTimer, Box<dyn Batcher<E, L>>);
+type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L>>);
 
 struct ReqBatcher<E: Engine, L: LockMgr> {
     inners: BTreeMap<String, ReqBatcherInner<E, L>>,
@@ -334,7 +389,7 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         let mut inners = BTreeMap::<String, ReqBatcherInner<E, L>>::default();
         inners.insert(
             "get".to_string(),
-            (BatchTimer::new(timeout), Box::new(ReadBatcher::new())),
+            (BatchLimiter::new(timeout), Box::new(ReadBatcher::new())),
         );
         ReqBatcher { inners, tx }
     }
@@ -354,7 +409,8 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                 | batch_commands_request::request::Cmd::RawGet(_) => self.inners.get_mut("get"),
                 _ => None,
             };
-            if let Some((_, batcher)) = inner {
+            if let Some((limiter, batcher)) = inner {
+                limiter.observe_input(1);
                 batcher.filter(request_id, cmd)
             } else {
                 false
@@ -364,24 +420,35 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         }
     }
 
+    /// Check all batchers and submit if their limiters see fit.
+    /// Called by anyone with a suitable timeslice for executing commands.
+    #[inline]
     pub fn maybe_submit(&mut self, storage: &Storage<E, L>) {
-        for (timer, batcher) in self.inners.values_mut() {
-            if timer.disabled() && !batcher.is_empty() {
-                batcher.submit(&self.tx, storage);
+        let mut now = None;
+        for (limiter, batcher) in self.inners.values_mut() {
+            if limiter.disabled() || limiter.ready() {
+                if now.is_none() {
+                    now = Some(Instant::now());
+                }
+                limiter.observe_submit(now.unwrap(), batcher.submit(&self.tx, storage));
             }
         }
     }
 
+    /// Check all batchers and submit if their wait duration has exceeded the max limit.
+    /// Called repeatedly every `request-batch-wait-duration` interval after the batcher starts working.
+    #[inline]
     pub fn should_submit(&mut self, storage: &Storage<E, L>) {
         let now = Instant::now();
-        for (timer, batcher) in self.inners.values_mut() {
-            if timer.is_timeout(now) && !batcher.is_empty() {
-                timer.set_now(now);
-                batcher.submit(&self.tx, storage);
+        for (limiter, batcher) in self.inners.values_mut() {
+            limiter.observe_tick();
+            if limiter.due(now) {
+                limiter.observe_submit(now, batcher.submit(&self.tx, storage));
             }
         }
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         for (_, batcher) in self.inners.values() {
             if !batcher.is_empty() {

@@ -987,17 +987,21 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             .flatten()
     }
 
+    /// Get values of a set of keys with seperate context from a snapshot, return a vector of results.
+    ///
+    /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_async_get(
         &self,
         gets: Vec<ReadpoolCommand>,
-        callback: BatchCallback<Option<Vec<u8>>>,
-    ) -> impl Future<Item = (), Error = Error> {
+    ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: &str = "get";
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
-            Self::with_tls_engine(|engine| {
+            let command_duration = tikv_util::time::Instant::now_coarse();
+
+            Self::with_tls_engine(move |engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1018,11 +1022,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                         .map_err(Error::from),
                                 );
                             }
-                            callback(results);
-                            Ok(())
+                            future::ok(results)
                         })
                     })
-                    .then(|r| r)
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
             })
         });
         future::result(res)
@@ -1566,18 +1572,19 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             .flatten()
     }
 
+    /// Get the values of a set of raw keys, return a vector of results.
     pub fn batch_async_raw_get(
         &self,
         cf: String,
         gets: Vec<ReadpoolCommand>,
-        callback: BatchCallback<Option<Vec<u8>>>,
-    ) -> impl Future<Item = (), Error = Error> {
+    ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: &str = "raw_get";
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
-            Self::with_tls_engine(|engine| {
+            let command_duration = tikv_util::time::Instant::now_coarse();
+            Self::with_tls_engine(move |engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1589,11 +1596,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                             for get in gets {
                                 results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
                             }
-                            callback(results);
-                            future::ok(())
+                            future::ok(results)
                         })
                     })
-                    .then(|r| r)
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
             })
         });
         future::result(res)
@@ -2407,28 +2416,22 @@ mod tests {
                 )
                 .wait(),
         );
-        storage
-            .batch_async_get(
-                vec![
-                    ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(1)),
-                    ReadpoolCommand::from_key_ts(Key::from_raw(b"d"), Some(1)),
-                ],
-                Box::new(move |x| {
-                    for v in x {
-                        expect_error(
-                            |e| match e {
-                                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(
-                                    EngineError::Request(..),
-                                ))) => (),
-                                e => panic!("unexpected error chain: {:?}", e),
-                            },
-                            v,
-                        );
-                    }
-                }),
-            )
+        let x = storage
+            .batch_async_get(vec![
+                ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(1)),
+                ReadpoolCommand::from_key_ts(Key::from_raw(b"d"), Some(1)),
+            ])
             .wait()
             .unwrap();
+        for v in x {
+            expect_error(
+                |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                },
+                v,
+            );
+        }
     }
 
     #[test]
@@ -2739,27 +2742,21 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        storage
-            .batch_async_get(
-                vec![
-                    ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(2)),
-                    ReadpoolCommand::from_key_ts(Key::from_raw(b"d"), Some(2)),
-                ],
-                Box::new(|x| {
-                    assert_eq!(x.len(), 2);
-                    let mut iter = x.into_iter();
-                    expect_error(
-                        |e| match e {
-                            Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(..))) => (),
-                            e => panic!("unexpected error chain: {:?}", e),
-                        },
-                        iter.next().unwrap(),
-                    );
-                    assert_eq!(iter.next().unwrap().unwrap(), None);
-                }),
-            )
+        let mut x = storage
+            .batch_async_get(vec![
+                ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(2)),
+                ReadpoolCommand::from_key_ts(Key::from_raw(b"d"), Some(2)),
+            ])
             .wait()
             .unwrap();
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(..))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
+            x.remove(0),
+        );
+        assert_eq!(x.remove(0).unwrap(), None);
         storage
             .async_commit(
                 Context::default(),
@@ -2774,29 +2771,27 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        storage
-            .batch_async_get(
-                vec![
-                    ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(5)),
-                    ReadpoolCommand::from_key_ts(Key::from_raw(b"x"), Some(5)),
-                    ReadpoolCommand::from_key_ts(Key::from_raw(b"a"), Some(5)),
-                    ReadpoolCommand::from_key_ts(Key::from_raw(b"b"), Some(5)),
-                ],
-                Box::new(move |x| {
-                    let x: Vec<Option<Vec<u8>>> = x.into_iter().map(|x| x.unwrap()).collect();
-                    assert_eq!(
-                        x,
-                        vec![
-                            Some(b"cc".to_vec()),
-                            None,
-                            Some(b"aa".to_vec()),
-                            Some(b"bb".to_vec())
-                        ]
-                    );
-                }),
-            )
+        let x: Vec<Option<Vec<u8>>> = storage
+            .batch_async_get(vec![
+                ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(5)),
+                ReadpoolCommand::from_key_ts(Key::from_raw(b"x"), Some(5)),
+                ReadpoolCommand::from_key_ts(Key::from_raw(b"a"), Some(5)),
+                ReadpoolCommand::from_key_ts(Key::from_raw(b"b"), Some(5)),
+            ])
             .wait()
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(
+            x,
+            vec![
+                Some(b"cc".to_vec()),
+                None,
+                Some(b"aa".to_vec()),
+                Some(b"bb".to_vec())
+            ]
+        );
     }
 
     #[test]
@@ -3414,18 +3409,14 @@ mod tests {
             .map(|&(ref k, _)| ReadpoolCommand::from_key_ts(Key::from_encoded(k.clone()), Some(0)))
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
-        storage
-            .batch_async_raw_get(
-                "".to_string(),
-                cmds,
-                Box::new(move |x| {
-                    let x: Vec<Option<Vec<u8>>> = x.into_iter().map(|x| x.unwrap()).collect();
-                    assert_eq!(x.len(), results.len());
-                    assert_eq!(x, results);
-                }),
-            )
+        let x: Vec<Option<Vec<u8>>> = storage
+            .batch_async_raw_get("".to_string(), cmds)
             .wait()
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(x, results);
     }
 
     #[test]

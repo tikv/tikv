@@ -113,7 +113,7 @@
 ## Whether to enable request batch.
 # enable-request-batch = true
 
-## Whether to collect batch cross commands. When disabled, wait duration is ignored.
+## Whether to collect batch across commands. When disabled, wait duration is ignored.
 # request-batch-enable-cross-command = false
 
 ## Wait duration before each mini-batch is processed.
