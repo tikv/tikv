@@ -1017,6 +1017,7 @@ mod tests {
                 Context::default(),
                 key.clone(),
                 20,
+                0,
                 expect_ok_callback(tx.clone()),
             )
             .unwrap();
@@ -1231,6 +1232,7 @@ mod tests {
                 Context::default(),
                 keys[0].clone(),
                 30,
+                0,
                 expect_ok_callback(tx.clone()),
             )
             .unwrap();
@@ -1334,6 +1336,7 @@ mod tests {
                 Context::default(),
                 keys[0].clone(),
                 30,
+                0,
                 expect_ok_callback(tx.clone()),
             )
             .unwrap();
