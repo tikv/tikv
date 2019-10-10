@@ -434,9 +434,8 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     res
 }
 
-// TODO: add check for prec and frac_cnt
 /// Get the max possible decimal with giving precision and fraction digit count.
-pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
+fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     let int_cnt = prec - frac_cnt;
     let mut res = Decimal::new(int_cnt, frac_cnt, false);
     let mut idx = 0;
