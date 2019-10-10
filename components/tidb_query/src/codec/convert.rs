@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
-use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_datatype::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
+use tidb_query_datatype::{Collation, FieldTypeAccessor};
 use tipb::FieldType;
 
 use super::mysql::{RoundMode, DEFAULT_FSP};
@@ -710,7 +710,10 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
         return;
     }
     let flen = flen as usize;
-    if ft.tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen {
+    if ft.as_accessor().tp() == FieldTypeTp::String
+        && ft.as_accessor().collation() == Collation::Binary
+        && s.len() < flen
+    {
         // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
         s.resize(flen, 0);
     }
@@ -995,7 +998,7 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<
     } else {
         valid_float
     };
-    // TODO, may here we can use Cow to avoid some copy below
+    // TODO: may here we can use Cow to avoid some copy below
     let int_str = if valid_float.starts_with('-') {
         if dot_idx == 0 {
             "-0"
@@ -1949,6 +1952,7 @@ mod tests {
             (1.36, 10, 2, Res::Ok(1.36)),
             (f64::NAN, 10, 1, Res::Overflow(0f64)),
         ];
+
         for (f, flen, decimal, exp) in cases {
             let res = truncate_f64(f, flen, decimal);
             assert_eq!(res, exp);
