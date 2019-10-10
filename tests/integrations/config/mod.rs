@@ -58,6 +58,7 @@ fn test_serde_custom_tikv_config() {
         grpc_compression_type: GrpcCompressionType::Gzip,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
+        grpc_memory_pool_quota: ReadableSize(123_456),
         grpc_raft_conn_num: 123,
         grpc_stream_initial_window_size: ReadableSize(12_345),
         grpc_keepalive_time: ReadableDuration::secs(3),
@@ -239,6 +240,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: true,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -291,6 +293,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -343,6 +346,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -395,6 +399,7 @@ fn test_serde_custom_tikv_config() {
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
         titan: TitanDBConfig {
             enabled: true,
@@ -469,6 +474,7 @@ fn test_serde_custom_tikv_config() {
             titan: TitanCfConfig::default(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
+            enable_doubly_skiplist: false,
         },
     };
     value.storage = StorageConfig {

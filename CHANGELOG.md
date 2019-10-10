@@ -2,6 +2,21 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.4]
+
++ Fix the issue that the approximate keys is not correct when region is empty [#5414](https://github.com/tikv/tikv/pull/5414)
++ Make the config support rocksdb doubly skiplist to optimize `reverse-scan` [#5368](https://github.com/tikv/tikv/pull/5368)
++ Optimize point-get in coprocessor [#5463](https://github.com/tikv/tikv/pull/5463)
++ Support batch-split command and empty batch command [#5470](https://github.com/tikv/tikv/pull/5470)
++ Fix `PointGetter` performance issue when there are concurrent write [#5495](https://github.com/tikv/tikv/pull/5495)
++ Fix the output on short version flag [#5501](https://github.com/tikv/tikv/pull/5501)
++ Support the pessmistic transaction API: txn-heart-beat [#5507](https://github.com/tikv/tikv/pull/5507)
++ `titan` GC and monitoring improvement [#5517](https://github.com/tikv/tikv/pull/5517)
++ Update `grpcio` to v0.4.5 [#5523](https://github.com/tikv/tikv/pull/5523)
++ Support GRPC memory quota [#5524](https://github.com/tikv/tikv/pull/5524)
++ Fix commit index is not forwarded when merge entry is empty [#5526](https://github.com/tikv/tikv/pull/5526)
++ Fix a resource leak bug in batch grpc [#5567](https://github.com/tikv/tikv/pull/5567)
+  
 ## [3.0.3]
 
 + Fix the issue that ReadIndex might fail to respond to requests because of duplicate context [#5256](https://github.com/tikv/tikv/pull/5256)

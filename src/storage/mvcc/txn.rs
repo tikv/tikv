@@ -4,7 +4,7 @@ use super::lock::{Lock, LockType};
 use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
-use super::{Error, Result};
+use super::{extract_physical, Error, Result};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -86,6 +86,12 @@ impl<S: Snapshot> MvccTxn<S> {
         self.write_size
     }
 
+    fn put_lock(&mut self, key: Key, lock: &Lock) {
+        let lock = lock.to_bytes();
+        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
+        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+    }
+
     fn lock_key(
         &mut self,
         key: Key,
@@ -102,10 +108,8 @@ impl<S: Snapshot> MvccTxn<S> {
             short_value,
             options.for_update_ts,
             options.txn_size,
-        )
-        .to_bytes();
-        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
-        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+        );
+        self.put_lock(key, &lock);
     }
 
     fn unlock_key(&mut self, key: Key) {
@@ -482,8 +486,34 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
+        self.cleanup(key, 0)
+    }
+
+    /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
+    /// cleanup the lock without checking TTL.
+    ///
+    /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
+    /// committed.
+    pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
         let is_pessimistic_txn = match self.reader.load_lock(&key)? {
-            Some(ref lock) if lock.ts == self.start_ts => {
+            Some(ref mut lock) if lock.ts == self.start_ts => {
+                // If current_ts is not 0, check the Lock's TTL.
+                // If the lock is not expired, do not rollback it but report key is locked.
+                if current_ts > 0
+                    && extract_physical(lock.ts) + lock.ttl >= extract_physical(current_ts)
+                {
+                    // The `lock.primary` field will not be accessed again. Use mem::replace to
+                    // avoid cloning.
+                    let primary = ::std::mem::replace(&mut lock.primary, Default::default());
+                    return Err(Error::KeyIsLocked {
+                        key: key.into_raw()?,
+                        primary,
+                        ts: lock.ts,
+                        ttl: lock.ttl,
+                        txn_size: lock.txn_size,
+                    });
+                }
+
                 // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
                     self.delete_value(key.clone(), lock.ts);
@@ -554,6 +584,41 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
         Ok(())
+    }
+
+    /// Update a primary key's TTL if `advise_ttl > lock.ttl`.
+    ///
+    /// Returns the new TTL.
+    pub fn txn_heart_beat(&mut self, primary_key: Key, advise_ttl: u64) -> Result<u64> {
+        if let Some(mut lock) = self.reader.load_lock(&primary_key)? {
+            if lock.ts == self.start_ts {
+                if lock.ttl < advise_ttl {
+                    lock.ttl = advise_ttl;
+                    self.put_lock(primary_key, &lock);
+                } else {
+                    debug!(
+                        "txn_heart_beat with advise_ttl not large than current ttl";
+                        "primary_key" => %primary_key,
+                        "start_ts" => self.start_ts,
+                        "advise_ttl" => advise_ttl,
+                        "current_ttl" => lock.ttl,
+                    );
+                }
+                return Ok(lock.ttl);
+            }
+        }
+
+        debug!(
+            "txn_heart_beat invoked but lock is absent";
+            "primary_key" => %primary_key,
+            "start_ts" => self.start_ts,
+            "advise_ttl" => advise_ttl,
+        );
+        Err(Error::TxnLockNotFound {
+            start_ts: self.start_ts,
+            commit_ts: 0,
+            key: primary_key.into_raw()?,
+        })
     }
 
     pub fn gc(&mut self, key: Key, safe_point: u64) -> Result<GcInfo> {
@@ -763,6 +828,37 @@ mod tests {
 
         // Rollback delete
         must_rollback(&engine, k, 15);
+    }
+
+    #[test]
+    fn test_cleanup() {
+        // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests that not
+        // related to TTL check should be covered by other test cases.
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Shorthand for composing ts.
+        let ts = super::super::compose_ts;
+
+        let (k, v) = (b"k", b"v");
+
+        must_prewrite_put(&engine, k, v, k, ts(10, 0));
+        must_locked(&engine, k, ts(10, 0));
+        must_txn_heart_beat(&engine, k, ts(10, 0), 100, 100);
+        // Check the last txn_heart_beat has set the lock's TTL to 100.
+        must_txn_heart_beat(&engine, k, ts(10, 0), 90, 100);
+
+        // TTL not expired. Do nothing but returns an error.
+        must_cleanup_err(&engine, k, ts(10, 0), ts(20, 0));
+        must_locked(&engine, k, ts(10, 0));
+
+        // Try to cleanup another transaction's lock. Does nothing.
+        must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
+        must_locked(&engine, k, ts(10, 0));
+
+        // TTL expired. The lock should be removed.
+        must_cleanup(&engine, k, ts(10, 0), ts(120, 0));
+        must_unlocked(&engine, k);
+        must_get_rollback_ts(&engine, k, ts(10, 0));
     }
 
     #[test]
@@ -1398,6 +1494,54 @@ mod tests {
         must_pessimistic_locked(&engine, k, 1, 2);
         must_acquire_pessimistic_lock(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
+    #[test]
+    fn test_txn_heart_beat() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (k, v) = (b"k1", b"v1");
+
+        let test = |ts| {
+            // Do nothing if advise_ttl is less smaller than current TTL.
+            must_txn_heart_beat(&engine, k, ts, 90, 100);
+            // Return the new TTL if the TTL when the TTL is updated.
+            must_txn_heart_beat(&engine, k, ts, 110, 110);
+            // The lock's TTL is updated and persisted into the db.
+            must_txn_heart_beat(&engine, k, ts, 90, 110);
+            // Heart beat another transaction's lock will lead to an error.
+            must_txn_heart_beat_err(&engine, k, ts - 1, 150);
+            must_txn_heart_beat_err(&engine, k, ts + 1, 150);
+            // The existing lock is not changed.
+            must_txn_heart_beat(&engine, k, ts, 90, 110);
+        };
+
+        // No lock.
+        must_txn_heart_beat_err(&engine, k, 5, 100);
+
+        // Create a lock with TTL=100.
+        // The initial TTL will be set to 0 after calling must_prewrite_put. Update it first.
+        must_prewrite_put(&engine, k, v, k, 5);
+        must_locked(&engine, k, 5);
+        must_txn_heart_beat(&engine, k, 5, 100, 100);
+
+        test(5);
+
+        must_locked(&engine, k, 5);
+        must_commit(&engine, k, 5, 10);
+        must_unlocked(&engine, k);
+
+        // No lock.
+        must_txn_heart_beat_err(&engine, k, 5, 100);
+        must_txn_heart_beat_err(&engine, k, 10, 100);
+
+        must_acquire_pessimistic_lock(&engine, k, k, 8, 15);
+        must_pessimistic_locked(&engine, k, 8, 15);
+        must_txn_heart_beat(&engine, k, 8, 100, 100);
+
+        test(8);
+
+        must_pessimistic_locked(&engine, k, 8, 15);
     }
 
     #[test]

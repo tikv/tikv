@@ -276,6 +276,29 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
+    fn kv_txn_heart_beat(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: TxnHeartBeatRequest,
+        sink: UnarySink<TxnHeartBeatResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .kv_txn_heart_beat
+            .start_coarse_timer();
+        let future = future_txn_heart_beat(&self.storage, req)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "kv_txn_heart_beat",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn kv_scan_lock(
         &mut self,
         ctx: RpcContext<'_>,
@@ -824,9 +847,18 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
+        let mut split_keys = if !req.get_split_key().is_empty() {
+            vec![Key::from_raw(req.get_split_key()).into_encoded()]
+        } else {
+            req.take_split_keys()
+                .into_iter()
+                .map(|x| Key::from_raw(&x).into_encoded())
+                .collect()
+        };
+        split_keys.sort();
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
-            split_keys: vec![Key::from_raw(req.get_split_key()).into_encoded()],
+            split_keys,
             callback: Callback::Write(cb),
         };
 
@@ -843,7 +875,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
                     let admin_resp = v.response.mut_admin_response();
-                    if admin_resp.get_splits().get_regions().len() != 2 {
+                    let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
+                    if regions.len() < 2 {
                         error!(
                             "invalid split response";
                             "region_id" => region_id,
@@ -854,10 +887,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                             admin_resp
                         ));
                     } else {
-                        let mut regions = admin_resp.mut_splits().take_regions().into_vec();
-                        let mut d = regions.drain(..);
-                        resp.set_left(d.next().unwrap());
-                        resp.set_right(d.next().unwrap());
+                        if regions.len() == 2 {
+                            resp.set_left(regions[0].clone());
+                            resp.set_right(regions[1].clone());
+                        }
+                        resp.set_regions(regions.into());
                     }
                 }
                 resp
@@ -1127,6 +1161,17 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
+        Some(BatchCommandsRequest_Request_oneof_cmd::TxnHeartBeat(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC
+                .kv_txn_heart_beat
+                .start_coarse_timer();
+            let resp = future_txn_heart_beat(&storage, req)
+                .map(oneof!(
+                    BatchCommandsResponse_Response_oneof_cmd::TxnHeartBeat
+                ))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
         Some(BatchCommandsRequest_Request_oneof_cmd::ScanLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
             let resp = future_scan_lock(&storage, req)
@@ -1263,7 +1308,27 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
+        Some(BatchCommandsRequest_Request_oneof_cmd::Empty(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
+            let resp = future_handle_empty(req)
+                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Empty))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
     }
+}
+
+fn future_handle_empty(
+    req: BatchCommandsEmptyRequest,
+) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
+    tikv_util::timer::GLOBAL_TIMER_HANDLE
+        .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
+        .map(move |_| {
+            let mut res = BatchCommandsEmptyResponse::new();
+            res.set_test_id(req.get_test_id());
+            res
+        })
+        .map_err(|_| unreachable!())
 }
 
 fn future_get<E: Engine>(
@@ -1468,6 +1533,7 @@ fn future_cleanup<E: Engine>(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_start_version(),
+        req.get_current_ts(),
         cb,
     );
 
@@ -1519,6 +1585,35 @@ fn future_batch_rollback<E: Engine>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(extract_key_error(&e));
+        }
+        resp
+    })
+}
+
+fn future_txn_heart_beat<E: Engine>(
+    storage: &Storage<E>,
+    mut req: TxnHeartBeatRequest,
+) -> impl Future<Item = TxnHeartBeatResponse, Error = Error> {
+    let primary_key = Key::from_raw(req.get_primary_lock());
+
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_txn_heart_beat(
+        req.take_context(),
+        primary_key,
+        req.get_start_version(),
+        req.get_advise_lock_ttl(),
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = TxnHeartBeatResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((ttl, _)) => resp.set_lock_ttl(ttl),
+                Err(e) => resp.set_error(extract_key_error(&e)),
+            }
         }
         resp
     })
