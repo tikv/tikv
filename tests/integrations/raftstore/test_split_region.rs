@@ -164,7 +164,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(300));
 
     let target = pd_client.get_region(&last_key).unwrap();
 
@@ -177,7 +177,11 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         &mut range,
     );
 
-    thread::sleep(Duration::from_secs(1));
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    if left == right {
+        cluster.wait_region_split(&region);
+    }
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
@@ -848,4 +852,69 @@ fn test_split_with_epoch_not_match() {
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
     assert!(resp.get_header().get_error().has_epoch_not_match());
+}
+
+#[test]
+fn test_node_split_region_restart() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_split_region_restart(&mut cluster);
+}
+
+#[test]
+fn test_server_split_region_restart() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_split_region_restart(&mut cluster);
+}
+
+fn test_split_region_restart<T: Simulator>(cluster: &mut Cluster<T>) {
+    // make sure split check is not triggered temporarily
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::secs(50);
+    cluster.cfg.coprocessor.region_max_size = ReadableSize(REGION_MAX_SIZE);
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(REGION_SPLIT_SIZE);
+
+    let check_size_diff = cluster.cfg.raft_store.region_split_check_diff.0;
+    let mut range = 1..;
+
+    cluster.run();
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"").unwrap();
+    let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
+
+    let target = pd_client.get_region(&last_key).unwrap();
+    assert_eq!(region, target);
+    let max_key = put_cf_till_size(
+        cluster,
+        CF_WRITE,
+        REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
+        &mut range,
+    );
+
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    assert_eq!(left, right);
+
+    cluster.shutdown();
+
+    // let update approximate size and keys in pd_worker first, then in split_checker
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(500);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.start().unwrap();
+
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    if left == right {
+        cluster.wait_region_split(&left);
+    }
+
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    assert_ne!(left, right);
+    assert_eq!(region.get_start_key(), left.get_start_key());
+    assert_eq!(right.get_start_key(), left.get_end_key());
+    assert_eq!(region.get_end_key(), right.get_end_key());
+    assert_eq!(pd_client.get_region(&max_key).unwrap(), right);
+    assert_eq!(pd_client.get_region(left.get_end_key()).unwrap(), right);
 }
