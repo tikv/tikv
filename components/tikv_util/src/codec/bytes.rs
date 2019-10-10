@@ -446,27 +446,86 @@ mod tests {
     #[test]
     fn test_is_encoded_from() {
         for raw_len in 0..=24 {
-            let raw_bytes: Vec<u8> = (1..=raw_len).collect();
+            let raw: Vec<u8> = (1..=raw_len).collect();
             for &desc in &[true, false] {
-                let mut encoded = encode_order_bytes(&raw_bytes, desc);
+                let encoded = encode_order_bytes(&raw, desc);
                 assert!(
-                    is_encoded_from(&encoded, &raw_bytes, desc),
+                    is_encoded_from(&encoded, &raw, desc),
                     "Encoded: {:?}, Raw: {:?}, desc: {}",
-                    raw_bytes,
                     encoded,
+                    raw,
                     desc
                 );
-                for i in 0..encoded.len() {
-                    encoded[i] = encoded[i].wrapping_add(1);
+
+                // Should fail if we modify one byte in raw
+                for i in 0..raw.len() {
+                    let mut invalid_raw = raw.clone();
+                    invalid_raw[i] = raw[i].wrapping_add(1);
                     assert!(
-                        !is_encoded_from(&encoded, &raw_bytes, desc),
+                        !is_encoded_from(&encoded, &invalid_raw, desc),
                         "Encoded: {:?}, Raw: {:?}, desc: {}",
-                        raw_bytes,
                         encoded,
+                        invalid_raw,
                         desc
                     );
-                    encoded[i] = encoded[i].wrapping_sub(1);
                 }
+
+                // Should fail if we modify one byte in encoded
+                for i in 0..encoded.len() {
+                    let mut invalid_encoded = encoded.clone();
+                    invalid_encoded[i] = encoded[i].wrapping_add(1);
+                    assert!(
+                        !is_encoded_from(&invalid_encoded, &raw, desc),
+                        "Encoded: {:?}, Raw: {:?}, desc: {}",
+                        invalid_encoded,
+                        raw,
+                        desc
+                    );
+                }
+
+                // Should panic if encoded length is not a multiple of 9
+                let res = panic_hook::recover_safe(|| {
+                    is_encoded_from(&encoded[..encoded.len() - 1], &raw, desc)
+                });
+                assert!(res.is_err());
+
+                // Should panic if encoded has less or more chunks
+                let shorter_encoded = &encoded[..encoded.len() - ENC_GROUP_SIZE - 1];
+                assert!(
+                    !is_encoded_from(shorter_encoded, &raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    shorter_encoded,
+                    raw,
+                    desc
+                );
+                let mut longer_encoded = encoded.clone();
+                longer_encoded.extend(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+                assert!(
+                    !is_encoded_from(&longer_encoded, &raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    longer_encoded,
+                    raw,
+                    desc
+                );
+
+                // Should fail if raw is longer or shorter
+                let shorter_raw = &raw[..raw.len() - 1];
+                assert!(
+                    !is_encoded_from(&encoded, shorter_raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    encoded,
+                    shorter_raw,
+                    desc
+                );
+                let mut longer_raw = raw.to_vec();
+                longer_raw.push(0);
+                assert!(
+                    !is_encoded_from(&encoded, &longer_raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    encoded,
+                    longer_raw,
+                    desc
+                );
             }
         }
     }
