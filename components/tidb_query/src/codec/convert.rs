@@ -2572,7 +2572,7 @@ mod tests {
             let ctx_in_dml_flag = vec![Flag::IN_INSERT_STMT, Flag::IN_UPDATE_OR_DELETE_STMT];
             for in_dml_flag in ctx_in_dml_flag {
                 // make ctx
-                let mut flag: Flag = Flag::default();
+                let mut flag: Flag = Flag::empty();
                 if overflow_as_warning {
                     flag |= Flag::OVERFLOW_AS_WARNING;
                 }
