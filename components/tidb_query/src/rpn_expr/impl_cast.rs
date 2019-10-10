@@ -2896,7 +2896,7 @@ mod tests {
     fn test_time_as_string() {
         test_none_with_ctx_and_extra(cast_any_as_string::<Time>);
 
-        // TODO, add more test case
+        // TODO: add more test case
         let cs: Vec<(Time, Vec<u8>, String)> = vec![
             (
                 Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
@@ -2964,7 +2964,7 @@ mod tests {
     fn test_json_as_string() {
         test_none_with_ctx(cast_any_as_any::<Json, Bytes>);
 
-        // FIXME, this case is not exactly same as TiDB's,
+        // FIXME: this case is not exactly same as TiDB's,
         //  such as(left is TiKV, right is TiDB)
         //  f64::MIN =>        "1.7976931348623157e308",  "1.7976931348623157e+308",
         //  f64::MAX =>        "-1.7976931348623157e308", "-1.7976931348623157e+308",
@@ -4365,7 +4365,7 @@ mod tests {
                 Json::Double(18446744073709552000.0),
                 true,
             ),
-            // FIXME, f64::MAX.to_string() to json should success
+            // FIXME: f64::MAX.to_string() to json should success
             // (f64::MAX.to_string(), Json::Double(f64::MAX), true),
             ("0.0".to_string(), Json::Double(0.0), true),
             (
@@ -4433,7 +4433,7 @@ mod tests {
     fn test_time_as_json() {
         test_none_with_ctx(cast_any_as_any::<Time, Json>);
 
-        // TODO, add more case for other TimeType
+        // TODO: add more case for other TimeType
         let cs = vec![
             // Add time_type filed here is to make maintainer know clearly that what is the type of the time.
             (
@@ -4488,7 +4488,7 @@ mod tests {
     fn test_duration_as_json() {
         test_none_with_ctx(cast_any_as_any::<Duration, Json>);
 
-        // TODO, add more case
+        // TODO: add more case
         let cs = vec![
             (
                 Duration::zero(),
