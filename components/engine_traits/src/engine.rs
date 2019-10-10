@@ -20,10 +20,6 @@ pub trait WriteBatch: Mutable + Send {
     fn rollback_to_save_point(&mut self) -> Result<()>;
 }
 
-pub struct IngestExternalFileOptions {
-    pub move_files: bool,
-}
-
 pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug + 'static {
     type Snap: Snapshot;
     type Batch: WriteBatch;

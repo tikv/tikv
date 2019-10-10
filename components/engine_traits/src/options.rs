@@ -168,3 +168,8 @@ impl Default for IterOptions {
         }
     }
 }
+
+pub struct IngestExternalFileOptions {
+    pub move_files: bool,
+}
+
