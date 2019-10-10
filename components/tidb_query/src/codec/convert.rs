@@ -2090,8 +2090,8 @@ mod tests {
             // (InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning, truncate_as_warning
             // )
             //
-            // why there is origin_flen, origin_decimal here?
-            // to make let the programmer clearly know what the flen and decimal of the decimal is.
+            // The origin_flen, origin_decimal field is to
+            // let the programmer clearly know what the flen and decimal of the decimal is.
 
             // res_flen and res_decimal isn't UNSPECIFIED_LENGTH
             // flen < decimal
@@ -2611,21 +2611,19 @@ mod tests {
                         );
 
                 // check result
-                match expect {
-                    Ok(ref d) => {
+                match &expect {
+                    Ok(d) => {
                         assert!(r.is_ok(), "{}", log);
                         assert_eq!(&r.unwrap(), d, "{}", log);
                     }
-                    Err(ref e) => match e {
-                        Error::Eval(_, _) => {
-                            if let Error::Eval(_, d) = r.err().unwrap() {
-                                assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
-                            } else {
-                                unreachable!("{}", log)
-                            }
+                    Err(Error::Eval(_, _)) => {
+                        if let Error::Eval(_, d) = r.err().unwrap() {
+                            assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
+                        } else {
+                            unreachable!("{}", log);
                         }
-                        _ => unreachable!("{}", log),
-                    },
+                    }
+                    _ => unreachable!("{}", log),
                 }
 
                 // check warning
