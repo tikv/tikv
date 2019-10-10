@@ -24,6 +24,9 @@ struct State {
 impl State {
     fn new(notify_size: usize) -> State {
         State {
+            // Any pointer that is put into `recv_task` must be a valid and owned
+            // pointer (it must not be dropped). When a pointer is retrieved from
+            // `recv_task`, the user is responsible for its proper destruction.
             recv_task: AtomicPtr::new(null_mut()),
             notify_size,
             pending: AtomicUsize::new(0),
@@ -44,6 +47,7 @@ impl State {
         let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
         if !t.is_null() {
             self.pending.store(0, Ordering::Release);
+            // Safety: see comment on `recv_task`.
             let t = unsafe { Box::from_raw(t) };
             t.notify();
         }
@@ -58,10 +62,21 @@ impl State {
         let t = Box::into_raw(Box::new(task::current()));
         let origin = self.recv_task.swap(t, Ordering::AcqRel);
         if !origin.is_null() {
+            // Safety: see comment on `recv_task`.
             unsafe { drop(Box::from_raw(origin)) };
             return true;
         }
         false
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
+        if !t.is_null() {
+            // Safety: see comment on `recv_task`.
+            unsafe { drop(Box::from_raw(t)) };
+        }
     }
 }
 
@@ -86,7 +101,7 @@ impl Drop for Notifier {
 }
 
 pub struct Sender<T> {
-    sender: channel::Sender<T>,
+    sender: Option<channel::Sender<T>>,
     state: Arc<State>,
 }
 
@@ -103,6 +118,7 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
+        drop(self.sender.take());
         self.state.notify();
     }
 }
@@ -115,21 +131,21 @@ pub struct Receiver<T> {
 impl<T> Sender<T> {
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        self.sender.send(t)?;
+        self.sender.as_ref().unwrap().send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
 
     #[inline]
     pub fn send_and_notify(&self, t: T) -> Result<(), SendError<T>> {
-        self.sender.send(t)?;
+        self.sender.as_ref().unwrap().send(t)?;
         self.state.notify();
         Ok(())
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        self.sender.try_send(t)?;
+        self.sender.as_ref().unwrap().try_send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
@@ -173,7 +189,7 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     let (sender, receiver) = channel::unbounded();
     (
         Sender {
-            sender,
+            sender: Some(sender),
             state: state.clone(),
         },
         Receiver { receiver, state },
@@ -192,7 +208,7 @@ pub fn bounded<T>(cap: usize, notify_size: usize) -> (Sender<T>, Receiver<T>) {
     let (sender, receiver) = channel::bounded(cap);
     (
         Sender {
-            sender,
+            sender: Some(sender),
             state: state.clone(),
         },
         Receiver { receiver, state },
@@ -278,8 +294,11 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::{thread, time};
 
+    use futures::executor::{self, Notify, Spawn};
+    use futures::Future;
     use futures_cpupool::CpuPool;
 
     use super::*;
@@ -360,5 +379,37 @@ mod tests {
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 17);
+    }
+
+    #[test]
+    fn test_switch_between_sender_and_receiver() {
+        struct Notifier<F>(Arc<Mutex<Option<Spawn<F>>>>);
+        impl<F> Clone for Notifier<F> {
+            fn clone(&self) -> Notifier<F> {
+                Notifier(Arc::clone(&self.0))
+            }
+        }
+        impl<F> Notify for Notifier<F>
+        where
+            F: Future<Item = (), Error = ()> + Send + 'static,
+        {
+            fn notify(&self, id: usize) {
+                let n = Arc::new(self.clone());
+                let mut s = self.0.lock().unwrap();
+                match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
+                    Some(Ok(Async::NotReady)) | None => {}
+                    _ => *s = None,
+                }
+            }
+        }
+
+        let (tx, rx) = unbounded::<u64>(4);
+        let f = rx.for_each(|_| Ok(())).map_err(|_| ());
+        let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
+        Notifier(Arc::clone(&spawn)).notify(0);
+
+        // Switch to `receiver` in one thread in where `sender` is dropped.
+        drop(tx);
+        assert!(spawn.lock().unwrap().is_none());
     }
 }

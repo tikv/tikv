@@ -8,7 +8,7 @@ use std::thread;
 
 use test::Bencher;
 
-use tidb_query::codec::mysql::{Json, JsonEncoder};
+use tidb_query::codec::mysql::{Json, JsonDecoder, JsonEncoder};
 
 fn download_and_extract_file(url: &str) -> io::Result<String> {
     let mut dl_child = Command::new("curl")
@@ -66,7 +66,7 @@ fn bench_encode_binary(b: &mut Bencher) {
     b.iter(|| {
         for j in &jsons {
             buf.clear();
-            buf.encode_json(j).unwrap();
+            buf.write_json(j).unwrap();
         }
     });
 }
@@ -108,13 +108,13 @@ fn bench_decode_binary(b: &mut Bencher) {
         .map(|t| t.parse::<Json>().unwrap())
         .map(|j| {
             let mut buf = Vec::new();
-            buf.encode_json(&j).unwrap();
+            buf.write_json(&j).unwrap();
             buf
         })
         .collect::<Vec<Vec<u8>>>();
     b.iter(|| {
         for binary in &binaries {
-            Json::decode(&mut binary.as_slice()).unwrap();
+            binary.as_slice().read_json().unwrap();
         }
     });
 }

@@ -89,8 +89,8 @@ impl PartialOrd for Json {
                 (&Json::Object(_), &Json::Object(_)) => {
                     let mut left_data = vec![];
                     let mut right_data = vec![];
-                    left_data.encode_json(self).unwrap();
-                    right_data.encode_json(right).unwrap();
+                    left_data.write_json(self).unwrap();
+                    right_data.write_json(right).unwrap();
                     left_data.partial_cmp(&right_data)
                 }
                 _ => Some(Ordering::Equal),
@@ -101,9 +101,7 @@ impl PartialOrd for Json {
         let right_data = right.as_f64();
         // tidb treats boolean as integer, but boolean is different from integer in JSON.
         // so we need convert them to same type and then compare.
-        if left_data.is_ok() && right_data.is_ok() {
-            let left = left_data.unwrap();
-            let right = right_data.unwrap();
+        if let (Ok(left), Ok(right)) = (left_data, right_data) {
             return left.partial_cmp(&right);
         }
 
