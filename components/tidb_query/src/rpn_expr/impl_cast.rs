@@ -113,6 +113,27 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
 
+        // any as json
+        (EvalType::Int, EvalType::Json) => {
+            if from_field_type
+                .as_accessor()
+                .flag()
+                .contains(FieldTypeFlag::IS_BOOLEAN)
+            {
+                cast_bool_as_json_fn_meta()
+            } else if !from_field_type.is_unsigned() {
+                cast_any_as_any_fn_meta::<Int, Json>()
+            } else {
+                cast_uint_as_json_fn_meta()
+            }
+        }
+        (EvalType::Real, EvalType::Json) => cast_any_as_any_fn_meta::<Real, Json>(),
+        (EvalType::Bytes, EvalType::Json) => cast_string_as_json_fn_meta(),
+        (EvalType::Decimal, EvalType::Json) => cast_any_as_any_fn_meta::<Decimal, Json>(),
+        (EvalType::DateTime, EvalType::Json) => cast_any_as_any_fn_meta::<DateTime, Json>(),
+        (EvalType::Duration, EvalType::Json) => cast_any_as_any_fn_meta::<Duration, Json>(),
+        (EvalType::Json, EvalType::Json) => cast_json_as_json_fn_meta(),
+
         (EvalType::Int, EvalType::Decimal) => {
             if !from_field_type.is_unsigned() && !to_field_type.is_unsigned() {
                 cast_any_as_decimal_fn_meta::<Int>()
@@ -125,24 +146,6 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Json>(),
-        (EvalType::Int, EvalType::Json) => {
-            if from_field_type
-                .as_accessor()
-                .flag()
-                .contains(FieldTypeFlag::IS_BOOLEAN)
-            {
-                cast_int_as_json_boolean_fn_meta()
-            } else if !from_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Int, Json>()
-            } else {
-                cast_uint_as_json_fn_meta()
-            }
-        }
-        (EvalType::Real, EvalType::Json) => cast_any_as_any_fn_meta::<Real, Json>(),
-        (EvalType::Bytes, EvalType::Json) => cast_string_as_json_fn_meta(),
-        (EvalType::Decimal, EvalType::Json) => cast_any_as_any_fn_meta::<Decimal, Json>(),
-        (EvalType::DateTime, EvalType::Json) => cast_any_as_any_fn_meta::<DateTime, Json>(),
-        (EvalType::Duration, EvalType::Json) => cast_any_as_any_fn_meta::<Duration, Json>(),
         (EvalType::Int, EvalType::Duration) => cast_int_as_duration_fn_meta(),
         (EvalType::Real, EvalType::Duration) => cast_real_as_duration_fn_meta(),
         (EvalType::Bytes, EvalType::Duration) => cast_bytes_as_duration_fn_meta(),
@@ -595,6 +598,65 @@ fn cast_as_string_helper(
     Ok(Some(res))
 }
 
+// cast any as json, some cast functions reuse `cast_any_as_any`
+//
+// - cast_int_as_json -> cast_any_as_any<Int, Json>
+// - cast_real_as_json -> cast_any_as_any<Real, Json>
+// - cast_decimal_as_json -> cast_any_as_any<Decimal, Json>
+// - cast_time_as_json -> cast_any_as_any<Time, Json>
+// - cast_duration_as_json -> cast_any_as_any<Duration, Json>
+
+#[rpn_fn]
+#[inline]
+fn cast_bool_as_json(val: &Option<Int>) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Some(Json::Boolean(*val != 0))),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Some(Json::U64(*val as u64))),
+    }
+}
+
+#[rpn_fn(capture = [extra])]
+#[inline]
+fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: &Option<Bytes>) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            if extra
+                .ret_field_type
+                .flag()
+                .contains(FieldTypeFlag::PARSE_TO_JSON)
+            {
+                // if failed, is it because of bug?
+                let s: String = box_try!(String::from_utf8(val.to_owned()));
+                let val: Json = s.parse()?;
+                Ok(Some(val))
+            } else {
+                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8 string
+                let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
+                Ok(Some(Json::String(val)))
+            }
+        }
+    }
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_json_as_json(val: &Option<Json>) -> Result<Option<Json>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Some(val.clone())),
+    }
+}
+
 /// The unsigned int implementation for push down signature `CastIntAsDecimal`.
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
@@ -653,51 +715,6 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
         Some(val) => {
             let val = val.convert(ctx)?;
             Ok(Some(val))
-        }
-    }
-}
-
-/// The implementation for push down signature `CastIntAsJson` from unsigned integer.
-#[rpn_fn]
-#[inline]
-pub fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
-    match val {
-        None => Ok(None),
-        Some(val) => Ok(Some(Json::U64(*val as u64))),
-    }
-}
-
-#[rpn_fn]
-#[inline]
-pub fn cast_int_as_json_boolean(val: &Option<Int>) -> Result<Option<Json>> {
-    match val {
-        None => Ok(None),
-        Some(val) => Ok(Some(Json::Boolean(*val != 0))),
-    }
-}
-
-#[rpn_fn(capture = [extra])]
-#[inline]
-pub fn cast_string_as_json(
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Bytes>,
-) -> Result<Option<Json>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            if extra
-                .ret_field_type
-                .flag()
-                .contains(FieldTypeFlag::PARSE_TO_JSON)
-            {
-                let s = box_try!(String::from_utf8(val.to_owned()));
-                let val: Json = s.parse()?;
-                Ok(Some(val))
-            } else {
-                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8 string
-                let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
-                Ok(Some(Json::String(val)))
-            }
         }
     }
 }
@@ -771,7 +788,7 @@ mod tests {
     use crate::codec::data_type::{Bytes, Decimal, Int, Real, ScalarValue};
     use crate::codec::error::*;
     use crate::codec::mysql::charset::*;
-    use crate::codec::mysql::{Duration, Json, Time};
+    use crate::codec::mysql::{Duration, Json, Time, TimeType};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
@@ -2824,6 +2841,273 @@ mod tests {
             let r = r.map(|x| x.map(|x| unsafe { String::from_utf8_unchecked(x) }));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_int_as_json() {
+        test_none_with_ctx(cast_any_as_any::<Int, Json>);
+
+        let cs = vec![
+            (i64::MIN, Json::I64(i64::MIN)),
+            (0, Json::I64(0)),
+            (i64::MAX, Json::I64(i64::MAX)),
+        ];
+        for (input, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Int, Json>(&mut ctx, &Some(input));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_uint_as_json() {
+        test_none_with_nothing(cast_uint_as_json);
+
+        let cs = vec![
+            (u64::MAX, Json::U64(u64::MAX)),
+            (0, Json::U64(0)),
+            (i64::MAX as u64, Json::U64(i64::MAX as u64)),
+        ];
+        for (input, expect) in cs {
+            let r = cast_uint_as_json(&Some(input as i64));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_bool_as_json() {
+        test_none_with_nothing(cast_bool_as_json);
+
+        let cs = vec![
+            (0, Json::Boolean(false)),
+            (i64::MIN, Json::Boolean(true)),
+            (i64::MAX, Json::Boolean(true)),
+        ];
+        for (input, expect) in cs {
+            let result = cast_bool_as_json(&Some(input));
+            let log = make_log(&input, &expect, &result);
+            check_result(Some(&expect), &result, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_real_as_json() {
+        test_none_with_ctx(cast_any_as_any::<Real, Json>);
+
+        let cs = vec![
+            (f64::from(f32::MAX), Json::Double(f64::from(f32::MAX))),
+            (f64::from(f32::MIN), Json::Double(f64::from(f32::MIN))),
+            (f64::MAX, Json::Double(f64::MAX)),
+            (f64::MIN, Json::Double(f64::MIN)),
+        ];
+        for (input, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Real, Json>(&mut ctx, &Real::new(input).ok());
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_string_as_json() {
+        test_none_with_extra(cast_string_as_json);
+
+        let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
+        jo1.insert(String::from("a"), Json::String(String::from("b")));
+        // HasParseToJSONFlag
+        let cs = vec![
+            ("{\"a\": \"b\"}".to_string(), Json::Object(jo1), true),
+            ("{}".to_string(), Json::Object(BTreeMap::new()), true),
+            (
+                "[1, 2, 3]".to_string(),
+                Json::Array(vec![Json::I64(1), Json::I64(2), Json::I64(3)]),
+                true,
+            ),
+            ("[]".to_string(), Json::Array(Vec::new()), true),
+            (
+                "9223372036854775807".to_string(),
+                Json::I64(9223372036854775807),
+                true,
+            ),
+            (
+                "-9223372036854775808".to_string(),
+                Json::I64(-9223372036854775808),
+                true,
+            ),
+            (
+                "18446744073709551615".to_string(),
+                Json::Double(18446744073709552000.0),
+                true,
+            ),
+            // FIXME, f64::MAX.to_string() to json should success
+            // (f64::MAX.to_string(), Json::Double(f64::MAX), true),
+            ("0.0".to_string(), Json::Double(0.0), true),
+            (
+                "\"abcde\"".to_string(),
+                Json::String("abcde".to_string()),
+                true,
+            ),
+            ("\"\"".to_string(), Json::String("".to_string()), true),
+            ("true".to_string(), Json::Boolean(true), true),
+            ("false".to_string(), Json::Boolean(false), true),
+        ];
+        for (input, expect, parse_to_json) in cs {
+            let ia = make_implicit_args(false);
+            let mut rft = FieldType::default();
+            if parse_to_json {
+                let fta = rft.as_mut_accessor();
+                fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
+            }
+            let extra = make_extra(&rft, &ia);
+            let result = cast_string_as_json(&extra, &Some(input.clone().into_bytes()));
+            let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
+            let log = format!(
+                "input: {}, parse_to_json: {}, expect: {:?}, result: {:?}",
+                input, parse_to_json, expect, result_str
+            );
+            check_result(Some(&expect), &result, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_decimal_as_json() {
+        test_none_with_ctx(cast_any_as_any::<Decimal, Json>);
+        let cs = vec![
+            (
+                Decimal::from_f64(i64::MIN as f64).unwrap(),
+                Json::Double(i64::MIN as f64),
+            ),
+            (
+                Decimal::from_f64(i64::MAX as f64).unwrap(),
+                Json::Double(i64::MAX as f64),
+            ),
+            (
+                Decimal::from_bytes(b"184467440737095516160")
+                    .unwrap()
+                    .unwrap(),
+                Json::Double(184467440737095516160.0),
+            ),
+            (
+                Decimal::from_bytes(b"-184467440737095516160")
+                    .unwrap()
+                    .unwrap(),
+                Json::Double(-184467440737095516160.0),
+            ),
+        ];
+
+        for (input, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, &Some(input.clone()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_time_as_json() {
+        test_none_with_ctx(cast_any_as_any::<Time, Json>);
+
+        // TODO, add more case for other TimeType
+        let cs = vec![
+            // Add time_type filed here is to make maintainer know clearly that what is the type of the time.
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
+                TimeType::DateTime,
+                Json::String("2000-01-01 12:13:14.000000".to_string()),
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                TimeType::DateTime,
+                Json::String("2000-01-01 12:13:15.000000".to_string()),
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14", 6).unwrap(),
+                TimeType::DateTime,
+                Json::String("2000-01-01 12:13:14.000000".to_string()),
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 6).unwrap(),
+                TimeType::DateTime,
+                Json::String("2000-01-01 12:13:14.666600".to_string()),
+            ),
+            (
+                Time::parse_utc_datetime("2019-09-01", 0).unwrap(),
+                TimeType::DateTime,
+                Json::String("2019-09-01 00:00:00.000000".to_string()),
+            ),
+            (
+                Time::parse_utc_datetime("2019-09-01", 6).unwrap(),
+                TimeType::DateTime,
+                Json::String("2019-09-01 00:00:00.000000".to_string()),
+            ),
+        ];
+        for (input, time_type, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let result = cast_any_as_any::<Time, Json>(&mut ctx, &Some(input.clone()));
+            let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
+            let log =
+                format!(
+                "input: {}, expect_time_type: {:?}, real_time_type: {:?}, expect: {}, result: {:?}",
+                &input, time_type, input.get_time_type(), &expect, result_str
+            );
+            assert_eq!(input.get_time_type(), time_type, "{}", log);
+            check_result(Some(&expect), &result, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_duration_as_json() {
+        test_none_with_ctx(cast_any_as_any::<Duration, Json>);
+
+        // TODO, add more case
+        let cs = vec![
+            (
+                Duration::zero(),
+                Json::String("00:00:00.000000".to_string()),
+            ),
+            (
+                Duration::parse(b"10:10:10", 0).unwrap(),
+                Json::String("10:10:10.000000".to_string()),
+            ),
+        ];
+
+        for (input, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let result = cast_any_as_any::<Duration, Json>(&mut ctx, &Some(input));
+            let log = make_log(&input, &expect, &result);
+            check_result(Some(&expect), &result, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_json_as_json() {
+        test_none_with_nothing(cast_json_as_json);
+
+        let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
+        jo1.insert("a".to_string(), Json::String("b".to_string()));
+        let cs = vec![
+            Json::Object(jo1),
+            Json::Array(vec![Json::I64(1), Json::I64(3), Json::I64(4)]),
+            Json::I64(i64::MIN),
+            Json::I64(i64::MAX),
+            Json::U64(0u64),
+            Json::U64(u64::MAX),
+            Json::Double(f64::MIN),
+            Json::Double(f64::MAX),
+            Json::String("abcde".to_string()),
+            Json::Boolean(true),
+            Json::Boolean(false),
+            Json::None,
+        ];
+
+        for input in cs {
+            let expect = input.clone();
+            let result = cast_json_as_json(&Some(input.clone()));
+            let log = make_log(&input, &expect, &result);
+            check_result(Some(&expect), &result, log.as_str());
         }
     }
 }
