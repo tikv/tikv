@@ -75,10 +75,16 @@ lazy_static! {
     .unwrap();
 }
 
-pub trait ThreadSpawnWrapper {
+pub trait ThreadBuildWrapper {
     fn spawn_wrapper<F, T>(self, f: F) -> io::Result<thread::JoinHandle<T>>
     where
         F: FnOnce() -> T,
         F: Send + 'static,
         T: Send + 'static;
+}
+
+pub trait TokioThreadBuildWrapper {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static;
 }

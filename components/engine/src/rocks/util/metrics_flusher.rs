@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use crate::rocks::util::engine_metrics::*;
 use crate::rocks::DB;
 use crate::Engines;
-use tikv_util::metrics::ThreadSpawnWrapper;
+use tikv_util::metrics::ThreadBuildWrapper;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;

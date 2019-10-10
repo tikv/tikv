@@ -9,7 +9,7 @@ use super::router::{BasicMailbox, Router};
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
-use tikv_util::{metrics::ThreadSpawnWrapper, mpsc};
+use tikv_util::{metrics::ThreadBuildWrapper, mpsc};
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {

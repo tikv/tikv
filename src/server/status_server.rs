@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
-use tikv_util::metrics::dump;
+use tikv_util::metrics::{dump, TokioThreadBuildWrapper};
 
 pub struct StatusServer {
     thread_pool: ThreadPool,
@@ -25,7 +25,7 @@ impl StatusServer {
         let thread_pool = Builder::new()
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
-            .after_start(|| {
+            .after_start_wrapper(|| {
                 info!("Status server started");
             })
             .before_stop(|| {

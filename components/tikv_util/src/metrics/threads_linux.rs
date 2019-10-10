@@ -12,7 +12,7 @@ use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
 
 use procinfo::pid;
 
-use super::ThreadSpawnWrapper;
+use super::{ThreadBuildWrapper, TokioThreadBuildWrapper};
 
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
@@ -65,7 +65,7 @@ impl ThreadsCollector {
             ).namespace(ns.clone()),
             &["name", "tid", "io"],
         )
-            .unwrap();
+        .unwrap();
         descs.extend(io_totals.desc().into_iter().cloned());
         let voluntary_ctxt_switches = IntCounterVec::new(
             Opts::new(
@@ -297,14 +297,9 @@ lazy_static! {
     static ref THREAD_NAME_HASHMAP: Mutex<HashMap<pid_t, String>> = Mutex::new(HashMap::new());
 }
 
-impl ThreadSpawnWrapper for thread::Builder {
-    fn spawn_wrapper<F, T>(self, f: F) -> Result<thread::JoinHandle<T>>
-    where
-        F: FnOnce() -> T,
-        F: Send + 'static,
-        T: Send + 'static,
-    {
-        self.spawn(|| {
+macro_rules! add_thread_name_to_map {
+    ($f:expr) => {{
+        move || {
             if let Some(name) = thread::current().name() {
                 let tid = pid_t::from(gettid());
                 THREAD_NAME_HASHMAP
@@ -313,8 +308,28 @@ impl ThreadSpawnWrapper for thread::Builder {
                     .insert(tid, name.to_string());
                 debug!("tid {} thread name is {}", tid, name);
             }
-            f()
-        })
+            $f()
+        }
+    }};
+}
+
+impl ThreadBuildWrapper for thread::Builder {
+    fn spawn_wrapper<F, T>(self, f: F) -> Result<thread::JoinHandle<T>>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static,
+    {
+        self.spawn(add_thread_name_to_map!(f))
+    }
+}
+
+impl TokioThreadBuildWrapper for tokio_threadpool::Builder {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.after_start(add_thread_name_to_map!(f))
     }
 }
 

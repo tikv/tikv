@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::metrics::ThreadSpawnWrapper;
+use crate::metrics::ThreadBuildWrapper;
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::marker::PhantomData;

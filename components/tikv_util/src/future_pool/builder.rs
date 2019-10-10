@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio_threadpool::Builder as TokioBuilder;
 
 use super::metrics::*;
+use crate::metrics::TokioThreadBuildWrapper;
 
 pub struct Builder {
     inner_builder: TokioBuilder,
@@ -58,7 +59,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.inner_builder.after_start(f);
+        self.inner_builder.after_start_wrapper(f);
         self
     }
 

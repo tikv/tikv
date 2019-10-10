@@ -10,7 +10,7 @@ use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
 use crate::pd::RegionInfo;
-use tikv_util::metrics::ThreadSpawnWrapper;
+use tikv_util::metrics::ThreadBuildWrapper;
 use tikv_util::time::Instant;
 
 use super::client::*;

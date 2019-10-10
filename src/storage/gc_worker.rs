@@ -27,7 +27,7 @@ use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
-use tikv_util::metrics::ThreadSpawnWrapper;
+use tikv_util::metrics::ThreadBuildWrapper;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 

@@ -28,7 +28,7 @@ use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use crate::metrics::ThreadSpawnWrapper;
+use crate::metrics::ThreadBuildWrapper;
 use crate::mpsc::{self, Receiver, Sender};
 use crate::time::{Instant, SlowTimer};
 use crate::timer::Timer;

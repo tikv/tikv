@@ -40,7 +40,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, slice, thread, u64};
 
-use crate::metrics::ThreadSpawnWrapper;
+use crate::metrics::ThreadBuildWrapper;
 use protobuf::Message;
 use rand;
 use rand::rngs::ThreadRng;

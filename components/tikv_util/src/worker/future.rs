@@ -12,7 +12,7 @@ use futures::Stream;
 use tokio_core::reactor::{Core, Handle};
 
 use super::metrics::*;
-use crate::metrics::ThreadSpawnWrapper;
+use crate::metrics::ThreadBuildWrapper;
 
 pub struct Stopped<T>(pub T);
 
