@@ -1,10 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 use std::convert::TryFrom;
 
+use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::*;
 use tipb::{Expr, FieldType};
@@ -58,6 +57,62 @@ fn get_cast_fn_rpn_meta(
             }
         }
 
+        //  any as real
+        (EvalType::Int, EvalType::Real) => {
+            let fu = from_field_type.is_unsigned();
+            let ru = to_field_type.is_unsigned();
+            match (fu, ru) {
+                (true, _) => cast_unsigned_int_as_signed_or_unsigned_real_fn_meta(),
+                (false, false) => cast_signed_int_as_signed_real_fn_meta(),
+                (false, true) => cast_signed_int_as_unsigned_real_fn_meta(),
+            }
+        }
+        (EvalType::Real, EvalType::Real) => {
+            if !to_field_type.is_unsigned() {
+                cast_real_as_signed_real_fn_meta()
+            } else {
+                cast_real_as_unsigned_real_fn_meta()
+            }
+        }
+        (EvalType::Bytes, EvalType::Real) => {
+            if !from_field_type.is_unsigned() {
+                cast_string_as_signed_real_fn_meta()
+            } else {
+                cast_string_as_unsigned_real_fn_meta()
+            }
+        }
+        (EvalType::Decimal, EvalType::Real) => {
+            if !to_field_type.is_unsigned() {
+                cast_any_as_any_fn_meta::<Decimal, Real>()
+            } else {
+                cast_decimal_as_unsigned_real_fn_meta()
+            }
+        }
+        (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
+        (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
+        (EvalType::Json, EvalType::Real) => cast_any_as_any_fn_meta::<Json, Real>(),
+
+        // any as string
+        (EvalType::Int, EvalType::Bytes) => {
+            if !from_field_type.is_unsigned() {
+                cast_any_as_string_fn_meta::<Int>()
+            } else {
+                cast_uint_as_string_fn_meta()
+            }
+        }
+        (EvalType::Real, EvalType::Bytes) => {
+            if from_field_type.tp() == FieldTypeTp::Float {
+                cast_float_real_as_string_fn_meta()
+            } else {
+                cast_any_as_string_fn_meta::<Real>()
+            }
+        }
+        (EvalType::Bytes, EvalType::Bytes) => cast_string_as_string_fn_meta(),
+        (EvalType::Decimal, EvalType::Bytes) => cast_any_as_string_fn_meta::<Decimal>(),
+        (EvalType::DateTime, EvalType::Bytes) => cast_any_as_string_fn_meta::<DateTime>(),
+        (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
+        (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
+
         // any as json
         (EvalType::Int, EvalType::Json) => {
             if from_field_type
@@ -79,17 +134,6 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Json) => cast_any_as_any_fn_meta::<Duration, Json>(),
         (EvalType::Json, EvalType::Json) => cast_json_as_json_fn_meta(),
 
-        (EvalType::Int, EvalType::Real) => {
-            if !from_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Int, Real>()
-            } else {
-                cast_uint_as_real_fn_meta()
-            }
-        }
-        (EvalType::Bytes, EvalType::Real) => cast_any_as_any_fn_meta::<Bytes, Real>(),
-        (EvalType::Decimal, EvalType::Real) => cast_any_as_any_fn_meta::<Decimal, Real>(),
-        (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
-        (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
         (EvalType::Int, EvalType::Decimal) => {
             if !from_field_type.is_unsigned() && !to_field_type.is_unsigned() {
                 cast_any_as_decimal_fn_meta::<Int>()
@@ -102,18 +146,19 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Json>(),
-        (EvalType::Int, EvalType::Bytes) => {
-            if !from_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Int, Bytes>()
+        (EvalType::Int, EvalType::Json) => {
+            if from_field_type
+                .as_accessor()
+                .flag()
+                .contains(FieldTypeFlag::IS_BOOLEAN)
+            {
+                cast_int_as_json_boolean_fn_meta()
+            } else if !from_field_type.is_unsigned() {
+                cast_any_as_any_fn_meta::<Int, Json>()
             } else {
-                cast_uint_as_string_fn_meta()
+                cast_uint_as_json_fn_meta()
             }
         }
-        (EvalType::Real, EvalType::Bytes) => cast_any_as_any_fn_meta::<Real, Bytes>(),
-        (EvalType::Decimal, EvalType::Bytes) => cast_any_as_any_fn_meta::<Decimal, Bytes>(),
-        (EvalType::DateTime, EvalType::Bytes) => cast_any_as_any_fn_meta::<DateTime, Bytes>(),
-        (EvalType::Duration, EvalType::Bytes) => cast_any_as_any_fn_meta::<Duration, Bytes>(),
-        (EvalType::Json, EvalType::Bytes) => cast_any_as_any_fn_meta::<Json, Bytes>(),
         (EvalType::Int, EvalType::Duration) => cast_int_as_duration_fn_meta(),
         (EvalType::Real, EvalType::Duration) => cast_real_as_duration_fn_meta(),
         (EvalType::Bytes, EvalType::Duration) => cast_bytes_as_duration_fn_meta(),
@@ -250,12 +295,22 @@ fn cast_string_as_int_or_uint(
             if in_union(extra.implicit_args) && is_unsigned && is_str_neg {
                 Ok(Some(0))
             } else {
+                // FIXME: if the err get_valid_int_prefix returned is overflow err,
+                //  it should be ERR_TRUNCATE_WRONG_VALUE but not others.
                 let valid_int_prefix = get_valid_int_prefix(ctx, val)?;
                 let parse_res = if !is_str_neg {
                     valid_int_prefix.parse::<u64>().map(|x| x as i64)
                 } else {
                     valid_int_prefix.parse::<i64>()
                 };
+                // The `OverflowAsWarning` is true just if in `SELECT` statement context, e.g:
+                // 1. SELECT * FROM t  => OverflowAsWarning = true
+                // 2. INSERT INTO t VALUE (...) => OverflowAsWarning = false
+                // 3. INSERT INTO t SELECT * FROM t2 => OverflowAsWarning = false
+                // (according to https://github.com/pingcap/tidb/blob/e173c7f5c1041b3c7e67507889d50a7bdbcdfc01/executor/executor.go#L1452)
+                //
+                // NOTE: if this flag(OverflowAsWarning)'s setting had changed,
+                // then here's behavior should be changed to keep consistent with TiDB.
                 match parse_res {
                     Ok(x) => {
                         if !is_str_neg {
@@ -269,24 +324,24 @@ fn cast_string_as_int_or_uint(
                         }
                         Ok(Some(x as i64))
                     }
-                    Err(err) => {
-                        if err.kind() == &IntErrorKind::Overflow {
+                    Err(err) => match *err.kind() {
+                        IntErrorKind::Overflow | IntErrorKind::Underflow => {
                             let err = if is_str_neg {
                                 Error::overflow("BIGINT UNSIGNED", valid_int_prefix)
                             } else {
                                 Error::overflow("BIGINT", valid_int_prefix)
                             };
-                            ctx.handle_overflow_err(err)?;
+                            let warn_err = Error::truncated_wrong_val("INTEGER", val);
+                            ctx.handle_overflow_err(warn_err).map_err(|_| err)?;
                             let val = if is_str_neg {
                                 std::i64::MIN
                             } else {
                                 std::u64::MAX as i64
                             };
                             Ok(Some(val))
-                        } else {
-                            Err(other_err!("parse string to int failed: {}", err))
                         }
-                    }
+                        _ => Err(other_err!("parse string to int failed: {}", err)),
+                    },
                 }
             }
         }
@@ -324,6 +379,236 @@ fn cast_json_as_uint(ctx: &mut EvalContext, val: &Option<Json>) -> Result<Option
             Ok(Some(r as i64))
         }
     }
+}
+
+// cast any as real, some cast functions reuse `cast_any_as_any`
+//
+// cast_decimal_as_signed_real -> cast_any_as_any<Decimal, Real>
+// cast_time_as_real -> cast_any_as_any<Time, Real>
+// cast_duration_as_real -> cast_any_as_any<Duration, Real>
+// cast_json_as_real -> by cast_any_as_any<Json, Real>
+
+#[rpn_fn]
+#[inline]
+fn cast_signed_int_as_signed_real(val: &Option<Int>) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Real::new(*val as f64).ok()),
+    }
+}
+
+#[rpn_fn(capture = [extra])]
+#[inline]
+fn cast_signed_int_as_unsigned_real(
+    extra: &RpnFnCallExtra,
+    val: &Option<Int>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            if in_union(extra.implicit_args) && *val < 0 {
+                Ok(Some(Real::zero()))
+            } else {
+                // FIXME: negative number to unsigned real's logic may be wrong here.
+                Ok(Real::new(*val as u64 as f64).ok())
+            }
+        }
+    }
+}
+
+// because we needn't to consider if uint overflow upper boundary of signed real,
+// so we can merge uint to signed/unsigned real in one function
+#[rpn_fn]
+#[inline]
+fn cast_unsigned_int_as_signed_or_unsigned_real(val: &Option<Int>) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => Ok(Real::new(*val as u64 as f64).ok()),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_real_as_signed_real(val: &Option<Real>) -> Result<Option<Real>> {
+    Ok(*val)
+}
+
+#[rpn_fn(capture = [extra])]
+#[inline]
+fn cast_real_as_unsigned_real(
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Real>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            if in_union(extra.implicit_args) && val.into_inner() < 0f64 {
+                Ok(Some(Real::zero()))
+            } else {
+                // FIXME: negative number to unsigned real's logic may be wrong here.
+                Ok(Some(*val))
+            }
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_string_as_signed_real(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Bytes>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            // FIXME: in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
+            //  then return evalReal directly
+            let r: f64 = val.convert(ctx)?;
+            let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
+            Ok(Real::new(r).ok())
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_string_as_unsigned_real(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Bytes>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            // FIXME: in TiDB's builtinCastStringAsRealSig, if val is IsBinaryLiteral,
+            //  then return evalReal directly
+            let mut r: f64 = val.convert(ctx)?;
+            if in_union(extra.implicit_args) && r < 0f64 {
+                r = 0f64;
+            }
+            let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
+            // FIXME: negative number to unsigned real's logic may be wrong here.
+            Ok(Real::new(r).ok())
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_decimal_as_unsigned_real(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Decimal>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            if in_union(extra.implicit_args) && val.is_negative() {
+                Ok(Some(Real::zero()))
+            } else {
+                // FIXME: negative number to unsigned real's logic may be wrong here.
+                Ok(Some(val.convert(ctx)?))
+            }
+        }
+    }
+}
+
+// cast any as string, some cast functions reuse `cast_any_as_any`
+//
+// cast_int_as_string -> cast_any_as_string_fn_meta::<Int>
+// cast_real_as_string -> cast_any_as_string_fn_meta::<Real>
+// cast_decimal_as_string -> cast_any_as_string_fn_meta::<Decimal>
+// cast_datetime_as_string -> cast_any_as_string_fn_meta::<DateTime>
+// cast_duration_as_string -> cast_any_as_string_fn_meta::<Duration>
+// cast_json_as_string -> by cast_any_as_any<Json, String>
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<T>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val: Bytes = val.convert(ctx)?;
+            cast_as_string_helper(ctx, extra, val)
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_uint_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = (*val as u64).to_string().into_bytes();
+            cast_as_string_helper(ctx, extra, val)
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_float_real_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Real>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.into_inner() as f32;
+            let val = val.to_string().into_bytes();
+            cast_as_string_helper(ctx, extra, val)
+        }
+    }
+}
+
+// FIXME: We cannot use specialization in current Rust version, so impl ConvertTo<Bytes> for Bytes cannot
+//  pass compile because of we have impl Convert<Bytes> for T where T: ToString + Evaluable
+//  Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_string_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Bytes>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.clone();
+            cast_as_string_helper(ctx, extra, val)
+        }
+    }
+}
+
+#[inline]
+fn cast_as_string_helper(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Vec<u8>,
+) -> Result<Option<Bytes>> {
+    let res = produce_str_with_specified_tp(
+        ctx,
+        Cow::Borrowed(val.as_slice()),
+        extra.ret_field_type,
+        false,
+    )?;
+    let mut res = match res {
+        Cow::Borrowed(_) => val,
+        Cow::Owned(x) => x.to_vec(),
+    };
+    pad_zero_for_binary_type(&mut res, extra.ret_field_type);
+    Ok(Some(res))
 }
 
 // cast any as json, some cast functions reuse `cast_any_as_any`
@@ -447,52 +732,6 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     }
 }
 
-/// The implementation for push down signature `CastIntAsReal` from unsigned integer.
-#[rpn_fn(capture = [extra])]
-#[inline]
-fn cast_uint_as_real(extra: &RpnFnCallExtra<'_>, val: &Option<Int>) -> Result<Option<Real>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            // TODO: TiDB's here may has bug(val is uint, why it will <0 ?),
-            // fix this after TiDB's had fixed.
-            if in_union(extra.implicit_args) && *val < 0 {
-                return Ok(Some(Real::new(0f64).unwrap()));
-            }
-            let val = *val as u64;
-            Ok(Real::new(val as f64).ok())
-        }
-    }
-}
-
-/// The implementation for push down signature `CastIntAsString` from unsigned integer.
-#[rpn_fn(capture = [ctx, extra])]
-#[inline]
-fn cast_uint_as_string(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Int>,
-) -> Result<Option<Bytes>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let p = (*val as u64).to_string().into_bytes();
-            let res = produce_str_with_specified_tp(
-                ctx,
-                Cow::Borrowed(p.as_slice()),
-                &extra.ret_field_type,
-                false,
-            )?;
-            let mut res = match res {
-                Cow::Borrowed(_) => p,
-                Cow::Owned(x) => x.to_vec(),
-            };
-            pad_zero_for_binary_type(&mut res, &extra.ret_field_type);
-            Ok(Some(res))
-        }
-    }
-}
-
 /// The implementation for push down signature `CastIntAsDuration`
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
@@ -559,19 +798,19 @@ cast_as_duration!(
 #[cfg(test)]
 mod tests {
     use super::Result;
-    use crate::codec::data_type::{Decimal, Int, Real, ScalarValue};
+    use crate::codec::data_type::{Bytes, Decimal, Int, Real, ScalarValue};
     use crate::codec::error::*;
-    use crate::codec::mysql::{Duration, Json, Time, TimeType};
+    use crate::codec::mysql::charset::*;
+    use crate::codec::mysql::{Duration, Json, Time};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
     use crate::rpn_expr::RpnFnCallExtra;
-    use bitfield::fmt::Display;
     use std::collections::BTreeMap;
-    use std::fmt::{Debug, Formatter};
+    use std::fmt::{Debug, Display, Formatter};
     use std::sync::Arc;
     use std::{f32, f64, i64, u64};
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag, UNSPECIFIED_LENGTH};
+    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
 
     #[test]
     fn test_in_union() {
@@ -678,6 +917,29 @@ mod tests {
         ft
     }
 
+    fn make_ret_field_type_2(unsigned: bool, flen: isize, decimal: isize) -> FieldType {
+        let mut ft = make_ret_field_type(unsigned);
+        let fta = ft.as_mut_accessor();
+        fta.set_flen(flen);
+        fta.set_decimal(decimal);
+        ft
+    }
+
+    fn make_ret_field_type_3(
+        flen: isize,
+        charset: &str,
+        tp: FieldTypeTp,
+        collation: Collation,
+    ) -> FieldType {
+        let mut ft = FieldType::default();
+        let fta = ft.as_mut_accessor();
+        fta.set_flen(flen);
+        fta.set_tp(tp);
+        fta.set_collation(collation);
+        ft.set_charset(String::from(charset));
+        ft
+    }
+
     fn make_extra<'a>(
         ret_field_type: &'a FieldType,
         implicit_args: &'a [ScalarValue],
@@ -701,7 +963,11 @@ mod tests {
 
     fn check_overflow(ctx: &EvalContext, overflow: bool, log: &str) {
         if overflow {
-            assert_eq!(ctx.warnings.warning_cnt, 1, "{}", log);
+            assert_eq!(
+                ctx.warnings.warning_cnt, 1,
+                "{}, {:?}",
+                log, ctx.warnings.warnings
+            );
             assert_eq!(
                 ctx.warnings.warnings[0].get_code(),
                 ERR_DATA_OUT_OF_RANGE,
@@ -852,7 +1118,7 @@ mod tests {
             let rtf = make_ret_field_type(true);
             let ia = make_implicit_args(true);
             let extra = make_extra(&rtf, &ia);
-            let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
+            let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -897,7 +1163,7 @@ mod tests {
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type(true);
             let extra = make_extra(&rft, &ia);
-            let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
+            let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -913,7 +1179,6 @@ mod tests {
         enum Cond {
             None,
             Unsigned,
-            InSelectStmt,
             InUnionAndUnsigned,
         }
         impl Cond {
@@ -1005,30 +1270,30 @@ mod tests {
                 vec![],
                 Cond::None,
             ),
-            // FIXME: if not is select stmt, should has this err code ERR_DATA_OUT_OF_RANGE, too.
-            // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::None),
             // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
-            // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::InSelectStmt),
+            (
+                "-9223372036854775809",
+                -9223372036854775808i64,
+                vec![ERR_TRUNCATE_WRONG_VALUE],
+                Cond::None,
+            ),
             ("-10", -10i64, vec![ERR_UNKNOWN], Cond::Unsigned),
-            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
-            // ("-9223372036854775808", -9223372036854775808i64, Some(ERR_UNKNOWN), Cond::Unsigned),
-            // FIXME: if not is select stmt, should has this err code ERR_DATA_OUT_OF_RANGE, too.
-            // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::Unsigned),
-            // FIXME: our cast_string_as_int_or_uint's err handle is not exactly same as TiDB's
-            // ("-9223372036854775809", -9223372036854775808i64, Some(ERR_DATA_OUT_OF_RANGE), Cond::Unsigned),
+            (
+                "-9223372036854775808",
+                -9223372036854775808i64,
+                vec![ERR_UNKNOWN],
+                Cond::Unsigned,
+            ),
+            (
+                "-9223372036854775809",
+                -9223372036854775808i64,
+                vec![ERR_TRUNCATE_WRONG_VALUE],
+                Cond::Unsigned,
+            ),
         ];
 
         for (input, expect, err_code, cond) in cs {
-            let mut ctx = if let Cond::InSelectStmt = cond {
-                let mut flag: Flag = Flag::empty();
-                flag |= Flag::OVERFLOW_AS_WARNING;
-                flag |= Flag::TRUNCATE_AS_WARNING;
-                flag |= Flag::IN_SELECT_STMT;
-                let cfg = Arc::new(EvalConfig::from_flag(flag));
-                EvalContext::new(cfg)
-            } else {
-                make_ctx(true, true, false)
-            };
+            let mut ctx = make_ctx(true, true, false);
             let ia = make_implicit_args(cond.in_union());
             let rft = make_ret_field_type(cond.is_unsigned());
             let extra = make_extra(&rft, &ia);
@@ -1337,6 +1602,1262 @@ mod tests {
     }
 
     #[test]
+    fn tes_signed_int_as_signed_real() {
+        test_none_with_nothing(cast_signed_int_as_signed_real);
+
+        let cs: Vec<(i64, f64)> = vec![
+            // (input, expect)
+            (i64::MIN, i64::MIN as f64),
+            (0, 0f64),
+            (i64::MAX, i64::MAX as f64),
+        ];
+
+        for (input, expect) in cs {
+            let r = cast_signed_int_as_signed_real(&Some(input));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_signed_int_as_unsigned_real() {
+        test_none_with_extra(cast_signed_int_as_unsigned_real);
+
+        let cs: Vec<(i64, f64, bool)> = vec![
+            // (input, expect, in_union)
+
+            // TODO: add test case of negative int to unsigned real without in_union
+            // (i64::MIN, i64::MIN as u64 as f64, false),
+
+            // not in union
+            (i64::MAX, i64::MAX as f64, false),
+            (0, 0f64, false),
+            // in union
+            (i64::MIN, 0f64, true),
+            (-1, 0f64, true),
+            (i64::MAX, i64::MAX as f64, true),
+            (0, 0f64, true),
+        ];
+        for (input, expect, in_union) in cs {
+            let ia = make_implicit_args(in_union);
+            let rft = make_ret_field_type(true);
+            let extra = make_extra(&rft, &ia);
+            let r = cast_signed_int_as_unsigned_real(&extra, &Some(input));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = format!(
+                "input: {}, expect: {}, in_union: {}",
+                input, expect, in_union
+            );
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_unsigned_int_as_signed_or_unsigned_real() {
+        test_none_with_nothing(cast_unsigned_int_as_signed_or_unsigned_real);
+
+        let cs = vec![
+            // (input, expect)
+            (0, 0f64),
+            (u64::MAX, u64::MAX as f64),
+            (i64::MAX as u64, i64::MAX as u64 as f64),
+        ];
+        for (input, expect) in cs {
+            let r = cast_unsigned_int_as_signed_or_unsigned_real(&Some(input as i64));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_real_as_signed_real() {
+        test_none_with_nothing(cast_real_as_signed_real);
+
+        let cs = vec![
+            // (input, expect)
+            (f64::from(f32::MIN), f64::from(f32::MIN)),
+            (f64::from(f32::MAX), f64::from(f32::MAX)),
+            (f64::MIN, f64::MIN),
+            (0f64, 0f64),
+            (f64::MAX, f64::MAX),
+            (i64::MIN as f64, i64::MIN as f64),
+            (i64::MAX as f64, i64::MAX as f64),
+            (u64::MAX as f64, u64::MAX as f64),
+        ];
+        for (input, expect) in cs {
+            let r = cast_real_as_signed_real(&Some(Real::new(input).unwrap()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_real_as_unsigned_real() {
+        let cs = vec![
+            // (input, expect, in_union)
+            // not in union
+            // TODO: add test case of negative real to unsigned real
+            // (-1.0, -1.0, false),
+            // (i64::MIN as f64, i64::MIN as f64, false),
+            // (f64::MIN, f64::MIN, false),
+            (u64::MIN as f64, u64::MIN as f64, false),
+            (1.0, 1.0, false),
+            (i64::MAX as f64, i64::MAX as f64, false),
+            (u64::MAX as f64, u64::MAX as f64, false),
+            (f64::MAX, f64::MAX, false),
+            // in union
+            (-1.0, 0.0, true),
+            (i64::MIN as f64, 0.0, true),
+            (u64::MIN as f64, 0.0, true),
+            (f64::MIN, 0.0, true),
+            (1.0, 1.0, true),
+            (i64::MAX as f64, i64::MAX as f64, true),
+            (u64::MAX as f64, u64::MAX as f64, true),
+            (f64::MAX, f64::MAX, true),
+        ];
+
+        for (input, expect, in_union) in cs {
+            let ia = make_implicit_args(in_union);
+            let rft = make_ret_field_type(true);
+            let extra = make_extra(&rft, &ia);
+            let r = cast_real_as_unsigned_real(&extra, &Some(Real::new(input).unwrap()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = format!(
+                "input: {}, expect: {}, in_union: {}",
+                input, expect, in_union
+            );
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_string_as_signed_real() {
+        test_none_with_ctx_and_extra(cast_string_as_signed_real);
+
+        let ul = UNSPECIFIED_LENGTH;
+        let cs: Vec<(String, f64, isize, isize, bool, bool)> = vec![
+            // (input, expect, flen, decimal, truncated, overflow)
+            // no special flen and decimal
+            (String::from("99999999"), 99999999f64, ul, ul, false, false),
+            (String::from("1234abc"), 1234f64, ul, ul, true, false),
+            (String::from("-1234abc"), -1234f64, ul, ul, true, false),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                f64::MAX,
+                ul,
+                ul,
+                true,
+                false,
+            ),
+            (
+                (0..401)
+                    .map(|x| if x == 0 { '-' } else { '9' })
+                    .collect::<String>(),
+                f64::MIN,
+                ul,
+                ul,
+                true,
+                false,
+            ),
+            // with special flen and decimal
+            (String::from("99999999"), 99999999f64, 8, 0, false, false),
+            (String::from("99999999"), 99999999f64, 9, 0, false, false),
+            (String::from("99999999"), 9999999f64, 7, 0, false, true),
+            (String::from("99999999"), 999999.99, 8, 2, false, true),
+            (String::from("1234abc"), 0.9f64, 1, 1, true, true),
+            (String::from("-1234abc"), -0.9f64, 1, 1, true, true),
+        ];
+
+        for (input, expect, flen, decimal, truncated, overflow) in cs {
+            let mut ctx = make_ctx(true, true, false);
+            let ia = make_implicit_args(false);
+            let rft = make_ret_field_type_2(false, flen, decimal);
+            let extra = make_extra(&rft, &ia);
+            let r = cast_string_as_signed_real(&mut ctx, &extra, &Some(input.clone().into_bytes()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = format!(
+                "input: {}, expect: {}, flen: {}, decimal: {}, expect_truncated: {}, expect_overflow: {}",
+                input.as_str(), expect, flen, decimal, truncated, overflow
+            );
+            check_result(Some(&expect), &r, log.as_str());
+            match (truncated, overflow) {
+                (true, true) => {
+                    assert_eq!(ctx.warnings.warning_cnt, 2, "{}", log.as_str());
+                    let a = ctx.warnings.warnings[0].get_code();
+                    let b = ctx.warnings.warnings[1].get_code();
+                    let (a, b) = if a > b { (b, a) } else { (a, b) };
+                    assert_eq!(a, ERR_TRUNCATE_WRONG_VALUE, "{}", log.as_str());
+                    assert_eq!(b, ERR_DATA_OUT_OF_RANGE, "{}", log.as_str());
+                }
+                (true, false) => check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str()),
+                (false, true) => check_overflow(&ctx, true, log.as_str()),
+                _ => (),
+            }
+        }
+    }
+
+    #[test]
+    fn test_string_as_unsigned_real() {
+        test_none_with_ctx_and_extra(cast_string_as_unsigned_real);
+
+        let ul = UNSPECIFIED_LENGTH;
+        let cs: Vec<(String, f64, isize, isize, bool, bool, bool)> = vec![
+            // (input, expect, flen, decimal, truncated, overflow, in_union)
+
+            // not in union
+            (
+                String::from("99999999"),
+                99999999f64,
+                ul,
+                ul,
+                false,
+                false,
+                false,
+            ),
+            (String::from("1234abc"), 1234f64, ul, ul, true, false, false),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                f64::MAX,
+                ul,
+                ul,
+                true,
+                false,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                99999999f64,
+                8,
+                0,
+                false,
+                false,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                9999999.9,
+                8,
+                1,
+                false,
+                true,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                999999.99,
+                8,
+                2,
+                false,
+                true,
+                false,
+            ),
+            (String::from("99999999"), 999999.9, 7, 1, false, true, false),
+            (String::from("1234abc"), 1234.0, 4, 0, true, false, false),
+            (String::from("1234abc"), 999.9, 4, 1, true, true, false),
+            (String::from("1234abc"), 99.99, 4, 2, true, true, false),
+            (String::from("1234abc"), 99.9, 3, 1, true, true, false),
+            (String::from("1234abc"), 9.999, 4, 3, true, true, false),
+            (
+                String::from("99999999"),
+                99999999f64,
+                8,
+                0,
+                false,
+                false,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                9999999.9,
+                8,
+                1,
+                false,
+                true,
+                false,
+            ),
+            (
+                String::from("99999999"),
+                999999.99,
+                8,
+                2,
+                false,
+                true,
+                false,
+            ),
+            (String::from("99999999"), 999999.9, 7, 1, false, true, false),
+            (String::from("1234abc"), 1234.0, 4, 0, true, false, false),
+            (String::from("1234abc"), 999.9, 4, 1, true, true, false),
+            (String::from("1234abc"), 99.99, 4, 2, true, true, false),
+            (String::from("1234abc"), 99.9, 3, 1, true, true, false),
+            (String::from("1234abc"), 9.999, 4, 3, true, true, false),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                f64::MAX,
+                ul,
+                ul,
+                true,
+                false,
+                false,
+            ),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                9999999999.0,
+                10,
+                0,
+                true,
+                true,
+                false,
+            ),
+            (
+                (0..400).map(|_| '9').collect::<String>(),
+                999999999.9,
+                10,
+                1,
+                true,
+                true,
+                false,
+            ),
+            // TODO
+            // (
+            //     (0..401)
+            //         .map(|x| if x == 0 { '-' } else { '9' })
+            //         .collect::<String>(),
+            //     0f64, ul, ul, true, true, false,
+            // ),
+            // (
+            //     String::from("-1234abc"), 0f64, ul, ul,
+            //     true, true, false,
+            // ),
+            // (String::from("-1234abc"), 0.0, 4, 0, true, true, false),
+            // (String::from("-1234abc"), 0.0, 4, 1, true, true, false),
+            // (String::from("-1234abc"), 0.0, 4, 2, true, true, false),
+            // (String::from("-1234abc"), 0.0, 3, 1, true, true, false),
+            // (String::from("-1234abc"), 0.0, 4, 3, true, true, false),
+
+            // in union
+            // in union and neg
+            (String::from("-190"), 0f64, ul, ul, false, false, true),
+            (String::from("-10abc"), 0f64, ul, ul, true, false, true),
+            (String::from("-1234abc"), 0.0, ul, ul, true, false, true),
+        ];
+
+        for (input, expect, flen, decimal, truncated, overflow, in_union) in cs {
+            let mut ctx = make_ctx(true, true, false);
+            let ia = make_implicit_args(in_union);
+            let rft = make_ret_field_type_2(true, flen, decimal);
+            let extra = make_extra(&rft, &ia);
+
+            let p = Some(input.clone().into_bytes());
+            let r = cast_string_as_unsigned_real(&mut ctx, &extra, &p);
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+
+            let log = format!(
+                "input: {}, expect: {}, flen: {}, decimal: {}, expect_truncated: {}, expect_overflow: {}, in_union: {}",
+                input.as_str(), expect, flen, decimal, truncated, overflow, in_union
+            );
+
+            check_result(Some(&expect), &r, log.as_str());
+            match (truncated, overflow) {
+                (true, true) => {
+                    assert_eq!(ctx.warnings.warning_cnt, 2, "{}", log.as_str());
+                    let a = ctx.warnings.warnings[0].get_code();
+                    let b = ctx.warnings.warnings[1].get_code();
+                    let (a, b) = if a > b { (b, a) } else { (a, b) };
+                    assert_eq!(a, ERR_TRUNCATE_WRONG_VALUE, "{}", log.as_str());
+                    assert_eq!(b, ERR_DATA_OUT_OF_RANGE, "{}", log.as_str());
+                }
+                (true, false) => check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str()),
+                (false, true) => check_overflow(&ctx, true, log.as_str()),
+                _ => (),
+            }
+        }
+
+        // not in union, neg
+        let cs: Vec<(String, f64, isize, isize, Vec<i32>)> = vec![
+            (
+                (0..401)
+                    .map(|x| if x == 0 { '-' } else { '9' })
+                    .collect::<String>(),
+                0f64,
+                ul,
+                ul,
+                vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE],
+            ),
+            (
+                String::from("-1234abc"),
+                0f64,
+                ul,
+                ul,
+                vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE],
+            ),
+            (
+                String::from("-1234abc"),
+                0.0,
+                4,
+                0,
+                vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE],
+            ),
+            // the case below has 3 warning
+            // 1. from getValidFloatPrefix, because of `-1234abc`'s `abc`, (ERR_TRUNCATE_WRONG_VALUE)
+            // 2. from ProduceFloatWithSpecifiedTp, because of TruncateFloat (ERR_DATA_OUT_OF_RANGE)
+            // 3. from ProduceFloatWithSpecifiedTp, because of unsigned but negative (ERR_DATA_OUT_OF_RANGE)
+            (
+                String::from("-1234abc"),
+                0.0,
+                4,
+                1,
+                vec![
+                    ERR_TRUNCATE_WRONG_VALUE,
+                    ERR_DATA_OUT_OF_RANGE,
+                    ERR_DATA_OUT_OF_RANGE,
+                ],
+            ),
+            (
+                String::from("-1234abc"),
+                0.0,
+                4,
+                2,
+                vec![
+                    ERR_TRUNCATE_WRONG_VALUE,
+                    ERR_DATA_OUT_OF_RANGE,
+                    ERR_DATA_OUT_OF_RANGE,
+                ],
+            ),
+            (
+                String::from("-1234abc"),
+                0.0,
+                3,
+                1,
+                vec![
+                    ERR_TRUNCATE_WRONG_VALUE,
+                    ERR_DATA_OUT_OF_RANGE,
+                    ERR_DATA_OUT_OF_RANGE,
+                ],
+            ),
+            (
+                String::from("-1234abc"),
+                0.0,
+                4,
+                3,
+                vec![
+                    ERR_TRUNCATE_WRONG_VALUE,
+                    ERR_DATA_OUT_OF_RANGE,
+                    ERR_DATA_OUT_OF_RANGE,
+                ],
+            ),
+        ];
+        for (input, expect, flen, decimal, err_codes) in cs {
+            let mut ctx = make_ctx(true, true, false);
+            let ia = make_implicit_args(false);
+            let rft = make_ret_field_type_2(true, flen, decimal);
+            let extra = make_extra(&rft, &ia);
+
+            let p = Some(input.clone().into_bytes());
+            let r = cast_string_as_unsigned_real(&mut ctx, &extra, &p);
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = format!(
+                "input: {}, expect: {}, flen: {}, decimal: {}, err_code: {:?}",
+                input.as_str(),
+                expect,
+                flen,
+                decimal,
+                err_codes
+            );
+            check_result(Some(&expect), &r, log.as_str());
+            assert_eq!(
+                ctx.warnings.warning_cnt,
+                err_codes.len(),
+                "{}",
+                log.as_str()
+            );
+            for (idx, err) in err_codes.iter().enumerate() {
+                assert_eq!(
+                    ctx.warnings.warnings[idx].get_code(),
+                    *err,
+                    "{}",
+                    log.as_str()
+                )
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal_as_signed_real() {
+        test_none_with_ctx(cast_any_as_any::<Decimal, Int>);
+
+        // because decimal can always be represent by signed real,
+        // so we needn't to check whether get truncated err.
+        let cs = vec![
+            // (input, expect)
+            (Decimal::from_f64(-10.0).unwrap(), -10.0),
+            (Decimal::from_f64(i64::MIN as f64).unwrap(), i64::MIN as f64),
+            (Decimal::from_f64(i64::MAX as f64).unwrap(), i64::MAX as f64),
+            (Decimal::from_f64(u64::MAX as f64).unwrap(), u64::MAX as f64),
+        ];
+        for (input, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Decimal, Real>(&mut ctx, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_decimal_as_unsigned_real() {
+        test_none_with_ctx_and_extra(cast_decimal_as_unsigned_real);
+
+        let cs: Vec<(Decimal, f64, bool, bool)> = vec![
+            // (origin, expect, in_union, overflow)
+            // not in union
+            (Decimal::from(0), 0.0, false, false),
+            (
+                Decimal::from(9223372036854775807u64),
+                9223372036854775807.0,
+                false,
+                false,
+            ),
+            (
+                Decimal::from_bytes(b"9223372036854775809")
+                    .unwrap()
+                    .unwrap(),
+                9223372036854775809.0,
+                false,
+                false,
+            ),
+            // TODO: add test case for negative decimal to unsigned real
+
+            // in union
+            (Decimal::from(-1023), 0f64, true, false),
+            (Decimal::from(-10), 0f64, true, false),
+            (Decimal::from(i64::MIN), 0f64, true, false),
+            (Decimal::from(1023), 1023.0, true, false),
+            (Decimal::from(10), 10.0, true, false),
+            (Decimal::from(i64::MAX), i64::MAX as f64, true, false),
+            (Decimal::from(u64::MAX), u64::MAX as f64, true, false),
+            (
+                Decimal::from(1844674407370955161u64),
+                1844674407370955161u64 as f64,
+                true,
+                false,
+            ),
+            (
+                Decimal::from_bytes(b"18446744073709551616")
+                    .unwrap()
+                    .unwrap(),
+                // 18446744073709551616 - u64::MAX==1,
+                // but u64::MAX as f64 == 18446744073709551616
+                u64::MAX as f64,
+                true,
+                false,
+            ),
+        ];
+
+        for (input, expect, in_union, overflow) in cs {
+            let mut ctx = make_ctx(true, false, false);
+            let ia = make_implicit_args(in_union);
+            let rft = make_ret_field_type(true);
+            let extra = make_extra(&rft, &ia);
+            let r = cast_decimal_as_unsigned_real(&mut ctx, &extra, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = format!(
+                "input: {}, expect: {}, in_union: {}, expect_overflow: {}, result: {:?}",
+                input, expect, in_union, overflow, r
+            );
+            check_result(Some(&expect), &r, log.as_str());
+            check_overflow(&ctx, overflow, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_time_as_real() {
+        test_none_with_ctx(cast_any_as_any::<Time, Real>);
+
+        // TODO: add more test case
+        let cs = vec![
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 6).unwrap(),
+                20000101121314.666600,
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                20000101121315.0,
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 3).unwrap(),
+                20000101121314.667,
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap(),
+                20000101121314.6666,
+            ),
+        ];
+
+        for (input, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Time, Real>(&mut ctx, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_duration_as_real() {
+        // TODO: add more test case
+        let cs = vec![
+            // (input, expect)
+            (Duration::parse(b"17:51:04.78", 2).unwrap(), 175104.78),
+            (Duration::parse(b"-17:51:04.78", 2).unwrap(), -175104.78),
+            (Duration::parse(b"17:51:04.78", 0).unwrap(), 175105.0),
+            (Duration::parse(b"-17:51:04.78", 0).unwrap(), -175105.0),
+        ];
+        for (input, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Duration, Real>(&mut ctx, &Some(input));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_json_as_real() {
+        let cs: Vec<(Json, f64, Option<i32>)> = vec![
+            // (input, expect, err_code)
+            (Json::Object(BTreeMap::default()), 0f64, None),
+            (Json::Array(vec![]), 0f64, None),
+            (Json::I64(10), 10f64, None),
+            (Json::I64(i64::MAX), i64::MAX as f64, None),
+            (Json::I64(i64::MIN), i64::MIN as f64, None),
+            (Json::U64(0), 0f64, None),
+            (Json::U64(u64::MAX), u64::MAX as f64, None),
+            (Json::Double(f64::MAX), f64::MAX, None),
+            (Json::Double(f64::MIN), f64::MIN, None),
+            (Json::String(String::from("10.0")), 10.0, None),
+            (Json::String(String::from("-10.0")), -10.0, None),
+            (Json::Boolean(true), 1f64, None),
+            (Json::Boolean(false), 0f64, None),
+            (Json::None, 0f64, None),
+            (
+                Json::String((0..500).map(|_| '9').collect::<String>()),
+                f64::MAX,
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+            ),
+            (
+                Json::String(
+                    (0..500)
+                        .map(|x| if x == 0 { '-' } else { '9' })
+                        .collect::<String>(),
+                ),
+                f64::MIN,
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+            ),
+        ];
+
+        for (input, expect, err_code) in cs {
+            let mut ctx = make_ctx(false, true, false);
+            let r = cast_any_as_any::<Json, Real>(&mut ctx, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| x.into_inner()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+            check_warning(&ctx, err_code, log.as_str());
+        }
+    }
+
+    /// base_cs:
+    /// vector of (T, T to bytes(without any other handle do by cast_as_string_helper),
+    /// T to string for debug output),
+    /// the object should not be zero len.
+    #[allow(clippy::type_complexity)]
+    fn test_as_string_helper<T: Clone, FnCast>(
+        base_cs: Vec<(T, Vec<u8>, String)>,
+        cast_func: FnCast,
+        func_name: &str,
+    ) where
+        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, &Option<T>) -> Result<Option<Bytes>>,
+    {
+        #[derive(Clone, Copy)]
+        enum FlenType {
+            Eq,
+            LessOne,
+            ExtraOne,
+            Unspecified,
+        }
+        let cs: Vec<(FlenType, bool, &str, FieldTypeTp, Collation, Option<i32>)> = vec![
+            // (flen_type, pad_zero, charset, tp, collation, err_code)
+
+            // normal, flen==str.len
+            (
+                FlenType::Eq,
+                false,
+                CHARSET_BIN,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::Eq,
+                false,
+                CHARSET_UTF8,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::Eq,
+                false,
+                CHARSET_UTF8MB4,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::Eq,
+                false,
+                CHARSET_ASCII,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::Eq,
+                false,
+                CHARSET_LATIN1,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            // normal, flen==UNSPECIFIED_LENGTH
+            (
+                FlenType::Unspecified,
+                false,
+                CHARSET_BIN,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::Unspecified,
+                false,
+                CHARSET_UTF8,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::Unspecified,
+                false,
+                CHARSET_UTF8MB4,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::Unspecified,
+                false,
+                CHARSET_ASCII,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::Unspecified,
+                false,
+                CHARSET_LATIN1,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            // branch 1 of ProduceStrWithSpecifiedTp
+            // not bin_str, so no pad_zero
+            (
+                FlenType::LessOne,
+                false,
+                CHARSET_UTF8,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                Some(ERR_DATA_TOO_LONG),
+            ),
+            (
+                FlenType::LessOne,
+                false,
+                CHARSET_UTF8MB4,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                Some(ERR_DATA_TOO_LONG),
+            ),
+            (
+                FlenType::Eq,
+                false,
+                CHARSET_UTF8,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                None,
+            ),
+            (
+                FlenType::Eq,
+                false,
+                CHARSET_UTF8MB4,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                None,
+            ),
+            (
+                FlenType::ExtraOne,
+                false,
+                CHARSET_UTF8,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                None,
+            ),
+            (
+                FlenType::ExtraOne,
+                false,
+                CHARSET_UTF8MB4,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                None,
+            ),
+            (
+                FlenType::ExtraOne,
+                false,
+                CHARSET_UTF8,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                None,
+            ),
+            (
+                FlenType::ExtraOne,
+                false,
+                CHARSET_UTF8MB4,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                None,
+            ),
+            // bin_str, so need pad_zero
+            (
+                FlenType::ExtraOne,
+                true,
+                CHARSET_UTF8,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            (
+                FlenType::ExtraOne,
+                true,
+                CHARSET_UTF8MB4,
+                FieldTypeTp::String,
+                Collation::Binary,
+                None,
+            ),
+            // branch 2 of ProduceStrWithSpecifiedTp
+            // branch 2 need s.len>flen, so never need pad_zero
+            (
+                FlenType::LessOne,
+                false,
+                CHARSET_ASCII,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                Some(ERR_DATA_TOO_LONG),
+            ),
+            (
+                FlenType::LessOne,
+                false,
+                CHARSET_LATIN1,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                Some(ERR_DATA_TOO_LONG),
+            ),
+            (
+                FlenType::LessOne,
+                false,
+                CHARSET_BIN,
+                FieldTypeTp::String,
+                Collation::UTF8Bin,
+                Some(ERR_DATA_TOO_LONG),
+            ),
+            // branch 3 of ProduceStrWithSpecifiedTp ,
+            // will never be reached,
+            // because padZero param is always false
+        ];
+        for (input, bytes, debug_str) in base_cs {
+            for (flen_type, pad_zero, charset, tp, collation, err_code) in cs.iter() {
+                let mut ctx = make_ctx(false, true, false);
+                let ia = make_implicit_args(false);
+                let res_len = bytes.len();
+                let flen = match flen_type {
+                    FlenType::Eq => res_len as isize,
+                    FlenType::LessOne => {
+                        if res_len == 0 {
+                            continue;
+                        } else {
+                            (res_len - 1) as isize
+                        }
+                    }
+                    FlenType::ExtraOne => (res_len + 1) as isize,
+                    FlenType::Unspecified => UNSPECIFIED_LENGTH,
+                };
+                let rft = make_ret_field_type_3(flen, charset, *tp, *collation);
+                let extra = make_extra(&rft, &ia);
+
+                let r = cast_func(&mut ctx, &extra, &Some(input.clone()));
+
+                let mut expect = bytes.clone();
+                if *pad_zero && flen > expect.len() as isize {
+                    expect.extend((expect.len()..flen as usize).map(|_| 0u8));
+                } else if flen != UNSPECIFIED_LENGTH {
+                    expect.truncate(flen as usize);
+                }
+
+                let log = format!(
+                    "func: {:?}, input: {}, expect: {:?}, flen: {}, \
+                     charset: {}, field_type: {}, collation: {}, output: {:?}",
+                    func_name, debug_str, &expect, flen, charset, tp, collation, &r
+                );
+                check_result(Some(&expect), &r, log.as_str());
+                check_warning(&ctx, *err_code, log.as_str());
+            }
+        }
+    }
+
+    #[test]
+    fn test_int_as_string() {
+        test_none_with_ctx_and_extra(cast_any_as_string::<Int>);
+
+        let cs: Vec<(i64, Vec<u8>, String)> = vec![
+            (
+                i64::MAX,
+                i64::MAX.to_string().into_bytes(),
+                i64::MAX.to_string(),
+            ),
+            (
+                i64::MIN,
+                i64::MIN.to_string().into_bytes(),
+                i64::MIN.to_string(),
+            ),
+        ];
+        test_as_string_helper(cs, cast_any_as_string::<Int>, "cast_any_as_string::<Int>");
+    }
+
+    #[test]
+    fn test_uint_as_string() {
+        test_none_with_ctx_and_extra(cast_uint_as_string);
+
+        let cs: Vec<(u64, Vec<u8>, String)> = vec![
+            (
+                i64::MAX as u64,
+                (i64::MAX as u64).to_string().into_bytes(),
+                (i64::MAX as u64).to_string(),
+            ),
+            (
+                i64::MIN as u64,
+                (i64::MIN as u64).to_string().into_bytes(),
+                (i64::MIN as u64).to_string(),
+            ),
+            (
+                u64::MAX,
+                u64::MAX.to_string().into_bytes(),
+                u64::MAX.to_string(),
+            ),
+            (0u64, 0u64.to_string().into_bytes(), 0u64.to_string()),
+        ];
+        test_as_string_helper(
+            cs,
+            |ctx, extra, val| {
+                let val = val.map(|x| x as i64);
+                cast_uint_as_string(ctx, extra, &val)
+            },
+            "cast_uint_as_string",
+        );
+    }
+
+    #[test]
+    fn test_float_real_as_string() {
+        test_none_with_ctx_and_extra(cast_float_real_as_string);
+
+        let cs: Vec<(f32, Vec<u8>, String)> = vec![
+            (
+                f32::MAX,
+                f32::MAX.to_string().into_bytes(),
+                f32::MAX.to_string(),
+            ),
+            (1.0f32, 1.0f32.to_string().into_bytes(), 1.0f32.to_string()),
+            (
+                1.1113f32,
+                1.1113f32.to_string().into_bytes(),
+                1.1113f32.to_string(),
+            ),
+            (0.1f32, 0.1f32.to_string().into_bytes(), 0.1f32.to_string()),
+        ];
+
+        test_as_string_helper(
+            cs,
+            |ctx, extra, val| {
+                cast_float_real_as_string(
+                    ctx,
+                    extra,
+                    &val.map(|x| Real::new(f64::from(x)).unwrap()),
+                )
+            },
+            "cast_float_real_as_string",
+        );
+    }
+
+    #[test]
+    fn test_double_real_as_string() {
+        test_none_with_ctx_and_extra(cast_any_as_string::<Real>);
+
+        let cs: Vec<(f64, Vec<u8>, String)> = vec![
+            (
+                f64::from(f32::MAX),
+                (f64::from(f32::MAX)).to_string().into_bytes(),
+                f64::from(f32::MAX).to_string(),
+            ),
+            (
+                f64::from(f32::MIN),
+                (f64::from(f32::MIN)).to_string().into_bytes(),
+                f64::from(f32::MIN).to_string(),
+            ),
+            (
+                f64::MIN,
+                f64::MIN.to_string().into_bytes(),
+                f64::MIN.to_string(),
+            ),
+            (
+                f64::MAX,
+                f64::MAX.to_string().into_bytes(),
+                f64::MAX.to_string(),
+            ),
+            (1.0f64, 1.0f64.to_string().into_bytes(), 1.0f64.to_string()),
+            (
+                1.1113f64,
+                1.1113f64.to_string().into_bytes(),
+                1.1113f64.to_string(),
+            ),
+            (0.1f64, 0.1f64.to_string().into_bytes(), 0.1f64.to_string()),
+        ];
+
+        test_as_string_helper(
+            cs,
+            |ctx, extra, val| {
+                cast_any_as_string::<Real>(ctx, extra, &val.map(|x| Real::new(x).unwrap()))
+            },
+            "cast_any_as_string::<Real>",
+        );
+    }
+
+    #[test]
+    fn test_string_as_string() {
+        test_none_with_ctx_and_extra(cast_string_as_string);
+
+        let cs: Vec<(Vec<u8>, Vec<u8>, String)> = vec![
+            (
+                Vec::from(b"".as_ref()),
+                Vec::from(b"".as_ref()),
+                String::from("<empty-str>"),
+            ),
+            (
+                (0..1024).map(|_| b'0').collect::<Vec<u8>>(),
+                (0..1024).map(|_| b'0').collect::<Vec<u8>>(),
+                String::from("1024 zeros('0')"),
+            ),
+        ];
+
+        test_as_string_helper(cs, cast_string_as_string, "cast_string_as_string");
+    }
+
+    #[test]
+    fn test_decimal_as_string() {
+        test_none_with_ctx_and_extra(cast_any_as_string::<Decimal>);
+
+        let cs: Vec<(Decimal, Vec<u8>, String)> = vec![
+            (
+                Decimal::from(i64::MAX),
+                i64::MAX.to_string().into_bytes(),
+                i64::MAX.to_string(),
+            ),
+            (
+                Decimal::from(i64::MIN),
+                i64::MIN.to_string().into_bytes(),
+                i64::MIN.to_string(),
+            ),
+            (
+                Decimal::from(u64::MAX),
+                u64::MAX.to_string().into_bytes(),
+                u64::MAX.to_string(),
+            ),
+            (
+                Decimal::from_f64(0.0).unwrap(),
+                0.0.to_string().into_bytes(),
+                0.0.to_string(),
+            ),
+            (
+                Decimal::from_f64(i64::MAX as f64).unwrap(),
+                (i64::MAX as f64).to_string().into_bytes(),
+                (i64::MAX as f64).to_string(),
+            ),
+            (
+                Decimal::from_f64(i64::MIN as f64).unwrap(),
+                (i64::MIN as f64).to_string().into_bytes(),
+                (i64::MIN as f64).to_string(),
+            ),
+            (
+                Decimal::from_f64(u64::MAX as f64).unwrap(),
+                (u64::MAX as f64).to_string().into_bytes(),
+                (u64::MAX as f64).to_string(),
+            ),
+            (
+                Decimal::from_bytes(b"999999999999999999999999")
+                    .unwrap()
+                    .unwrap(),
+                Vec::from(b"999999999999999999999999".as_ref()),
+                String::from("999999999999999999999999"),
+            ),
+        ];
+
+        test_as_string_helper(
+            cs,
+            cast_any_as_string::<Decimal>,
+            "cast_any_as_string::<Decimal>",
+        );
+    }
+
+    #[test]
+    fn test_time_as_string() {
+        test_none_with_ctx_and_extra(cast_any_as_string::<Time>);
+
+        // TODO, add more test case
+        let cs: Vec<(Time, Vec<u8>, String)> = vec![
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
+                "2000-01-01 12:13:14".to_string().into_bytes(),
+                "2000-01-01 12:13:14".to_string(),
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                "2000-01-01 12:13:15".to_string().into_bytes(),
+                "2000-01-01 12:13:15".to_string(),
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 3).unwrap(),
+                "2000-01-01 12:13:14.667".to_string().into_bytes(),
+                "2000-01-01 12:13:14.667".to_string(),
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap(),
+                "2000-01-01 12:13:14.6666".to_string().into_bytes(),
+                "2000-01-01 12:13:14.6666".to_string(),
+            ),
+            (
+                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 6).unwrap(),
+                "2000-01-01 12:13:14.666600".to_string().into_bytes(),
+                "2000-01-01 12:13:14.666600".to_string(),
+            ),
+        ];
+        test_as_string_helper(cs, cast_any_as_string::<Time>, "cast_any_as_string::<Time>");
+    }
+
+    #[test]
+    fn test_duration_as_string() {
+        test_none_with_ctx_and_extra(cast_any_as_string::<Duration>);
+
+        let cs = vec![
+            (
+                Duration::parse(b"17:51:04.78", 2).unwrap(),
+                "17:51:04.78".to_string().into_bytes(),
+                "17:51:04.78".to_string(),
+            ),
+            (
+                Duration::parse(b"-17:51:04.78", 2).unwrap(),
+                "-17:51:04.78".to_string().into_bytes(),
+                "-17:51:04.78".to_string(),
+            ),
+            (
+                Duration::parse(b"17:51:04.78", 0).unwrap(),
+                "17:51:05".to_string().into_bytes(),
+                "17:51:05".to_string(),
+            ),
+            (
+                Duration::parse(b"-17:51:04.78", 0).unwrap(),
+                "-17:51:05".to_string().into_bytes(),
+                "-17:51:05".to_string(),
+            ),
+        ];
+        test_as_string_helper(
+            cs,
+            cast_any_as_string::<Duration>,
+            "cast_any_as_string::<Duration>",
+        );
+    }
+
+    #[test]
+    fn test_json_as_string() {
+        test_none_with_ctx(cast_any_as_any::<Json, Bytes>);
+
+        // FIXME, this case is not exactly same as TiDB's,
+        //  such as(left is TiKV, right is TiDB)
+        //  f64::MIN =>        "1.7976931348623157e308",  "1.7976931348623157e+308",
+        //  f64::MAX =>        "-1.7976931348623157e308", "-1.7976931348623157e+308",
+        //  f32::MIN as f64 => "3.4028234663852886e38",   "3.4028234663852886e+38",
+        //  f32::MAX as f64 => "-3.4028234663852886e38",  "-3.4028234663852886e+38",
+        //  i64::MIN as f64 => "-9.223372036854776e18", "-9223372036854776000",
+        //  i64::MAX as f64 => "9.223372036854776e18",  "9223372036854776000",
+        //  u64::MAX as f64 => "1.8446744073709552e19", "18446744073709552000",
+        let cs = vec![
+            (Json::Object(BTreeMap::default()), "{}".to_string()),
+            (Json::Array(vec![]), "[]".to_string()),
+            (Json::I64(10), "10".to_string()),
+            (Json::I64(i64::MAX), i64::MAX.to_string()),
+            (Json::I64(i64::MIN), i64::MIN.to_string()),
+            (Json::U64(0), "0".to_string()),
+            (Json::U64(u64::MAX), u64::MAX.to_string()),
+            (Json::Double(f64::MIN), format!("{:e}", f64::MIN)),
+            (Json::Double(f64::MAX), format!("{:e}", f64::MAX)),
+            (
+                Json::Double(f64::from(f32::MIN)),
+                format!("{:e}", f64::from(f32::MIN)),
+            ),
+            (
+                Json::Double(f64::from(f32::MAX)),
+                format!("{:e}", f64::from(f32::MAX)),
+            ),
+            (
+                Json::Double(i64::MIN as f64),
+                format!("{:e}", i64::MIN as f64),
+            ),
+            (
+                Json::Double(i64::MAX as f64),
+                format!("{:e}", i64::MAX as f64),
+            ),
+            (
+                Json::Double(u64::MAX as f64),
+                format!("{:e}", u64::MAX as f64),
+            ),
+            (Json::Double(10.5), "10.5".to_string()),
+            (Json::Double(10.4), "10.4".to_string()),
+            (Json::Double(-10.4), "-10.4".to_string()),
+            (Json::Double(-10.5), "-10.5".to_string()),
+            (Json::String(String::from("10.0")), r#""10.0""#.to_string()),
+            (Json::Boolean(true), "true".to_string()),
+            (Json::Boolean(false), "false".to_string()),
+            (Json::None, "null".to_string()),
+        ];
+
+        for (input, expect) in cs {
+            let mut ctx = make_ctx(false, false, false);
+            let r = cast_any_as_any::<Json, Bytes>(&mut ctx, &Some(input.clone()));
+            let r = r.map(|x| x.map(|x| unsafe { String::from_utf8_unchecked(x) }));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
     fn test_int_as_json() {
         test_none_with_ctx(cast_any_as_any::<Int, Json>);
 
@@ -1446,11 +2967,7 @@ mod tests {
         ];
         for (input, expect, parse_to_json) in cs {
             let ia = make_implicit_args(false);
-            let mut rft = FieldType::default();
-            if parse_to_json {
-                let fta = rft.as_mut_accessor();
-                fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
-            }
+            let rft = make_ret_field_type_7(parse_to_json);
             let extra = make_extra(&rft, &ia);
             let result = cast_string_as_json(&extra, &Some(input.clone().into_bytes()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
@@ -1538,17 +3055,11 @@ mod tests {
             let mut ctx = make_ctx(false, false, false);
             let result = cast_any_as_any::<Time, Json>(&mut ctx, &Some(input.clone()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
-            let log = format!(
+            let log =
+                format!(
                 "input: {}, expect_time_type: {:?}, real_time_type: {:?}, expect: {}, result: {:?}",
-                &input,
-                time_type,
-                input.get_time_type(),
-                &expect,
-                result_str
+                &input, time_type, input.get_time_type(), &expect, result_str
             );
-            // if input.get_time_type() != time_type {
-            //     println!("input.get_time_type()==time_type failed, {}", log);
-            // }
             assert_eq!(input.get_time_type(), time_type, "{}", log);
             check_result(Some(&expect), &result, log.as_str());
         }

@@ -252,6 +252,9 @@ pub trait PollHandler<N, C> {
 
     /// This function is called at the end of every round.
     fn end(&mut self, batch: &mut [Box<N>]);
+
+    /// This function is called when batch system is going to sleep.
+    fn pause(&mut self) {}
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
@@ -263,7 +266,7 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
 }
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
-    fn fetch_batch(&self, batch: &mut Batch<N, C>, max_size: usize) {
+    fn fetch_batch(&mut self, batch: &mut Batch<N, C>, max_size: usize) {
         let curr_batch_len = batch.len();
         if batch.control.is_some() || curr_batch_len >= max_size {
             // Do nothing if there's a pending control fsm or the batch is already full.
@@ -271,8 +274,11 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         let mut pushed = if curr_batch_len == 0 {
-            // Block if the batch is empty.
-            match self.fsm_receiver.recv() {
+            match self.fsm_receiver.try_recv().or_else(|_| {
+                self.handler.pause();
+                // Block if the batch is empty.
+                self.fsm_receiver.recv()
+            }) {
                 Ok(fsm) => batch.push(fsm),
                 Err(_) => return,
             }
@@ -561,8 +567,8 @@ pub mod tests {
             .send_control(Some(Box::new(move |_: &mut Runner| {
                 let (tx, runner) = new_runner(10);
                 let mailbox = BasicMailbox::new(tx, runner);
-                tx_.send(1).unwrap();
                 r.register(1, mailbox);
+                tx_.send(1).unwrap();
             })))
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
