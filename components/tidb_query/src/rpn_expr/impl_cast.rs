@@ -601,7 +601,6 @@ fn cast_as_string_helper(
     Ok(Some(res))
 }
 
-
 // cast any as duration, no cast functions reuse `cast_any_as_any`
 
 #[rpn_fn(capture = [ctx, extra])]
@@ -834,133 +833,16 @@ fn cast_any_as_any<From: ConvertTo<To> + Evaluable, To: Evaluable>(
     }
 }
 
-/// The implementation for push down signature `CastIntAsDuration`
-#[rpn_fn(capture = [ctx, extra])]
-#[inline]
-fn cast_time_as_duration(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra,
-    val: &Option<DateTime>,
-) -> Result<Option<Duration>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let dur: Duration = val.convert(ctx)?;
-            Ok(Some(dur.round_frac(extra.ret_field_type.decimal() as i8)?))
-        }
-    }
-}
-
-#[rpn_fn(capture = [extra])]
-#[inline]
-fn cast_duration_as_duration(
-    extra: &RpnFnCallExtra,
-    val: &Option<Duration>,
-) -> Result<Option<Duration>> {
-    match val {
-        None => Ok(None),
-        Some(val) => Ok(Some(val.round_frac(extra.ret_field_type.decimal() as i8)?)),
-    }
-}
-
-macro_rules! cast_as_duration {
-    ($ty:ty, $as_uint_fn:ident, $extra:expr) => {
-        #[rpn_fn(capture = [ctx, extra])]
-        #[inline]
-        fn $as_uint_fn(
-            ctx: &mut EvalContext,
-            extra: &RpnFnCallExtra<'_>,
-            val: &Option<$ty>,
-        ) -> Result<Option<Duration>> {
-            match val {
-                None => Ok(None),
-                Some(val) => {
-                    let result = Duration::parse($extra, extra.ret_field_type.get_decimal() as i8);
-                    match result {
-                        Ok(dur) => Ok(Some(dur)),
-                        Err(e) => match e.code() {
-                            ERR_DATA_OUT_OF_RANGE => {
-                                ctx.handle_overflow_err(e)?;
-                                Ok(Some(Duration::zero()))
-                            }
-                            WARN_DATA_TRUNCATED => {
-                                ctx.handle_truncate_err(e)?;
-                                Ok(Some(Duration::zero()))
-                            }
-                            _ => Err(e.into()),
-                        },
-                    }
-                }
-            }
-        }
-    };
-}
-
-cast_as_duration!(
-    Real,
-    cast_real_as_duration,
-    val.into_inner().to_string().as_bytes()
-);
-cast_as_duration!(Bytes, cast_bytes_as_duration, val);
-cast_as_duration!(
-    Decimal,
-    cast_decimal_as_duration,
-    val.to_string().as_bytes()
-);
-cast_as_duration!(Json, cast_json_as_duration, val.unquote()?.as_bytes());
-
-/// The implementation for push down signature `CastIntAsJson` from unsigned integer.
-#[rpn_fn]
-#[inline]
-pub fn cast_uint_as_json(val: &Option<Int>) -> Result<Option<Json>> {
-    match val {
-        None => Ok(None),
-        Some(val) => Ok(Some(Json::U64(*val as u64))),
-    }
-}
-
-#[rpn_fn]
-#[inline]
-pub fn cast_int_as_json_boolean(val: &Option<Int>) -> Result<Option<Json>> {
-    match val {
-        None => Ok(None),
-        Some(val) => Ok(Some(Json::Boolean(*val != 0))),
-    }
-}
-
-#[rpn_fn(capture = [extra])]
-#[inline]
-pub fn cast_string_as_json(
-    extra: &RpnFnCallExtra<'_>,
-    val: &Option<Bytes>,
-) -> Result<Option<Json>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            if extra
-                .ret_field_type
-                .flag()
-                .contains(FieldTypeFlag::PARSE_TO_JSON)
-            {
-                let s = box_try!(String::from_utf8(val.to_owned()));
-                let val: Json = s.parse()?;
-                Ok(Some(val))
-            } else {
-                // FIXME: port `JSONBinary` from TiDB to adapt if the bytes is not a valid utf8 string
-                let val = unsafe { String::from_utf8_unchecked(val.to_owned()) };
-                Ok(Some(Json::String(val)))
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::Result;
-    use crate::codec::data_type::{Bytes, Decimal, Int, Real, ScalarValue};
-    use crate::codec::error::*;
+    use crate::codec::data_type::ScalarValue;
+    use crate::codec::data_type::{Bytes, Int, Real};
+    use crate::codec::error::{
+        ERR_DATA_OUT_OF_RANGE, ERR_DATA_TOO_LONG, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN,
+        WARN_DATA_TRUNCATED,
+    };
     use crate::codec::mysql::charset::*;
-    use crate::codec::mysql::{Duration, Json, Time, TimeType};
+    use crate::codec::mysql::{Decimal, Duration, Json, Time, TimeType, MAX_FSP, MIN_FSP};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
@@ -1060,13 +942,6 @@ mod tests {
         } else {
             [ScalarValue::Int(Some(0))]
         }
-    }
-
-    fn make_ret_field_type_6(decimal: isize) -> FieldType {
-        let mut ft = FieldType::default();
-        let fta = ft.as_mut_accessor();
-        fta.set_decimal(decimal);
-        ft
     }
 
     fn make_ret_field_type(unsigned: bool) -> FieldType {
@@ -3661,10 +3536,13 @@ mod tests {
             let mut ctx = make_ctx(false, false, false);
             let result = cast_any_as_any::<Time, Json>(&mut ctx, &Some(input.clone()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
-            let log =
-                format!(
+            let log = format!(
                 "input: {}, expect_time_type: {:?}, real_time_type: {:?}, expect: {}, result: {:?}",
-                &input, time_type, input.get_time_type(), &expect, result_str
+                &input,
+                time_type,
+                input.get_time_type(),
+                &expect,
+                result_str
             );
             assert_eq!(input.get_time_type(), time_type, "{}", log);
             check_result(Some(&expect), &result, log.as_str());
