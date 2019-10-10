@@ -146,19 +146,6 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Decimal) => cast_any_as_decimal_fn_meta::<Json>(),
-        (EvalType::Int, EvalType::Json) => {
-            if from_field_type
-                .as_accessor()
-                .flag()
-                .contains(FieldTypeFlag::IS_BOOLEAN)
-            {
-                cast_int_as_json_boolean_fn_meta()
-            } else if !from_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Int, Json>()
-            } else {
-                cast_uint_as_json_fn_meta()
-            }
-        }
         (EvalType::Int, EvalType::Duration) => cast_int_as_duration_fn_meta(),
         (EvalType::Real, EvalType::Duration) => cast_real_as_duration_fn_meta(),
         (EvalType::Bytes, EvalType::Duration) => cast_bytes_as_duration_fn_meta(),
@@ -801,7 +788,7 @@ mod tests {
     use crate::codec::data_type::{Bytes, Decimal, Int, Real, ScalarValue};
     use crate::codec::error::*;
     use crate::codec::mysql::charset::*;
-    use crate::codec::mysql::{Duration, Json, Time};
+    use crate::codec::mysql::{Duration, Json, Time, TimeType};
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
@@ -2967,7 +2954,11 @@ mod tests {
         ];
         for (input, expect, parse_to_json) in cs {
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_7(parse_to_json);
+            let mut rft = FieldType::default();
+            if parse_to_json {
+                let fta = rft.as_mut_accessor();
+                fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
+            }
             let extra = make_extra(&rft, &ia);
             let result = cast_string_as_json(&extra, &Some(input.clone().into_bytes()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
