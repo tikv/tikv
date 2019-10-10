@@ -1043,8 +1043,7 @@ mod tests {
         ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
     };
     use crate::codec::mysql::Res;
-    use crate::expr::Flag;
-    use crate::expr::{EvalConfig, EvalContext};
+    use crate::expr::{EvalConfig, EvalContext, Flag};
     use tidb_query_datatype::{Collation, FieldTypeFlag};
 
     use super::*;
