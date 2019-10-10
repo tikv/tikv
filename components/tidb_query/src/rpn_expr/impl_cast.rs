@@ -932,6 +932,7 @@ cast_as_duration!(
 #[cfg(test)]
 mod tests {
     use super::Result;
+    use crate::codec::convert::produce_dec_with_specified_tp;
     use crate::codec::data_type::{Bytes, Decimal, Int, Real, ScalarValue};
     use crate::codec::error::*;
     use crate::codec::mysql::charset::*;
@@ -3064,8 +3065,8 @@ mod tests {
             // (InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning, truncate_as_warning
             // )
             //
-            // why there is origin_flen, origin_decimal here?
-            // to make let the programmer clearly know what the flen and decimal of the decimal is.
+            // The origin_flen, origin_decimal here is
+            // to let the programmer clearly know what the flen and decimal of the decimal is.
 
             // res_flen and res_decimal isn't UNSPECIFIED_LENGTH
             // origin not zero, but res's int part len < origin's int part
