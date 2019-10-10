@@ -278,6 +278,57 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     }
 }
 
+/// Returns whether `encoded` bytes is encoded from `raw`.
+///
+/// # Panics
+///
+/// Panics if `encoded` is not valid
+pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
+    let check_single_chunk = |encoded: &[u8], raw: &[u8]| {
+        let len = raw.len();
+        let pad = (ENC_GROUP_SIZE - len) as u8;
+        if desc {
+            encoded[..len]
+                .iter()
+                .zip(raw)
+                .all(|(&enc, &raw)| enc == !raw)
+                && encoded[len..encoded.len() - 1].iter().all(|&v| v == 0xff)
+                && encoded[ENC_GROUP_SIZE] == !(ENC_MARKER - pad)
+        } else {
+            &encoded[..len] == raw
+                && encoded[len..encoded.len() - 1].iter().all(|&v| v == 0)
+                && encoded[ENC_GROUP_SIZE] == (ENC_MARKER - pad)
+        }
+    };
+
+    let mut rev_encoded_chunks = encoded.rchunks_exact(ENC_GROUP_SIZE + 1);
+    // Valid encoded bytes must has complete chunks
+    assert!(rev_encoded_chunks.remainder().is_empty());
+
+    // Bytes are compared in reverse order because in TiKV, if two keys are different, the last
+    // a few bytes are more likely to be different.
+
+    let raw_chunks = raw.chunks_exact(ENC_GROUP_SIZE);
+    // Check the last chunk first
+    match rev_encoded_chunks.next() {
+        Some(encoded_chunk) if check_single_chunk(encoded_chunk, raw_chunks.remainder()) => {}
+        _ => return false,
+    }
+
+    // The count of the remaining chunks must be the same. Using `size_hint` here is both safe and
+    // efficient because chunk iterators implement trait `TrustedLen`.
+    if rev_encoded_chunks.size_hint() != raw_chunks.size_hint() {
+        return false;
+    }
+
+    for (encoded_chunk, raw_chunk) in rev_encoded_chunks.zip(raw_chunks.rev()) {
+        if !check_single_chunk(encoded_chunk, raw_chunk) {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +440,34 @@ mod tests {
         for mut x in invalid_bytes {
             assert!(decode_bytes(&mut x.as_slice(), false).is_err());
             assert!(decode_bytes_in_place(&mut x, false).is_err());
+        }
+    }
+
+    #[test]
+    fn test_is_encoded_from() {
+        for raw_len in 0..=24 {
+            let raw_bytes: Vec<u8> = (1..=raw_len).collect();
+            for &desc in &[true, false] {
+                let mut encoded = encode_order_bytes(&raw_bytes, desc);
+                assert!(
+                    is_encoded_from(&encoded, &raw_bytes, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    raw_bytes,
+                    encoded,
+                    desc
+                );
+                for i in 0..encoded.len() {
+                    encoded[i] = encoded[i].wrapping_add(1);
+                    assert!(
+                        !is_encoded_from(&encoded, &raw_bytes, desc),
+                        "Encoded: {:?}, Raw: {:?}, desc: {}",
+                        raw_bytes,
+                        encoded,
+                        desc
+                    );
+                    encoded[i] = encoded[i].wrapping_sub(1);
+                }
+            }
         }
     }
 
@@ -522,6 +601,24 @@ mod tests {
         b.iter(|| {
             let mut encoded = encoded.clone();
             decode_bytes_in_place(&mut encoded, false).unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from(b: &mut Bencher) {
+        let key = [b'x'; 10000];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            assert!(is_encoded_from(&encoded, &key, false));
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from_small(b: &mut Bencher) {
+        let key = [b'x'; 30];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            assert!(is_encoded_from(&encoded, &key, false));
         });
     }
 }
