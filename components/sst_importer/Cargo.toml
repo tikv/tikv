@@ -18,6 +18,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
 engine = { path = "../engine" }
+engine_traits = { path = "../engine_traits" }
 keys = { path = "../keys" }
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 

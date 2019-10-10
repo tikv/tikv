@@ -45,6 +45,11 @@ quick_error! {
             description("Engine error")
             display("Engine {:?}", err)
         }
+        EngineTraits(err: engine_traits::Error) {
+            from()
+            description("Engine error")
+            display("Engine {:?}", err)
+        }
         ParseIntError(err: ParseIntError) {
             from()
             cause(err)

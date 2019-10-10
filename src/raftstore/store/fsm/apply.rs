@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::{cmp, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine_rocks::Rocks;
 use engine::rocks;
 use engine::rocks::Writable;
 use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
@@ -1337,7 +1338,7 @@ impl ApplyDelegate {
         }
 
         ctx.importer
-            .ingest(sst, &ctx.engines.kv)
+            .ingest(sst, AsRef::<Rocks>::as_ref(&ctx.engines.kv))
             .unwrap_or_else(|e| {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.

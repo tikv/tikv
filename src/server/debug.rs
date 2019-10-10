@@ -615,7 +615,7 @@ impl Debugger {
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
         let kv = self.engines.kv.as_ref();
-        let raft = self.engines.raft.as_ref();
+        let raft: &DB = self.engines.raft.as_ref();
 
         let kv_wb = WriteBatch::default();
         let raft_wb = WriteBatch::default();
