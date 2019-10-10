@@ -182,6 +182,15 @@ impl Key {
             ts_encoded_key[..user_key_len] == user_key[..]
         }
     }
+
+    /// Returns whether the encoded key is encoded from `raw_key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` is not a valid encoded key.
+    pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
+        bytes::is_encoded_from(&self.0, raw_key, false)
+    }
 }
 
 impl Clone for Key {
@@ -273,5 +282,14 @@ mod tests {
         assert_eq!(false, eq(b"abxdefghijk87654321", b"abcdefghijk"));
         assert_eq!(false, eq(b"axcdefghijk87654321", b"abcdefghijk"));
         assert_eq!(false, eq(b"abcdeffhijk87654321", b"abcdefghijk"));
+    }
+
+    #[test]
+    fn test_is_encoded_from() {
+        for raw_len in 0..=255 {
+            let raw: Vec<u8> = (0..raw_len).collect();
+            let encoded = Key::from_raw(&raw);
+            assert!(encoded.is_encoded_from(&raw));
+        }
     }
 }
