@@ -3008,9 +3008,6 @@ mod tests {
                     check_overflow(&ctx, overflow, log.as_str());
                 }
                 Err(e) => {
-                    // if !result.is_err() {
-                    //     println!("result.is_err==false, log: {}, output_err: {}", log, e);
-                    // }
                     assert!(result.is_err(), "log: {}, output_err: {}", log, e);
                 }
             }
@@ -3019,9 +3016,9 @@ mod tests {
 
     fn test_as_duration_helper<T: Clone, FnToCastStr, FnToDebugStr, FnCast>(
         base_cs: Vec<T>,
-        to_cast_str_func: FnToCastStr,
-        to_debug_str_func: FnToDebugStr,
-        cast_func: FnCast,
+        func_to_cast_str: FnToCastStr,
+        func_to_debug_str: FnToDebugStr,
+        func_cast: FnCast,
         func_name: &str,
     ) where
         FnToCastStr: Fn(&T) -> String,
@@ -3039,9 +3036,9 @@ mod tests {
                 let rft = make_ret_field_type_6(fsp as isize);
                 let extra = make_extra(&rft, &ia);
 
-                let result = cast_func(&mut ctx, &extra, &Some(val.clone()));
+                let result = func_cast(&mut ctx, &extra, &Some(val.clone()));
 
-                let val_str = to_cast_str_func(&val);
+                let val_str = func_to_cast_str(&val);
                 let base_expect = Duration::parse(val_str.as_bytes(), fsp);
 
                 // make log
@@ -3052,7 +3049,7 @@ mod tests {
                         ERR_DATA_OUT_OF_RANGE => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, expect: {}, expect_warn: {}",
-                                func_name, to_debug_str_func(&val), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
+                                func_name, func_to_debug_str(&val), fsp, result_str, Duration::zero(), ERR_DATA_OUT_OF_RANGE
                             );
                             check_overflow(&ctx, true, log.as_str());
                             check_result(Some(&Duration::zero()), &result, log.as_str());
@@ -3060,7 +3057,7 @@ mod tests {
                         WARN_DATA_TRUNCATED => {
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {}, expect_warn: {}",
-                                func_name, to_debug_str_func(&val), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
+                                func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, Duration::zero(), WARN_DATA_TRUNCATED
                             );
                             check_warning(&ctx, Some(WARN_DATA_TRUNCATED), log.as_str());
                             check_result(Some(&Duration::zero()), &result, log.as_str());
@@ -3069,18 +3066,15 @@ mod tests {
                             let expect_err: crate::error::Error = e.into();
                             let log = format!(
                                 "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
-                                func_name, to_debug_str_func(&val), fsp, result_str, ctx.warnings.warnings, expect_err
+                                func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, expect_err
                             );
-                            // if !result.is_err() {
-                            //     println!("expect result is err, log: {}", log.as_str());
-                            // }
                             assert!(result.is_err(), "log: {}", log)
                         }
                     },
                     Ok(v) => {
                         let log = format!(
                             "func_name:{}, input: {}, fsp: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
-                            func_name, to_debug_str_func(&val), fsp, result_str, ctx.warnings.warnings, v
+                            func_name, func_to_debug_str(&val), fsp, result_str, ctx.warnings.warnings, v
                         );
                         check_result(Some(&v), &result, log.as_str())
                     }
