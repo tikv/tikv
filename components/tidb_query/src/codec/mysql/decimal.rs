@@ -434,7 +434,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     res
 }
 
-// TODO, add check for prec and frac_cnt
+// TODO: add check for prec and frac_cnt
 /// Get the max possible decimal with giving precision and fraction digit count.
 pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     let int_cnt = prec - frac_cnt;
@@ -1908,7 +1908,6 @@ impl ToString for Decimal {
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         let mut dec = self.clone();
-        // TODO, why there is rounding here?
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();

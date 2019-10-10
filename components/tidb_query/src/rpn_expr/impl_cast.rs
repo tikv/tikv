@@ -2780,7 +2780,7 @@ mod tests {
     fn test_time_as_string() {
         test_none_with_ctx_and_extra(cast_any_as_string::<Time>);
 
-        // TODO, add more test case
+        // TODO: add more test case
         let cs: Vec<(Time, Vec<u8>, String)> = vec![
             (
                 Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
@@ -2974,7 +2974,7 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, add test for num>=10000000000
+            // TODO: add test for num>=10000000000
             //  after Duration::from_f64 had impl logic for num>=10000000000
             // (10000000000, 0, Ok(Duration::parse(b"0:0:0", 0).unwrap())),
             // (10000235959, 0, Ok(Duration::parse(b"23:59:59", 0).unwrap())),
@@ -3491,7 +3491,7 @@ mod tests {
     fn test_time_as_json() {
         test_none_with_ctx(cast_any_as_any::<Time, Json>);
 
-        // TODO, add more case for other TimeType
+        // TODO: add more case for other TimeType
         let cs = vec![
             // Add time_type filed here is to make maintainer know clearly that what is the type of the time.
             (
@@ -3546,7 +3546,7 @@ mod tests {
     fn test_duration_as_json() {
         test_none_with_ctx(cast_any_as_any::<Duration, Json>);
 
-        // TODO, add more case
+        // TODO: add more case
         let cs = vec![
             (
                 Duration::zero(),
