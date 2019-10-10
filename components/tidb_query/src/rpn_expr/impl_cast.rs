@@ -678,15 +678,6 @@ mod tests {
         ft
     }
 
-    fn make_ret_field_type_7(parse_to_json: bool) -> FieldType {
-        let mut ft = FieldType::default();
-        let fta = ft.as_mut_accessor();
-        if parse_to_json {
-            fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
-        }
-        ft
-    }
-
     fn make_extra<'a>(
         ret_field_type: &'a FieldType,
         implicit_args: &'a [ScalarValue],
@@ -1455,7 +1446,11 @@ mod tests {
         ];
         for (input, expect, parse_to_json) in cs {
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_7(parse_to_json);
+            let mut rft = FieldType::default();
+            if parse_to_json {
+                let fta = rft.as_mut_accessor();
+                fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
+            }
             let extra = make_extra(&rft, &ia);
             let result = cast_string_as_json(&extra, &Some(input.clone().into_bytes()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
@@ -1543,10 +1538,13 @@ mod tests {
             let mut ctx = make_ctx(false, false, false);
             let result = cast_any_as_any::<Time, Json>(&mut ctx, &Some(input.clone()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
-            let log =
-                format!(
+            let log = format!(
                 "input: {}, expect_time_type: {:?}, real_time_type: {:?}, expect: {}, result: {:?}",
-                &input, time_type, input.get_time_type(), &expect, result_str
+                &input,
+                time_type,
+                input.get_time_type(),
+                &expect,
+                result_str
             );
             // if input.get_time_type() != time_type {
             //     println!("input.get_time_type()==time_type failed, {}", log);
