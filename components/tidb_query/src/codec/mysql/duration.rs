@@ -819,7 +819,6 @@ mod tests {
     use crate::expr::{EvalConfig, EvalContext, Flag};
     use std::f64::EPSILON;
     use std::sync::Arc;
-    use tidb_query_datatype::UNSPECIFIED_LENGTH;
 
     #[test]
     fn test_hours() {
