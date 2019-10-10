@@ -124,7 +124,8 @@ impl BatchLimiter {
     /// Whether the batch is ready to be submitted.
     #[inline]
     fn ready(&self) -> bool {
-        self.input_since_last_submit >= self.input_limit
+        // self.input_since_last_submit >= self.input_limit
+        false
     }
 
     /// Observe a tick from timer guard. Limiter will update statistics at this point.
