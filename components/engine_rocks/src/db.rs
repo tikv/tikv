@@ -93,10 +93,10 @@ impl KvEngine for Rocks {
     type CFOptions = RocksCFOptions;
 
     fn get_db_options(&self) -> Self::DBOptions {
-        panic!()
+        RocksDBOptions::from_raw(self.0.get_db_options())
     }
     fn set_db_options(&self, options: &[(&str, &str)]) -> StdResult<(), String> {
-        panic!()
+        self.0.set_db_options(options)
     }
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()> {
@@ -130,15 +130,15 @@ impl KvEngine for Rocks {
     }
 
     fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
-        panic!()
+        self.0.cf_handle(name).map(RocksCFHandle::from_raw)
     }
 
     fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions {
-        panic!()
+        RocksCFOptions::from_raw(self.0.get_options_cf(cf.as_inner()))
     }
 
     fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> StdResult<(), String> {
-        panic!()
+        self.0.set_options_cf(cf.as_inner(), options)
     }
 
     fn delete_all_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], use_delete_range: bool) -> Result<()> {

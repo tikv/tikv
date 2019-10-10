@@ -25,6 +25,12 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug 
     type Snap: Snapshot;
     type Batch: WriteBatch;
     type DBOptions: DBOptions;
+    // FIXME: With the current rocks implementation this
+    // type wants to be able to contain a lifetime, but it's
+    // not possible without "generic associated types".
+    //
+    // https://github.com/rust-lang/rfcs/pull/1598
+    // https://github.com/rust-lang/rust/issues/44265
     type CFHandle: CFHandle;
     type CFOptions: CFOptions;
 
