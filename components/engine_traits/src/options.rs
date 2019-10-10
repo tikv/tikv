@@ -44,21 +44,6 @@ impl Default for WriteOptions {
 }
 
 #[derive(Clone)]
-pub struct CFOptions {}
-
-impl CFOptions {
-    pub fn new() -> CFOptions {
-        CFOptions {}
-    }
-}
-
-impl Default for CFOptions {
-    fn default() -> CFOptions {
-        CFOptions {}
-    }
-}
-
-#[derive(Clone)]
 pub struct IterOptions {
     pub lower_bound: Option<KeyBuilder>,
     pub upper_bound: Option<KeyBuilder>,

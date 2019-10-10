@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::DB;
+use engine_traits::{KvEngine, DBOptions, CFOptions};
 use kvproto::import_sstpb::*;
 
 use super::Result;
@@ -22,7 +22,7 @@ impl ImportModeSwitcher {
         }
     }
 
-    pub fn enter_normal_mode(&mut self, db: &DB, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_normal_mode(&mut self, db: &impl KvEngine, mf: RocksDBMetricsFn) -> Result<()> {
         if self.mode == SwitchMode::Normal {
             return Ok(());
         }
@@ -36,7 +36,7 @@ impl ImportModeSwitcher {
         Ok(())
     }
 
-    pub fn enter_import_mode(&mut self, db: &DB, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_import_mode(&mut self, db: &impl KvEngine, mf: RocksDBMetricsFn) -> Result<()> {
         if self.mode == SwitchMode::Import {
             return Ok(());
         }
@@ -69,14 +69,14 @@ impl ImportModeDBOptions {
         }
     }
 
-    fn new_options(db: &DB) -> ImportModeDBOptions {
+    fn new_options(db: &impl KvEngine) -> ImportModeDBOptions {
         let db_opts = db.get_db_options();
         ImportModeDBOptions {
             max_background_jobs: db_opts.get_max_background_jobs(),
         }
     }
 
-    fn set_options(&self, db: &DB) -> Result<()> {
+    fn set_options(&self, db: &impl KvEngine) -> Result<()> {
         let opts = [(
             "max_background_jobs".to_string(),
             self.max_background_jobs.to_string(),
@@ -106,7 +106,7 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn new_options(db: &DB, cf_name: &str) -> ImportModeCFOptions {
+    fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCFOptions {
         let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
 
@@ -119,7 +119,7 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn set_options(&self, db: &DB, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
+    fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
         let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
         cf_opts.set_block_cache_capacity(self.block_cache_size)?;

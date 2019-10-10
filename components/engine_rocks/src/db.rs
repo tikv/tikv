@@ -4,6 +4,7 @@ use std::fs::{self, File};
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
+use std::result::Result as StdResult;
 
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
@@ -17,6 +18,9 @@ use tikv_util::file::calc_crc32;
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::{delete_all_in_range_cf, get_cf_handle};
 use crate::{Iterator, Snapshot};
+use crate::db_options::RocksDBOptions;
+use crate::cf_options::RocksCFOptions;
+use crate::cf::RocksCFHandle;
 
 #[derive(Clone, Debug)]
 #[repr(transparent)]
@@ -84,6 +88,16 @@ impl Into<Arc<DB>> for Rocks {
 impl KvEngine for Rocks {
     type Snap = Snapshot;
     type Batch = crate::WriteBatch;
+    type DBOptions = RocksDBOptions;
+    type CFHandle = RocksCFHandle;
+    type CFOptions = RocksCFOptions;
+
+    fn get_db_options(&self) -> Self::DBOptions {
+        panic!()
+    }
+    fn set_db_options(&self, options: &[(&str, &str)]) -> StdResult<(), String> {
+        panic!()
+    }
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()> {
         if wb.get_db().path() != self.0.path() {
@@ -113,6 +127,18 @@ impl KvEngine for Rocks {
 
     fn cf_names(&self) -> Vec<&str> {
         self.0.cf_names()
+    }
+
+    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
+        panic!()
+    }
+
+    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions {
+        panic!()
+    }
+
+    fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> StdResult<(), String> {
+        panic!()
     }
 
     fn delete_all_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], use_delete_range: bool) -> Result<()> {

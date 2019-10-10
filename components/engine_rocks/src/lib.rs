@@ -11,8 +11,14 @@ mod writebatch;
 pub use self::writebatch::WriteBatch;
 mod iterator;
 pub use self::iterator::Iterator;
+mod cf;
+pub use cf::*;
 mod options;
 mod util;
+mod db_options;
+pub use db_options::*;
+mod cf_options;
+pub use cf_options::*;
 
 #[cfg(test)]
 mod tests {

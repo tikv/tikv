@@ -2,6 +2,7 @@
 
 use std::fmt::Debug;
 use std::path::Path;
+use std::result::Result as StdResult;
 
 use crate::*;
 
@@ -23,6 +24,13 @@ pub trait WriteBatch: Mutable + Send {
 pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug + 'static {
     type Snap: Snapshot;
     type Batch: WriteBatch;
+    type DBOptions: DBOptions;
+    type CFHandle: CFHandle;
+    type CFOptions: CFOptions;
+
+    fn get_db_options(&self) -> Self::DBOptions;
+    // FIXME: return type
+    fn set_db_options(&self, options: &[(&str, &str)]) -> StdResult<(), String>;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()>;
     fn write(&self, wb: &Self::Batch) -> Result<()> {
@@ -32,7 +40,13 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug 
     fn write_batch_with_cap(&self, cap: usize) -> Self::Batch;
     fn snapshot(&self) -> Self::Snap;
     fn sync(&self) -> Result<()>;
+
     fn cf_names(&self) -> Vec<&str>;
+    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
+    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions;
+    // FIXME: return type
+    fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> StdResult<(), String>;
+
     fn delete_all_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
         if start_key >= end_key {
             return Ok(());
