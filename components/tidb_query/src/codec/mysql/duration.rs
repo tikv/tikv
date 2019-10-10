@@ -813,11 +813,11 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::EPSILON;
-
     use super::*;
     use crate::codec::data_type::DateTime;
+    use crate::codec::mysql::UNSPECIFIED_FSP;
     use crate::expr::{EvalConfig, EvalContext, Flag};
+    use std::f64::EPSILON;
     use std::sync::Arc;
     use tidb_query_datatype::UNSPECIFIED_LENGTH;
 
@@ -1156,7 +1156,7 @@ mod tests {
             // UNSPECIFIED_LENGTH
             (
                 8385959,
-                UNSPECIFIED_LENGTH as i8,
+                UNSPECIFIED_FSP as i8,
                 Ok(Duration::parse(b"838:59:59", 0).unwrap()),
                 false,
             ),
