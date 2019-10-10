@@ -218,7 +218,7 @@ impl Chunk {
 pub trait ChunkEncoder: ColumnEncoder {
     fn encode_chunk(&mut self, data: &Chunk) -> Result<()> {
         for col in &data.columns {
-            self.encode_column(col)?;
+            self.write_column(col)?;
         }
         Ok(())
     }
