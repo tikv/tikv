@@ -2920,11 +2920,13 @@ mod tests {
         // HasParseToJSONFlag
         let cs = vec![
             ("{\"a\": \"b\"}".to_string(), Json::Object(jo1), true),
+            ("{}".to_string(), Json::Object(BTreeMap::new()), true),
             (
                 "[1, 2, 3]".to_string(),
                 Json::Array(vec![Json::I64(1), Json::I64(2), Json::I64(3)]),
                 true,
             ),
+            ("[]".to_string(), Json::Array(Vec::new()), true),
             (
                 "9223372036854775807".to_string(),
                 Json::I64(9223372036854775807),
