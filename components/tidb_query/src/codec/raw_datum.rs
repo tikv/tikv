@@ -2,8 +2,8 @@
 
 //! Decoders to decode into a concrete datum.
 
+use codec::prelude::*;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-use tikv_util::codec::{bytes, number};
 use tipb::FieldType;
 
 use super::data_type::*;
@@ -13,55 +13,55 @@ use crate::codec::{Error, Result};
 
 #[inline]
 fn decode_int(v: &mut &[u8]) -> Result<i64> {
-    number::decode_i64(v)
+    v.read_i64()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as i64".to_owned()))
 }
 
 #[inline]
 fn decode_uint(v: &mut &[u8]) -> Result<u64> {
-    number::decode_u64(v)
+    v.read_u64()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as u64".to_owned()))
 }
 
 #[inline]
 fn decode_var_int(v: &mut &[u8]) -> Result<i64> {
-    number::decode_var_i64(v)
+    v.read_var_i64()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as var_i64".to_owned()))
 }
 
 #[inline]
 fn decode_var_uint(v: &mut &[u8]) -> Result<u64> {
-    number::decode_var_u64(v)
+    v.read_var_u64()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as var_u64".to_owned()))
 }
 
 #[inline]
 fn decode_float(v: &mut &[u8]) -> Result<f64> {
-    number::decode_f64(v)
+    v.read_f64()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as f64".to_owned()))
 }
 
 #[inline]
 fn decode_decimal(v: &mut &[u8]) -> Result<Decimal> {
-    v.decode_decimal()
+    v.read_decimal()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as decimal".to_owned()))
 }
 
 #[inline]
 fn decode_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
-    bytes::decode_bytes(v, false)
+    v.read_comparable_bytes()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as bytes".to_owned()))
 }
 
 #[inline]
 fn decode_compact_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
-    bytes::decode_compact_bytes(v)
+    v.read_compact_bytes()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as compact bytes".to_owned()))
 }
 
 #[inline]
 fn decode_json(v: &mut &[u8]) -> Result<Json> {
-    v.decode_json()
+    v.read_json()
         .map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
 }
 
