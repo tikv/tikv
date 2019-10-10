@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::Bound::Excluded;
 use std::mem;
 use std::sync::Mutex;
 
@@ -259,20 +258,23 @@ fn get_approximate_split_keys_cf(
     max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let collection = box_try!(util::get_range_properties_cf(db, cfname, &start, &end));
+    let start_key = keys::enc_start_key(region);
+    let end_key = keys::enc_end_key(region);
+    let collection = box_try!(util::get_range_properties_cf(
+        db, cfname, &start_key, &end_key
+    ));
 
     let mut keys = vec![];
     let mut total_size = 0;
     for (_, v) in &*collection {
         let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
-        total_size += props.get_approximate_size_in_range(&start, &end);
+        total_size += props.get_approximate_size_in_range(&start_key, &end_key);
+
         keys.extend(
             props
-                .offsets
-                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
-                .map(|(k, _)| k.to_owned()),
+                .take_excluded_range(start_key.as_slice(), end_key.as_slice())
+                .into_iter()
+                .map(|(k, _)| k),
         );
     }
     if keys.len() == 1 {
@@ -286,8 +288,8 @@ fn get_approximate_split_keys_cf(
             split_size,
             collection.len(),
             cfname,
-            hex::encode_upper(&start),
-            hex::encode_upper(&end)
+            hex::encode_upper(&start_key),
+            hex::encode_upper(&end_key)
         ));
     }
     keys.sort();
@@ -764,5 +766,46 @@ pub mod tests {
         let region = make_region(1, b"k2".to_vec(), b"k8".to_vec());
         let size = get_region_approximate_size(&db, &region).unwrap();
         assert_eq!(size, 0);
+    }
+
+    use test::Bencher;
+
+    #[bench]
+    fn bench_get_region_approximate_size(b: &mut Bencher) {
+        let path = Builder::new()
+            .prefix("_bench_get_region_approximate_size")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_disable_auto_compactions(true);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut cf_size = 0;
+        let cf = db.cf_handle("default").unwrap();
+        for i in 0..10 {
+            let v = vec![0; 4096];
+            for j in 10000 * i..10000 * (i + 1) {
+                let k1 = keys::data_key(format!("k1{:0100}", j).as_bytes());
+                let k2 = keys::data_key(format!("k9{:0100}", j).as_bytes());
+                cf_size += k1.len() + k2.len() + v.len() * 2;
+                db.put_cf(cf, &k1, &v).unwrap();
+                db.put_cf(cf, &k2, &v).unwrap();
+            }
+            db.flush_cf(cf, true).unwrap();
+        }
+
+        let region = make_region(1, vec![], vec![]);
+        b.iter(|| {
+            let size = get_region_approximate_size(&db, &region).unwrap();
+            assert_eq!(size, cf_size as u64);
+        })
     }
 }
