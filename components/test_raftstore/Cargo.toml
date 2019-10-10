@@ -15,7 +15,7 @@ futures = "0.1"
 tokio-timer = "0.2"
 tokio-threadpool = "0.1"
 grpcio = { version = "0.5.0-alpha.3", features = [ "secure" ] }
-rand = "0.6.5"
+rand = "0.7"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
