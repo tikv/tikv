@@ -148,8 +148,14 @@ impl Peekable for RegionSnapshot {
                     hex::encode_upper(&key),
                     self.region.get_id(),
                 );
+            } else {
+                error!(
+                    "failed to get value of key";
+                    "key" => hex::encode_upper(&key),
+                    "region" => self.region.get_id(),
+                );
+                e
             }
-            e
         })
     }
 
@@ -172,9 +178,10 @@ impl Peekable for RegionSnapshot {
                 );
             } else {
                 error!(
-                    "failed to get value of key";
+                    "failed to get value of key in cf";
                     "key" => hex::encode_upper(&key),
                     "region" => self.region.get_id(),
+                    "cf" => cf,
                 );
                 e
             }
