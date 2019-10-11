@@ -37,3 +37,4 @@ fuzz-incremental/
 /db/
 /last_tikv.toml
 /raft/
+first-pull-request.toml
