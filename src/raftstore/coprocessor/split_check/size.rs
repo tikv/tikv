@@ -18,6 +18,7 @@ use super::super::metrics::*;
 use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use tikv_util::codec::number::NumberEncoder;
 
 pub struct Checker {
     max_size: u64,
@@ -203,8 +204,10 @@ pub fn get_region_approximate_size(db: &DB, region: &Region) -> Result<u64> {
 
 pub fn get_region_approximate_size_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
     let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
+    let mut start_key = keys::enc_start_key(region);
+    let mut end_key = keys::enc_end_key(region);
+    start_key.encode_u64_desc(std::u64::MAX);
+    end_key.encode_u64_desc(0);
     let range = Range::new(&start_key, &end_key);
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
 
@@ -258,11 +261,13 @@ fn get_approximate_split_keys_cf(
     max_size: u64,
     batch_split_limit: u64,
 ) -> Result<Vec<Vec<u8>>> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
+    let mut start_key = keys::enc_start_key(region);
+    let mut end_key = keys::enc_end_key(region);
     let collection = box_try!(util::get_range_properties_cf(
         db, cfname, &start_key, &end_key
     ));
+    start_key.encode_u64_desc(std::u64::MAX);
+    end_key.encode_u64_desc(0);
 
     let mut keys = vec![];
     let mut total_size = 0;

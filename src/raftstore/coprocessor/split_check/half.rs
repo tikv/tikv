@@ -7,6 +7,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
 use crate::raftstore::store::keys;
+use tikv_util::codec::number::NumberEncoder;
 use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
@@ -132,8 +133,11 @@ fn get_region_approximate_middle_cf(
     cfname: &str,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
+    let mut start_key = keys::enc_start_key(region);
+    let mut end_key = keys::enc_end_key(region);
+    start_key.encode_u64_desc(std::u64::MAX);
+    end_key.encode_u64_desc(0);
+
     let collection = box_try!(util::get_range_properties_cf(
         db, cfname, &start_key, &end_key
     ));
