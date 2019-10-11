@@ -1152,7 +1152,7 @@ mod tests {
     fn test_from_i64() {
         let cs: Vec<(i64, i8, Result<Duration>, bool)> = vec![
             // (input, fsp, expect, overflow)
-            // UNSPECIFIED_LENGTH
+            // UNSPECIFIED_FSP
             (
                 8385959,
                 UNSPECIFIED_FSP as i8,
