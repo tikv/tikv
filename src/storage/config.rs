@@ -52,7 +52,7 @@ impl Default for Config {
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             block_cache: BlockCacheConfig::default(),
-            user_timestamp_enabled: false,
+            user_timestamp_enabled: true,
         }
     }
 }
