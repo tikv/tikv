@@ -434,9 +434,17 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     res
 }
 
-// TODO: add check for prec and frac_cnt
 /// Get the max possible decimal with giving precision and fraction digit count.
+/// The `prec` should <= `frac_cnt`.
+///
+/// # Panics
+///
+/// If `prec` > `frac_cnt`, panic.
+/// The panic is because of `debug_assert`.
+
+// TODO: what if prec-frac_cnt==0
 pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
+    debug_assert!(prec >= frac_cnt);
     let int_cnt = prec - frac_cnt;
     let mut res = Decimal::new(int_cnt, frac_cnt, false);
     let mut idx = 0;
@@ -466,6 +474,12 @@ pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
 
 /// `max_or_min_dec`(`NewMaxOrMinDec` in tidb) returns the max or min
 /// value decimal for given precision and fraction.
+/// The `prec` should <= `frac_cnt`.
+///
+/// # Panics
+///
+/// If `prec` > `frac_cnt`, panic.
+/// The panic is because of `debug_assert`.
 pub fn max_or_min_dec(negative: bool, prec: u8, frac: u8) -> Decimal {
     let mut ret = max_decimal(prec, frac);
     ret.negative = negative;
@@ -1113,6 +1127,9 @@ impl Decimal {
     /// produces a new decimal according to `flen` and `decimal`.
     pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
         let (prec, frac) = self.prec_and_frac();
+        if flen < decimal {
+            return Err(Error::m_bigger_than_d(""));
+        }
         if !self.is_zero() && prec - frac > flen - decimal {
             return Ok(max_or_min_dec(self.negative, flen, decimal));
             // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
@@ -3522,6 +3539,17 @@ mod tests {
             negative_exp.push_str(exp);
             let res = negative.to_string();
             assert_eq!(res, negative_exp);
+        }
+
+        let should_panic_cases = vec![(0, 10), (0, 1)];
+        for (prec, frac) in should_panic_cases {
+            let log = format!("prec: {}, frac: {}, is neg", prec, frac);
+            let result = std::panic::catch_unwind(|| super::max_or_min_dec(true, prec, frac));
+            assert!(result.is_err(), "{}", log);
+
+            let log = format!("prec: {}, frac: {}, is not neg", prec, frac);
+            let result = std::panic::catch_unwind(|| super::max_or_min_dec(false, prec, frac));
+            assert!(result.is_err(), "{}", log);
         }
     }
 

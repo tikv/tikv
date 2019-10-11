@@ -626,8 +626,6 @@ fn cast_as_string_helper(
 // - cast_duration_as_decimal -> cast_any_as_decimal<Duration>
 // - cast_json_as_decimal -> cast_any_as_decimal<Json>
 
-// because uint's upper bound is smaller than signed decimal's upper bound
-// so we can merge cast uint as signed/unsigned decimal in this function
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
 fn cast_unsigned_int_as_signed_or_unsigned_decimal(
@@ -638,6 +636,8 @@ fn cast_unsigned_int_as_signed_or_unsigned_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
+            // because uint's upper bound is smaller than signed decimal's upper bound
+            // so we can merge cast uint as signed/unsigned decimal in this function
             let dec = Decimal::from(*val as u64);
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
