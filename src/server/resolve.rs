@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use kvproto::metapb;
 
-use crate::pd::PdClient;
+use crate::pd::{take_peer_address, PdClient};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -69,14 +69,14 @@ impl<T: PdClient> Runner<T> {
 
     fn get_address(&mut self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
-        let s = box_try!(pd_client.get_store(store_id));
+        let mut s = box_try!(pd_client.get_store(store_id));
         if s.get_state() == metapb::StoreState::Tombstone {
             RESOLVE_STORE_COUNTER
                 .with_label_values(&["tombstone"])
                 .inc();
             return Err(box_err!("store {} has been removed", store_id));
         }
-        let addr = s.get_address().to_owned();
+        let addr = take_peer_address(&mut s);
         // In some tests, we use empty address for store first,
         // so we should ignore here.
         // TODO: we may remove this check after we refactor the test.
@@ -205,6 +205,17 @@ mod tests {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
         let mut runner = new_runner(store);
         assert!(runner.get_address(0).is_err());
+    }
+
+    #[test]
+    fn test_resolve_store_peer_addr() {
+        let mut store = new_store("127.0.0.1:12345", metapb::StoreState::Up);
+        store.set_peer_address("127.0.0.1:22345".to_string());
+        let runner = new_runner(store);
+        assert_eq!(
+            runner.get_address(0).unwrap(),
+            "127.0.0.1:22345".to_string()
+        );
     }
 
     #[test]
