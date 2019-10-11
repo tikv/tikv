@@ -154,7 +154,7 @@ impl Peekable for RegionSnapshot {
                     "failed to get value of key";
                     "key" => hex::encode_upper(&key),
                     "region" => self.region.get_id(),
-                    "error" => %e,
+                    "error" => ?e,
                 );
                 e
             }
@@ -185,7 +185,7 @@ impl Peekable for RegionSnapshot {
                     "key" => hex::encode_upper(&key),
                     "region" => self.region.get_id(),
                     "cf" => cf,
-                    "error" => %e,
+                    "error" => ?e,
                 );
                 e
             }
