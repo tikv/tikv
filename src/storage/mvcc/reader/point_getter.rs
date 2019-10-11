@@ -198,7 +198,7 @@ impl<S: Snapshot> PointGetter<S> {
                     }
                     WriteType::Lock | WriteType::Rollback => {
                         // Continue iterate next `write`.
-                        ts = ts - 1;
+                        ts = write.start_ts - 1;
                     }
                 }
             } else {
