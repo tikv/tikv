@@ -14,7 +14,7 @@ slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog-term = "2.4"
 byteorder = "1.2"
-rand = "0.6.5"
+rand = "0.7"
 quick-error = "1.2.2"
 tempfile = "3.0"
 time = "0.1"
