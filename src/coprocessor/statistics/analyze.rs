@@ -38,6 +38,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
+            false,
         );
         Ok(Self {
             req,

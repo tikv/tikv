@@ -27,6 +27,7 @@ use super::{
 };
 
 pub use engine::SyncSnapshot as RocksSnapshot;
+use tikv_util::codec::number::NumberEncoder;
 
 const TEMP_DIR: &str = "";
 
@@ -160,6 +161,7 @@ impl Debug for RocksEngine {
 pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
+    enable_user_timestamp: bool,
 }
 
 impl TestEngineBuilder {
@@ -167,6 +169,7 @@ impl TestEngineBuilder {
         Self {
             path: None,
             cfs: None,
+            enable_user_timestamp: false,
         }
     }
 
@@ -186,6 +189,11 @@ impl TestEngineBuilder {
         self
     }
 
+    pub fn enable_user_timestamp(mut self, enable: bool) -> Self {
+        self.enable_user_timestamp = enable;
+        self
+    }
+
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let path = match self.path {
@@ -193,8 +201,9 @@ impl TestEngineBuilder {
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
-        let cfg_rocksdb = crate::config::DbConfig::default();
+        let mut cfg_rocksdb = crate::config::DbConfig::default();
         let cache = BlockCacheConfig::default().build_shared_cache();
+        cfg_rocksdb.writecf.enable_user_timestamp = self.enable_user_timestamp;
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
@@ -302,6 +311,14 @@ impl Snapshot for RocksSnapshot {
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_with_ts(&self, cf: CfName, key: &Key, ts: u64) -> Result<Option<Value>> {
+        trace!("RocksSnapshot: get_cf_with_ts"; "cf" => cf, "key" => %key);
+        let mut encode_ts = Vec::with_capacity(8);
+        encode_ts.encode_u64_desc(ts).unwrap();
+        let v = box_try!(self.get_value_cf_with_ts(cf, key.as_encoded(), encode_ts));
         Ok(v.map(|v| v.to_vec()))
     }
 

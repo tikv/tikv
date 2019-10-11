@@ -142,6 +142,7 @@ pub struct SnapshotStore<S: Snapshot> {
     start_ts: u64,
     isolation_level: IsolationLevel,
     fill_cache: bool,
+    user_timestamp_enabled: bool,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -151,6 +152,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
+            .enable_user_timestamp(self.user_timestamp_enabled)
             .multi(false)
             .build()?;
         let v = point_getter.get(key)?;
@@ -176,6 +178,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
+            .enable_user_timestamp(self.user_timestamp_enabled)
             .multi(true)
             .build()?;
 
@@ -244,12 +247,14 @@ impl<S: Snapshot> SnapshotStore<S> {
         start_ts: u64,
         isolation_level: IsolationLevel,
         fill_cache: bool,
+        user_timestamp_enabled: bool,
     ) -> Self {
         SnapshotStore {
             snapshot,
             start_ts,
             isolation_level,
             fill_cache,
+            user_timestamp_enabled,
         }
     }
 
@@ -441,9 +446,29 @@ mod tests {
         snapshot: RocksSnapshot,
         ctx: Context,
         engine: RocksEngine,
+        enable_user_timestamp: bool,
     }
 
     impl TestStore {
+
+        fn create_store_for_user_timestamp(key_num: u64) -> TestStore {
+            let engine = TestEngineBuilder::new().enable_user_timestamp(true).build().unwrap();
+            let keys: Vec<String> = (START_ID..START_ID + key_num)
+                .map(|i| format!("{}{}", KEY_PREFIX, i))
+                .collect();
+            let ctx = Context::default();
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut store = TestStore {
+                keys,
+                snapshot,
+                ctx,
+                engine,
+                enable_user_timestamp: true
+            };
+            store.init_data();
+            store
+        }
+
         fn new(key_num: u64) -> TestStore {
             let engine = TestEngineBuilder::new().build().unwrap();
             let keys: Vec<String> = (START_ID..START_ID + key_num)
@@ -456,6 +481,7 @@ mod tests {
                 snapshot,
                 ctx,
                 engine,
+                enable_user_timestamp: false,
             };
             store.init_data();
             store
@@ -503,6 +529,7 @@ mod tests {
                 COMMIT_TS + 1,
                 IsolationLevel::Si,
                 true,
+                self.enable_user_timestamp,
             )
         }
     }
@@ -607,6 +634,26 @@ mod tests {
             assert!(data.is_some(), "{:?} expect some, but got none", key);
         }
     }
+
+    #[test]
+    fn test_snapshot_store_user_timestamp() {
+        let key_num = 100;
+        let store = TestStore::create_store_for_user_timestamp(key_num);
+        let snapshot_store = store.store();
+        let mut statistics = Statistics::default();
+        let mut keys_list = Vec::new();
+        for key in &store.keys {
+            keys_list.push(Key::from_raw(key.as_bytes()));
+        }
+        let data = snapshot_store
+            .batch_get(&keys_list, &mut statistics)
+            .unwrap();
+        for item in data {
+            let item = item.unwrap();
+            assert!(item.is_some(), "item expect some while get none");
+        }
+    }
+
 
     #[test]
     fn test_snapshot_store_batch_get() {
@@ -720,7 +767,7 @@ mod tests {
     fn test_scanner_verify_bound() {
         // Store with a limited range
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
-        let store = SnapshotStore::new(snap, 0, IsolationLevel::Si, true);
+        let store = SnapshotStore::new(snap, 0, IsolationLevel::Si, true, false);
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
         let bound_c = Key::from_encoded(b"c".to_vec());
@@ -741,7 +788,7 @@ mod tests {
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
-        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::Si, true);
+        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::Si, true, false);
         assert!(store2.scanner(false, false, None, None).is_ok());
         assert!(store2
             .scanner(false, false, Some(bound_a.clone()), None)

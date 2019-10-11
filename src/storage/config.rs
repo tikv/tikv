@@ -37,6 +37,7 @@ pub struct Config {
     pub scheduler_worker_pool_size: usize,
     pub scheduler_pending_write_threshold: ReadableSize,
     pub block_cache: BlockCacheConfig,
+    pub user_timestamp_enabled: bool,
 }
 
 impl Default for Config {
@@ -51,6 +52,7 @@ impl Default for Config {
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             block_cache: BlockCacheConfig::default(),
+            user_timestamp_enabled: false,
         }
     }
 }

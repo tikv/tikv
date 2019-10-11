@@ -109,6 +109,10 @@ pub trait Snapshot: Send + Clone {
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+    fn get_cf_with_ts(&self, cf: CfName, key: &Key, ts: u64) -> Result<Option<Value>> {
+        let key_ts = key.clone().append_ts(ts);
+        self.get_cf(cf, &key_ts)
+    }
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,

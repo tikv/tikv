@@ -4,6 +4,7 @@ use std::option::Option;
 
 use super::{util, DBIterator, DBVector, WriteBatch, DB};
 use crate::{IterOption, Iterable, Mutable, Peekable, Result};
+use rocksdb::ReadOptions;
 
 impl Peekable for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
@@ -14,6 +15,14 @@ impl Peekable for DB {
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
         let handle = util::get_cf_handle(self, cf)?;
         let v = self.get_cf(handle, key)?;
+        Ok(v)
+    }
+
+    fn get_value_cf_with_ts(&self, cf: &str, key: &[u8], ts: Vec<u8>) -> Result<Option<DBVector>> {
+        let handle = util::get_cf_handle(self, cf)?;
+        let mut opt = ReadOptions::new();
+        opt.set_user_timestamp(ts);
+        let v = self.get_cf_opt(handle, key, &opt)?;
         Ok(v)
     }
 }

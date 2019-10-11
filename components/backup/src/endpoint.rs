@@ -138,6 +138,7 @@ impl BackupRange {
             backup_ts,
             IsolationLevel::Si,
             false, /* fill_cache */
+            false,
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();

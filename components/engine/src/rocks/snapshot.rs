@@ -135,4 +135,15 @@ impl Peekable for Snapshot {
         let v = self.db.get_cf_opt(handle, key, &opt)?;
         Ok(v)
     }
+
+    fn get_value_cf_with_ts(&self, cf: &str, key: &[u8], ts: Vec<u8>) -> Result<Option<DBVector>> {
+        let handle = super::util::get_cf_handle(&self.db, cf)?;
+        let mut opt = ReadOptions::new();
+        unsafe {
+            opt.set_snapshot(&self.snap);
+            opt.set_user_timestamp(ts);
+        }
+        let v = self.db.get_cf_opt(handle, key, &opt)?;
+        Ok(v)
+    }
 }

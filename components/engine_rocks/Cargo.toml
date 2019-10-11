@@ -34,7 +34,8 @@ rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 features = ["nightly", "push", "process"]
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/Little-Wallace/rust-rocksdb.git"
+branch = "user_timestamp"
 package = "rocksdb"
 
 [dev-dependencies]

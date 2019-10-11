@@ -133,6 +133,7 @@ impl<T: Simulator> Cluster<T> {
             let kv_path = dir.path().join("kv");
             let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
+            self.cfg.rocksdb.writecf.enable_user_timestamp = self.cfg.storage.user_timestamp_enabled;
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)

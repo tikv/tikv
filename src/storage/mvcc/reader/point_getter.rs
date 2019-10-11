@@ -13,6 +13,7 @@ pub struct PointGetterBuilder<S: Snapshot> {
     multi: bool,
     fill_cache: bool,
     omit_value: bool,
+    enable_user_timestamp: bool,
     isolation_level: IsolationLevel,
     ts: u64,
 }
@@ -25,6 +26,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             multi: true,
             fill_cache: true,
             omit_value: false,
+            enable_user_timestamp: false,
             isolation_level: IsolationLevel::Si,
             ts,
         }
@@ -60,6 +62,11 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
+    pub fn enable_user_timestamp(mut self, enable_user_timestamp: bool) -> Self {
+        self.enable_user_timestamp = enable_user_timestamp;
+        self
+    }
+
     /// Set the isolation level.
     ///
     /// Defaults to `IsolationLevel::Si`.
@@ -72,10 +79,15 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
         // If we only want to get single value, we can use prefix seek.
-        let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .fill_cache(self.fill_cache)
-            .prefix_seek(!self.multi)
-            .build()?;
+        let write_cursor = if !self.enable_user_timestamp {
+            let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+                .fill_cache(self.fill_cache)
+                .prefix_seek(!self.multi)
+                .build()?;
+            Some(cursor)
+        } else {
+            None
+        };
 
         Ok(PointGetter {
             snapshot: self.snapshot,
@@ -107,7 +119,7 @@ pub struct PointGetter<S: Snapshot> {
 
     statistics: Statistics,
 
-    write_cursor: Cursor<S::Iter>,
+    write_cursor: Option<Cursor<S::Iter>>,
     write_cursor_valid: bool,
 
     /// Indicating whether or not this structure can serve more requests. It is meaningful only
@@ -168,17 +180,44 @@ impl<S: Snapshot> PointGetter<S> {
         }
     }
 
+    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
+        if self.write_cursor.is_some() {
+            return self.load_data_by_seek(user_key);
+        }
+        let mut ts = self.ts;
+        loop {
+            let result = self.snapshot.get_cf_with_ts(CF_WRITE, user_key, ts)?;
+            if let Some(value) = result {
+                let write = Write::parse(value.as_ref())?;
+                match write.write_type {
+                    WriteType::Put => {
+                        return Ok(Some(self.load_data_by_write(write, user_key)?));
+                    }
+                    WriteType::Delete => {
+                        return Ok(None);
+                    }
+                    WriteType::Lock | WriteType::Rollback => {
+                        // Continue iterate next `write`.
+                        ts = ts -1;
+                    }
+                }
+            }
+        }
+    }
+
     /// Load the value.
     ///
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
+    fn load_data_by_seek(&mut self, user_key: &Key) -> Result<Option<Value>> {
         if !self.write_cursor_valid {
             return Ok(None);
         }
 
+        let write_cursor = self.write_cursor.as_mut().unwrap();
+
         // Seek to `${user_key}_${ts}`. TODO: We can avoid this clone.
-        if !self.write_cursor.near_seek(
+        if !write_cursor.near_seek(
             &user_key.clone().append_ts(self.ts),
             &mut self.statistics.write,
         )? {
@@ -194,20 +233,20 @@ impl<S: Snapshot> PointGetter<S> {
         }
 
         loop {
-            if !self.write_cursor.valid()? {
+            if !write_cursor.valid()? {
                 // Key space ended.
                 return Ok(None);
             }
             // We may seek to another key. In this case, it means we cannot find the specified key.
             {
-                let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+                let cursor_key = write_cursor.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
                     return Ok(None);
                 }
             }
 
             self.statistics.write.processed += 1;
-            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = Write::parse(write_cursor.value(&mut self.statistics.write))?;
 
             match write.write_type {
                 WriteType::Put => {
@@ -221,7 +260,7 @@ impl<S: Snapshot> PointGetter<S> {
                 }
             }
 
-            self.write_cursor.next(&mut self.statistics.write);
+            write_cursor.next(&mut self.statistics.write);
         }
     }
 

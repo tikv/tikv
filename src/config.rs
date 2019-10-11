@@ -162,6 +162,7 @@ macro_rules! cf_config {
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
             pub enable_doubly_skiplist: bool,
+            pub enable_user_timestamp: bool,
             pub titan: TitanCfConfig,
         }
 
@@ -346,6 +347,9 @@ macro_rules! build_cf_opt {
         if $opt.enable_doubly_skiplist {
             cf_opts.set_doubly_skiplist();
         }
+        if $opt.enable_user_timestamp {
+            cf_opts.set_user_timestamp_comparator(8);
+        }
         cf_opts
     }};
 }
@@ -396,6 +400,7 @@ impl Default for DefaultCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
             titan: TitanCfConfig::default(),
         }
     }
@@ -463,6 +468,7 @@ impl Default for WriteCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
             titan,
         }
     }
@@ -532,6 +538,7 @@ impl Default for LockCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
             titan,
         }
     }
@@ -591,6 +598,7 @@ impl Default for RaftCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
             titan,
         }
     }
@@ -860,6 +868,7 @@ impl Default for RaftDefaultCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
             titan: TitanCfConfig::default(),
         }
     }

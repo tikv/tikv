@@ -743,6 +743,8 @@ pub struct Storage<E: Engine, L: LockMgr> {
     max_key_size: usize,
 
     pessimistic_txn_enabled: bool,
+
+    user_timestamp_enabled: bool,
 }
 
 impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
@@ -764,6 +766,7 @@ impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             pessimistic_txn_enabled: self.pessimistic_txn_enabled,
+            user_timestamp_enabled: self.user_timestamp_enabled,
         }
     }
 }
@@ -833,6 +836,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             pessimistic_txn_enabled,
+            user_timestamp_enabled: config.user_timestamp_enabled,
         })
     }
 
@@ -899,6 +903,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
         let priority = get_priority_tag(ctx.get_priority());
+        let user_timestamp_enabled = self.user_timestamp_enabled;
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
@@ -914,6 +919,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                user_timestamp_enabled,
                             );
                             let result = snap_store
                                 .get(&key, &mut statistics)
@@ -953,6 +959,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
         let priority = get_priority_tag(ctx.get_priority());
+        let user_timestamp_enabled = self.user_timestamp_enabled;
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
@@ -968,6 +975,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                user_timestamp_enabled,
                             );
                             let result = snap_store
                                 .batch_get(&keys, &mut statistics)
@@ -1037,6 +1045,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                false,
                             );
 
                             let mut scanner;
