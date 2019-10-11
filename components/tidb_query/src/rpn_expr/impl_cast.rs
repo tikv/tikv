@@ -1160,6 +1160,7 @@ mod tests {
         }
         ft
     }
+
     fn make_ret_field_type_6(decimal: isize) -> FieldType {
         let mut ft = FieldType::default();
         let fta = ft.as_mut_accessor();
