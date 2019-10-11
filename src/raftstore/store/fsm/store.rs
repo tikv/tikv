@@ -469,7 +469,9 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     .schedule_task(prop.region_id, ApplyTask::Proposal(prop));
             }
         }
-        if self.poll_ctx.need_flush_trans {
+        if self.poll_ctx.need_flush_trans
+            && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
+        {
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
         }
@@ -543,11 +545,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             .append_log
             .observe(duration_to_sec(dur) as f64);
 
-        if self.poll_ctx.need_flush_trans {
-            self.poll_ctx.trans.flush();
-            self.poll_ctx.need_flush_trans = false;
-        }
-
         slow_log!(
             self.timer,
             "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
@@ -568,7 +565,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
-        self.poll_ctx.need_flush_trans = false;
         if self.pending_proposals.capacity() == 0 {
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
@@ -654,10 +650,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
-        if self.poll_ctx.need_flush_trans {
-            self.poll_ctx.trans.flush();
-            self.poll_ctx.need_flush_trans = false;
-        }
         if !self.poll_ctx.queued_snapshot.is_empty() {
             let mut meta = self.poll_ctx.store_meta.lock().unwrap();
             meta.pending_snapshot_regions
@@ -670,6 +662,13 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+    }
+
+    fn pause(&mut self) {
+        if self.poll_ctx.need_flush_trans {
+            self.poll_ctx.trans.flush();
+            self.poll_ctx.need_flush_trans = false;
+        }
     }
 }
 
