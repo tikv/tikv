@@ -2061,7 +2061,7 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
+    use crate::raftstore::coprocessor::properties::{RangeOffsets, RangeProperties};
     use crate::storage::kv::CompactedEvent;
     use tikv_util::collections::HashMap;
 
@@ -2069,34 +2069,39 @@ mod tests {
 
     #[test]
     fn test_calc_region_declined_bytes() {
-        let index_handle1 = IndexHandle {
-            size: 4 * 1024,
-            offset: 4 * 1024,
-        };
-        let index_handle2 = IndexHandle {
-            size: 4 * 1024,
-            offset: 8 * 1024,
-        };
-        let index_handle3 = IndexHandle {
-            size: 4 * 1024,
-            offset: 12 * 1024,
-        };
-        let mut index_handles = IndexHandles::new();
-        index_handles.add(b"a".to_vec(), index_handle1);
-        index_handles.add(b"b".to_vec(), index_handle2);
-        index_handles.add(b"c".to_vec(), index_handle3);
-        let size_prop = SizeProperties {
-            total_size: 12 * 1024,
-            index_handles,
+        let prop = RangeProperties {
+            offsets: vec![
+                (
+                    b"a".to_vec(),
+                    RangeOffsets {
+                        size: 4 * 1024,
+                        keys: 1,
+                    },
+                ),
+                (
+                    b"b".to_vec(),
+                    RangeOffsets {
+                        size: 8 * 1024,
+                        keys: 2,
+                    },
+                ),
+                (
+                    b"c".to_vec(),
+                    RangeOffsets {
+                        size: 12 * 1024,
+                        keys: 3,
+                    },
+                ),
+            ],
         };
         let event = CompactedEvent {
             cf: "default".to_owned(),
             output_level: 3,
             total_input_bytes: 12 * 1024,
             total_output_bytes: 0,
-            start_key: size_prop.smallest_key().unwrap(),
-            end_key: size_prop.largest_key().unwrap(),
-            input_props: vec![size_prop.into()],
+            start_key: prop.smallest_key().unwrap(),
+            end_key: prop.largest_key().unwrap(),
+            input_props: vec![prop],
             output_props: vec![],
         };
 
