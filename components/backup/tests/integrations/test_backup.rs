@@ -44,7 +44,7 @@ macro_rules! retry_req {
             if $check_resp {
                 break;
             } else {
-                thread::sleep(Duration::from_millis(20));
+                thread::sleep(Duration::from_millis(200));
                 tried_times += 1;
                 $resp = $call_req;
                 continue;
@@ -122,8 +122,8 @@ impl TestSuite {
             self.tikv_cli.kv_prewrite(&prewrite_req).unwrap(),
             !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
             prewrite_resp,
-            5,   // retry 5 times
-            100  // 100ms timeout
+            5,    // retry 5 times
+            5000  // 100ms timeout
         );
         assert!(
             !prewrite_resp.has_region_error(),
@@ -148,8 +148,8 @@ impl TestSuite {
             self.tikv_cli.kv_commit(&commit_req).unwrap(),
             !commit_resp.has_region_error() && !commit_resp.has_error(),
             commit_resp,
-            5,   // retry 5 times
-            100  // 100ms timeout
+            5,    // retry 5 times
+            5000  // 100ms timeout
         );
         assert!(
             !commit_resp.has_region_error(),
