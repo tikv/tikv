@@ -637,9 +637,9 @@ impl<I: Iterator> Cursor<I> {
                 } else {
                     error!(
                         "failed to iterate";
-                        "min_key" => %self.min_key.as_ref().map(|k| hex::encode_upper(k)),
-                        "max_key" => %self.max_key.as_ref().map(|k| hex::encode_upper(k)),
-                        "error" => %e,
+                        "min_key" => ?self.min_key.as_ref().map(|k| hex::encode_upper(k)),
+                        "max_key" => ?self.max_key.as_ref().map(|k| hex::encode_upper(k)),
+                        "error" => ?e,
                     );
                 }
                 return Err(e);
