@@ -26,6 +26,7 @@ use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
 use crate::storage::{self, kv, Key, Value};
+use tikv_util::codec::number::NumberEncoder;
 
 quick_error! {
     #[derive(Debug)]
@@ -376,6 +377,16 @@ impl Snapshot for RegionSnapshot {
             "injected error for get_cf"
         )));
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        Ok(v.map(|v| v.to_vec()))
+    }
+
+    fn get_cf_with_ts(&self, cf: CfName, key: &Key, ts: u64) -> kv::Result<Option<Value>> {
+        fail_point!("raftkv_snapshot_get_cf_with_ts", |_| Err(box_err!(
+            "injected error for get_cf"
+        )));
+        let mut encode_ts = Vec::with_capacity(8);
+        encode_ts.encode_u64_desc(ts).unwrap();
+        let v = box_try!(self.get_value_cf_with_ts(cf, key.as_encoded(), key_ts));
         Ok(v.map(|v| v.to_vec()))
     }
 
