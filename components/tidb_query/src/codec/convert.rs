@@ -1042,7 +1042,7 @@ mod tests {
     use crate::codec::error::{
         ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
     };
-    use crate::codec::mysql::Res;
+    use crate::codec::mysql::{Res, UNSPECIFIED_FSP};
     use crate::expr::{EvalConfig, EvalContext, Flag};
     use tidb_query_datatype::{Collation, FieldTypeFlag};
 
@@ -2081,7 +2081,7 @@ mod tests {
 
     #[test]
     fn test_produce_dec_with_specified_tp_2() {
-        let ul = UNSPECIFIED_FSP;
+        let ul = isize::from(UNSPECIFIED_FSP);
         let cs = vec![
             // (
             // origin,
