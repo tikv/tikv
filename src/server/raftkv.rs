@@ -386,7 +386,7 @@ impl Snapshot for RegionSnapshot {
         )));
         let mut encode_ts = Vec::with_capacity(8);
         encode_ts.encode_u64_desc(ts).unwrap();
-        let v = box_try!(self.get_value_cf_with_ts(cf, key.as_encoded(), key_ts));
+        let v = box_try!(self.get_value_cf_with_ts(cf, key.as_encoded(), encode_ts));
         Ok(v.map(|v| v.to_vec()))
     }
 

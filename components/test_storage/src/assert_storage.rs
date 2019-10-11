@@ -26,6 +26,15 @@ impl Default for AssertionStorage<RocksEngine> {
     }
 }
 
+impl<E: Engine> AssertionStorage<E> {
+    pub fn from_engine(engine: E) -> Self {
+        AssertionStorage {
+            ctx: Context::default(),
+            store: SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
+        }
+    }
+}
+
 impl AssertionStorage<SimulateEngine> {
     pub fn new_raft_storage_with_store_count(
         count: usize,

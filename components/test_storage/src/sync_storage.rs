@@ -23,8 +23,12 @@ pub struct SyncTestStorageBuilder<E: Engine> {
 
 impl SyncTestStorageBuilder<RocksEngine> {
     pub fn new() -> Self {
+        let default_config = Config::default();
         Self {
-            engine: TestEngineBuilder::new().build().unwrap(),
+            engine: TestEngineBuilder::new()
+                .enable_user_timestamp(default_config.user_timestamp_enabled)
+                .build()
+                .unwrap(),
             config: None,
         }
     }
