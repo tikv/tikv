@@ -83,15 +83,10 @@ impl RegionVerId {
     }
 }
 
+/// BatchLimiter controls submit timing of request batch.
 struct BatchLimiter {
     timeout: Option<Duration>,
     last_submit_time: Instant,
-    // Statistics
-    input_since_last_submit: u64,
-    input_since_last_tick: u64,
-    output_since_last_tick: u64,
-    // Batch size is restrained below this limit.
-    input_limit: u64,
 }
 
 impl BatchLimiter {
@@ -99,10 +94,6 @@ impl BatchLimiter {
         BatchLimiter {
             timeout,
             last_submit_time: Instant::now(),
-            input_since_last_submit: 0,
-            input_since_last_tick: 0,
-            output_since_last_tick: 0,
-            input_limit: 1,
         }
     }
 
@@ -111,7 +102,7 @@ impl BatchLimiter {
         self.timeout.is_none()
     }
 
-    /// Whether the batch is due to be submitted in a timely manner.
+    /// Whether the batch is timely due to be submitted.
     #[inline]
     fn due(&self, now: Instant) -> bool {
         if let Some(timeout) = self.timeout {
@@ -121,40 +112,28 @@ impl BatchLimiter {
         }
     }
 
-    /// Whether the batch is ready to be submitted.
+    /// Whether the batch is ready to be early submitted.
     #[inline]
     fn ready(&self) -> bool {
-        // self.input_since_last_submit >= self.input_limit
+        // TODO: fallback to direct submit when stream is cold.
         false
     }
 
     /// Observe a tick from timer guard. Limiter will update statistics at this point.
     #[inline]
     fn observe_tick(&mut self) {
-        // naive strategy: fallback to quick submit when request stream is cold.
-        self.input_limit = if self.input_since_last_tick < 5 {
-            1
-        } else {
-            u64::max_value()
-        };
-        self.input_since_last_tick = 0;
-        self.output_since_last_tick = 0;
+        // TODO: robust strategy here to detect stream hotness.
     }
 
     /// Observe the size of commands been examined by batcher.
     /// Command may not be batched but must have the valid type for this batch.
     #[inline]
-    fn observe_input(&mut self, size: u64) {
-        self.input_since_last_submit += size;
-        self.input_since_last_tick += size;
-    }
+    fn observe_input(&mut self, _size: u64) {}
 
     /// Observe the time and output size of one batch submit.
     #[inline]
-    fn observe_submit(&mut self, now: Instant, size: u64) {
+    fn observe_submit(&mut self, now: Instant, _size: u64) {
         self.last_submit_time = now;
-        self.input_since_last_submit = 0;
-        self.output_since_last_tick += size;
     }
 }
 
