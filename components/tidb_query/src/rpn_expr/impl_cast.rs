@@ -661,9 +661,6 @@ fn cast_signed_int_as_unsigned_decimal(
             let dec = if in_union(extra.implicit_args) && *val < 0 {
                 Decimal::zero()
             } else {
-                // FIXME: here TiDB has bug, fix this after fix TiDB's
-                // if val is >=0, then val as u64 is ok,
-                // if val <0, there may be bug here.
                 Decimal::from(*val as u64)
             };
             Ok(Some(produce_dec_with_specified_tp(
@@ -675,7 +672,6 @@ fn cast_signed_int_as_unsigned_decimal(
     }
 }
 
-// FIXME: here TiDB may has bug, fix this after fix TiDB's
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
 fn cast_real_as_decimal(
@@ -718,7 +714,6 @@ fn cast_string_as_unsigned_decimal(
             } else {
                 d
             };
-            // FIXME: how to make a negative decimal value to unsigned decimal value
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
                 d,
@@ -761,8 +756,6 @@ fn cast_decimal_as_unsigned_decimal(
             let res = if in_union(extra.implicit_args) && val.is_negative() {
                 Decimal::zero()
             } else {
-                // FIXME: here TiDB may has bug, fix this after fix TiDB's
-                // FIXME: how to make a unsigned decimal from negative decimal
                 val.clone()
             };
             Ok(Some(produce_dec_with_specified_tp(
@@ -774,7 +767,6 @@ fn cast_decimal_as_unsigned_decimal(
     }
 }
 
-// FIXME: for cast_int_as_decimal, TiDB's impl has bug, fix this after fixed TiDB's
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
 fn cast_any_as_decimal<From: Evaluable + ConvertTo<Decimal>>(
