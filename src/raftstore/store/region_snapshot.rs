@@ -140,10 +140,11 @@ impl Peekable for RegionSnapshot {
         )?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key).map_err(|e| {
+            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!(
-                    "failed to get key {} of region {}",
+                    "failed to get value of key {} in region {}",
                     hex::encode_upper(&key),
                     self.region.get_id(),
                 );
@@ -161,15 +162,22 @@ impl Peekable for RegionSnapshot {
         )?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key).map_err(|e| {
+            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!(
-                    "failed to get key {} of region {}",
+                    "failed to get value of key {} in region {}",
                     hex::encode_upper(&key),
                     self.region.get_id(),
                 );
+            } else {
+                error!(
+                    "failed to get value of key";
+                    "key" => hex::encode_upper(&key),
+                    "region" => self.region.get_id(),
+                );
+                e
             }
-            e
         })
     }
 }
