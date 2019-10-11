@@ -3540,17 +3540,6 @@ mod tests {
             let res = negative.to_string();
             assert_eq!(res, negative_exp);
         }
-
-        let should_panic_cases = vec![(0, 10), (0, 1)];
-        for (prec, frac) in should_panic_cases {
-            let log = format!("prec: {}, frac: {}, is neg", prec, frac);
-            let result = std::panic::catch_unwind(|| super::max_or_min_dec(true, prec, frac));
-            assert!(result.is_err(), "{}", log);
-
-            let log = format!("prec: {}, frac: {}, is not neg", prec, frac);
-            let result = std::panic::catch_unwind(|| super::max_or_min_dec(false, prec, frac));
-            assert!(result.is_err(), "{}", log);
-        }
     }
 
     #[test]
