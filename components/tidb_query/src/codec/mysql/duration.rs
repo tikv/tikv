@@ -650,7 +650,11 @@ impl Duration {
 
     /// If the error is overflow, the result will be returned, too.
     /// Otherwise, only one of result or err will be returned
-    pub fn from_i64_without_ctx(mut n: i64, fsp: u8) -> (Option<Duration>, Option<Error>) {
+    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> (Option<Duration>, Option<Error>) {
+        let fsp = match check_fsp(fsp) {
+            Err(e) => return (None, Some(e)),
+            Ok(fsp) => fsp,
+        };
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
             let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
@@ -681,7 +685,7 @@ impl Duration {
         (Some(dur), None)
     }
 
-    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: u8) -> Result<Duration> {
+    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
         let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
         err.map_or_else(
             || {
@@ -809,11 +813,11 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::EPSILON;
-
     use super::*;
     use crate::codec::data_type::DateTime;
+    use crate::codec::mysql::UNSPECIFIED_FSP;
     use crate::expr::{EvalConfig, EvalContext, Flag};
+    use std::f64::EPSILON;
     use std::sync::Arc;
 
     #[test]
@@ -1146,8 +1150,15 @@ mod tests {
 
     #[test]
     fn test_from_i64() {
-        let cs: Vec<(i64, u8, Result<Duration>, bool)> = vec![
+        let cs: Vec<(i64, i8, Result<Duration>, bool)> = vec![
             // (input, fsp, expect, overflow)
+            // UNSPECIFIED_FSP
+            (
+                8385959,
+                UNSPECIFIED_FSP as i8,
+                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
+                false,
+            ),
             (
                 101010,
                 0,
