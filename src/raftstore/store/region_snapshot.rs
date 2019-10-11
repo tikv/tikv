@@ -153,8 +153,13 @@ impl Peekable for RegionSnapshot {
         self.snap.get_value_cf(cf, &data_key)
     }
 
-    fn get_value_cf_with_ts(&self, cf: &str, key: &[u8], ts: Vec<u8>) -> EngineResult<Option<DBVector>> {
-         engine::util::check_key_in_range(
+    fn get_value_cf_with_ts(
+        &self,
+        cf: &str,
+        key: &[u8],
+        ts: Vec<u8>,
+    ) -> EngineResult<Option<DBVector>> {
+        engine::util::check_key_in_range(
             key,
             self.region.get_id(),
             self.region.get_start_key(),

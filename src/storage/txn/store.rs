@@ -450,9 +450,11 @@ mod tests {
     }
 
     impl TestStore {
-
         fn create_store_for_user_timestamp(key_num: u64) -> TestStore {
-            let engine = TestEngineBuilder::new().enable_user_timestamp(true).build().unwrap();
+            let engine = TestEngineBuilder::new()
+                .enable_user_timestamp(true)
+                .build()
+                .unwrap();
             let keys: Vec<String> = (START_ID..START_ID + key_num)
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();
@@ -463,7 +465,7 @@ mod tests {
                 snapshot,
                 ctx,
                 engine,
-                enable_user_timestamp: true
+                enable_user_timestamp: true,
             };
             store.init_data();
             store
@@ -653,7 +655,6 @@ mod tests {
             assert!(item.is_some(), "item expect some while get none");
         }
     }
-
 
     #[test]
     fn test_snapshot_store_batch_get() {
