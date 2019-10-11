@@ -144,15 +144,17 @@ impl Peekable for RegionSnapshot {
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!(
-                    "failed to get value of key {} in region {}",
+                    "failed to get value of key {} in region {}: {:?}",
                     hex::encode_upper(&key),
                     self.region.get_id(),
+                    e,
                 );
             } else {
                 error!(
                     "failed to get value of key";
                     "key" => hex::encode_upper(&key),
                     "region" => self.region.get_id(),
+                    "error" => %e,
                 );
                 e
             }
@@ -172,9 +174,10 @@ impl Peekable for RegionSnapshot {
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!(
-                    "failed to get value of key {} in region {}",
+                    "failed to get value of key {} in region {}: {:?}",
                     hex::encode_upper(&key),
                     self.region.get_id(),
+                    e,
                 );
             } else {
                 error!(
@@ -182,6 +185,7 @@ impl Peekable for RegionSnapshot {
                     "key" => hex::encode_upper(&key),
                     "region" => self.region.get_id(),
                     "cf" => cf,
+                    "error" => %e,
                 );
                 e
             }
