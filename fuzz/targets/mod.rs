@@ -171,7 +171,7 @@ fn fuzz_time(t: tidb_query::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Re
     let _ = t.last_day_of_month();
     let _ = t.to_string();
     let mut v = Vec::new();
-    let _ = v.encode_time(&t);
+    let _ = v.write_time(&t);
 
     let mut ctx = EvalContext::default();
     let _: i64 = t.convert(&mut ctx)?;
@@ -229,7 +229,7 @@ fn fuzz_duration(
     let u = t;
     u.round_frac(cursor.read_as_i8()?)?;
     let mut v = Vec::new();
-    let _ = v.encode_duration(t);
+    let _ = v.write_duration(t);
 
     let mut ctx = EvalContext::default();
     let _: Decimal = t.convert(&mut ctx)?;
