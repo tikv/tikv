@@ -267,7 +267,7 @@ pub struct SizeProperties {
 }
 
 impl SizeProperties {
-    pub fn encode(&self) -> UserProperties {	
+    pub fn encode(&self) -> UserProperties {
         let mut props = UserProperties::new();
         props.encode_u64(PROP_TOTAL_SIZE, self.total_size);
         props.encode_handles(PROP_SIZE_INDEX, &self.index_handles);
