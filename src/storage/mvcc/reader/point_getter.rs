@@ -201,6 +201,8 @@ impl<S: Snapshot> PointGetter<S> {
                         ts = ts -1;
                     }
                 }
+            } else {
+                return Ok(None);
             }
         }
     }
