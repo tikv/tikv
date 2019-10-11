@@ -14,6 +14,7 @@ use super::super::metrics::*;
 use super::super::properties::{get_range_entries_and_versions, RangeProperties};
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use tikv_util::codec::number::NumberEncoder;
 
 pub struct Checker {
     max_keys_count: u64,
@@ -192,8 +193,11 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
 }
 
 pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
+    let mut start_key = keys::enc_start_key(region);
+    let mut end_key = keys::enc_end_key(region);
+    start_key.encode_u64_desc(std::u64::MAX);
+    end_key.encode_u64_desc(0);
+
     let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
     let range = Range::new(&start_key, &end_key);
     let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
