@@ -70,13 +70,13 @@ impl rocksdb::EventListener for EventListener {
     fn on_background_error(&self, reason: DBBackgroundErrorReason, result: Result<(), String>) {
         assert!(result.is_err());
         if let Err(err) = result {
-            CRITICAL_ERROR.with_label_values(&["rocksdb"]).inc();
             let r = match reason {
                 DBBackgroundErrorReason::Flush => "flush",
                 DBBackgroundErrorReason::Compaction => "compaction",
                 DBBackgroundErrorReason::WriteCallback => "write_callback",
                 DBBackgroundErrorReason::MemTable => "memtable",
             };
+            CRITICAL_ERROR.with_label_values(&[format!("rocksdb_bg_{}", r).as_str()]).inc();
             // Avoid tikv from restarting if rocksdb get corruption.
             if err.starts_with("Corruption") {
                 set_panic_mark();
