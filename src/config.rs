@@ -274,6 +274,9 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "enable_doubly_skiplist"])
             .set(($cf.enable_doubly_skiplist as i32).into());
         $metrics
+            .with_label_values(&[$tag, "enable_user_timestamp"])
+            .set(($cf.enable_user_timestamp as i32).into());
+        $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.0 as f64);
         $metrics

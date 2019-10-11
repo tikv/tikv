@@ -35,9 +35,9 @@ pub struct Config {
     pub scheduler_notify_capacity: usize,
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
+    pub user_timestamp_enabled: bool,
     pub scheduler_pending_write_threshold: ReadableSize,
     pub block_cache: BlockCacheConfig,
-    pub user_timestamp_enabled: bool,
 }
 
 impl Default for Config {

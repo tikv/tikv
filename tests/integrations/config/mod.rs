@@ -241,6 +241,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
+            enable_user_timestamp: false,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -295,6 +296,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -349,6 +351,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -403,6 +406,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
         },
         titan: TitanDBConfig {
             enabled: true,
@@ -479,6 +483,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_user_timestamp: false,
         },
     };
     value.storage = StorageConfig {
@@ -489,6 +494,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
+        user_timestamp_enabled: false,
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: Some(ReadableSize::gb(40)),
