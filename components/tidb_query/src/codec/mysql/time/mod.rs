@@ -832,9 +832,12 @@ impl ConvertTo<MyDuration> for Time {
         if self.is_zero() {
             return Ok(MyDuration::zero());
         }
-        let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC
-            + i64::from(self.time.nanosecond());
-        MyDuration::from_nanos(nanos, self.fsp as i8)
+        let seconds = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC;
+        // `nanosecond` returns the number of nanoseconds since the whole non-leap second.
+        // Such as for 2019-09-22 07:21:22.670936103 UTC,
+        // it will return 670936103.
+        let nanosecond = i64::from(self.time.nanosecond());
+        MyDuration::from_nanos(seconds + nanosecond, self.fsp as i8)
     }
 }
 
