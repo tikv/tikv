@@ -31,6 +31,31 @@ fn last_day_of_month(year: u32, month: u32) -> u32 {
     }
 }
 
+fn round_components(parts: &mut [u32]) -> Option<()> {
+    debug_assert_eq!(parts.len(), 7);
+    let modulus = [
+        std::u32::MAX,
+        12,
+        last_day_of_month(parts[0], parts[1]),
+        // hms[.fraction]
+        24,
+        60,
+        60,
+        1_000_000,
+    ];
+    for i in (1..=6).rev() {
+        let is_ymd = u32::from(i < 3);
+        if parts[i] >= modulus[i] + is_ymd {
+            parts[i] -= modulus[i];
+            if i < 4 && parts[i - 1] == 0 || parts[i - 1] > modulus[i - 1] {
+                return None;
+            }
+            parts[i - 1] += 1;
+        }
+    }
+    Some(())
+}
+
 #[inline]
 fn chrono_datetime<T: TimeZone>(
     time_zone: &T,
@@ -54,8 +79,12 @@ fn chrono_datetime<T: TimeZone>(
 
 fn round_frac(frac: u32, fsp: u8) -> (bool, u32) {
     debug_assert!(frac < 100_000_000 && fsp < 7);
+    if frac >= 100_000 && frac < 1_000_000 && fsp == 6 {
+        return (false, frac);
+    }
+
     let fsp = usize::from(fsp);
-    let width = if frac >= 1_000_000 { 7 } else { 6 };
+    let width: usize = if frac >= 1_000_000 { 7 } else { 6 };
     let mask = TEN_POW[width - fsp - 1];
     let result = (frac / mask + 5) / 10 * mask * if width == 6 { 10 } else { 1 };
     (result >= 1_000_000, result)
@@ -285,27 +314,6 @@ mod parser {
         } else {
             (false, frac)
         })
-    }
-
-    fn round_components(parts: &mut [u32]) -> Option<()> {
-        (parts.len() == 7).as_option()?;
-        let modulus = [
-            0,
-            12,
-            last_day_of_month(parts[0], parts[1]),
-            24,
-            60,
-            60,
-            1_000_000,
-        ];
-
-        for i in (1..7).rev() {
-            if parts[i] >= modulus[i] {
-                parts[i] -= modulus[i];
-                parts[i - 1] += 1;
-            }
-        }
-        Some(())
     }
 
     pub fn parse(
@@ -595,6 +603,18 @@ impl Time {
         .ok()
     }
 
+    fn into_slice(self) -> [u32; 7] {
+        let mut slice = [0; 7];
+        slice[0] = self.year();
+        slice[1] = self.month();
+        slice[2] = self.day();
+        slice[3] = self.hour();
+        slice[4] = self.minute();
+        slice[5] = self.second();
+        slice[6] = self.micro();
+        slice
+    }
+
     pub fn try_from_chrono_datetime<T: Datelike + Timelike>(
         ctx: &mut EvalContext,
         datetime: T,
@@ -830,6 +850,29 @@ impl Time {
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
+    }
+
+    pub fn round_frac(self, ctx: &mut EvalContext, fsp: i8) -> Result<Self> {
+        let time_type = self.get_time_type();
+        // If we have cases like:
+        //   1. 2012-0-1  23:59:59.999      (fsp: 2)
+        //   2. 2012-4-31 23:59:59.999      (fsp: 2)
+        // 0000-00-00.00 is expected.
+        if time_type == TimeType::Date || self.is_zero() {
+            return Ok(self);
+        }
+
+        let fsp = check_fsp(fsp)?;
+        let (carry, frac) = round_frac(self.micro(), fsp);
+        let mut slice = self.into_slice();
+        slice[6] = frac;
+
+        if carry && round_components(&mut slice).is_none() {
+            return Time::new(ctx, TimeArgs::zero(fsp as i8, time_type));
+        }
+
+        Time::from_slice(ctx, &slice, time_type, fsp)
+            .ok_or_else(|| Error::incorrect_datetime_value(self))
     }
 }
 
@@ -1494,7 +1537,6 @@ mod tests {
     #[test]
     fn test_from_duration() -> Result<()> {
         let cases = vec!["11:30:45.123456", "-35:30:46"];
-        let tz = Tz::utc();
         for case in cases {
             let mut ctx = EvalContext::default();
             let duration = Duration::parse(case.as_bytes(), MAX_FSP)?;
@@ -1512,6 +1554,45 @@ mod tests {
             assert_eq!(today.hour(), 0);
             assert_eq!(today.minute(), 0);
             assert_eq!(today.second(), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_datetime_round_frac() -> Result<()> {
+        let cases = vec![
+            ("121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
+            ("121231113045.999999", 6, "2012-12-31 11:30:45.999999"),
+            ("121231113045.999999", 5, "2012-12-31 11:30:46.00000"),
+            ("2012-12-31 11:30:45.123456", 4, "2012-12-31 11:30:45.1235"),
+            (
+                "2012-12-31 11:30:45.123456",
+                6,
+                "2012-12-31 11:30:45.123456",
+            ),
+            ("2012-12-31 11:30:45.123456", 0, "2012-12-31 11:30:45"),
+            ("2012-12-31 11:30:45.123456", 1, "2012-12-31 11:30:45.1"),
+            ("2012-12-31 11:30:45.999999", 4, "2012-12-31 11:30:46.0000"),
+            ("2012-12-31 11:30:45.999999", 0, "2012-12-31 11:30:46"),
+            ("2012-12-31 23:59:59.999999", 0, "2013-01-01 00:00:00"),
+            ("2012-12-31 23:59:59.999999", 3, "2013-01-01 00:00:00.000"),
+            ("2012-00-00 11:30:45.999999", 3, "2012-00-00 11:30:46.000"),
+            // Edge cases:
+            ("2012-01-00 23:59:59.999999", 3, "0000-00-00 00:00:00.000"),
+            ("2012-04-31 23:59:59.999999", 3, "0000-00-00 00:00:00.000"),
+        ];
+
+        for (input, fsp, expected) in cases {
+            let mut ctx = EvalContext::from(TimeEnv {
+                allow_invalid_date: true,
+                ..TimeEnv::default()
+            });
+            assert_eq!(
+                expected,
+                Time::parse(&mut ctx, input, TimeType::DateTime, MAX_FSP, true)?
+                    .round_frac(&mut ctx, fsp)?
+                    .to_string()
+            );
         }
         Ok(())
     }
