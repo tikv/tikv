@@ -195,8 +195,10 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
 }
 
 pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
-    let mut start_key = keys::enc_start_key(region);
-    let mut end_key = keys::enc_end_key(region);
+    let origin_start = keys::enc_start_key(region);
+    let origin_end = keys::enc_end_key(region);
+    let mut start_key = origin_start.clone();
+    let mut end_key = origin_end.clone();
     start_key.encode_u64_desc(std::u64::MAX).unwrap();
     end_key.encode_u64_desc(std::u64::MAX).unwrap();
 
@@ -209,7 +211,7 @@ pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) ->
     ));
     for (_, v) in &*collection {
         let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
-        keys += props.get_approximate_keys_in_range(&start_key, &end_key);
+        keys += props.get_approximate_keys_in_range(&origin_start, &origin_end);
     }
     Ok(keys)
 }

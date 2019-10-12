@@ -552,11 +552,14 @@ fn test_node_merge_brain_split() {
 fn test_merge_approximate_size_and_keys() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.storage.user_timestamp_enabled = false;
     cluster.run();
 
     let mut range = 1..;
     let middle_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
     let max_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
+    let max_key_str = std::str::from_utf8(&max_key).unwrap();
+    println!("max key: {}", max_key_str);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"").unwrap();
@@ -568,18 +571,25 @@ fn test_merge_approximate_size_and_keys() {
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
     assert_ne!(left, right);
+    println!("============before transfer======");
 
     // make sure all peer's approximate size is not None.
     cluster.must_transfer_leader(right.get_id(), right.get_peers()[0].clone());
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(1000));
     cluster.must_transfer_leader(right.get_id(), right.get_peers()[1].clone());
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(1000));
     cluster.must_transfer_leader(right.get_id(), right.get_peers()[2].clone());
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(1000));
+
+    let size = pd_client
+        .get_region_approximate_size(left.get_id())
+        .unwrap();
+    println!("left {} : {}", left.get_id(), size);
 
     let size = pd_client
         .get_region_approximate_size(right.get_id())
         .unwrap();
+    println!("right {} : {}", right.get_id(), size);
     assert_ne!(size, 0);
     let keys = pd_client
         .get_region_approximate_keys(right.get_id())

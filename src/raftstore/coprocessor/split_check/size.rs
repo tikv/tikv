@@ -215,6 +215,7 @@ pub fn get_region_approximate_size_cf(db: &DB, cfname: &str, region: &Region) ->
     let collection = box_try!(util::get_range_properties_cf(
         db, cfname, &start_key, &end_key
     ));
+
     for (_, v) in &*collection {
         let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
         size += props.get_approximate_size_in_range(&origin_start, &origin_end);

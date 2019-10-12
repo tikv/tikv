@@ -133,8 +133,10 @@ fn get_region_approximate_middle_cf(
     cfname: &str,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
-    let mut start_key = keys::enc_start_key(region);
-    let mut end_key = keys::enc_end_key(region);
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let mut start_key = start.clone();
+    let mut end_key = end.clone();
     start_key.encode_u64_desc(std::u64::MAX).unwrap();
     end_key.encode_u64_desc(std::u64::MAX).unwrap();
 
@@ -147,7 +149,7 @@ fn get_region_approximate_middle_cf(
         let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
         keys.extend(
             props
-                .take_excluded_range(start_key.as_slice(), end_key.as_slice())
+                .take_excluded_range(start.as_slice(), end.as_slice())
                 .into_iter()
                 .map(|(k, _)| k),
         );
