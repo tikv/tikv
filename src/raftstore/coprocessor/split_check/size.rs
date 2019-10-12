@@ -204,19 +204,20 @@ pub fn get_region_approximate_size(db: &DB, region: &Region) -> Result<u64> {
 
 pub fn get_region_approximate_size_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
     let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
-    let mut start_key = keys::enc_start_key(region);
-    let mut end_key = keys::enc_end_key(region);
-    start_key.encode_u64_desc(std::u64::MAX);
-    end_key.encode_u64_desc(std::u64::MAX);
+    let origin_start = keys::enc_start_key(region);
+    let origin_end = keys::enc_end_key(region);
+    let mut start_key = origin_start.clone();
+    let mut end_key = origin_end.clone();
+    start_key.encode_u64_desc(std::u64::MAX).unwrap();
+    end_key.encode_u64_desc(std::u64::MAX).unwrap();
     let range = Range::new(&start_key, &end_key);
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
-
     let collection = box_try!(util::get_range_properties_cf(
         db, cfname, &start_key, &end_key
     ));
     for (_, v) in &*collection {
         let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
-        size += props.get_approximate_size_in_range(&start_key, &end_key);
+        size += props.get_approximate_size_in_range(&origin_start, &origin_end);
     }
     Ok(size)
 }
@@ -263,8 +264,8 @@ fn get_approximate_split_keys_cf(
 ) -> Result<Vec<Vec<u8>>> {
     let mut start_key = keys::enc_start_key(region);
     let mut end_key = keys::enc_end_key(region);
-    start_key.encode_u64_desc(std::u64::MAX);
-    end_key.encode_u64_desc(std::u64::MAX);
+    start_key.encode_u64_desc(std::u64::MAX).unwrap();
+    end_key.encode_u64_desc(std::u64::MAX).unwrap();
 
     let collection = box_try!(util::get_range_properties_cf(
         db, cfname, &start_key, &end_key

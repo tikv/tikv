@@ -135,8 +135,8 @@ fn get_region_approximate_middle_cf(
 ) -> Result<Option<Vec<u8>>> {
     let mut start_key = keys::enc_start_key(region);
     let mut end_key = keys::enc_end_key(region);
-    start_key.encode_u64_desc(std::u64::MAX);
-    end_key.encode_u64_desc(std::u64::MAX);
+    start_key.encode_u64_desc(std::u64::MAX).unwrap();
+    end_key.encode_u64_desc(std::u64::MAX).unwrap();
 
     let collection = box_try!(util::get_range_properties_cf(
         db, cfname, &start_key, &end_key

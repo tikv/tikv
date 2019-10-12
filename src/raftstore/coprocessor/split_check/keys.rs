@@ -187,8 +187,8 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
 
     let mut start = keys::enc_start_key(region);
     let mut end = keys::enc_end_key(region);
-    start.encode_u64_desc(std::u64::MAX);
-    end.encode_u64_desc(std::u64::MAX);
+    start.encode_u64_desc(std::u64::MAX).unwrap();
+    end.encode_u64_desc(std::u64::MAX).unwrap();
     let cf = box_try!(rocks::util::get_cf_handle(db, CF_WRITE));
     let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
     Ok(keys)
@@ -197,8 +197,8 @@ pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
 pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
     let mut start_key = keys::enc_start_key(region);
     let mut end_key = keys::enc_end_key(region);
-    start_key.encode_u64_desc(std::u64::MAX);
-    end_key.encode_u64_desc(std::u64::MAX);
+    start_key.encode_u64_desc(std::u64::MAX).unwrap();
+    end_key.encode_u64_desc(std::u64::MAX).unwrap();
 
     let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
     let range = Range::new(&start_key, &end_key);

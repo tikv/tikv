@@ -465,8 +465,8 @@ pub fn compact_range(
         if let Some(end) = end_key {
             end_vec = end.to_vec();
         }
-        start_vec.encode_u64_desc(std::u64::MAX);
-        end_vec.encode_u64_desc(std::u64::MAX);
+        start_vec.encode_u64_desc(std::u64::MAX).unwrap();
+        end_vec.encode_u64_desc(std::u64::MAX).unwrap();
         start_key = Some(start_vec.as_ref());
         end_key = Some(end_vec.as_ref());
     }
@@ -512,8 +512,8 @@ pub fn compact_files_in_range_cf(
         if let Some(end_key) = end {
             end_vec = end_key.to_vec();
         }
-        start_vec.encode_u64_desc(std::u64::MAX);
-        end_vec.encode_u64_desc(std::u64::MAX);
+        start_vec.encode_u64_desc(std::u64::MAX).unwrap();
+        end_vec.encode_u64_desc(std::u64::MAX).unwrap();
         start = Some(start_vec.as_ref());
         end = Some(end_vec.as_ref());
     }

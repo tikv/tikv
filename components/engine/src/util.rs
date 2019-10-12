@@ -8,6 +8,8 @@ use crate::CF_LOCK;
 
 use super::{Error, Result};
 use super::{IterOption, Iterable};
+use rocksdb::ROCKSDB_USER_TIMESTAMP_COMPARATOR_NAME;
+use tikv_util::codec::number::NumberEncoder;
 use tikv_util::keybuilder::KeyBuilder;
 
 /// Check if key in range [`start_key`, `end_key`).
@@ -102,7 +104,16 @@ pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> R
 
     for cf in db.cf_names() {
         let handle = rocks::util::get_cf_handle(db, cf)?;
-        db.delete_files_in_range_cf(handle, start_key, end_key, false)?;
+        let cf_opts = db.get_options_cf(handle);
+        if cf_opts.get_comparator_name() == ROCKSDB_USER_TIMESTAMP_COMPARATOR_NAME {
+            let mut start = start_key.to_vec();
+            let mut end = end_key.to_vec();
+            start.encode_u64_desc(std::u64::MAX).unwrap();
+            end.encode_u64_desc(std::u64::MAX).unwrap();
+            db.delete_files_in_range_cf(handle, &start, &end, false)?;
+        } else {
+            db.delete_files_in_range_cf(handle, start_key, end_key, false)?;
+        }
     }
 
     Ok(())

@@ -209,9 +209,9 @@ fn collect_ranges_need_compact(
         // Get total entries and total versions in this range and checks if it needs to be compacted.
         // The range is [start_key, end_key), so we encode max timestamp, which less than any version of end_key.
         let mut start_key = range[0].clone();
-        start_key.encode_u64_desc(std::u64::MAX);
+        start_key.encode_u64_desc(std::u64::MAX).unwrap();
         let mut end_key = range[1].clone();
-        end_key.encode_u64_desc(std::u64::MAX);
+        end_key.encode_u64_desc(std::u64::MAX).unwrap();
         if let Some((num_ent, num_ver)) =
             get_range_entries_and_versions(engine, cf, &start_key, &end_key)
         {
@@ -377,8 +377,8 @@ mod tests {
         engine.flush_cf(cf, true).unwrap();
 
         let (mut s, mut e) = (data_key(b"k0"), data_key(b"k5"));
-        s.encode_u64_desc(std::u64::MAX);
-        e.encode_u64_desc(0);
+        s.encode_u64_desc(std::u64::MAX).unwrap();
+        e.encode_u64_desc(std::u64::MAX).unwrap();
         let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
@@ -391,18 +391,11 @@ mod tests {
         engine.flush_cf(cf, true).unwrap();
 
         let (mut s, mut e) = (data_key(b"k5"), data_key(b"k9"));
-        s.encode_u64_desc(std::u64::MAX);
-        e.encode_u64_desc(std::u64::MAX);
+        s.encode_u64_desc(std::u64::MAX).unwrap();
+        e.encode_u64_desc(std::u64::MAX).unwrap();
 
         let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
         assert_eq!(entries, 5);
-        assert_eq!(version, 5);
-        let (mut s, mut e) = (data_key(b"k0"), data_key(b"k5"));
-        s.encode_u64_desc(std::u64::MAX);
-        e.encode_u64_desc(std::u64::MAX);
-
-        let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
-        assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
@@ -425,8 +418,8 @@ mod tests {
         engine.flush_cf(cf, true).unwrap();
 
         let (mut s, mut e) = (data_key(b"k5"), data_key(b"k9"));
-        s.encode_u64_desc(std::u64::MAX);
-        e.encode_u64_desc(0);
+        s.encode_u64_desc(std::u64::MAX).unwrap();
+        e.encode_u64_desc(0).unwrap();
 
         let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
         assert_eq!(entries, 10);
