@@ -7,9 +7,8 @@ use crate::CF_DEFAULT;
 
 use crate::rocks::{
     self, DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
-    HistogramData, MapProperty, DB,
+    HistogramData, DB,
 };
-use std::sync::Mutex;
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";
