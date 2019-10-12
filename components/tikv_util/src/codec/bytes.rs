@@ -305,8 +305,8 @@ pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
     // Valid encoded bytes must has complete chunks
     assert!(rev_encoded_chunks.remainder().is_empty());
 
-    // Bytes are compared in reverse order because in TiKV, if two keys are different, the last
-    // a few bytes are more likely to be different.
+    // Bytes are compared in reverse order because in real cases like TiDB, if two keys
+    // are different, the last a few bytes are more likely to be different.
 
     let raw_chunks = raw.chunks_exact(ENC_GROUP_SIZE);
     // Check the last chunk first
