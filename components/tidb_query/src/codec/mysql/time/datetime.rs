@@ -2,12 +2,16 @@
 
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
+use std::fmt::Write;
 
 use crate::codec;
 use crate::codec::mysql::{check_fsp, Duration, Tz};
 use crate::codec::TEN_POW;
 use crate::codec::{Error, Result};
 use crate::expr::{EvalContext, Flag, SqlMode};
+
+use super::extension::{DateTimeExtension, WeekdayExtension};
+use super::weekmode::WeekMode;
 
 use tidb_query_datatype::FieldTypeTp;
 
@@ -18,6 +22,25 @@ use chrono::prelude::*;
 const MIN_TIMESTAMP: i64 = 0;
 const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
+
+pub const MONTH_NAMES: &[&str] = &[
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+const MONTH_NAMES_ABBR: &[&str] = &[
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 fn is_leap_year(year: u32) -> bool {
     year & 3 == 0 && (year % 100 != 0 || year % 400 == 0)
@@ -403,6 +426,25 @@ impl Time {
     ) -> Result<Time> {
         parser::parse(ctx, input, time_type, check_fsp(fsp)?, round)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+    pub fn parse_datetime(
+        ctx: &mut EvalContext,
+        input: &str,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        Self::parse(ctx, input, TimeType::DateTime, fsp, round)
+    }
+    pub fn parse_date(ctx: &mut EvalContext, input: &str) -> Result<Time> {
+        Self::parse(ctx, input, TimeType::Date, 0, false)
+    }
+    pub fn parse_timestamp(
+        ctx: &mut EvalContext,
+        input: &str,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        Self::parse(ctx, input, TimeType::TimeStamp, fsp, round)
     }
 }
 
@@ -931,6 +973,39 @@ impl Time {
         Ok(self)
     }
 
+    fn unchecked_normalized(self) -> Result<Self> {
+        if self.get_time_type() == TimeType::TimeStamp {
+            return Ok(self);
+        }
+
+        if self.day() > self.last_day_of_month() || self.month() == 0 || self.day() == 0 {
+            let date = if self.month() == 0 {
+                (self.year() >= 1).ok_or(Error::incorrect_datetime_value(self))?;
+                NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+            } else {
+                NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
+            } + chrono::Duration::days(i64::from(self.day()) - 1);
+            let datetime = NaiveDateTime::new(
+                date,
+                NaiveTime::from_hms_micro(self.hour(), self.minute(), self.second(), self.micro()),
+            );
+
+            return Ok(Time::unchecked_new(TimeArgs {
+                year: datetime.year() as u32,
+                month: datetime.month(),
+                day: datetime.day(),
+                hour: datetime.hour(),
+                minute: datetime.minute(),
+                second: datetime.second(),
+                micro: datetime.nanosecond() / 1000,
+                time_type: self.get_time_type(),
+                fsp: self.fsp() as i8,
+            }));
+        }
+
+        Ok(self)
+    }
+
     pub fn checked_add(self, ctx: &mut EvalContext, rhs: Duration) -> Option<Time> {
         let normalized = self.normalized(ctx).ok()?;
         let duration = chrono::Duration::nanoseconds(rhs.to_nanos());
@@ -967,6 +1042,217 @@ impl Time {
             Time::try_from_chrono_datetime(ctx, naive, TimeType::TimeStamp, self.fsp() as i8)
         }
         .ok()
+    }
+
+    pub fn ordinal(self) -> i32 {
+        if self.month() == 0 {
+            return self.day() as i32 - 32;
+        }
+        ((1..self.month()).fold(0, |acc, month| acc + last_day_of_month(self.year(), month))
+            + self.day()) as i32
+    }
+
+    pub fn weekday(self) -> Weekday {
+        self.unchecked_normalized()
+            .unwrap()
+            .try_into_chrono_naive_datetime()
+            .unwrap()
+            .weekday()
+    }
+
+    fn write_date_format_segment(self, b: char, output: &mut String) -> Result<()> {
+        match b {
+            'b' => {
+                let month = self.month();
+                if month == 0 || month > 12 {
+                    return Err(box_err!("invalid time format"));
+                } else {
+                    output.push_str(MONTH_NAMES_ABBR[(month - 1) as usize]);
+                }
+            }
+            'M' => {
+                let month = self.month();
+                if month == 0 || month > 12 {
+                    return Err(box_err!("invalid time format"));
+                } else {
+                    output.push_str(MONTH_NAMES[(month - 1) as usize]);
+                }
+            }
+            'm' => {
+                write!(output, "{:02}", self.month()).unwrap();
+            }
+            'c' => {
+                write!(output, "{}", self.month()).unwrap();
+            }
+            'D' => {
+                write!(output, "{}{}", self.day(), self.abbr_day_of_month()).unwrap();
+            }
+            'd' => {
+                write!(output, "{:02}", self.day()).unwrap();
+            }
+            'e' => {
+                write!(output, "{}", self.day()).unwrap();
+            }
+            'j' => {
+                write!(output, "{:03}", self.days()).unwrap();
+            }
+            'H' => {
+                write!(output, "{:02}", self.hour()).unwrap();
+            }
+            'k' => {
+                write!(output, "{}", self.hour()).unwrap();
+            }
+            'h' | 'I' => {
+                let t = self.hour();
+                if t == 0 || t == 12 {
+                    output.push_str("12");
+                } else {
+                    write!(output, "{:02}", t % 12).unwrap();
+                }
+            }
+            'l' => {
+                let t = self.hour();
+                if t == 0 || t == 12 {
+                    output.push_str("12");
+                } else {
+                    write!(output, "{}", t % 12).unwrap();
+                }
+            }
+            'i' => {
+                write!(output, "{:02}", self.minute()).unwrap();
+            }
+            'p' => {
+                let hour = self.hour();
+                if (hour / 12) % 2 == 0 {
+                    output.push_str("AM")
+                } else {
+                    output.push_str("PM")
+                }
+            }
+            'r' => {
+                let h = self.hour();
+                if h == 0 {
+                    write!(
+                        output,
+                        "{:02}:{:02}:{:02} AM",
+                        12,
+                        self.minute(),
+                        self.second()
+                    )
+                    .unwrap();
+                } else if h == 12 {
+                    write!(
+                        output,
+                        "{:02}:{:02}:{:02} PM",
+                        12,
+                        self.minute(),
+                        self.second()
+                    )
+                    .unwrap();
+                } else if h < 12 {
+                    write!(
+                        output,
+                        "{:02}:{:02}:{:02} AM",
+                        h,
+                        self.minute(),
+                        self.second()
+                    )
+                    .unwrap();
+                } else {
+                    write!(
+                        output,
+                        "{:02}:{:02}:{:02} PM",
+                        h - 12,
+                        self.minute(),
+                        self.second()
+                    )
+                    .unwrap();
+                }
+            }
+            'T' => {
+                write!(
+                    output,
+                    "{:02}:{:02}:{:02}",
+                    self.hour(),
+                    self.minute(),
+                    self.second()
+                )
+                .unwrap();
+            }
+            'S' | 's' => {
+                write!(output, "{:02}", self.second()).unwrap();
+            }
+            'f' => {
+                write!(output, "{:06}", self.micro()).unwrap();
+            }
+            'U' => {
+                let w = self.week(WeekMode::from_bits_truncate(0));
+                write!(output, "{:02}", w).unwrap();
+            }
+            'u' => {
+                let w = self.week(WeekMode::from_bits_truncate(1));
+                write!(output, "{:02}", w).unwrap();
+            }
+            'V' => {
+                let w = self.week(WeekMode::from_bits_truncate(2));
+                write!(output, "{:02}", w).unwrap();
+            }
+            'v' => {
+                let (_, w) = self.year_week(WeekMode::from_bits_truncate(3));
+                write!(output, "{:02}", w).unwrap();
+            }
+            'a' => {
+                output.push_str(self.weekday().name_abbr());
+            }
+            'W' => {
+                output.push_str(self.weekday().name());
+            }
+            'w' => {
+                write!(output, "{}", self.weekday().num_days_from_sunday()).unwrap();
+            }
+            'X' => {
+                let (year, _) = self.year_week(WeekMode::from_bits_truncate(2));
+                if year < 0 {
+                    write!(output, "{}", u32::max_value()).unwrap();
+                } else {
+                    write!(output, "{:04}", year).unwrap();
+                }
+            }
+            'x' => {
+                let (year, _) = self.year_week(WeekMode::from_bits_truncate(3));
+                if year < 0 {
+                    write!(output, "{}", u32::max_value()).unwrap();
+                } else {
+                    write!(output, "{:04}", year).unwrap();
+                }
+            }
+            'Y' => {
+                write!(output, "{:04}", self.year()).unwrap();
+            }
+            'y' => {
+                write!(output, "{:02}", self.year() % 100).unwrap();
+            }
+            _ => output.push(b),
+        }
+        Ok(())
+    }
+
+    pub fn date_format(&self, layout: &str) -> Result<String> {
+        let mut ret = String::new();
+        let mut pattern_match = false;
+        for b in layout.chars() {
+            if pattern_match {
+                self.write_date_format_segment(b, &mut ret)?;
+                pattern_match = false;
+                continue;
+            }
+            if b == '%' {
+                pattern_match = true;
+            } else {
+                ret.push(b);
+            }
+        }
+        Ok(ret)
     }
 }
 
@@ -1147,7 +1433,7 @@ mod tests {
         ];
 
         for (expected, actual) in cases {
-            let date = Time::parse(&mut ctx, actual, TimeType::Date, 0, false)?;
+            let date = Time::parse_date(&mut ctx, actual)?;
             assert_eq!(date.hour(), 0);
             assert_eq!(date.minute(), 0);
             assert_eq!(date.second(), 0);
@@ -1233,7 +1519,7 @@ mod tests {
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
                 expected,
-                Time::parse(&mut ctx, actual, TimeType::DateTime, fsp, round)?.to_string()
+                Time::parse_datetime(&mut ctx, actual, fsp, round)?.to_string()
             );
         }
 
@@ -1253,7 +1539,7 @@ mod tests {
         ];
 
         for (case, fsp) in should_fail {
-            assert!(Time::parse(&mut ctx, case, TimeType::DateTime, fsp, false).is_err());
+            assert!(Time::parse_datetime(&mut ctx, case, fsp, false).is_err());
         }
         Ok(())
     }
@@ -1313,7 +1599,7 @@ mod tests {
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
                 expected,
-                Time::parse(&mut ctx, actual, TimeType::TimeStamp, fsp, round)?.to_string()
+                Time::parse_timestamp(&mut ctx, actual, fsp, round)?.to_string()
             );
         }
         Ok(())
@@ -1336,10 +1622,7 @@ mod tests {
                 allow_invalid_date: true,
                 ..TimeEnv::default()
             });
-            assert_eq!(
-                expected,
-                Time::parse(&mut ctx, actual, TimeType::Date, 0, false)?.to_string()
-            );
+            assert_eq!(expected, Time::parse_date(&mut ctx, actual)?.to_string());
         }
         Ok(())
     }
@@ -1360,7 +1643,7 @@ mod tests {
         for case in cases {
             assert_eq!(
                 "0000-00-00 00:00:00",
-                Time::parse(&mut ctx, case, TimeType::DateTime, 0, false)?.to_string()
+                Time::parse_datetime(&mut ctx, case, 0, false)?.to_string()
             );
         }
         Ok(())
@@ -1381,7 +1664,7 @@ mod tests {
         for case in ok_cases {
             assert_eq!(
                 "0000-00-00 00:00:00",
-                Time::parse(&mut ctx, case, TimeType::TimeStamp, 0, false)?.to_string()
+                Time::parse_timestamp(&mut ctx, case, 0, false)?.to_string()
             );
         }
 
@@ -1397,7 +1680,7 @@ mod tests {
             });
             assert_eq!(
                 "0000-00-00 00:00:00",
-                Time::parse(&mut ctx, timestamp, TimeType::TimeStamp, 0, false)?.to_string()
+                Time::parse_timestamp(&mut ctx, timestamp, 0, false)?.to_string()
             )
         }
 
@@ -1412,13 +1695,7 @@ mod tests {
             ..TimeEnv::default()
         });
 
-        let _ = Time::parse(
-            &mut ctx,
-            "0000-00-00 00:00:00",
-            TimeType::DateTime,
-            0,
-            false,
-        )?;
+        let _ = Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false)?;
 
         assert!(ctx.warnings.warning_cnt > 0);
 
@@ -1430,14 +1707,7 @@ mod tests {
             ..TimeEnv::default()
         });
 
-        assert!(Time::parse(
-            &mut ctx,
-            "0000-00-00 00:00:00",
-            TimeType::DateTime,
-            0,
-            false,
-        )
-        .is_err());
+        assert!(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,).is_err());
 
         // Enable NO_ZERO_DATE, STRICT_MODE and IGNORE_TRUNCATE.
         // If zero-date is encountered, an error is returned.
@@ -1450,14 +1720,7 @@ mod tests {
 
         assert_eq!(
             "0000-00-00 00:00:00",
-            Time::parse(
-                &mut ctx,
-                "0000-00-00 00:00:00",
-                TimeType::DateTime,
-                0,
-                false,
-            )?
-            .to_string()
+            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,)?.to_string()
         );
 
         assert!(ctx.warnings.warning_cnt > 0);
@@ -1476,7 +1739,7 @@ mod tests {
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert!(Time::parse(&mut ctx, case, TimeType::DateTime, 0, false).is_err());
+            assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
         }
 
         Ok(())
@@ -1493,7 +1756,7 @@ mod tests {
                 ..TimeEnv::default()
             });
 
-            let _ = Time::parse(&mut ctx, case, TimeType::DateTime, 0, false)?;
+            let _ = Time::parse_datetime(&mut ctx, case, 0, false)?;
 
             assert!(ctx.warnings.warning_cnt > 0);
         }
@@ -1509,14 +1772,7 @@ mod tests {
 
         assert_eq!(
             "0000-00-00 00:00:00",
-            Time::parse(
-                &mut ctx,
-                "0000-00-00 00:00:00",
-                TimeType::DateTime,
-                0,
-                false,
-            )?
-            .to_string()
+            Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false,)?.to_string()
         );
 
         assert!(ctx.warnings.warning_cnt > 0);
@@ -1529,7 +1785,7 @@ mod tests {
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert!(Time::parse(&mut ctx, case, TimeType::DateTime, 0, false).is_err());
+            assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
         }
 
         Ok(())
@@ -1558,7 +1814,7 @@ mod tests {
                 allow_invalid_date: true,
                 ..TimeEnv::default()
             });
-            let time = Time::parse(&mut ctx, case, TimeType::DateTime, fsp, false)?;
+            let time = Time::parse_datetime(&mut ctx, case, fsp, false)?;
 
             let packed = time.to_packed_u64(&mut ctx)?;
             let reverted_datetime =
@@ -1593,7 +1849,7 @@ mod tests {
                     ..TimeEnv::default()
                 });
 
-                let time = Time::parse(&mut ctx, case, TimeType::TimeStamp, fsp, false)?;
+                let time = Time::parse_timestamp(&mut ctx, case, fsp, false)?;
 
                 let packed = time.to_packed_u64(&mut ctx)?;
                 let reverted_datetime =
@@ -1621,8 +1877,8 @@ mod tests {
 
         for (left, right, expected) in cases {
             let mut ctx = EvalContext::default();
-            let left = Time::parse(&mut ctx, left, TimeType::DateTime, MAX_FSP, false)?;
-            let right = Time::parse(&mut ctx, right, TimeType::DateTime, MAX_FSP, false)?;
+            let left = Time::parse_datetime(&mut ctx, left, MAX_FSP, false)?;
+            let right = Time::parse_datetime(&mut ctx, right, MAX_FSP, false)?;
             assert_eq!(expected, left.cmp(&right));
         }
         Ok(())
@@ -1684,7 +1940,7 @@ mod tests {
             });
             assert_eq!(
                 expected,
-                Time::parse(&mut ctx, input, TimeType::DateTime, MAX_FSP, true)?
+                Time::parse_datetime(&mut ctx, input, MAX_FSP, true)?
                     .round_frac(&mut ctx, fsp)?
                     .to_string()
             );
@@ -1710,7 +1966,7 @@ mod tests {
             });
             assert_eq!(
                 expected,
-                Time::parse(&mut ctx, input, TimeType::DateTime, 1, false)?
+                Time::parse_datetime(&mut ctx, input, 1, false)?
                     .normalized(&mut ctx)?
                     .to_string()
             );
@@ -1745,7 +2001,7 @@ mod tests {
 
         for (lhs, rhs, expected) in normal_cases.clone() {
             let mut ctx = EvalContext::default();
-            let lhs = Time::parse(&mut ctx, lhs, TimeType::DateTime, 6, false)?;
+            let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
             let rhs = Duration::parse(rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
@@ -1753,7 +2009,7 @@ mod tests {
 
         for (expected, rhs, lhs) in normal_cases {
             let mut ctx = EvalContext::default();
-            let lhs = Time::parse(&mut ctx, lhs, TimeType::DateTime, 6, false)?;
+            let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
             let rhs = Duration::parse(rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
@@ -1770,14 +2026,14 @@ mod tests {
         ];
 
         for (lhs, rhs, expected) in dsts.clone() {
-            let lhs = Time::parse(&mut ctx, lhs, TimeType::TimeStamp, 0, false)?;
+            let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
             let rhs = Duration::parse(rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
 
         for (expected, rhs, lhs) in dsts {
-            let lhs = Time::parse(&mut ctx, lhs, TimeType::TimeStamp, 0, false)?;
+            let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
             let rhs = Duration::parse(rhs.as_bytes(), 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
@@ -1794,7 +2050,7 @@ mod tests {
             ("2019-2-0 00:00:00", "1:00:00", "2019-01-31 01:00:00"),
         ];
         for (lhs, rhs, expected) in cases {
-            let lhs = Time::parse(&mut ctx, lhs, TimeType::DateTime, 0, false)?;
+            let lhs = Time::parse_datetime(&mut ctx, lhs, 0, false)?;
             let rhs = Duration::parse(rhs.as_bytes(), 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
@@ -1802,26 +2058,64 @@ mod tests {
 
         // Failed cases
         let mut ctx = EvalContext::default();
-        let lhs = Time::parse(
-            &mut ctx,
-            "9999-12-31 23:59:59",
-            TimeType::DateTime,
-            6,
-            false,
-        )?;
+        let lhs = Time::parse_datetime(&mut ctx, "9999-12-31 23:59:59", 6, false)?;
         let rhs = Duration::parse(b"01:00:00", 6)?;
         assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
 
-        let lhs = Time::parse(
-            &mut ctx,
-            "0000-01-01 00:00:01",
-            TimeType::DateTime,
-            6,
-            false,
-        )?;
+        let lhs = Time::parse_datetime(&mut ctx, "0000-01-01 00:00:01", 6, false)?;
         let rhs = Duration::parse(b"01:00:00", 6)?;
         assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_date_format() -> Result<()> {
+        let cases = vec![
+            (
+                "2010-01-07 23:12:34.12345",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V
+                %v %a %W %w %X %x %Y %y %%",
+                "Jan January 01 1 7th 07 7 007 23 11 12 PM 11:12:34 PM 23:12:34 34 123450 01 01 01
+                01 Thu Thursday 4 2010 2010 2010 10 %",
+            ),
+            (
+                "2012-12-21 23:12:34.123456",
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U
+                %u %V %v %a %W %w %X %x %Y %y %%",
+                "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51
+                51 51 51 Fri Friday 5 2012 2012 2012 12 %",
+            ),
+            (
+                "0000-01-01 00:00:00.123456",
+                // Functions week() and yearweek() don't support multi mode,
+                // so the result of "%U %u %V %Y" is different from MySQL.
+                "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %Y
+                %y %%",
+                "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 52 0000
+                00 %",
+            ),
+            (
+                "2016-09-3 00:59:59.123456",
+                "abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U
+                %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z",
+                "abcSep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35
+                35 35 35 Sat Saturday 6 2016 2016 2016 16!123 %xyz z",
+            ),
+            (
+                "2012-10-01 00:00:00",
+                "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v
+                %x %Y %y %%",
+                "Oct October 10 10 1st 01 1 275 0 00 00 AM 12:00:00 AM 00:00:00 00 000000 40
+                2012 2012 12 %",
+            ),
+        ];
+        for (s, layout, expect) in cases {
+            let mut ctx = EvalContext::default();
+            let t = Time::parse_datetime(&mut ctx, s, 6, false)?;
+            let get = t.date_format(layout)?;
+            assert_eq!(get, expect);
+        }
         Ok(())
     }
 }
