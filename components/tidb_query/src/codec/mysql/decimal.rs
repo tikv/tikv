@@ -439,7 +439,7 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 ///
 /// # Panics
 ///
-/// If `prec` > `frac_cnt`, panic.
+/// Will panic if `prec` < `frac_cnt`.
 /// The panic is because of `debug_assert`.
 pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     debug_assert!(prec >= frac_cnt);
@@ -476,7 +476,7 @@ pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
 ///
 /// # Panics
 ///
-/// If `prec` > `frac_cnt`, panic.
+/// Will panic if `prec` < `frac_cnt`.
 /// The panic is because of `debug_assert`.
 pub fn max_or_min_dec(negative: bool, prec: u8, frac: u8) -> Decimal {
     let mut ret = max_decimal(prec, frac);
