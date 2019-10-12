@@ -761,10 +761,7 @@ pub mod tests {
 
     #[bench]
     fn bench_get_region_approximate_size(b: &mut Bencher) {
-        let path = Builder::new()
-            .prefix("_bench_get_region_approximate_size")
-            .tempdir()
-            .unwrap();
+        let path = TempDir::new("_bench_get_region_approximate_size").unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
