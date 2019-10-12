@@ -640,9 +640,13 @@ pub struct TestStorageBuilder<E: Engine> {
 impl TestStorageBuilder<RocksEngine> {
     /// Build `Storage<RocksEngine>`.
     pub fn new() -> Self {
+        let config = Config::default();
         Self {
-            engine: TestEngineBuilder::new().build().unwrap(),
-            config: Config::default(),
+            engine: TestEngineBuilder::new()
+                .enable_user_timestamp(config.user_timestamp_enabled)
+                .build()
+                .unwrap(),
+            config: config,
             local_storage: None,
             raft_store_router: None,
         }
