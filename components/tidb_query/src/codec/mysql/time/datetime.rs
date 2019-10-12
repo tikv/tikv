@@ -77,9 +77,26 @@ fn chrono_datetime<T: TimeZone>(
         .ok_or_else(|| Error::truncated())
 }
 
+#[inline]
+fn chrono_naive_datetime(
+    year: u32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    micro: u32,
+) -> Result<NaiveDateTime> {
+    NaiveDate::from_ymd_opt(year as i32, month, day)
+        .and_then(|date| date.and_hms_opt(hour, minute, second))
+        .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
+        .ok_or_else(|| Error::truncated())
+}
+
 fn round_frac(frac: u32, fsp: u8) -> (bool, u32) {
     debug_assert!(frac < 100_000_000 && fsp < 7);
-    if frac >= 100_000 && frac < 1_000_000 && fsp == 6 {
+    dbg!(frac);
+    if frac < 1_000_000 && fsp == 6 {
         return (false, frac);
     }
 
@@ -615,7 +632,7 @@ impl Time {
         slice
     }
 
-    pub fn try_from_chrono_datetime<T: Datelike + Timelike>(
+    fn try_from_chrono_datetime<T: Datelike + Timelike>(
         ctx: &mut EvalContext,
         datetime: T,
         time_type: TimeType,
@@ -637,9 +654,21 @@ impl Time {
         )
     }
 
-    pub fn try_into_chrono_datetime(self, ctx: &mut EvalContext) -> Result<DateTime<Tz>> {
+    fn try_into_chrono_datetime(self, ctx: &mut EvalContext) -> Result<DateTime<Tz>> {
         chrono_datetime(
             &ctx.cfg.tz,
+            self.year(),
+            self.month(),
+            self.day(),
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.micro(),
+        )
+    }
+
+    fn try_into_chrono_naive_datetime(self) -> Result<NaiveDateTime> {
+        chrono_naive_datetime(
             self.year(),
             self.month(),
             self.day(),
@@ -854,10 +883,6 @@ impl Time {
 
     pub fn round_frac(self, ctx: &mut EvalContext, fsp: i8) -> Result<Self> {
         let time_type = self.get_time_type();
-        // If we have cases like:
-        //   1. 2012-0-1  23:59:59.999      (fsp: 2)
-        //   2. 2012-4-31 23:59:59.999      (fsp: 2)
-        // 0000-00-00.00 is expected.
         if time_type == TimeType::Date || self.is_zero() {
             return Ok(self);
         }
@@ -867,12 +892,81 @@ impl Time {
         let mut slice = self.into_slice();
         slice[6] = frac;
 
+        // If we have cases like:
+        //   1. 2012-0-1  23:59:59.999      (fsp: 2)
+        //   2. 2012-4-31 23:59:59.999      (fsp: 2)
+        // 0000-00-00.00 is expected.
         if carry && round_components(&mut slice).is_none() {
             return Time::new(ctx, TimeArgs::zero(fsp as i8, time_type));
         }
 
         Time::from_slice(ctx, &slice, time_type, fsp)
             .ok_or_else(|| Error::incorrect_datetime_value(self))
+    }
+
+    pub fn normalized(self, ctx: &mut EvalContext) -> Result<Self> {
+        if self.get_time_type() == TimeType::TimeStamp {
+            return Ok(self);
+        }
+
+        if self.day() > self.last_day_of_month() || self.month() == 0 || self.day() == 0 {
+            let date = if self.month() == 0 {
+                (self.year() >= 1).ok_or(Error::incorrect_datetime_value(self))?;
+                NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+            } else {
+                NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
+            } + chrono::Duration::days(i64::from(self.day()) - 1);
+            let datetime = NaiveDateTime::new(
+                date,
+                NaiveTime::from_hms_micro(self.hour(), self.minute(), self.second(), self.micro()),
+            );
+            return Time::try_from_chrono_datetime(
+                ctx,
+                datetime,
+                self.get_time_type(),
+                self.fsp() as i8,
+            );
+        }
+
+        Ok(self)
+    }
+
+    pub fn checked_add(self, ctx: &mut EvalContext, rhs: Duration) -> Option<Time> {
+        let normalized = self.normalized(ctx).ok()?;
+        let duration = chrono::Duration::nanoseconds(rhs.to_nanos());
+        if self.get_time_type() == TimeType::TimeStamp {
+            let datetime = normalized
+                .try_into_chrono_datetime(ctx)
+                .ok()
+                .and_then(|datetime| datetime.checked_add_signed(duration))?;
+            Time::try_from_chrono_datetime(ctx, datetime, TimeType::TimeStamp, self.fsp() as i8)
+        } else {
+            let naive = normalized
+                .try_into_chrono_naive_datetime()
+                .ok()
+                .and_then(|datetime| datetime.checked_add_signed(duration))?;
+            Time::try_from_chrono_datetime(ctx, naive, TimeType::TimeStamp, self.fsp() as i8)
+        }
+        .ok()
+    }
+
+    pub fn checked_sub(self, ctx: &mut EvalContext, rhs: Duration) -> Option<Time> {
+        let normalized = self.normalized(ctx).ok()?;
+        let duration = chrono::Duration::nanoseconds(rhs.to_nanos());
+        if self.get_time_type() == TimeType::TimeStamp {
+            let datetime = normalized
+                .try_into_chrono_datetime(ctx)
+                .ok()
+                .and_then(|datetime| datetime.checked_sub_signed(duration))?;
+            Time::try_from_chrono_datetime(ctx, datetime, TimeType::TimeStamp, self.fsp() as i8)
+        } else {
+            let naive = normalized
+                .try_into_chrono_naive_datetime()
+                .ok()
+                .and_then(|datetime| datetime.checked_sub_signed(duration))?;
+            Time::try_from_chrono_datetime(ctx, naive, TimeType::TimeStamp, self.fsp() as i8)
+        }
+        .ok()
     }
 }
 
@@ -1559,7 +1653,7 @@ mod tests {
     }
 
     #[test]
-    fn test_datetime_round_frac() -> Result<()> {
+    fn test_round_frac() -> Result<()> {
         let cases = vec![
             ("121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
             ("121231113045.999999", 6, "2012-12-31 11:30:45.999999"),
@@ -1571,6 +1665,7 @@ mod tests {
                 "2012-12-31 11:30:45.123456",
             ),
             ("2012-12-31 11:30:45.123456", 0, "2012-12-31 11:30:45"),
+            ("2012-12-31 11:30:45.9", 0, "2012-12-31 11:30:46"),
             ("2012-12-31 11:30:45.123456", 1, "2012-12-31 11:30:45.1"),
             ("2012-12-31 11:30:45.999999", 4, "2012-12-31 11:30:46.0000"),
             ("2012-12-31 11:30:45.999999", 0, "2012-12-31 11:30:46"),
@@ -1594,6 +1689,139 @@ mod tests {
                     .to_string()
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalized() -> Result<()> {
+        let should_pass = vec![
+            ("2019-00-01 12:34:56.1", "2018-12-01 12:34:56.1"),
+            ("2019-01-00 12:34:56.1", "2018-12-31 12:34:56.1"),
+            ("2019-00-00 12:34:56.1", "2018-11-30 12:34:56.1"),
+            ("2019-04-31 12:34:56.1", "2019-05-01 12:34:56.1"),
+            ("2019-02-29 12:34:56.1", "2019-03-01 12:34:56.1"),
+            ("2019-02-30 12:34:56.1", "2019-03-02 12:34:56.1"),
+            ("2019-02-31 12:34:56.1", "2019-03-03 12:34:56.1"),
+        ];
+        for (input, expected) in should_pass {
+            let mut ctx = EvalContext::from(TimeEnv {
+                allow_invalid_date: true,
+                ..TimeEnv::default()
+            });
+            assert_eq!(
+                expected,
+                Time::parse(&mut ctx, input, TimeType::DateTime, 1, false)?
+                    .normalized(&mut ctx)?
+                    .to_string()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn checked_add_sub_duration() -> Result<()> {
+        let normal_cases = vec![
+            (
+                "2018-12-30 11:30:45.123456",
+                "00:00:14.876545",
+                "2018-12-30 11:31:00.000001",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "00:30:00",
+                "2018-12-30 12:00:45.123456",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "12:30:00",
+                "2018-12-31 00:00:45.123456",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "1 12:30:00",
+                "2019-01-01 00:00:45.123456",
+            ),
+        ];
+
+        for (lhs, rhs, expected) in normal_cases.clone() {
+            let mut ctx = EvalContext::default();
+            let lhs = Time::parse(&mut ctx, lhs, TimeType::DateTime, 6, false)?;
+            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
+            assert_eq!(expected, actual.to_string());
+        }
+
+        for (expected, rhs, lhs) in normal_cases {
+            let mut ctx = EvalContext::default();
+            let lhs = Time::parse(&mut ctx, lhs, TimeType::DateTime, 6, false)?;
+            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
+            assert_eq!(expected, actual.to_string());
+        }
+
+        // DSTs
+        let mut ctx = EvalContext::from(TimeEnv {
+            time_zone: Tz::from_tz_name("America/New_York"),
+            ..TimeEnv::default()
+        });
+        let dsts = vec![
+            ("2019-03-10 01:00:00", "1:00:00", "2019-03-10 03:00:00"),
+            ("2018-03-11 01:00:00", "1:00:00", "2018-03-11 03:00:00"),
+        ];
+
+        for (lhs, rhs, expected) in dsts.clone() {
+            let lhs = Time::parse(&mut ctx, lhs, TimeType::TimeStamp, 0, false)?;
+            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
+            assert_eq!(expected, actual.to_string());
+        }
+
+        for (expected, rhs, lhs) in dsts {
+            let lhs = Time::parse(&mut ctx, lhs, TimeType::TimeStamp, 0, false)?;
+            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
+            assert_eq!(expected, actual.to_string());
+        }
+
+        // Edge cases
+        let mut ctx = EvalContext::from(TimeEnv {
+            allow_invalid_date: true,
+            ..TimeEnv::default()
+        });
+        let cases = vec![
+            ("2019-04-31 00:00:00", "1:00:00", "2019-05-01 01:00:00"),
+            ("2019-00-01 00:00:00", "1:00:00", "2018-12-01 01:00:00"),
+            ("2019-2-0 00:00:00", "1:00:00", "2019-01-31 01:00:00"),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let lhs = Time::parse(&mut ctx, lhs, TimeType::DateTime, 0, false)?;
+            let rhs = Duration::parse(rhs.as_bytes(), 6)?;
+            let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
+            assert_eq!(expected, actual.to_string());
+        }
+
+        // Failed cases
+        let mut ctx = EvalContext::default();
+        let lhs = Time::parse(
+            &mut ctx,
+            "9999-12-31 23:59:59",
+            TimeType::DateTime,
+            6,
+            false,
+        )?;
+        let rhs = Duration::parse(b"01:00:00", 6)?;
+        assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
+
+        let lhs = Time::parse(
+            &mut ctx,
+            "0000-01-01 00:00:01",
+            TimeType::DateTime,
+            6,
+            false,
+        )?;
+        let rhs = Duration::parse(b"01:00:00", 6)?;
+        assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
+
         Ok(())
     }
 }
