@@ -34,6 +34,8 @@ use tikv_util::file::calc_crc32;
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
+use rocksdb::ROCKSDB_USER_TIMESTAMP_COMPARATOR_NAME;
+use tikv_util::codec::number::NumberEncoder;
 
 /// Copies the source file to a newly created file.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
@@ -450,6 +452,25 @@ pub fn compact_range(
     // concurrently run with other background compactions.
     compact_opts.set_exclusive_manual_compaction(exclusive_manual);
     compact_opts.set_max_subcompactions(max_subcompactions as i32);
+    let cf_opts = db.get_options_cf(handle);
+    let mut start_key = start_key;
+    let mut end_key = end_key;
+    let mut start_vec = Vec::new();
+    let mut end_vec = Vec::new();
+    if cf_opts.get_comparator_name() == ROCKSDB_USER_TIMESTAMP_COMPARATOR_NAME {
+        // when compare with user timestamp, we must be sure that all key have suffix which is encoded by timestamp
+        if let Some(start) = start_key {
+            start_vec = start.to_vec();
+        }
+        if let Some(end) = end_key {
+            end_vec = end.to_vec();
+        }
+        start_vec.encode_u64_desc(std::u64::MAX);
+        end_vec.encode_u64_desc(std::u64::MAX);
+        start_key = Some(start_vec.as_ref());
+        end_key = Some(end_vec.as_ref());
+    }
+
     db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
 }
 
@@ -479,6 +500,23 @@ pub fn compact_files_in_range_cf(
 ) -> Result<()> {
     let cf = db.cf_handle(cf_name).unwrap();
     let cf_opts = db.get_options_cf(cf);
+    let mut start_vec = Vec::new();
+    let mut end_vec = Vec::new();
+    let mut start = start;
+    let mut end = end;
+    if cf_opts.get_comparator_name() == ROCKSDB_USER_TIMESTAMP_COMPARATOR_NAME {
+        // when compare with user timestamp, we must be sure that all key have suffix which is encoded by timestamp
+        if let Some(start_key) = start {
+            start_vec = start_key.to_vec();
+        }
+        if let Some(end_key) = end {
+            end_vec = end_key.to_vec();
+        }
+        start_vec.encode_u64_desc(std::u64::MAX);
+        end_vec.encode_u64_desc(std::u64::MAX);
+        start = Some(start_vec.as_ref());
+        end = Some(end_vec.as_ref());
+    }
     let output_level = output_level.unwrap_or(cf_opts.get_num_levels() as i32 - 1);
     let output_compression = cf_opts
         .get_compression_per_level()

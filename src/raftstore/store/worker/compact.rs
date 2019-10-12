@@ -14,6 +14,7 @@ use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
 use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
+use tikv_util::codec::number::NumberEncoder;
 
 type Key = Vec<u8>;
 
@@ -176,19 +177,19 @@ impl Runnable<Task> for Runner {
 }
 
 fn need_compact(
-    num_entires: u64,
+    num_entries: u64,
     num_versions: u64,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
 ) -> bool {
-    if num_entires <= num_versions {
+    if num_entries <= num_versions {
         return false;
     }
 
     // When the number of tombstones exceed threshold and ratio, this range need compacting.
-    let estimate_num_del = num_entires - num_versions;
+    let estimate_num_del = num_entries - num_versions;
     estimate_num_del >= tombstones_num_threshold
-        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
+        && estimate_num_del * 100 >= tombstones_percent_threshold * num_entries
 }
 
 fn collect_ranges_need_compact(
@@ -206,8 +207,13 @@ fn collect_ranges_need_compact(
     let mut compact_end = None;
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to be compacted.
+        // The range is [start_key, end_key), so we encode max timestamp, which less than any version of end_key.
+        let mut start_key = range[0].clone();
+        start_key.encode_u64_desc(std::u64::MAX);
+        let mut end_key = range[1].clone();
+        end_key.encode_u64_desc(std::u64::MAX);
         if let Some((num_ent, num_ver)) =
-            get_range_entries_and_versions(engine, cf, &range[0], &range[1])
+            get_range_entries_and_versions(engine, cf, &start_key, &end_key)
         {
             if need_compact(
                 num_ent,
@@ -370,7 +376,9 @@ mod tests {
         }
         engine.flush_cf(cf, true).unwrap();
 
-        let (s, e) = (data_key(b"k0"), data_key(b"k5"));
+        let (mut s, mut e) = (data_key(b"k0"), data_key(b"k5"));
+        s.encode_u64_desc(std::u64::MAX);
+        e.encode_u64_desc(0);
         let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
@@ -382,9 +390,19 @@ mod tests {
         }
         engine.flush_cf(cf, true).unwrap();
 
-        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
+        let (mut s, mut e) = (data_key(b"k5"), data_key(b"k9"));
+        s.encode_u64_desc(std::u64::MAX);
+        e.encode_u64_desc(std::u64::MAX);
+
         let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
         assert_eq!(entries, 5);
+        assert_eq!(version, 5);
+        let (mut s, mut e) = (data_key(b"k0"), data_key(b"k5"));
+        s.encode_u64_desc(std::u64::MAX);
+        e.encode_u64_desc(std::u64::MAX);
+
+        let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
+        assert_eq!(entries, 10);
         assert_eq!(version, 5);
 
         let ranges_need_to_compact = collect_ranges_need_compact(
@@ -406,7 +424,10 @@ mod tests {
         }
         engine.flush_cf(cf, true).unwrap();
 
-        let (s, e) = (data_key(b"k5"), data_key(b"k9"));
+        let (mut s, mut e) = (data_key(b"k5"), data_key(b"k9"));
+        s.encode_u64_desc(std::u64::MAX);
+        e.encode_u64_desc(0);
+
         let (entries, version) = get_range_entries_and_versions(&engine, cf, &s, &e).unwrap();
         assert_eq!(entries, 10);
         assert_eq!(version, 5);
