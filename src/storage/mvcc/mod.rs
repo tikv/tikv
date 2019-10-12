@@ -323,7 +323,7 @@ pub mod tests {
     ) {
         let mut options = Options::default();
         options.lock_ttl = ttl;
-        options.min_commit_ts = ts;
+        options.min_commit_ts = ts + 1;
         options.for_update_ts = for_update_ts;
         must_prewrite_put_impl(engine, key, value, pk, ts, for_update_ts != 0, options);
     }

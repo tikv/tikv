@@ -176,8 +176,7 @@ impl<S: Snapshot> MvccTxn<S> {
             self.delete_value(key.clone(), lock.ts);
         }
         let write = Write::new(WriteType::Rollback, self.start_ts, None);
-        let ts = self.start_ts;
-        self.put_write(key.clone(), ts, write.to_bytes());
+        self.put_write(key.clone(), self.start_ts, write.to_bytes());
         self.unlock_key(key.clone());
         if self.collapse_rollback {
             self.collapse_prev_rollback(key)?;
@@ -628,8 +627,8 @@ impl<S: Snapshot> MvccTxn<S> {
 
     /// Check the status of a transaction.
     ///
-    /// This operation checks whether a transaction has expired it's Lock's TTL, rollback the
-    /// transaction if expired, and update the transaction's min_commit_ts according to the metadata
+    /// This operation checks whether a transaction has expired its primary lock's TTL, rollback the
+    /// transaction if expired, or update the transaction's min_commit_ts according to the metadata
     /// in the primary lock.
     ///
     /// When transaction T1 meets T2's lock, it may invoke this on T2's primary key. In this
@@ -655,11 +654,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     || extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts)
                 {
                     // When current_ts == 0 or the lock is expired, clean it up.
-                    if lock.lock_type == LockType::Pessimistic {
-                        self.unlock_key(primary_key);
-                    } else {
-                        self.rollback_lock(primary_key, lock)?;
-                    }
+                    self.rollback_lock(primary_key, lock)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((0, 0, is_pessimistic_txn));
                 }
