@@ -288,16 +288,16 @@ pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
         let len = raw.len();
         let pad = (ENC_GROUP_SIZE - len) as u8;
         if desc {
-            encoded[..len]
-                .iter()
-                .zip(raw)
-                .all(|(&enc, &raw)| enc == !raw)
+            encoded[ENC_GROUP_SIZE] == !(ENC_MARKER - pad)
+                && encoded[..len]
+                    .iter()
+                    .zip(raw)
+                    .all(|(&enc, &raw)| enc == !raw)
                 && encoded[len..encoded.len() - 1].iter().all(|&v| v == 0xff)
-                && encoded[ENC_GROUP_SIZE] == !(ENC_MARKER - pad)
         } else {
-            &encoded[..len] == raw
+            encoded[ENC_GROUP_SIZE] == (ENC_MARKER - pad)
+                && &encoded[..len] == raw
                 && encoded[len..encoded.len() - 1].iter().all(|&v| v == 0)
-                && encoded[ENC_GROUP_SIZE] == (ENC_MARKER - pad)
         }
     };
 
@@ -489,7 +489,7 @@ mod tests {
                 });
                 assert!(res.is_err());
 
-                // Should panic if encoded has less or more chunks
+                // Should fail if encoded has less or more chunks
                 let shorter_encoded = &encoded[..encoded.len() - ENC_GROUP_SIZE - 1];
                 assert!(
                     !is_encoded_from(shorter_encoded, &raw, desc),

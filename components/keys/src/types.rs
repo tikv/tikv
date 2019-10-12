@@ -315,7 +315,7 @@ mod tests {
             });
             assert!(res.is_err());
 
-            // Should panic if encoded has less or more chunks
+            // Should fail if encoded has less or more chunks
             let shorter_encoded = Key::from_encoded_slice(&encoded.0[..encoded_len - 9]);
             assert!(!shorter_encoded.is_encoded_from(&raw));
             let mut longer_encoded = encoded.as_encoded().clone();
