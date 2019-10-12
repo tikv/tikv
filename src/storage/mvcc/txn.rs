@@ -1801,7 +1801,8 @@ mod tests {
 
         // Lock the key with TTL=100.
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(5, 0), 100, 0);
-        must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(5, 0), false);
+        // The initial min_commit_ts is start_ts + 1.
+        must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(5, 1), false);
 
         // Update min_commit_ts to current_ts.
         must_check_txn_status(&engine, k, ts(5, 0), ts(6, 0), ts(7, 0), 100, 0);
@@ -1888,20 +1889,19 @@ mod tests {
         must_large_txn_locked(&engine, k, ts(150, 0), 100, 0, true);
         must_check_txn_status(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), 0, 0);
         must_unlocked(&engine, k);
-        // Rolling back a pessimistic lock shouldn't leave Rollback mark. seek_write gets the older
-        // record in write_cf.
+        // Rolling back a pessimistic lock should leave Rollback mark.
         must_seek_write(
             &engine,
             k,
             u64::max_value(),
-            ts(4, 0),
-            ts(140, 0),
-            WriteType::Put,
+            ts(150, 0),
+            ts(150, 0),
+            WriteType::Rollback,
         );
 
         // Rollback anyway if current_ts is 0.
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(270, 0), 100, 0);
-        must_large_txn_locked(&engine, k, ts(270, 0), 100, ts(270, 0), false);
+        must_large_txn_locked(&engine, k, ts(270, 0), 100, ts(270, 1), false);
         must_check_txn_status(&engine, k, ts(270, 0), ts(271, 0), 0, 0, 0);
         must_unlocked(&engine, k);
         must_seek_write(
@@ -1923,8 +1923,8 @@ mod tests {
             &engine,
             k,
             u64::max_value(),
-            ts(270, 0),
-            ts(270, 0),
+            ts(280, 0),
+            ts(280, 0),
             WriteType::Rollback,
         );
     }
