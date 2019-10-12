@@ -54,7 +54,7 @@ pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
-pub const SHORT_VALUE_MAX_LEN: usize = 64;
+pub const SHORT_VALUE_MAX_LEN: usize = 255;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
