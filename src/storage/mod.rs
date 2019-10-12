@@ -646,7 +646,7 @@ impl TestStorageBuilder<RocksEngine> {
                 .enable_user_timestamp(config.user_timestamp_enabled)
                 .build()
                 .unwrap(),
-            config: config,
+            config,
             local_storage: None,
             raft_store_router: None,
         }
