@@ -435,14 +435,12 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 /// Get the max possible decimal with giving precision and fraction digit count.
-/// The `prec` should <= `frac_cnt`.
+/// The `prec` should >= `frac_cnt`.
 ///
 /// # Panics
 ///
 /// If `prec` > `frac_cnt`, panic.
 /// The panic is because of `debug_assert`.
-
-// TODO: what if prec-frac_cnt==0
 pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
     debug_assert!(prec >= frac_cnt);
     let int_cnt = prec - frac_cnt;
@@ -474,7 +472,7 @@ pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
 
 /// `max_or_min_dec`(`NewMaxOrMinDec` in tidb) returns the max or min
 /// value decimal for given precision and fraction.
-/// The `prec` should <= `frac_cnt`.
+/// The `prec` should >= `frac_cnt`.
 ///
 /// # Panics
 ///
