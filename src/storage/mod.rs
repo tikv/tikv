@@ -3905,6 +3905,7 @@ mod tests {
 
         let mut options = Options::default();
         options.lock_ttl = 123;
+        options.txn_size = 3;
         storage
             .async_prewrite(
                 Context::default(),
@@ -3928,6 +3929,7 @@ mod tests {
                 lock.set_lock_version(101);
                 lock.set_key(b"a".to_vec());
                 lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -3936,6 +3938,7 @@ mod tests {
                 lock.set_lock_version(101);
                 lock.set_key(b"b".to_vec());
                 lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -3944,6 +3947,7 @@ mod tests {
                 lock.set_lock_version(101);
                 lock.set_key(b"c".to_vec());
                 lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
