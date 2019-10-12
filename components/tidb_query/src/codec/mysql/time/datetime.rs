@@ -417,7 +417,7 @@ mod parser {
 }
 
 impl Time {
-    pub fn parse(
+    fn parse(
         ctx: &mut EvalContext,
         input: &str,
         time_type: TimeType,
@@ -746,7 +746,7 @@ impl Time {
         time
     }
 
-    pub fn new(ctx: &mut EvalContext, mut config: TimeArgs) -> Result<Time> {
+    fn new(ctx: &mut EvalContext, mut config: TimeArgs) -> Result<Time> {
         if config.time_type == TimeType::Date {
             config.hour = 0;
             config.minute = 0;
@@ -973,39 +973,6 @@ impl Time {
         Ok(self)
     }
 
-    fn unchecked_normalized(self) -> Result<Self> {
-        if self.get_time_type() == TimeType::TimeStamp {
-            return Ok(self);
-        }
-
-        if self.day() > self.last_day_of_month() || self.month() == 0 || self.day() == 0 {
-            let date = if self.month() == 0 {
-                (self.year() >= 1).ok_or(Error::incorrect_datetime_value(self))?;
-                NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
-            } else {
-                NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
-            } + chrono::Duration::days(i64::from(self.day()) - 1);
-            let datetime = NaiveDateTime::new(
-                date,
-                NaiveTime::from_hms_micro(self.hour(), self.minute(), self.second(), self.micro()),
-            );
-
-            return Ok(Time::unchecked_new(TimeArgs {
-                year: datetime.year() as u32,
-                month: datetime.month(),
-                day: datetime.day(),
-                hour: datetime.hour(),
-                minute: datetime.minute(),
-                second: datetime.second(),
-                micro: datetime.nanosecond() / 1000,
-                time_type: self.get_time_type(),
-                fsp: self.fsp() as i8,
-            }));
-        }
-
-        Ok(self)
-    }
-
     pub fn checked_add(self, ctx: &mut EvalContext, rhs: Duration) -> Option<Time> {
         let normalized = self.normalized(ctx).ok()?;
         let duration = chrono::Duration::nanoseconds(rhs.to_nanos());
@@ -1053,11 +1020,12 @@ impl Time {
     }
 
     pub fn weekday(self) -> Weekday {
-        self.unchecked_normalized()
-            .unwrap()
-            .try_into_chrono_naive_datetime()
-            .unwrap()
-            .weekday()
+        let date = if self.month() == 0 {
+            NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
+        } else {
+            NaiveDate::from_ymd(self.year() as i32, self.month(), 1)
+        } + chrono::Duration::days(i64::from(self.day()) - 1);
+        date.weekday()
     }
 
     fn write_date_format_segment(self, b: char, output: &mut String) -> Result<()> {
@@ -2066,6 +2034,27 @@ mod tests {
         let rhs = Duration::parse(b"01:00:00", 6)?;
         assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_weekday() -> Result<()> {
+        let cases = vec![
+            ("2019-10-12", "Sat"),
+            ("2019-04-31", "Wed"),
+            ("0000-01-01", "Sat"),
+            ("0000-01-00", "Fri"),
+        ];
+        let mut ctx = EvalContext::from(TimeEnv {
+            allow_invalid_date: true,
+            ..TimeEnv::default()
+        });
+        for (s, expected) in cases {
+            assert_eq!(
+                expected,
+                format!("{:?}", Time::parse_date(&mut ctx, s)?.weekday())
+            );
+        }
         Ok(())
     }
 
