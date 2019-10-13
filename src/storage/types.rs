@@ -311,29 +311,26 @@ mod tests {
 
             let encoded_len = encoded.as_encoded().len();
 
-            // Should fail if we modify one byte in raw
+            // Should return false if we modify one byte in raw
             for i in 0..raw.len() {
                 let mut invalid_raw = raw.clone();
                 invalid_raw[i] = raw[i].wrapping_add(1);
                 assert!(!encoded.is_encoded_from(&invalid_raw));
             }
 
-            // Should fail if we modify one byte in encoded
+            // Should return false if we modify one byte in encoded
             for i in 0..encoded_len {
                 let mut invalid_encoded = encoded.clone();
                 invalid_encoded.0[i] = encoded.0[i].wrapping_add(1);
                 assert!(!invalid_encoded.is_encoded_from(&raw));
             }
 
-            // Should panic if encoded length is not a multiple of 9
-            let res = panic_hook::recover_safe(|| {
-                let mut invalid_encoded = encoded.clone();
-                invalid_encoded.0.pop();
-                invalid_encoded.is_encoded_from(&raw)
-            });
-            assert!(res.is_err());
+            // Should return false if encoded length is not a multiple of 9
+            let mut invalid_encoded = encoded.clone();
+            invalid_encoded.0.pop();
+            assert!(!invalid_encoded.is_encoded_from(&raw));
 
-            // Should fail if encoded has less or more chunks
+            // Should return false if encoded has less or more chunks
             let shorter_encoded = Key::from_encoded_slice(&encoded.0[..encoded_len - 9]);
             assert!(!shorter_encoded.is_encoded_from(&raw));
             let mut longer_encoded = encoded.as_encoded().clone();
@@ -341,9 +338,11 @@ mod tests {
             let longer_encoded = Key::from_encoded(longer_encoded);
             assert!(!longer_encoded.is_encoded_from(&raw));
 
-            // Should fail if raw is longer or shorter
-            let shorter_raw = &raw[..raw.len() - 1];
-            assert!(!encoded.is_encoded_from(shorter_raw));
+            // Should return false if raw is longer or shorter
+            if raw.len() > 0 {
+                let shorter_raw = &raw[..raw.len() - 1];
+                assert!(!encoded.is_encoded_from(shorter_raw));
+            }
             let mut longer_raw = raw.to_vec();
             longer_raw.push(0);
             assert!(!encoded.is_encoded_from(&longer_raw));
