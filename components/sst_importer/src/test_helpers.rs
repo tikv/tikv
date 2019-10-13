@@ -41,8 +41,8 @@ pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<
 
     let mut meta = SstMeta::default();
     meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-    meta.mut_range().set_start(vec![range.0]);
-    meta.mut_range().set_end(vec![range.1]);
+    meta.mut_range().set_start(keys::data_key(&[range.0]));
+    meta.mut_range().set_end(keys::data_key(&[range.1]));
     meta.set_crc32(crc32);
     meta.set_length(data.len() as u64);
     meta.set_cf_name("default".to_owned());

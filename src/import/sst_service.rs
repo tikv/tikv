@@ -159,8 +159,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 req.get_sst(),
                 req.get_url(),
                 req.get_name(),
-                req.get_old_key_prefix_length() as usize,
-                req.get_new_key_prefix(),
+                req.get_rewrite_rule(),
                 req.get_speed_limit(),
             );
 
