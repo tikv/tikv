@@ -321,7 +321,7 @@ mod tests {
             assert!(!longer_encoded.is_encoded_from(&raw));
 
             // Should return false if raw is longer or shorter
-            if raw.len() > 0 {
+            if !raw.is_empty() {
                 let shorter_raw = &raw[..raw.len() - 1];
                 assert!(!encoded.is_encoded_from(shorter_raw));
             }
