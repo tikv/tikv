@@ -297,7 +297,7 @@ pub fn is_encoded_from_asc(encoded: &[u8], raw: &[u8]) -> bool {
     const PADDING_BUF: [u8; 8] = [!ENC_MARKER; 8];
     if last_encoded_group[ENC_GROUP_SIZE] != (ENC_MARKER - pad_len as u8)
         || &last_encoded_group[..last_group_len] != last_raw_group
-        || &last_encoded_group[last_group_len..ENC_GROUP_SIZE] != &PADDING_BUF[..pad_len]
+        || last_encoded_group[last_group_len..ENC_GROUP_SIZE] != PADDING_BUF[..pad_len]
     {
         return false;
     }
@@ -342,7 +342,7 @@ pub fn is_encoded_from_desc(encoded: &[u8], raw: &[u8]) -> bool {
             .iter()
             .zip(last_raw_group)
             .any(|(&encoded, &raw)| encoded != !raw)
-        || &last_encoded_group[last_group_len..ENC_GROUP_SIZE] != &PADDING_BUF[..pad_len]
+        || last_encoded_group[last_group_len..ENC_GROUP_SIZE] != PADDING_BUF[..pad_len]
     {
         return false;
     }
