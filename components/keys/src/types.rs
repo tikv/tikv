@@ -189,7 +189,7 @@ impl Key {
     ///
     /// Panics if `self` is not a valid encoded key.
     pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
-        bytes::is_encoded_from(&self.0, raw_key, false)
+        bytes::is_encoded_from_asc(&self.0, raw_key)
     }
 }
 

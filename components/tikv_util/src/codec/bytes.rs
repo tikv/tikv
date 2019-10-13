@@ -5,7 +5,7 @@ use std::io::{BufRead, Write};
 
 use super::{BytesSlice, Error, Result};
 use crate::codec::number::{self, NumberEncoder};
-use std::ptr;
+use std::{ptr, slice};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -278,6 +278,99 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     }
 }
 
+/// Returns whether `encoded` is encoded from `raw` using ascending memory-comparable format.
+/// Returns `false` if `encoded` is invalid.
+pub fn is_encoded_from_asc(encoded: &[u8], raw: &[u8]) -> bool {
+    let group_count = raw.len() / ENC_GROUP_SIZE + 1;
+    if encoded.len() != group_count * (ENC_GROUP_SIZE + 1) {
+        return false;
+    }
+
+    // Bytes are compared in reverse order because in real cases like TiDB, if two keys
+    // are different, the last a few bytes are more likely to be different.
+
+    // Check the last group first
+    let last_encoded_group = &encoded[encoded.len() - ENC_GROUP_SIZE - 1..];
+    let last_group_len = raw.len() % ENC_GROUP_SIZE;
+    let last_raw_group = &raw[raw.len() - last_group_len..];
+    let pad_len = ENC_GROUP_SIZE - last_group_len;
+    const PADDING_BUF: [u8; 8] = [!ENC_MARKER; 8];
+    if last_encoded_group[ENC_GROUP_SIZE] != (ENC_MARKER - pad_len as u8)
+        || &last_encoded_group[..last_group_len] != last_raw_group
+        || &last_encoded_group[last_group_len..ENC_GROUP_SIZE] != &PADDING_BUF[..pad_len]
+    {
+        return false;
+    }
+
+    let mut encoded_group_ptr = last_encoded_group.as_ptr();
+    let mut raw_group_ptr = last_raw_group.as_ptr();
+    while encoded_group_ptr > encoded.as_ptr() {
+        unsafe {
+            let pad_ptr = encoded_group_ptr.sub(1);
+            encoded_group_ptr = pad_ptr.sub(ENC_GROUP_SIZE);
+            raw_group_ptr = raw_group_ptr.sub(ENC_GROUP_SIZE);
+            if *pad_ptr != ENC_MARKER
+                || slice::from_raw_parts(encoded_group_ptr, ENC_GROUP_SIZE)
+                    != slice::from_raw_parts(raw_group_ptr, ENC_GROUP_SIZE)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Returns whether `encoded` is encoded from `raw` using descending memory-comparable format.
+/// Returns `false` if `encoded` is invalid.
+pub fn is_encoded_from_desc(encoded: &[u8], raw: &[u8]) -> bool {
+    let group_count = raw.len() / ENC_GROUP_SIZE + 1;
+    if encoded.len() != group_count * (ENC_GROUP_SIZE + 1) {
+        return false;
+    }
+
+    // Bytes are compared in reverse order because in real cases like TiDB, if two keys
+    // are different, the last a few bytes are more likely to be different.
+
+    // Check the last group first
+    let last_encoded_group = &encoded[encoded.len() - ENC_GROUP_SIZE - 1..];
+    let last_group_len = raw.len() % ENC_GROUP_SIZE;
+    let last_raw_group = &raw[raw.len() - last_group_len..];
+    let pad_len = ENC_GROUP_SIZE - last_group_len;
+    const PADDING_BUF: [u8; 8] = [ENC_MARKER; 8];
+    if last_encoded_group[ENC_GROUP_SIZE] != !(ENC_MARKER - pad_len as u8)
+        || last_encoded_group[..last_group_len]
+            .iter()
+            .zip(last_raw_group)
+            .any(|(&encoded, &raw)| encoded != !raw)
+        || &last_encoded_group[last_group_len..ENC_GROUP_SIZE] != &PADDING_BUF[..pad_len]
+    {
+        return false;
+    }
+
+    let mut encoded_group_ptr = last_encoded_group.as_ptr();
+    let mut raw_group_ptr = last_raw_group.as_ptr();
+    while encoded_group_ptr > encoded.as_ptr() {
+        unsafe {
+            let pad_ptr = encoded_group_ptr.sub(1);
+            encoded_group_ptr = pad_ptr.sub(ENC_GROUP_SIZE);
+            raw_group_ptr = raw_group_ptr.sub(ENC_GROUP_SIZE);
+            if *pad_ptr != !ENC_MARKER
+                || *encoded_group_ptr != !*raw_group_ptr
+                || *encoded_group_ptr.add(1) != !*raw_group_ptr.add(1)
+                || *encoded_group_ptr.add(2) != !*raw_group_ptr.add(2)
+                || *encoded_group_ptr.add(3) != !*raw_group_ptr.add(3)
+                || *encoded_group_ptr.add(4) != !*raw_group_ptr.add(4)
+                || *encoded_group_ptr.add(5) != !*raw_group_ptr.add(5)
+                || *encoded_group_ptr.add(6) != !*raw_group_ptr.add(6)
+                || *encoded_group_ptr.add(7) != !*raw_group_ptr.add(7)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Returns whether `encoded` bytes is encoded from `raw`. Returns `false` if `encoded` is invalid.
 pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
     let check_single_chunk = |encoded: &[u8], raw: &[u8]| {
@@ -450,9 +543,14 @@ mod tests {
         for raw_len in 0..=24 {
             let raw: Vec<u8> = (1..=raw_len).collect();
             for &desc in &[true, false] {
+                let imp = if desc {
+                    is_encoded_from_desc
+                } else {
+                    is_encoded_from_asc
+                };
                 let encoded = encode_order_bytes(&raw, desc);
                 assert!(
-                    is_encoded_from(&encoded, &raw, desc),
+                    imp(&encoded, &raw),
                     "Encoded: {:?}, Raw: {:?}, desc: {}",
                     encoded,
                     raw,
@@ -464,7 +562,7 @@ mod tests {
                     let mut invalid_raw = raw.clone();
                     invalid_raw[i] = raw[i].wrapping_add(1);
                     assert!(
-                        !is_encoded_from(&encoded, &invalid_raw, desc),
+                        !imp(&encoded, &invalid_raw),
                         "Encoded: {:?}, Raw: {:?}, desc: {}",
                         encoded,
                         invalid_raw,
@@ -477,7 +575,7 @@ mod tests {
                     let mut invalid_encoded = encoded.clone();
                     invalid_encoded[i] = encoded[i].wrapping_add(1);
                     assert!(
-                        !is_encoded_from(&invalid_encoded, &raw, desc),
+                        !imp(&invalid_encoded, &raw),
                         "Encoded: {:?}, Raw: {:?}, desc: {}",
                         invalid_encoded,
                         raw,
@@ -488,7 +586,7 @@ mod tests {
                 // Should return false if encoded length is not a multiple of 9
                 let invalid_encoded = &encoded[..encoded.len() - 1];
                 assert!(
-                    !is_encoded_from(invalid_encoded, &raw, desc),
+                    !imp(invalid_encoded, &raw),
                     "Encoded: {:?}, Raw: {:?}, desc: {}",
                     invalid_encoded,
                     raw,
@@ -498,7 +596,7 @@ mod tests {
                 // Should return false if encoded has less or more chunks
                 let shorter_encoded = &encoded[..encoded.len() - ENC_GROUP_SIZE - 1];
                 assert!(
-                    !is_encoded_from(shorter_encoded, &raw, desc),
+                    !imp(shorter_encoded, &raw),
                     "Encoded: {:?}, Raw: {:?}, desc: {}",
                     shorter_encoded,
                     raw,
@@ -507,7 +605,7 @@ mod tests {
                 let mut longer_encoded = encoded.clone();
                 longer_encoded.extend(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
                 assert!(
-                    !is_encoded_from(&longer_encoded, &raw, desc),
+                    !imp(&longer_encoded, &raw),
                     "Encoded: {:?}, Raw: {:?}, desc: {}",
                     longer_encoded,
                     raw,
@@ -518,7 +616,7 @@ mod tests {
                 if raw.len() > 0 {
                     let shorter_raw = &raw[..raw.len() - 1];
                     assert!(
-                        !is_encoded_from(&encoded, shorter_raw, desc),
+                        !imp(&encoded, shorter_raw),
                         "Encoded: {:?}, Raw: {:?}, desc: {}",
                         encoded,
                         shorter_raw,
@@ -528,7 +626,7 @@ mod tests {
                 let mut longer_raw = raw.to_vec();
                 longer_raw.push(0);
                 assert!(
-                    !is_encoded_from(&encoded, &longer_raw, desc),
+                    !imp(&encoded, &longer_raw),
                     "Encoded: {:?}, Raw: {:?}, desc: {}",
                     encoded,
                     longer_raw,
@@ -672,7 +770,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_is_encoded_from(b: &mut Bencher) {
+    fn bench_slow_is_encoded_from_asc_10000(b: &mut Bencher) {
         let key = [b'x'; 10000];
         let encoded = encode_bytes(&key);
         b.iter(|| {
@@ -681,11 +779,101 @@ mod tests {
     }
 
     #[bench]
-    fn bench_is_encoded_from_small(b: &mut Bencher) {
+    fn bench_slow_is_encoded_from_asc_1000(b: &mut Bencher) {
+        let key = [b'x'; 1000];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            assert!(is_encoded_from(&encoded, &key, false));
+        });
+    }
+
+    #[bench]
+    fn bench_slow_is_encoded_from_asc_30(b: &mut Bencher) {
         let key = [b'x'; 30];
         let encoded = encode_bytes(&key);
         b.iter(|| {
             assert!(is_encoded_from(&encoded, &key, false));
+        });
+    }
+
+    #[bench]
+    fn bench_slow_is_encoded_from_desc_10000(b: &mut Bencher) {
+        let key = [b'x'; 10000];
+        let encoded = encode_bytes_desc(&key);
+        b.iter(|| {
+            assert!(is_encoded_from(&encoded, &key, true));
+        });
+    }
+
+    #[bench]
+    fn bench_slow_is_encoded_from_desc_1000(b: &mut Bencher) {
+        let key = [b'x'; 1000];
+        let encoded = encode_bytes_desc(&key);
+        b.iter(|| {
+            assert!(is_encoded_from(&encoded, &key, true));
+        });
+    }
+
+    #[bench]
+    fn bench_slow_is_encoded_from_desc_30(b: &mut Bencher) {
+        let key = [b'x'; 30];
+        let encoded = encode_bytes_desc(&key);
+        b.iter(|| {
+            assert!(is_encoded_from(&encoded, &key, true));
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from_asc_10000(b: &mut Bencher) {
+        let key = [b'x'; 10000];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            assert!(is_encoded_from_asc(&encoded, &key));
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from_asc_1000(b: &mut Bencher) {
+        let key = [b'x'; 1000];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            assert!(is_encoded_from_asc(&encoded, &key));
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from_asc_30(b: &mut Bencher) {
+        let key = [b'x'; 30];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            assert!(is_encoded_from_asc(&encoded, &key));
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from_desc_10000(b: &mut Bencher) {
+        let key = [b'x'; 10000];
+        let encoded = encode_bytes_desc(&key);
+        b.iter(|| {
+            assert!(is_encoded_from_desc(&encoded, &key));
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from_desc_1000(b: &mut Bencher) {
+        let key = [b'x'; 1000];
+        let encoded = encode_bytes_desc(&key);
+        b.iter(|| {
+            assert!(is_encoded_from_desc(&encoded, &key));
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from_desc_30(b: &mut Bencher) {
+        let key = [b'x'; 30];
+        let encoded = encode_bytes_desc(&key);
+        b.iter(|| {
+            assert!(is_encoded_from_desc(&encoded, &key));
         });
     }
 }
