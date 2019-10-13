@@ -174,9 +174,7 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use crate::raftstore::coprocessor::properties::{
-        RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
-    };
+    use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
     use crate::storage::Key;
     use tikv_util::config::ReadableSize;
@@ -196,7 +194,7 @@ mod tests {
             .iter()
             .map(|cf| {
                 let mut cf_opts = ColumnFamilyOptions::new();
-                let f = Box::new(SizePropertiesCollectorFactory::default());
+                let f = Box::new(RangePropertiesCollectorFactory::default());
                 cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
                 CFOptions::new(cf, cf_opts)
             })

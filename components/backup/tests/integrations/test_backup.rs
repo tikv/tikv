@@ -1,7 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::*;
+use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use futures::sync::mpsc as future_mpsc;
 use futures::{Future, Stream};
@@ -30,6 +32,25 @@ struct TestSuite {
     ts: u64,
 
     _env: Arc<Environment>,
+}
+
+// Retry if encounter error
+macro_rules! retry_req {
+    ($call_req: expr, $check_resp: expr, $resp:ident, $retry:literal, $timeout:literal) => {
+        let start = Instant::now();
+        let timeout = Duration::from_millis($timeout);
+        let mut tried_times = 0;
+        while tried_times < $retry && start.elapsed() < timeout {
+            if $check_resp {
+                break;
+            } else {
+                thread::sleep(Duration::from_millis(200));
+                tried_times += 1;
+                $resp = $call_req;
+                continue;
+            }
+        }
+    };
 }
 
 impl TestSuite {
@@ -96,7 +117,14 @@ impl TestSuite {
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts;
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-        let prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        let mut prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        retry_req!(
+            self.tikv_cli.kv_prewrite(&prewrite_req).unwrap(),
+            !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
+            prewrite_resp,
+            5,    // retry 5 times
+            5000  // 100ms timeout
+        );
         assert!(
             !prewrite_resp.has_region_error(),
             "{:?}",
@@ -115,7 +143,14 @@ impl TestSuite {
         commit_req.start_version = start_ts;
         commit_req.set_keys(keys.into_iter().collect());
         commit_req.commit_version = commit_ts;
-        let commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
+        let mut commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
+        retry_req!(
+            self.tikv_cli.kv_commit(&commit_req).unwrap(),
+            !commit_resp.has_region_error() && !commit_resp.has_error(),
+            commit_resp,
+            5,    // retry 5 times
+            5000  // 100ms timeout
+        );
         assert!(
             !commit_resp.has_region_error(),
             "{:?}",

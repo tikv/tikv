@@ -2,6 +2,8 @@
 
 use std::marker::PhantomData;
 
+use criterion::measurement::Measurement;
+
 use kvproto::coprocessor::KeyRange;
 use tipb::ColumnInfo;
 
@@ -39,22 +41,30 @@ pub trait ScanExecutorDAGHandlerBuilder: 'static {
 }
 
 /// Benchers shared for table scan and index scan.
-pub trait ScanBencher<P: Copy + 'static>: 'static {
+pub trait ScanBencher<P, M>: 'static
+where
+    P: Copy + 'static,
+    M: Measurement,
+{
     fn name(&self) -> String;
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
         parameters: P,
     );
 
-    fn box_clone(&self) -> Box<dyn ScanBencher<P>>;
+    fn box_clone(&self) -> Box<dyn ScanBencher<P, M>>;
 }
 
-impl<P: Copy + 'static> Clone for Box<dyn ScanBencher<P>> {
+impl<P, M> Clone for Box<dyn ScanBencher<P, M>>
+where
+    P: Copy + 'static,
+    M: Measurement + 'static,
+{
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
@@ -81,10 +91,11 @@ where
     }
 }
 
-impl<B> ScanBencher<B::P> for NormalScanNext1Bencher<B>
+impl<B, M> ScanBencher<B::P, M> for NormalScanNext1Bencher<B>
 where
     B: ScanExecutorBuilder,
     B::E: Executor,
+    M: Measurement,
 {
     fn name(&self) -> String {
         format!("{}/normal/next=1", <B::T as StoreDescriber>::name())
@@ -92,7 +103,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -104,7 +115,7 @@ where
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn ScanBencher<B::P>> {
+    fn box_clone(&self) -> Box<dyn ScanBencher<B::P, M>> {
         Box::new(Self::new())
     }
 }
@@ -129,10 +140,11 @@ where
     }
 }
 
-impl<B> ScanBencher<B::P> for NormalScanNext1024Bencher<B>
+impl<B, M> ScanBencher<B::P, M> for NormalScanNext1024Bencher<B>
 where
     B: ScanExecutorBuilder,
     B::E: Executor,
+    M: Measurement,
 {
     fn name(&self) -> String {
         format!("{}/normal/next=1024", <B::T as StoreDescriber>::name())
@@ -140,7 +152,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -152,7 +164,7 @@ where
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn ScanBencher<B::P>> {
+    fn box_clone(&self) -> Box<dyn ScanBencher<B::P, M>> {
         Box::new(Self::new())
     }
 }
@@ -177,10 +189,11 @@ where
     }
 }
 
-impl<B> ScanBencher<B::P> for BatchScanNext1024Bencher<B>
+impl<B, M> ScanBencher<B::P, M> for BatchScanNext1024Bencher<B>
 where
     B: ScanExecutorBuilder,
     B::E: BatchExecutor,
+    M: Measurement,
 {
     fn name(&self) -> String {
         format!("{}/batch/next=1024", <B::T as StoreDescriber>::name())
@@ -188,7 +201,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -200,7 +213,7 @@ where
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn ScanBencher<B::P>> {
+    fn box_clone(&self) -> Box<dyn ScanBencher<B::P, M>> {
         Box::new(Self::new())
     }
 }
@@ -221,7 +234,11 @@ impl<B: ScanExecutorDAGHandlerBuilder> ScanDAGBencher<B> {
     }
 }
 
-impl<B: ScanExecutorDAGHandlerBuilder> ScanBencher<B::P> for ScanDAGBencher<B> {
+impl<B, M> ScanBencher<B::P, M> for ScanDAGBencher<B>
+where
+    B: ScanExecutorDAGHandlerBuilder,
+    M: Measurement,
+{
     fn name(&self) -> String {
         let tag = if self.batch { "batch" } else { "normal" };
         format!(
@@ -234,7 +251,7 @@ impl<B: ScanExecutorDAGHandlerBuilder> ScanBencher<B::P> for ScanDAGBencher<B> {
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -246,7 +263,7 @@ impl<B: ScanExecutorDAGHandlerBuilder> ScanBencher<B::P> for ScanDAGBencher<B> {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn ScanBencher<B::P>> {
+    fn box_clone(&self) -> Box<dyn ScanBencher<B::P, M>> {
         Box::new(Self::new(self.batch, self.display_table_rows))
     }
 }
