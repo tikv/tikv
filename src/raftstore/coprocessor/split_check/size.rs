@@ -120,6 +120,8 @@ impl<K: KvEngine, R: KvEngine, C: CasualRouter<K, R>> SizeCheckObserver<K, R, C>
             split_size,
             split_limit,
             router: Mutex::new(router),
+            _phantom_k: PhantomData,
+            _phantom_r: PhantomData,
         }
     }
 }

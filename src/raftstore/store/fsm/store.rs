@@ -54,7 +54,6 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
-use engine::{Iterable, Mutable, Peekable};
 use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -62,7 +61,7 @@ use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
-use engine_traits::{KvEngines, KvEngine, WriteOptions, WriteBatch};
+use engine_traits::{KvEngines, KvEngine, WriteOptions, WriteBatch, Mutable};
 
 type Key = Vec<u8>;
 
@@ -384,7 +383,7 @@ struct StoreFsmDelegate<'a, T: 'static, C: 'static, K: KvEngine, R: KvEngine> {
     ctx: &'a mut PollContext<T, C, K, R>,
 }
 
-impl<'a, T: Transport, C: PdClient, K: KvEngine, R: KvEngine> StoreFsmDelegate<'a, T, C, K, R> {
+impl<'a, T: Transport, C: PdClient, K: KvEngine + 'static, R: KvEngine + 'static> StoreFsmDelegate<'a, T, C, K, R> {
     fn on_tick(&mut self, tick: StoreTick) {
         let t = SlowTimer::new();
         match tick {
@@ -459,7 +458,7 @@ pub struct RaftPoller<T: 'static, C: 'static, K: KvEngine, R: KvEngine> {
     messages_per_tick: usize,
 }
 
-impl<T: Transport, C: PdClient, K: KvEngine, R: KvEngine> RaftPoller<T, C, K, R> {
+impl<T: Transport, C: PdClient, K: KvEngine + 'static, R: KvEngine + 'static> RaftPoller<T, C, K, R> {
     fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm<K, R>>]) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
@@ -492,7 +491,7 @@ impl<T: Transport, C: PdClient, K: KvEngine, R: KvEngine> RaftPoller<T, C, K, R>
                 });
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
-                self.poll_ctx.kv_wb = WriteBatch::with_capacity(4 * 1024);
+                self.poll_ctx.kv_wb = self.poll_ctx.engines.kv.write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.kv_wb.clear();
             }
@@ -510,7 +509,7 @@ impl<T: Transport, C: PdClient, K: KvEngine, R: KvEngine> RaftPoller<T, C, K, R>
                 });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
-                self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);
+                self.poll_ctx.raft_wb = self.poll_ctx.engines.raft.write_batch_with_cap(4 * 1024);
             } else {
                 self.poll_ctx.raft_wb.clear();
             }
@@ -775,11 +774,11 @@ impl<T, C, K: KvEngine, R: KvEngine> RaftPollerBuilder<T, C, K, R> {
 
         if !kv_wb.is_empty() {
             self.engines.kv.write(&kv_wb).unwrap();
-            self.engines.kv.sync_wal().unwrap();
+            self.engines.kv.sync().unwrap();
         }
         if !raft_wb.is_empty() {
             self.engines.raft.write(&raft_wb).unwrap();
-            self.engines.raft.sync_wal().unwrap();
+            self.engines.raft.sync().unwrap();
         }
 
         // schedule applying snapshot after raft writebatch were written.
@@ -848,6 +847,7 @@ impl<T, C, K: KvEngine, R: KvEngine> RaftPollerBuilder<T, C, K, R> {
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
+        self.engines.kv.roughly_cleanup_ranges()?;
         rocks::util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
 
         info!(

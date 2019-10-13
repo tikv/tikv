@@ -322,7 +322,7 @@ impl InvokeContext {
 
 pub fn recover_from_applying_state<K: KvEngine, R: KvEngine>(
     engines: &KvEngines<K, R>,
-    raft_wb: &K::Batch,
+    raft_wb: &R::Batch,
     region_id: u64,
 ) -> Result<()> {
     let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);

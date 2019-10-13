@@ -1,7 +1,4 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use std::path::Path;
-use std::fs;
-
 use rocksdb::{CFHandle, DBIterator, Writable, WriteBatch as RawWriteBatch, DB};
 
 use engine_traits::{Error, IterOptions, Result, CF_LOCK, MAX_DELETE_BATCH_SIZE};
@@ -62,4 +59,3 @@ pub fn delete_all_in_range_cf(
 
     Ok(())
 }
-
