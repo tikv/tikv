@@ -278,11 +278,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     }
 }
 
-/// Returns whether `encoded` bytes is encoded from `raw`.
-///
-/// # Panics
-///
-/// Panics if `encoded` is not valid
+/// Returns whether `encoded` bytes is encoded from `raw`. Returns `false` if `encoded` is invalid.
 pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
     let check_single_chunk = |encoded: &[u8], raw: &[u8]| {
         let len = raw.len();
@@ -293,17 +289,23 @@ pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
                     .iter()
                     .zip(raw)
                     .all(|(&enc, &raw)| enc == !raw)
-                && encoded[len..encoded.len() - 1].iter().all(|&v| v == 0xff)
+                && encoded[len..encoded.len() - 1]
+                    .iter()
+                    .all(|&v| v == ENC_MARKER)
         } else {
             encoded[ENC_GROUP_SIZE] == (ENC_MARKER - pad)
                 && &encoded[..len] == raw
-                && encoded[len..encoded.len() - 1].iter().all(|&v| v == 0)
+                && encoded[len..encoded.len() - 1]
+                    .iter()
+                    .all(|&v| v == !ENC_MARKER)
         }
     };
 
     let mut rev_encoded_chunks = encoded.rchunks_exact(ENC_GROUP_SIZE + 1);
     // Valid encoded bytes must has complete chunks
-    assert!(rev_encoded_chunks.remainder().is_empty());
+    if !rev_encoded_chunks.remainder().is_empty() {
+        return false;
+    }
 
     // Bytes are compared in reverse order because in real cases like TiDB, if two keys
     // are different, the last a few bytes are more likely to be different.
@@ -457,7 +459,7 @@ mod tests {
                     desc
                 );
 
-                // Should fail if we modify one byte in raw
+                // Should return false if we modify one byte in raw
                 for i in 0..raw.len() {
                     let mut invalid_raw = raw.clone();
                     invalid_raw[i] = raw[i].wrapping_add(1);
@@ -470,7 +472,7 @@ mod tests {
                     );
                 }
 
-                // Should fail if we modify one byte in encoded
+                // Should return false if we modify one byte in encoded
                 for i in 0..encoded.len() {
                     let mut invalid_encoded = encoded.clone();
                     invalid_encoded[i] = encoded[i].wrapping_add(1);
@@ -483,13 +485,17 @@ mod tests {
                     );
                 }
 
-                // Should panic if encoded length is not a multiple of 9
-                let res = panic_hook::recover_safe(|| {
-                    is_encoded_from(&encoded[..encoded.len() - 1], &raw, desc)
-                });
-                assert!(res.is_err());
+                // Should return false if encoded length is not a multiple of 9
+                let invalid_encoded = &encoded[..encoded.len() - 1];
+                assert!(
+                    !is_encoded_from(invalid_encoded, &raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    invalid_encoded,
+                    raw,
+                    desc
+                );
 
-                // Should fail if encoded has less or more chunks
+                // Should return false if encoded has less or more chunks
                 let shorter_encoded = &encoded[..encoded.len() - ENC_GROUP_SIZE - 1];
                 assert!(
                     !is_encoded_from(shorter_encoded, &raw, desc),
@@ -508,15 +514,17 @@ mod tests {
                     desc
                 );
 
-                // Should fail if raw is longer or shorter
-                let shorter_raw = &raw[..raw.len() - 1];
-                assert!(
-                    !is_encoded_from(&encoded, shorter_raw, desc),
-                    "Encoded: {:?}, Raw: {:?}, desc: {}",
-                    encoded,
-                    shorter_raw,
-                    desc
-                );
+                // Should return false if raw is longer or shorter
+                if raw.len() > 0 {
+                    let shorter_raw = &raw[..raw.len() - 1];
+                    assert!(
+                        !is_encoded_from(&encoded, shorter_raw, desc),
+                        "Encoded: {:?}, Raw: {:?}, desc: {}",
+                        encoded,
+                        shorter_raw,
+                        desc
+                    );
+                }
                 let mut longer_raw = raw.to_vec();
                 longer_raw.push(0);
                 assert!(
