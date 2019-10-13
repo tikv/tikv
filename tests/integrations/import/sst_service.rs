@@ -154,7 +154,7 @@ fn test_download_sst() {
 
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx.clone());
-    ingest.set_sst(meta.clone());
+    ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
 

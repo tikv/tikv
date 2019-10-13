@@ -64,13 +64,11 @@ quick_error! {
             cause(err)
             display("Cannot read {}/{}", url, name)
         }
-        KeyTooShortForRewrite(key: Vec<u8>, prefix_len: usize) {
+        WrongKeyPrefix(key: Vec<u8>, prefix: Vec<u8>) {
             display("\
-                Key in SST is too short for rewriting: \
-                key {} has length {} which is less than prefix length {}",
+                Key in SST has wrong prefix: key {} does not start with {}",
                 hex::encode_upper(&key),
-                key.len(),
-                prefix_len,
+                hex::encode_upper(&prefix),
             )
         }
     }
