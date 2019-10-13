@@ -154,18 +154,18 @@ impl SSTImporter {
         let range_end = meta.get_range().get_end();
 
         let mut iter = sst_reader.iter();
-        let should_iterate = loop {
+        let should_iterate = (|| {
             if rewrite_rule.old_key_prefix != rewrite_rule.new_key_prefix {
                 // must iterate if we perform key rewrite
-                break true;
+                return true;
             }
             if !iter.seek(SeekKey::Start) {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
-                break false;
+                return false;
             }
             if iter.key() < range_start {
                 // SST's start is before the range to consume, so needs to iterate to skip over
-                break true;
+                return true;
             }
             if !range_end.is_empty() {
                 // (empty end key means no end)
@@ -173,12 +173,12 @@ impl SSTImporter {
                 iter.seek(SeekKey::End);
                 if iter.key() >= range_end {
                     // SST's end is after the range to consume
-                    break true;
+                    return true;
                 }
             }
             // range contained the entire SST, no need to iterate, just moving the file is ok
-            break false;
-        };
+            false
+        })();
 
         if !should_iterate {
             // TODO: what about encrypted SSTs?
