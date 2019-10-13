@@ -54,7 +54,7 @@ pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
-pub const SHORT_VALUE_MAX_LEN: usize = 64;
+pub const SHORT_VALUE_MAX_LEN: usize = 255;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
@@ -4162,6 +4162,10 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        let mut options = Options::default();
+        options.lock_ttl = 123;
+        options.txn_size = 3;
         storage
             .async_prewrite(
                 Context::default(),
@@ -4172,17 +4176,20 @@ mod tests {
                 ],
                 b"c".to_vec(),
                 101,
-                Options::default(),
+                options,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
+
         let (lock_a, lock_b, lock_c, lock_x, lock_y, lock_z) = (
             {
                 let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"a".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -4190,6 +4197,8 @@ mod tests {
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"b".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -4197,6 +4206,8 @@ mod tests {
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"c".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -4221,6 +4232,7 @@ mod tests {
                 lock
             },
         );
+
         storage
             .async_scan_locks(
                 Context::default(),
