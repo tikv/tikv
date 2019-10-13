@@ -346,16 +346,27 @@ mod tests {
 
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
-                    match rx.try_recv() {
-                        Ok((_, CasualMessage::SplitRegion { split_keys, .. })) => {
-                            assert_eq!(split_keys, vec![key.into_encoded()]);
+                    loop {
+                        match rx.try_recv() {
+                            Ok((_, CasualMessage::RegionApproximateSize { .. }))
+                            | Ok((_, CasualMessage::RegionApproximateKeys { .. })) => (),
+                            Ok((_, CasualMessage::SplitRegion { split_keys, .. })) => {
+                                assert_eq!(split_keys, vec![key.into_encoded()]);
+                                break;
+                            }
+                            others => panic!("expect {:?}, but got {:?}", key, others),
                         }
-                        others => panic!("expect {:?}, but got {:?}", key, others),
                     }
                 } else {
-                    match rx.try_recv() {
-                        Err(mpsc::TryRecvError::Empty) => (),
-                        others => panic!("expect empty, but got {:?}", others),
+                    loop {
+                        match rx.try_recv() {
+                            Ok((_, CasualMessage::RegionApproximateSize { .. }))
+                            | Ok((_, CasualMessage::RegionApproximateKeys { .. })) => (),
+                            Err(mpsc::TryRecvError::Empty) => {
+                                break;
+                            }
+                            others => panic!("expect empty, but got {:?}", others),
+                        }
                     }
                 }
             }
