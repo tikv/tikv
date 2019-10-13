@@ -837,7 +837,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     #[inline]
     pub fn readpool_heavy_load_threshold(&self) -> usize {
         // TODO: make this configurable.
-        self.read_pool_normal.pool_size() * 80
+        self.read_pool_normal.pool_size() * 96
     }
 
     /// Create a `Storage` from given engine.

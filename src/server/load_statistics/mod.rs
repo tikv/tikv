@@ -36,6 +36,12 @@ impl ThreadLoad {
     pub fn load(&self) -> usize {
         self.load.load(Ordering::Acquire)
     }
+
+    #[allow(dead_code)]
+    pub fn threshold(&self) -> usize {
+        // read-only
+        self.threshold
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -54,7 +60,12 @@ mod other_os {
 
     impl ThreadLoadStatistics {
         /// Constructs a new `ThreadLoadStatistics`.
-        pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
+        pub fn new(
+            _slots: usize,
+            _prefix: &str,
+            _thread_load: Arc<ThreadLoad>,
+            _target: Option<usize>,
+        ) -> Self {
             ThreadLoadStatistics {}
         }
         /// Records current thread load statistics.

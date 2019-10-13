@@ -21,22 +21,7 @@ pub struct ThreadLoadStatistics {
     cpu_usages: Vec<f64>,
     instants: Vec<Instant>,
     thread_load: Arc<ThreadLoad>,
-}
-
-fn poll_tids(pid: pid_t, prefix: &str) -> (Vec<pid_t>, f64) {
-    let mut tids = vec![];
-    let mut cpu_total_count = 0f64;
-    for tid in get_thread_ids(pid).unwrap() {
-        // TODO: avoid this clone?
-        if let Ok(stat) = pid::stat_task(pid, tid) {
-            if !stat.command.starts_with(prefix) {
-                continue;
-            }
-            cpu_total_count += cpu_total(&stat);
-            tids.push(tid);
-        }
-    }
-    (tids, cpu_total_count)
+    target: Option<usize>,
 }
 
 impl ThreadLoadStatistics {
@@ -44,9 +29,14 @@ impl ThreadLoadStatistics {
     /// `thread_load`. At most `slots` old records will be kept, to make the curve more smooth.
     ///
     /// Note: call this after the target threads are initialized, otherwise it can't catch them.
-    pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
+    pub fn new(
+        slots: usize,
+        prefix: &str,
+        thread_load: Arc<ThreadLoad>,
+        target: Option<usize>,
+    ) -> Self {
         let pid: pid_t = unsafe { getpid() };
-        let (tids, cpu_total_count) = poll_tids(pid, prefix);
+        let (tids, cpu_total_count) = poll_task(pid, prefix);
         ThreadLoadStatistics {
             pid,
             tids,
@@ -56,6 +46,7 @@ impl ThreadLoadStatistics {
             cpu_usages: vec![cpu_total_count; slots],
             instants: vec![Instant::now(); slots],
             thread_load,
+            target,
         }
     }
 
@@ -65,18 +56,29 @@ impl ThreadLoadStatistics {
     ///
     /// Some old usages and instants (at most `slots`) will be kept internal to make
     /// the usage curve more smooth.
-    pub fn record(&mut self, instant: Instant, force: bool) {
+    pub fn record(&mut self, instant: Instant) {
         self.instants[self.cur_pos] = instant;
         self.cpu_usages[self.cur_pos] = 0f64;
-        if force {
-            let (tids, _) = poll_tids(self.pid, self.prefix.as_str());
-            std::mem::replace(&mut self.tids, tids);
-        }
-        for tid in &self.tids {
-            // TODO: if monitored threads exited and restarted then, we should update `self.tids`.
-            if let Ok(stat) = pid::stat_task(self.pid, *tid) {
-                self.cpu_usages[self.cur_pos] += cpu_total(&stat);
+        let mut need_poll_task = if let Some(target) = self.target {
+            self.tids.len() < target
+        } else {
+            false
+        };
+        if !need_poll_task {
+            for tid in &self.tids {
+                if let Ok(stat) = pid::stat_task(self.pid, *tid) {
+                    self.cpu_usages[self.cur_pos] += cpu_total(&stat);
+                } else {
+                    // if monitored threads exited and restarted then, we should update `self.tids`.
+                    need_poll_task = true;
+                    break;
+                }
             }
+        }
+        if need_poll_task {
+            let (tids, cpu_usage) = poll_task(self.pid, self.prefix.as_str());
+            std::mem::replace(&mut self.tids, tids);
+            self.cpu_usages[self.cur_pos] = cpu_usage;
         }
         let current_instant = self.instants[self.cur_pos];
         let current_cpu_usage = self.cpu_usages[self.cur_pos];
@@ -105,6 +107,23 @@ fn calc_cpu_load(elapsed_millis: usize, start_usage: f64, end_usage: f64) -> usi
     cpu_usage as usize / elapsed_millis
 }
 
+#[inline]
+fn poll_task(pid: pid_t, prefix: &str) -> (Vec<pid_t>, f64) {
+    let mut tids = vec![];
+    let mut cpu_total_count = 0f64;
+    for tid in get_thread_ids(pid).unwrap() {
+        // TODO: avoid this clone?
+        if let Ok(stat) = pid::stat_task(pid, tid) {
+            if !stat.command.starts_with(prefix) {
+                continue;
+            }
+            cpu_total_count += cpu_total(&stat);
+            tids.push(tid);
+        }
+    }
+    (tids, cpu_total_count)
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -122,14 +141,14 @@ mod tests {
         let thread_name = thread_name[..end].to_owned();
 
         let load = Arc::new(ThreadLoad::with_threshold(80));
-        let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load));
+        let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load), None);
         let start = Instant::now();
         loop {
             if (Instant::now() - start).as_millis() > 200 {
                 break;
             }
         }
-        stats.record(Instant::now(), false);
+        stats.record(Instant::now());
         let cpu_usage = load.load();
         assert!(cpu_usage < 100); // There is only 1 thread.
         if cpu_usage < 80 {

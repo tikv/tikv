@@ -364,6 +364,9 @@ struct ReqBatcher<E: Engine, L: LockMgr> {
     inners: BTreeMap<String, ReqBatcherInner<E, L>>,
     readpool_thread_load: Arc<ThreadLoad>,
     enable_read_batch: bool,
+    read_heavy_load: usize,
+    read_heavy_confidence: f32,
+    read_heavy_confidence_threshold: f32,
     tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
@@ -383,8 +386,34 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         ReqBatcher {
             inners,
             tx,
+            read_heavy_load: 0,
+            read_heavy_confidence: 0.0,
+            read_heavy_confidence_threshold: 0.8,
             readpool_thread_load,
             enable_read_batch: false,
+        }
+    }
+
+    fn check_thread_load(&mut self) {
+        if !self.enable_read_batch {
+            // exponential decay to smoothen the load estimation
+            if self.readpool_thread_load.in_heavy_load() {
+                self.read_heavy_load =
+                    (self.readpool_thread_load.load() + self.read_heavy_load) / 2;
+                self.read_heavy_confidence = (self.read_heavy_confidence + 1.0) / 2.0;
+                self.read_heavy_confidence_threshold =
+                    self.read_heavy_confidence_threshold * 0.9 + 0.08;
+            } else {
+                self.read_heavy_confidence /= 2.0;
+            }
+            if self.read_heavy_confidence > self.read_heavy_confidence_threshold {
+                self.read_heavy_confidence = 0.0;
+                self.enable_read_batch = true;
+            }
+        } else if self.readpool_thread_load.load() < self.read_heavy_load * 3 / 10 {
+            self.enable_read_batch = false;
+            // penalty for wrong batch decision
+            self.read_heavy_confidence_threshold = 10.0;
         }
     }
 
@@ -393,10 +422,6 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         request_id: u64,
         request: &mut batch_commands_request::Request,
     ) -> bool {
-        if self.readpool_thread_load.in_heavy_load() && !self.enable_read_batch {
-            // one-direction fire
-            self.enable_read_batch = true;
-        }
         if let Some(ref mut cmd) = request.cmd {
             let inner = match cmd {
                 batch_commands_request::request::Cmd::Prewrite(_) => {
@@ -442,6 +467,7 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
     #[inline]
     pub fn should_submit(&mut self, storage: &Storage<E, L>) {
         let now = Instant::now();
+        self.check_thread_load();
         for (limiter, batcher) in self.inners.values_mut() {
             limiter.observe_tick();
             if limiter.due(now) {

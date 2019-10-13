@@ -205,19 +205,25 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let mut grpc_load_stats = {
             let tl = Arc::clone(&self.grpc_thread_load);
-            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
+            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl, None)
         };
         let mut readpool_normal_load_stats = {
             let tl = Arc::clone(&self.readpool_normal_thread_load);
-            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl)
+            let target = (self.readpool_normal_thread_load.threshold() + 99) / 100;
+            ThreadLoadStatistics::new(
+                LOAD_STATISTICS_SLOTS,
+                READPOOL_NORMAL_THREAD_PREFIX,
+                tl,
+                Some(target),
+            )
         };
         self.stats_pool.as_ref().unwrap().spawn(
             self.timer
                 .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())
                 .for_each(move |i| {
-                    grpc_load_stats.record(i, false);
-                    readpool_normal_load_stats.record(i, true);
+                    grpc_load_stats.record(i);
+                    readpool_normal_load_stats.record(i);
                     Ok(())
                 }),
         );
