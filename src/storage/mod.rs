@@ -833,6 +833,13 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
 }
 
 impl<E: Engine, L: LockMgr> Storage<E, L> {
+    /// Gets heavy thread load of normal readpool.
+    #[inline]
+    pub fn readpool_heavy_load_threshold(&self) -> usize {
+        // TODO: make this configurable.
+        self.read_pool_normal.pool_size() * 80
+    }
+
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
@@ -1010,6 +1017,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 !ctx.get_not_fill_cache(),
                             );
                             let mut results = vec![];
+                            // TODO: optimize using seek.
                             for get in gets {
                                 snap_store.set_start_ts(get.ts.unwrap());
                                 snap_store.set_isolation_level(get.ctx.get_isolation_level());
@@ -1590,6 +1598,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 Err(e) => return future::err(e),
                             };
                             let mut results = vec![];
+                            // TODO: optimize using seek.
                             for get in gets {
                                 results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
                             }

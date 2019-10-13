@@ -34,6 +34,7 @@ struct Env {
 pub struct FuturePool {
     pool: Arc<ThreadPool>,
     env: Arc<Env>,
+    pool_size: usize,
     max_tasks: usize,
 }
 
@@ -47,6 +48,12 @@ impl crate::AssertSend for FuturePool {}
 impl crate::AssertSync for FuturePool {}
 
 impl FuturePool {
+    /// Gets inner thread pool size.
+    #[inline]
+    pub fn pool_size(&self) -> usize {
+        self.pool_size
+    }
+
     /// Gets current running task count.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {

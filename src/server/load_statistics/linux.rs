@@ -15,11 +15,28 @@ use procinfo::pid;
 pub struct ThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,
+    prefix: String,
     slots: usize,
     cur_pos: usize,
     cpu_usages: Vec<f64>,
     instants: Vec<Instant>,
     thread_load: Arc<ThreadLoad>,
+}
+
+fn poll_tids(pid: pid_t, prefix: &str) -> (Vec<pid_t>, f64) {
+    let mut tids = vec![];
+    let mut cpu_total_count = 0f64;
+    for tid in get_thread_ids(pid).unwrap() {
+        // TODO: avoid this clone?
+        if let Ok(stat) = pid::stat_task(pid, tid) {
+            if !stat.command.starts_with(prefix) {
+                continue;
+            }
+            cpu_total_count += cpu_total(&stat);
+            tids.push(tid);
+        }
+    }
+    (tids, cpu_total_count)
 }
 
 impl ThreadLoadStatistics {
@@ -29,20 +46,11 @@ impl ThreadLoadStatistics {
     /// Note: call this after the target threads are initialized, otherwise it can't catch them.
     pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
         let pid: pid_t = unsafe { getpid() };
-        let mut tids = vec![];
-        let mut cpu_total_count = 0f64;
-        for tid in get_thread_ids(pid).unwrap() {
-            if let Ok(stat) = pid::stat_task(pid, tid) {
-                if !stat.command.starts_with(prefix) {
-                    continue;
-                }
-                cpu_total_count += cpu_total(&stat);
-                tids.push(tid);
-            }
-        }
+        let (tids, cpu_total_count) = poll_tids(pid, prefix);
         ThreadLoadStatistics {
             pid,
             tids,
+            prefix: prefix.to_string(),
             slots,
             cur_pos: 0,
             cpu_usages: vec![cpu_total_count; slots],
@@ -57,9 +65,13 @@ impl ThreadLoadStatistics {
     ///
     /// Some old usages and instants (at most `slots`) will be kept internal to make
     /// the usage curve more smooth.
-    pub fn record(&mut self, instant: Instant) {
+    pub fn record(&mut self, instant: Instant, force: bool) {
         self.instants[self.cur_pos] = instant;
         self.cpu_usages[self.cur_pos] = 0f64;
+        if force {
+            let (tids, _) = poll_tids(self.pid, self.prefix.as_str());
+            std::mem::replace(&mut self.tids, tids);
+        }
         for tid in &self.tids {
             // TODO: if monitored threads exited and restarted then, we should update `self.tids`.
             if let Ok(stat) = pid::stat_task(self.pid, *tid) {
@@ -117,7 +129,7 @@ mod tests {
                 break;
             }
         }
-        stats.record(Instant::now());
+        stats.record(Instant::now(), false);
         let cpu_usage = load.load();
         assert!(cpu_usage < 100); // There is only 1 thread.
         if cpu_usage < 80 {

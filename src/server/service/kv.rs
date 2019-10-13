@@ -56,7 +56,9 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
 
-    thread_load: Arc<ThreadLoad>,
+    grpc_thread_load: Arc<ThreadLoad>,
+
+    readpool_normal_thread_load: Arc<ThreadLoad>,
 
     enable_req_batch: bool,
 
@@ -360,6 +362,8 @@ type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L>>);
 
 struct ReqBatcher<E: Engine, L: LockMgr> {
     inners: BTreeMap<String, ReqBatcherInner<E, L>>,
+    readpool_thread_load: Arc<ThreadLoad>,
+    enable_read_batch: bool,
     tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
@@ -369,13 +373,19 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
     pub fn new(
         tx: Sender<(u64, batch_commands_response::Response)>,
         timeout: Option<Duration>,
+        readpool_thread_load: Arc<ThreadLoad>,
     ) -> Self {
         let mut inners = BTreeMap::<String, ReqBatcherInner<E, L>>::default();
         inners.insert(
             "get".to_string(),
             (BatchLimiter::new(timeout), Box::new(ReadBatcher::new())),
         );
-        ReqBatcher { inners, tx }
+        ReqBatcher {
+            inners,
+            tx,
+            readpool_thread_load,
+            enable_read_batch: false,
+        }
     }
 
     pub fn filter(
@@ -383,6 +393,10 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         request_id: u64,
         request: &mut batch_commands_request::Request,
     ) -> bool {
+        if self.readpool_thread_load.in_heavy_load() && !self.enable_read_batch {
+            // one-direction fire
+            self.enable_read_batch = true;
+        }
         if let Some(ref mut cmd) = request.cmd {
             let inner = match cmd {
                 batch_commands_request::request::Cmd::Prewrite(_) => {
@@ -390,7 +404,11 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                 }
                 batch_commands_request::request::Cmd::Commit(_) => self.inners.get_mut("commit"),
                 batch_commands_request::request::Cmd::Get(_)
-                | batch_commands_request::request::Cmd::RawGet(_) => self.inners.get_mut("get"),
+                | batch_commands_request::request::Cmd::RawGet(_)
+                    if self.enable_read_batch =>
+                {
+                    self.inners.get_mut("get")
+                }
                 _ => None,
             };
             if let Some((limiter, batcher)) = inner {
@@ -450,7 +468,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        thread_load: Arc<ThreadLoad>,
+        grpc_thread_load: Arc<ThreadLoad>,
+        readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         req_batch_wait_duration: Option<Duration>,
     ) -> Self {
@@ -465,7 +484,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
             cop,
             ch,
             snap_scheduler,
-            thread_load,
+            grpc_thread_load,
+            readpool_normal_thread_load,
             timer_pool,
             enable_req_batch,
             req_batch_wait_duration,
@@ -1401,7 +1421,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let cop = self.cop.clone();
         if self.enable_req_batch {
             let stopped = Arc::new(AtomicBool::new(false));
-            let req_batcher = ReqBatcher::new(tx.clone(), self.req_batch_wait_duration);
+            let req_batcher = ReqBatcher::new(
+                tx.clone(),
+                self.req_batch_wait_duration,
+                Arc::clone(&self.readpool_normal_thread_load),
+            );
             let req_batcher = Arc::new(Mutex::new(req_batcher));
             if let Some(duration) = self.req_batch_wait_duration {
                 let storage = storage.clone();
@@ -1460,7 +1484,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
             ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
         };
 
-        let thread_load = Arc::clone(&self.thread_load);
+        let thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
