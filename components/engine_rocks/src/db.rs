@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs::{self, File};
-use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
+use std::ops::Deref;
 
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
@@ -24,7 +24,7 @@ pub struct Rocks(Arc<DB>);
 
 impl Rocks {
     pub fn from_db(db: Arc<DB>) -> Self {
-        Rocks(db)
+        Self(db)
     }
 
     pub fn get_sync_db(&self) -> Arc<DB> {
@@ -41,6 +41,11 @@ impl Rocks {
         // but db has not been created, `DB::list_column_families` fails and we can clean up
         // the directory by this indication.
         fs::read_dir(&path).unwrap().next().is_some()
+    }
+
+    pub fn drop_cf(&mut self, name: &str) -> Result<()> {
+        let db: &mut DB = self.as_mut();
+        db.drop_cf(name).map_err(|err| err.into())
     }
 }
 

@@ -104,6 +104,8 @@ impl<K: KvEngine, R: KvEngine, C: CasualRouter<K, R>> KeysCheckObserver<K, R, C>
             split_keys,
             batch_split_limit,
             router: Mutex::new(router),
+            _phantom_k: PhantomData,
+            _phantom_r: PhantomData,
         }
     }
 }

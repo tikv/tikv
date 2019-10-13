@@ -84,14 +84,14 @@ impl RocksCFOptions {
     }
 }
 
-impl From<engine_traits::CFOptions> for RocksCFOptions {
-    fn from(_opts: engine_traits::CFOptions) -> Self {
-        RocksCFOptions(RawCFOptions::default())
-    }
-}
+// impl From<engine_traits::CFOptions> for RocksCFOptions {
+//     fn from(_opts: engine_traits::CFOptions) -> Self {
+//         RocksCFOptions(RawCFOptions::default())
+//     }
+// }
 
-impl From<&engine_traits::CFOptions> for RocksCFOptions {
-    fn from(opts: &engine_traits::CFOptions) -> Self {
-        opts.clone().into()
-    }
-}
+// impl From<&engine_traits::CFOptions> for RocksCFOptions {
+//     fn from(opts: &engine_traits::CFOptions) -> Self {
+//         opts.clone().into()
+//     }
+// }

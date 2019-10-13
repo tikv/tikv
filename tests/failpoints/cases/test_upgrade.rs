@@ -18,6 +18,7 @@ use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv_util::rocksdb_util;
 use tikv_util::config::MB;
 use pd_client::PdClient;
+use engine_rocks::util::maybe_upgrade_from_2_to_3;
 
 const CLUSTER_ID: u64 = 1_000_000_000;
 const STOER_ID: u64 = 1;
@@ -126,17 +127,17 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     // Create a raft engine.
     let tmp_path_raft = tmp_dir.path().join(Path::new("raft"));
     let raft_engine =
-        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap();
+        Arc::new(rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap());
     let mut cache_opts = LRUCacheOptions::new();
     cache_opts.set_capacity(8 * MB);
 
     // No need to upgrade an empty node.
-    tikv::raftstore::store::maybe_upgrade_from_2_to_3(
-        &raft_engine,
+    let kv_cfg = &DbConfig::default();
+    maybe_upgrade_from_2_to_3(
+        Arc::clone(raft_engine),
         tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
-        &DbConfig::default(),
-        Some(Cache::new_lru_cache(cache_opts)),
+        kv_cfg.build_cf_opts_v2(Some(Cache::new_lru_cache(cache_opts))),
     )
     .unwrap();
     // Check whether there is a kv engine.
@@ -203,11 +204,12 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
 
     // Return early.
     fail::cfg(fp, "return").unwrap();
-    let res = tikv::raftstore::store::maybe_upgrade_from_2_to_3(
-        &raft_engine,
+    let kv_cfg = &DbConfig::default();
+    let res = maybe_upgrade_from_2_to_3(
+        Arc::clone(raft_engine),
         tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
-        &DbConfig::default(),
+        kv_cfg.build_cf_opts_v2(Some(Cache::new_lru_cache(cache_opts))),
     );
     // `unwrap` or `unwrap_err` depends on whether we enable a fail point.
     if fp.is_empty() {
@@ -217,13 +219,13 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     }
     fail::remove(fp);
     // Retry upgrade.
-    tikv::raftstore::store::maybe_upgrade_from_2_to_3(
-        &raft_engine,
+    let kv_cfg = &DbConfig::default();
+    maybe_upgrade_from_2_to_3(
+        Arc::clone(raft_engine),
         tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
-        &DbConfig::default(),
-    )
-    .unwrap();
+        kv_cfg.build_cf_opts_v2(Some(Cache::new_lru_cache(cache_opts))),
+    ).unwrap();
 
     // Check kv engine, no RAFT cf.
     let cfs = DB::list_column_families(&DBOptions::new(), tmp_path_kv.to_str().unwrap()).unwrap();

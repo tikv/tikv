@@ -8,10 +8,9 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use engine_traits::{KvEngine, Mutable, Peekable, Iterable, KvEngines, CF_RAFT};
+use engine_traits::{KvEngine, Mutable, KvEngines, CF_RAFT};
 use engine::rocks;
-use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
-use engine::rocks::{DBOptions, Writable};
+use engine::rocks::{Snapshot as DbSnapshot, DB};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -30,7 +29,6 @@ use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
-use crate::config;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -283,17 +281,17 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_raft_state_to(&self, raft_wb: &mut WriteBatch) -> Result<()> {
+    pub fn save_raft_state_to<M: Mutable>(&self, raft_wb: &mut M) -> Result<()> {
         raft_wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state)?;
         Ok(())
     }
 
     #[inline]
-    pub fn save_snapshot_raft_state_to(
+    pub fn save_snapshot_raft_state_to<M: Mutable>(
         &self,
         snapshot_index: u64,
         kv_engine: &DB,
-        kv_wb: &mut WriteBatch,
+        kv_wb: &mut M,
     ) -> Result<()> {
         let mut snapshot_raft_state = self.raft_state.clone();
         snapshot_raft_state
@@ -311,7 +309,7 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_apply_state_to(&self, kv_engine: &DB, kv_wb: &mut WriteBatch) -> Result<()> {
+    pub fn save_apply_state_to<M: Mutable>(&self, kv_engine: &DB, kv_wb: &mut M) -> Result<()> {
         let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
@@ -897,8 +895,8 @@ impl<K: KvEngine, R: KvEngine> PeerStorage<K, R> {
         &mut self,
         ctx: &mut InvokeContext,
         snap: &Snapshot,
-        kv_wb: &WriteBatch,
-        raft_wb: &WriteBatch,
+        kv_wb: &K::Batch,
+        raft_wb: &R::Batch,
     ) -> Result<()> {
         info!(
             "begin to apply snapshot";
@@ -953,7 +951,7 @@ impl<K: KvEngine, R: KvEngine> PeerStorage<K, R> {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&mut self, kv_wb: &WriteBatch, raft_wb: &WriteBatch) -> Result<()> {
+    pub fn clear_meta(&mut self, kv_wb: &K::Batch, raft_wb: &R::Batch) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
         self.cache = EntryCache::default();
@@ -1478,152 +1476,6 @@ pub fn write_peer_state<T: Mutable, E: KvEngine>(
         "state" => ?region_state,
     );
     kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
-    Ok(())
-}
-
-/// Upgreade from v2.x to v3.x
-///
-/// For backward compatibility, it needs to check whether there are any
-/// meta data in the raft cf of the kv engine, if there are, it moves them
-/// into raft engine.
-pub fn maybe_upgrade_from_2_to_3<R: KvEngine>(
-    raft_engine: &R,
-    kv_path: &str,
-    kv_db_opts: DBOptions,
-    kv_cfg: &config::DbConfig,
-    cache: &Option<Cache>,
-) -> Result<()> {
-    use engine::WriteOptions;
-
-    if !rocks::util::db_exist(kv_path) {
-        debug!("no need upgrade to v3.x");
-        return Ok(());
-    }
-
-    if DB::list_column_families(&kv_db_opts, kv_path)
-        .unwrap()
-        .into_iter()
-        .find(|cf| *cf == CF_RAFT)
-        .is_none()
-    {
-        // We have upgraded from v2.x to v3.x.
-        return Ok(());
-    }
-
-    info!("start upgrading from v2.x to v3.x");
-    let t = Instant::now();
-
-    // Create v2.0.x kv engine.
-    let kv_cfs_opts = kv_cfg.build_cf_opts_v2(cache);
-    let mut kv_engine = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)?;
-
-    // Move meta data from kv engine to raft engine.
-    let upgrade_raft_wb = WriteBatch::default();
-    // Cleanup meta data in kv engine.
-    let cleanup_kv_wb = WriteBatch::default();
-
-    // For meta data in the default CF.
-    //
-    //  1. store_ident_key: 0x01 0x01
-    //  2. prepare_bootstrap_key: 0x01 0x02
-    if let Some(m) =
-        kv_engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)?
-    {
-        info!("upgrading STORE_IDENT_KEY";
-            "store_id" => m.get_store_id(),
-            "cluster_id" => m.get_cluster_id(),
-        );
-        box_try!(upgrade_raft_wb.put_msg(keys::STORE_IDENT_KEY, &m));
-        box_try!(cleanup_kv_wb.delete(keys::STORE_IDENT_KEY));
-    }
-    if let Some(m) = kv_engine.get_msg::<kvproto::metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)? {
-        info!("upgrading PREPARE_BOOTSTRAP_KEY"; "region" => ?m);
-        box_try!(upgrade_raft_wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, &m));
-        box_try!(cleanup_kv_wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
-    }
-
-    // For meta data in the raft CF.
-    //
-    //  1. apply_state_key:         0x01 0x02 region_id 0x03
-    //  2. snapshot_raft_state_key: 0x01 0x02 region_id 0x04
-    //  3. region_state_key:        0x01 0x03 region_id 0x01
-    let start_key = keys::LOCAL_MIN_KEY;
-    let end_key = keys::LOCAL_MAX_KEY;
-    kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
-        if let Ok((region_id, suffix)) = keys::decode_region_raft_key(key) {
-            if suffix == keys::APPLY_STATE_SUFFIX {
-                // apply_state_key
-                box_try!(upgrade_raft_wb.put(key, value));
-                info!("upgrading apply state"; "region_id" => region_id);
-                return Ok(true);
-            } else if suffix == keys::SNAPSHOT_RAFT_STATE_SUFFIX {
-                // snapshot_raft_state_key
-                //
-                // In v2.x, we keep an raft local state in kv engine too,
-                // in case of restart happen when we just write region state
-                // to Applying, but not write raft_local_state to
-                // raft engine in time.
-                let raft_state_key = keys::raft_state_key(region_id);
-                let raft_state = raft_engine
-                    .get_msg(&raft_state_key)?
-                    .unwrap_or_else(RaftLocalState::default);
-                let mut snapshot_raft_state = RaftLocalState::default();
-                box_try!(snapshot_raft_state.merge_from_bytes(value));
-                // if we recv append log when applying snapshot, last_index in
-                // raft_local_state will larger than snapshot_index. since
-                // raft_local_state is written to raft engine, and raft
-                // write_batch is written after kv write_batch, raft_local_state
-                // may wrong if restart happen between the two write. so we copy
-                // raft_local_state to kv engine (snapshot_raft_state), and set
-                // snapshot_raft_state.last_index = snapshot_index.
-                // After restart, we need check last_index.
-                if last_index(&snapshot_raft_state) > last_index(&raft_state) {
-                    box_try!(upgrade_raft_wb.put(&raft_state_key, value));
-                    info!(
-                        "upgrading snapshot raft state";
-                        "region_id" => region_id,
-                        "snapshot_raft_state" => ?snapshot_raft_state,
-                        "raft_state" => ?raft_state
-                    );
-                }
-                return Ok(true);
-            }
-        } else if let Ok((region_id, suffix)) = keys::decode_region_meta_key(key) {
-            if suffix == keys::REGION_STATE_SUFFIX {
-                box_try!(upgrade_raft_wb.put(key, value));
-                info!("upgrading region state"; "region_id" => region_id);
-                return Ok(true);
-            }
-        }
-        Err(box_err!(
-            "unexpect key {:?} when upgrading from v2.x to v3.x",
-            key
-        ))
-    })?;
-
-    let mut sync_opt = WriteOptions::new();
-    sync_opt.set_sync(true);
-
-    fail_point!("upgrade_2_3_before_update_raft", |_| {
-        Err(box_err!("injected error: upgrade_2_3_before_update_raft"))
-    });
-    raft_engine.write_opt(&upgrade_raft_wb, &sync_opt).unwrap();
-
-    fail_point!("upgrade_2_3_before_update_kv", |_| {
-        Err(box_err!("injected error: upgrade_2_3_before_update_kv"))
-    });
-    kv_engine.write_opt(&cleanup_kv_wb, &sync_opt).unwrap();
-
-    // Drop the raft cf.
-    fail_point!("upgrade_2_3_before_drop_raft_cf", |_| {
-        Err(box_err!("injected error: upgrade_2_3_before_drop_raft_cf"))
-    });
-    kv_engine.drop_cf(CF_RAFT).unwrap();
-
-    info!(
-        "finish upgrading from v2.x to v3.x";
-        "takes" => ?t.elapsed(),
-    );
     Ok(())
 }
 

@@ -42,7 +42,7 @@ impl SstWriterBuilder {
         self
     }
 
-    /// Builder a SstWriter.
+    /// Build an SstWriter.
     pub fn build(self, path: &str) -> Result<SstWriter, String> {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {

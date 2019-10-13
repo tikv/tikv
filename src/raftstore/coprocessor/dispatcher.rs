@@ -120,7 +120,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: CasualRouter<K, R> + Clone + Send + 'static, K: KvEngine, R: KvEngine>(cfg: Config, ch: C) -> Self {
+    pub fn new<C: CasualRouter<K, R> + Clone + Send + 'static, K: KvEngine + 'static, R: KvEngine + 'static>(cfg: Config, ch: C) -> Self {
         let mut registry = Registry::default();
         let split_size_check_observer = SizeCheckObserver::new(
             cfg.region_max_size.0,

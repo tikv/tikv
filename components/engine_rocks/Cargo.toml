@@ -21,12 +21,14 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 time = "0.1"
 sys-info = "0.5.7"
 tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
+engine_traits = { path = "../engine_traits" }
+keys = { path = "../keys" }
 serde = "1.0"
 serde_derive = "1.0"
 toml = "0.4"
 hex = "0.3"
-tikv_util = { path = "../tikv_util" }
-engine_traits = { path = "../engine_traits" }
+fail = "0.3"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
