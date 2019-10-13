@@ -2,12 +2,6 @@
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate slog_global;
-#[macro_use(box_err, box_try)]
-extern crate tikv_util;
-#[macro_use(fail_point)]
-extern crate fail;
 
 mod db;
 pub use self::db::*;
