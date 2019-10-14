@@ -18,12 +18,22 @@ make_static_metric! {
         acquire_pessimistic_lock,
     }
 
+    pub label_enum MvccCheckTxnStatusKind {
+        rollback,
+        update_ts,
+        get_commit_info,
+    }
+
     pub struct MvccConflictCounterVec: IntCounter {
         "type" => MvccConflictKind,
     }
 
     pub struct MvccDuplicateCmdCounterVec: IntCounter {
         "type" => MvccDuplicateCommandKind,
+    }
+
+    pub struct MvccCheckTxnStatusCounterVec: IntCounter {
+        "type" => MvccCheckTxnStatusKind,
     }
 }
 
@@ -54,6 +64,15 @@ lazy_static! {
             MvccDuplicateCmdCounterVec,
             "tikv_storage_mvcc_duplicate_cmd_counter",
             "Total number of duplicated commands",
+            &["type"]
+        )
+        .unwrap()
+    };
+    pub static ref MVCC_CHECK_TXN_STATUS_COUNTER_VEC: MvccCheckTxnStatusCounterVec = {
+        register_static_int_counter_vec!(
+            MvccCheckTxnStatusCounterVec,
+            "tikv_storage_mvcc_check_txn_status",
+            "Counter of different results of check_txn_status",
             &["type"]
         )
         .unwrap()

@@ -783,11 +783,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
 
     fn kv_check_txn_status(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: CheckTxnStatusRequest,
-        _sink: UnarySink<CheckTxnStatusResponse>,
+        ctx: RpcContext<'_>,
+        req: CheckTxnStatusRequest,
+        sink: UnarySink<CheckTxnStatusResponse>,
     ) {
-        unimplemented!();
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .kv_check_txn_status
+            .start_coarse_timer();
+        let future = future_check_txn_status(&self.storage, req)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "kv_check_txn_status",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.kv_check_txn_status.inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn kv_scan_lock(
@@ -1713,7 +1727,17 @@ fn handle_batch_commands_request<E: Engine, L: LockMgr>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(batch_commands_request::request::Cmd::CheckTxnStatus(_)) => unimplemented!(),
+        Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC
+                .kv_check_txn_status
+                .start_coarse_timer();
+            let resp = future_check_txn_status(&storage, req)
+                .map(oneof!(
+                    batch_commands_response::response::Cmd::CheckTxnStatus
+                ))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_check_txn_status.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
         Some(batch_commands_request::request::Cmd::ScanLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
             let resp = future_scan_lock(&storage, req)
@@ -1941,6 +1965,7 @@ fn future_prewrite<E: Engine, L: LockMgr>(
     options.for_update_ts = req.get_for_update_ts();
     options.is_pessimistic_lock = req.take_is_pessimistic_lock();
     options.txn_size = req.get_txn_size();
+    options.min_commit_ts = req.get_min_commit_ts();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_prewrite(
@@ -2142,6 +2167,39 @@ fn future_txn_heart_beat<E: Engine, L: LockMgr>(
         } else {
             match v {
                 Ok((ttl, _)) => resp.set_lock_ttl(ttl),
+                Err(e) => resp.set_error(extract_key_error(&e)),
+            }
+        }
+        resp
+    })
+}
+
+fn future_check_txn_status<E: Engine, L: LockMgr>(
+    storage: &Storage<E, L>,
+    mut req: CheckTxnStatusRequest,
+) -> impl Future<Item = CheckTxnStatusResponse, Error = Error> {
+    let primary_key = Key::from_raw(req.get_primary_key());
+
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_check_txn_status(
+        req.take_context(),
+        primary_key,
+        req.get_lock_ts(),
+        req.get_caller_start_ts(),
+        req.get_current_ts(),
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = CheckTxnStatusResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((lock_ttl, commit_ts)) => {
+                    resp.set_lock_ttl(lock_ttl);
+                    resp.set_commit_version(commit_ts);
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
