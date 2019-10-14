@@ -417,6 +417,8 @@ fn process_read_impl<E: Engine>(
                 lock_info.set_primary_lock(lock.primary);
                 lock_info.set_lock_version(lock.ts);
                 lock_info.set_key(key.into_raw()?);
+                lock_info.set_lock_ttl(lock.ttl);
+                lock_info.set_txn_size(lock.txn_size);
                 locks.push(lock_info);
             }
 
