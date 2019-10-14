@@ -170,13 +170,12 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    /// Rollbacks the given lock and returns whether the lock belongs to a pessimistic transaction.
-    fn rollback_lock(&mut self, key: Key, lock: &Lock) -> Result<bool> {
+    fn rollback_lock(&mut self, key: Key, lock: &Lock, is_pessimistic_txn: bool) -> Result<()> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
             self.delete_value(key.clone(), lock.ts);
         }
-        let is_pessimistic_txn = lock.for_update_ts != 0;
+
         // Only the primary key of a pessimistic transaction needs to be protected.
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
         let write = Write::new_rollback(self.start_ts, protected);
@@ -185,7 +184,7 @@ impl<S: Snapshot> MvccTxn<S> {
         if self.collapse_rollback {
             self.collapse_prev_rollback(key)?;
         }
-        Ok(is_pessimistic_txn)
+        Ok(())
     }
 
     /// Checks the existence of the key according to `should_not_exist`.
@@ -537,7 +536,8 @@ impl<S: Snapshot> MvccTxn<S> {
                     return Err(Error::KeyIsLocked(info));
                 }
 
-                let is_pessimistic_txn = self.rollback_lock(key, lock)?;
+                let is_pessimistic_txn = lock.for_update_ts != 0;
+                self.rollback_lock(key, lock, is_pessimistic_txn)?;
                 Ok(is_pessimistic_txn)
             }
             _ => {
@@ -659,9 +659,11 @@ impl<S: Snapshot> MvccTxn<S> {
     ) -> Result<(u64, u64, bool)> {
         match self.reader.load_lock(&primary_key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
+                let is_pessimistic_txn = lock.for_update_ts != 0;
+
                 if extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts) {
                     // If the lock is expired, clean it up.
-                    let is_pessimistic_txn = self.rollback_lock(primary_key, lock)?;
+                    self.rollback_lock(primary_key, lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((0, 0, is_pessimistic_txn));
                 }
@@ -945,8 +947,8 @@ mod tests {
 
         must_acquire_pessimistic_lock(&engine, k1, k1, 5, 5);
         must_acquire_pessimistic_lock(&engine, k2, k1, 5, 7);
-        must_rollback(&engin, k1, 5);
-        must_rollback(&engin, k2, 5);
+        must_rollback(&engine, k1, 5);
+        must_rollback(&engine, k2, 5);
         must_get_rollback_protected(&engine, k1, 5, true);
         must_get_rollback_protected(&engine, k2, 5, false);
 
@@ -954,8 +956,8 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k2, k1, 15, 17);
         must_pessimistic_prewrite_put(&engine, k1, v, k1, 15, 17, true);
         must_pessimistic_prewrite_put(&engine, k2, v, k1, 15, 17, true);
-        must_rollback(&engin, k1, 15);
-        must_rollback(&engin, k2, 15);
+        must_rollback(&engine, k1, 15);
+        must_rollback(&engine, k2, 15);
         must_get_rollback_protected(&engine, k1, 15, true);
         must_get_rollback_protected(&engine, k2, 15, false);
     }
