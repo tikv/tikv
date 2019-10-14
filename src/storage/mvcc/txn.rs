@@ -489,7 +489,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // 1) A failed transaction rolls back its prewritten keys
         // 2) Other transactions roll back the secondary locks
         // In both cases the rollback record needn't be protected from being collapsed.
-        self.cleanup(key, 0, false)
+        self.cleanup(key, 0)
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
@@ -498,7 +498,7 @@ impl<S: Snapshot> MvccTxn<S> {
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
-    pub fn cleanup(&mut self, key: Key, current_ts: u64, protect_rollback: bool) -> Result<bool> {
+    pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
         let is_pessimistic_txn = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
@@ -522,7 +522,18 @@ impl<S: Snapshot> MvccTxn<S> {
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
                     self.delete_value(key.clone(), lock.ts);
                 }
-                lock.for_update_ts != 0
+                let is_pessimistic_txn = lock.for_update_ts != 0;
+
+                // Only the primary key of a pessimistic transaction needs to be protected.
+                let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
+                let write = Write::new_rollback(self.start_ts, protect);
+                let ts = self.start_ts;
+                self.put_write(key.clone(), ts, write.to_bytes());
+                self.unlock_key(key.clone());
+                if self.collapse_rollback {
+                    self.collapse_prev_rollback(key)?;
+                }
+                Ok(is_pessimistic_txn)
             }
             _ => {
                 return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
@@ -561,15 +572,6 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        // Only rollbacks of pessimistic transactions need to be protected.
-        let write = Write::new_rollback(self.start_ts, protect_rollback & is_pessimistic_txn);
-        let ts = self.start_ts;
-        self.put_write(key.clone(), ts, write.to_bytes());
-        self.unlock_key(key.clone());
-        if self.collapse_rollback {
-            self.collapse_prev_rollback(key)?;
-        }
-        Ok(is_pessimistic_txn)
     }
 
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.

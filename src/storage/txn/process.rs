@@ -646,7 +646,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             // If the primary lock of a pessimistic transaction is cleaned up, it must be protected
             // from being collapsed to prevent stale acquire_pessimistic_lock requests.
-            let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts, true)?;
+            let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
 
             wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
