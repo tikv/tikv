@@ -583,7 +583,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        txn.cleanup(Key::from_raw(key), current_ts, true).unwrap();
+        txn.cleanup(Key::from_raw(key), current_ts).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -591,7 +591,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        assert!(txn.cleanup(Key::from_raw(key), current_ts, false).is_err());
+        assert!(txn.cleanup(Key::from_raw(key), current_ts).is_err());
     }
 
     pub fn must_txn_heart_beat<E: Engine>(

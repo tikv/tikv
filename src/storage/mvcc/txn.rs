@@ -170,20 +170,22 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    fn rollback_lock(&mut self, key: Key, lock: &Lock) -> Result<()> {
+    /// Rollbacks the given lock and returns whether the lock belongs to a pessimistic transaction.
+    fn rollback_lock(&mut self, key: Key, lock: &Lock) -> Result<bool> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
             self.delete_value(key.clone(), lock.ts);
         }
+        let is_pessimistic_txn = lock.for_update_ts != 0;
         // Only the primary key of a pessimistic transaction needs to be protected.
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-        let write = Write::new_rollback(self.start_ts, protect);
+        let write = Write::new_rollback(self.start_ts, protected);
         self.put_write(key.clone(), self.start_ts, write.to_bytes());
         self.unlock_key(key.clone());
         if self.collapse_rollback {
             self.collapse_prev_rollback(key)?;
         }
-        Ok(())
+        Ok(is_pessimistic_txn)
     }
 
     /// Checks the existence of the key according to `should_not_exist`.
@@ -535,8 +537,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     return Err(Error::KeyIsLocked(info));
                 }
 
-                let is_pessimistic_txn = lock.for_update_ts != 0;
-                self.rollback_lock(key, lock)?;
+                let is_pessimistic_txn = self.rollback_lock(key, lock)?;
                 Ok(is_pessimistic_txn)
             }
             _ => {
@@ -658,11 +659,9 @@ impl<S: Snapshot> MvccTxn<S> {
     ) -> Result<(u64, u64, bool)> {
         match self.reader.load_lock(&primary_key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
-                let is_pessimistic_txn = lock.for_update_ts != 0;
-
                 if extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts) {
                     // If the lock is expired, clean it up.
-                    self.rollback_lock(primary_key, lock)?;
+                    let is_pessimistic_txn = self.rollback_lock(primary_key, lock)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((0, 0, is_pessimistic_txn));
                 }
