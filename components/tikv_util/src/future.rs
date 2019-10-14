@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::Either;
-use futures::sync::oneshot;
+use tokio_sync::oneshot;
 use futures::{Async, Future, IntoFuture, Poll};
 
 /// Generates a paired future and callback so that when callback is being called, its result

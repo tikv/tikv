@@ -3,7 +3,7 @@
 use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
 use fail;
-use futures::sync::oneshot;
+use tokio_sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{Error as GrpcError, WriteFlags};

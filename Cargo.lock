@@ -2714,6 +2714,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "tikv_alloc",
+ "tokio-sync",
  "uuid",
 ]
 
@@ -3112,6 +3113,7 @@ dependencies = [
  "tokio-executor",
  "tokio-fs",
  "tokio-io",
+ "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
  "toml",
@@ -3174,6 +3176,7 @@ dependencies = [
  "time",
  "tokio-core",
  "tokio-executor",
+ "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
  "toml",
@@ -3349,9 +3352,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-sync"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2162248ff317e2bc713b261f242b69dbb838b85248ed20bb21df56d60ea4cae7"
+checksum = "d06554cce1ae4a50f42fba8023918afa931413aded705b560e29600ccf7c6d76"
 dependencies = [
  "fnv",
  "futures",

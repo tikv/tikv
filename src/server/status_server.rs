@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::future::{err, ok};
-use futures::sync::oneshot::{Receiver, Sender};
+use tokio_sync::oneshot::{Receiver, Sender};
 #[cfg(feature = "failpoints")]
 use futures::Stream;
 use futures::{self, Future};
@@ -90,7 +90,7 @@ impl StatusServer {
                 debug!("stopping status server");
             })
             .build();
-        let (tx, rx) = futures::sync::oneshot::channel::<()>();
+        let (tx, rx) = tokio_sync::oneshot::channel::<()>();
         StatusServer {
             thread_pool,
             tx,
