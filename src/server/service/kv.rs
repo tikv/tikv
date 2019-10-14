@@ -30,7 +30,7 @@ use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use prometheus::HistogramTimer;
+use prometheus::{Histogram, HistogramTimer};
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
@@ -43,6 +43,37 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
+
+struct HistogramObserver {
+    histogram: Histogram,
+    sum: f64,
+    count: u64,
+}
+
+impl HistogramObserver {
+    fn new(histogram: Histogram) -> Self {
+        let (sum, count) = (histogram.get_sample_sum(), histogram.get_sample_count());
+        HistogramObserver {
+            histogram,
+            sum,
+            count,
+        }
+    }
+
+    fn observe(&mut self) -> f64 {
+        let (sum, count) = (
+            self.histogram.get_sample_sum(),
+            self.histogram.get_sample_count(),
+        );
+        if count == self.count {
+            return 0.0;
+        }
+        let val = (sum - self.sum) / (count - self.count) as f64;
+        self.sum = sum;
+        self.count = count;
+        val
+    }
+}
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -89,13 +120,29 @@ impl RegionVerId {
 struct BatchLimiter {
     timeout: Option<Duration>,
     last_submit_time: Instant,
+    latency_observer: HistogramObserver,
+    latency_estimation: f64,
+    thread_load_observer: Arc<ThreadLoad>,
+    thread_load_estimation: usize,
+    sample_size: usize,
+    enable_batch: bool,
 }
 
 impl BatchLimiter {
-    fn new(timeout: Option<Duration>) -> Self {
+    fn new(
+        timeout: Option<Duration>,
+        latency_observer: HistogramObserver,
+        thread_load_observer: Arc<ThreadLoad>,
+    ) -> Self {
         BatchLimiter {
             timeout,
             last_submit_time: Instant::now(),
+            latency_observer,
+            latency_estimation: 0.0,
+            thread_load_observer,
+            thread_load_estimation: 100,
+            sample_size: 0,
+            enable_batch: false,
         }
     }
 
@@ -117,14 +164,40 @@ impl BatchLimiter {
     /// Whether the batch is ready to be early submitted.
     #[inline]
     fn ready(&self) -> bool {
-        // TODO: fallback to direct submit when stream is cold.
-        false
+        !self.enable_batch
     }
 
     /// Observe a tick from timer guard. Limiter will update statistics at this point.
     #[inline]
     fn observe_tick(&mut self) {
-        // TODO: robust strategy here to detect stream hotness.
+        if self.disabled() {
+            return;
+        }
+        self.sample_size += 1;
+        if self.enable_batch {
+            // check if thread load is too low, which means busy hour has passed.
+            if self.thread_load_observer.load() < self.thread_load_estimation * 3 / 10 {
+                self.enable_batch = false;
+            }
+        } else if self.sample_size > 10 {
+            // TODO: make sample window configurable.
+            self.sample_size = 0;
+            let latency = self.latency_observer.observe() * 1000.0;
+            let load = self.thread_load_observer.load();
+            self.latency_estimation = (self.latency_estimation + latency) / 2.0;
+            if load > 70 {
+                // thread load is less sensitive to workload,
+                // a small barrier here to make sure we have good samples of thread load.
+                let timeout = self.timeout.unwrap();
+                if latency > timeout.as_millis() as f64 {
+                    self.thread_load_estimation = (self.thread_load_estimation + load) / 2;
+                }
+                if self.latency_estimation > timeout.as_millis() as f64 + 0.2 {
+                    self.enable_batch = true;
+                    self.latency_estimation = 0.0;
+                }
+            }
+        }
     }
 
     /// Observe the size of commands been examined by batcher.
@@ -362,11 +435,6 @@ type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L>>);
 
 struct ReqBatcher<E: Engine, L: LockMgr> {
     inners: BTreeMap<String, ReqBatcherInner<E, L>>,
-    readpool_thread_load: Arc<ThreadLoad>,
-    enable_read_batch: bool,
-    read_heavy_load: usize,
-    read_heavy_confidence: f32,
-    read_heavy_confidence_threshold: f32,
     tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
@@ -381,40 +449,16 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         let mut inners = BTreeMap::<String, ReqBatcherInner<E, L>>::default();
         inners.insert(
             "get".to_string(),
-            (BatchLimiter::new(timeout), Box::new(ReadBatcher::new())),
+            (
+                BatchLimiter::new(
+                    timeout,
+                    HistogramObserver::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
+                    readpool_thread_load,
+                ),
+                Box::new(ReadBatcher::new()),
+            ),
         );
-        ReqBatcher {
-            inners,
-            tx,
-            read_heavy_load: 0,
-            read_heavy_confidence: 0.0,
-            read_heavy_confidence_threshold: 0.8,
-            readpool_thread_load,
-            enable_read_batch: false,
-        }
-    }
-
-    fn check_thread_load(&mut self) {
-        if !self.enable_read_batch {
-            // exponential decay to smoothen the load estimation
-            if self.readpool_thread_load.in_heavy_load() {
-                self.read_heavy_load =
-                    (self.readpool_thread_load.load() + self.read_heavy_load) / 2;
-                self.read_heavy_confidence = (self.read_heavy_confidence + 1.0) / 2.0;
-                self.read_heavy_confidence_threshold =
-                    self.read_heavy_confidence_threshold * 0.9 + 0.08;
-            } else {
-                self.read_heavy_confidence /= 2.0;
-            }
-            if self.read_heavy_confidence > self.read_heavy_confidence_threshold {
-                self.read_heavy_confidence = 0.0;
-                self.enable_read_batch = true;
-            }
-        } else if self.readpool_thread_load.load() < self.read_heavy_load * 3 / 10 {
-            self.enable_read_batch = false;
-            // penalty for wrong batch decision
-            self.read_heavy_confidence_threshold = 10.0;
-        }
+        ReqBatcher { inners, tx }
     }
 
     pub fn filter(
@@ -423,28 +467,22 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         request: &mut batch_commands_request::Request,
     ) -> bool {
         if let Some(ref mut cmd) = request.cmd {
-            let inner = match cmd {
+            if let Some((limiter, batcher)) = match cmd {
                 batch_commands_request::request::Cmd::Prewrite(_) => {
                     self.inners.get_mut("prewrite")
                 }
                 batch_commands_request::request::Cmd::Commit(_) => self.inners.get_mut("commit"),
                 batch_commands_request::request::Cmd::Get(_)
-                | batch_commands_request::request::Cmd::RawGet(_)
-                    if self.enable_read_batch =>
-                {
-                    self.inners.get_mut("get")
-                }
+                | batch_commands_request::request::Cmd::RawGet(_) => self.inners.get_mut("get"),
                 _ => None,
-            };
-            if let Some((limiter, batcher)) = inner {
-                limiter.observe_input(1);
-                batcher.filter(request_id, cmd)
-            } else {
-                false
+            } {
+                if !limiter.ready() {
+                    limiter.observe_input(1);
+                    return batcher.filter(request_id, cmd);
+                }
             }
-        } else {
-            false
         }
+        false
     }
 
     /// Check all batchers and submit if their limiters see fit.
@@ -467,7 +505,6 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
     #[inline]
     pub fn should_submit(&mut self, storage: &Storage<E, L>) {
         let now = Instant::now();
-        self.check_thread_load();
         for (limiter, batcher) in self.inners.values_mut() {
             limiter.observe_tick();
             if limiter.due(now) {

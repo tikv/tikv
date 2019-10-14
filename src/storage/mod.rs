@@ -833,11 +833,10 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
 }
 
 impl<E: Engine, L: LockMgr> Storage<E, L> {
-    /// Gets heavy thread load of normal readpool.
+    /// Get concurrency of normal readpool.
     #[inline]
-    pub fn readpool_heavy_load_threshold(&self) -> usize {
-        // TODO: make this configurable.
-        self.read_pool_normal.pool_size() * 96
+    pub fn readpool_normal_concurrency(&self) -> usize {
+        self.read_pool_normal.pool_size()
     }
 
     /// Create a `Storage` from given engine.

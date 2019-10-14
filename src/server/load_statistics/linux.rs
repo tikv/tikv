@@ -21,7 +21,7 @@ pub struct ThreadLoadStatistics {
     cpu_usages: Vec<f64>,
     instants: Vec<Instant>,
     thread_load: Arc<ThreadLoad>,
-    target: Option<usize>,
+    target: usize,
 }
 
 impl ThreadLoadStatistics {
@@ -29,12 +29,7 @@ impl ThreadLoadStatistics {
     /// `thread_load`. At most `slots` old records will be kept, to make the curve more smooth.
     ///
     /// Note: call this after the target threads are initialized, otherwise it can't catch them.
-    pub fn new(
-        slots: usize,
-        prefix: &str,
-        thread_load: Arc<ThreadLoad>,
-        target: Option<usize>,
-    ) -> Self {
+    pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
         let pid: pid_t = unsafe { getpid() };
         let (tids, cpu_total_count) = poll_task(pid, prefix);
         ThreadLoadStatistics {
@@ -46,8 +41,13 @@ impl ThreadLoadStatistics {
             cpu_usages: vec![cpu_total_count; slots],
             instants: vec![Instant::now(); slots],
             thread_load,
-            target,
+            target: 0,
         }
+    }
+
+    #[inline]
+    pub fn set_thread_target(&mut self, target: usize) {
+        self.target = target;
     }
 
     /// For every threads with the name prefix given in `ThreadLoadStatistics::new`,
@@ -59,11 +59,8 @@ impl ThreadLoadStatistics {
     pub fn record(&mut self, instant: Instant) {
         self.instants[self.cur_pos] = instant;
         self.cpu_usages[self.cur_pos] = 0f64;
-        let mut need_poll_task = if let Some(target) = self.target {
-            self.tids.len() < target
-        } else {
-            false
-        };
+        // workaround for tokio's threadpool with unstable worker.
+        let mut need_poll_task = self.tids.len() < self.target;
         if !need_poll_task {
             for tid in &self.tids {
                 if let Ok(stat) = pid::stat_task(self.pid, *tid) {
@@ -109,16 +106,14 @@ fn calc_cpu_load(elapsed_millis: usize, start_usage: f64, end_usage: f64) -> usi
 
 #[inline]
 fn poll_task(pid: pid_t, prefix: &str) -> (Vec<pid_t>, f64) {
-    let mut tids = vec![];
+    let tids = get_thread_ids(pid).unwrap();
     let mut cpu_total_count = 0f64;
-    for tid in get_thread_ids(pid).unwrap() {
-        // TODO: avoid this clone?
-        if let Ok(stat) = pid::stat_task(pid, tid) {
+    for tid in &tids {
+        if let Ok(stat) = pid::stat_task(pid, *tid) {
             if !stat.command.starts_with(prefix) {
                 continue;
             }
             cpu_total_count += cpu_total(&stat);
-            tids.push(tid);
         }
     }
     (tids, cpu_total_count)
@@ -141,7 +136,7 @@ mod tests {
         let thread_name = thread_name[..end].to_owned();
 
         let load = Arc::new(ThreadLoad::with_threshold(80));
-        let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load), None);
+        let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load));
         let start = Instant::now();
         loop {
             if (Instant::now() - start).as_millis() > 200 {
