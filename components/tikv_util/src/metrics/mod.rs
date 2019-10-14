@@ -83,8 +83,15 @@ pub trait ThreadBuildWrapper {
         T: Send + 'static;
 }
 
+/// It is necessary to use after_start_wrapper and before_stop_wrapper together.
+/// Otherwise it may cause reporting a wrong thread name when a new thread whose
+/// name is not added in hashmap is assigned same tid as previous thread.
 pub trait TokioThreadBuildWrapper {
     fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static;
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
     where
         F: Fn() + Send + Sync + 'static;
 }

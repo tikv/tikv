@@ -51,7 +51,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.inner_builder.before_stop(f);
+        self.inner_builder.before_stop_wrapper(f);
         self
     }
 

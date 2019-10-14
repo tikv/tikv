@@ -28,7 +28,7 @@ impl StatusServer {
             .after_start_wrapper(|| {
                 info!("Status server started");
             })
-            .before_stop(|| {
+            .before_stop_wrapper(|| {
                 info!("stopping status server");
             })
             .build();

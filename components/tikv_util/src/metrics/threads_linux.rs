@@ -297,20 +297,20 @@ lazy_static! {
     static ref THREAD_NAME_HASHMAP: Mutex<HashMap<pid_t, String>> = Mutex::new(HashMap::new());
 }
 
-macro_rules! add_thread_name_to_map {
-    ($f:expr) => {{
-        move || {
-            if let Some(name) = thread::current().name() {
-                let tid = pid_t::from(gettid());
-                THREAD_NAME_HASHMAP
-                    .lock()
-                    .unwrap()
-                    .insert(tid, name.to_string());
-                debug!("tid {} thread name is {}", tid, name);
-            }
-            $f()
-        }
-    }};
+fn add_thread_name_to_map() {
+    if let Some(name) = thread::current().name() {
+        let tid = pid_t::from(gettid());
+        THREAD_NAME_HASHMAP
+            .lock()
+            .unwrap()
+            .insert(tid, name.to_string());
+        debug!("tid {} thread name is {}", tid, name);
+    }
+}
+
+fn remove_thread_name_from_map() {
+    let tid = pid_t::from(gettid());
+    THREAD_NAME_HASHMAP.lock().unwrap().remove(&tid);
 }
 
 impl ThreadBuildWrapper for thread::Builder {
@@ -320,7 +320,12 @@ impl ThreadBuildWrapper for thread::Builder {
         F: Send + 'static,
         T: Send + 'static,
     {
-        self.spawn(add_thread_name_to_map!(f))
+        self.spawn(|| {
+            add_thread_name_to_map();
+            let res = f();
+            remove_thread_name_from_map();
+            res
+        })
     }
 }
 
@@ -329,7 +334,20 @@ impl TokioThreadBuildWrapper for tokio_threadpool::Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.after_start(add_thread_name_to_map!(f))
+        self.after_start(move || {
+            add_thread_name_to_map();
+            f();
+        })
+    }
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.before_stop(move || {
+            f();
+            remove_thread_name_from_map();
+        })
     }
 }
 

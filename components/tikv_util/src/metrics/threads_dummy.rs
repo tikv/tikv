@@ -32,4 +32,11 @@ impl TokioThreadBuildWrapper for tokio_threadpool::Builder {
     {
         self.after_start(f)
     }
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.before_stop(f)
+    }
 }
