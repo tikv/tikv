@@ -13,6 +13,9 @@
 ## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
+## Which datacenter.
+# region = ""
+
 ## Timespan between rotating the log files.
 ## Once this timespan passes, log files will be rotated, i.e. existing log file will have a
 ## timestamp appended to its name and a new file will be created.

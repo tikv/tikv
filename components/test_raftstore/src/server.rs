@@ -212,6 +212,7 @@ impl Simulator for ServerCluster {
             system,
             &cfg.server,
             &cfg.raft_store,
+            "",
             Arc::clone(&self.pd_client),
         );
 

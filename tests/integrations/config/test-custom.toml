@@ -1,5 +1,6 @@
 log-level = "debug"
 log-file = "foo"
+region = "Beijing"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 

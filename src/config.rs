@@ -1273,6 +1273,7 @@ pub struct TiKvConfig {
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
     pub log_file: String,
+    pub region: String,
     pub log_rotation_timespan: ReadableDuration,
     pub panic_when_unexpected_key_or_data: bool,
     pub readpool: ReadPoolConfig,
@@ -1295,6 +1296,7 @@ impl Default for TiKvConfig {
         TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
+            region: String::default(),
             log_rotation_timespan: ReadableDuration::hours(24),
             panic_when_unexpected_key_or_data: false,
             readpool: ReadPoolConfig::default(),

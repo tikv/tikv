@@ -76,9 +76,11 @@ where
         system: RaftBatchSystem,
         cfg: &ServerConfig,
         store_cfg: &StoreConfig,
+        region: &str,
         pd_client: Arc<C>,
     ) -> Node<C> {
         let mut store = metapb::Store::default();
+        store.set_region(region.to_owned());
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
