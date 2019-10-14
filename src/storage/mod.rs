@@ -2237,8 +2237,17 @@ mod tests {
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
-        let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
+        let mut config = Config::default();
+        config.user_timestamp_enabled = false;
+        let engine = TestEngineBuilder::new()
+            .cfs(["foo"])
+            .enable_user_timestamp(config.user_timestamp_enabled)
+            .build()
+            .unwrap();
+        let storage = TestStorageBuilder::from_engine(engine)
+            .config(config)
+            .build()
+            .unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(

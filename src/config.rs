@@ -471,7 +471,7 @@ impl Default for WriteCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
-            enable_user_timestamp: false,
+            enable_user_timestamp: true,
             titan,
         }
     }
