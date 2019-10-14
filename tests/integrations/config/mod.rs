@@ -296,7 +296,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
-            enable_user_timestamp: false,
+            enable_user_timestamp: true,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
