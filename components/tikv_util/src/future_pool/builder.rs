@@ -53,7 +53,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.mark &= 1;
+        self.mark |= 1;
         self.inner_builder.before_stop_wrapper(f);
         self
     }
@@ -62,7 +62,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.mark &= 2;
+        self.mark |= 2;
         self.inner_builder.after_start_wrapper(f);
         self
     }
