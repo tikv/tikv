@@ -114,6 +114,12 @@ pub struct Receiver<T> {
 }
 
 impl<T> Sender<T> {
+    pub fn is_empty(&self) -> bool {
+        // When there is no sender references, it can't be known whether
+        // it's empty or not.
+        self.sender.as_ref().map_or(false, |s| s.is_empty())
+    }
+
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         self.sender.as_ref().unwrap().send(t)?;
