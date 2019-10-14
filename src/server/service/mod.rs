@@ -2,6 +2,8 @@
 
 mod debug;
 mod kv;
+mod proxy;
 
 pub use self::debug::Service as DebugService;
 pub use self::kv::Service as KvService;
+pub use self::proxy::Service as ProxyService;
