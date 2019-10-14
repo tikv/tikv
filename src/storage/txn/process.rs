@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
@@ -474,7 +475,10 @@ fn process_read_impl<E: Engine>(
 
 // If lock_mgr has waiters, there may be some transactions waiting for these keys,
 // so calculates keys' hashes to wake up them.
-fn gen_key_hashes_if_needed<L: LockMgr>(lock_mgr: &Option<L>, keys: &[Key]) -> Option<Vec<u64>> {
+fn gen_key_hashes_if_needed<L: LockMgr, K: Borrow<Key>>(
+    lock_mgr: &Option<L>,
+    keys: &[K],
+) -> Option<Vec<u64>> {
     lock_mgr.as_ref().and_then(|lm| {
         if lm.has_waiter() {
             Some(lock_manager::gen_key_hashes(keys))
@@ -827,6 +831,30 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             let pr = ProcessResult::TxnStatus {
                 lock_ttl,
                 commit_ts: 0,
+            };
+            (pr, txn.into_modifies(), 1, ctx, None)
+        }
+        Command::CheckTxnStatus {
+            ctx,
+            primary_key,
+            lock_ts,
+            caller_start_ts,
+            current_ts,
+        } => {
+            let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !ctx.get_not_fill_cache())?;
+            let (lock_ttl, commit_ts, is_pessimistic_txn) =
+                txn.check_txn_status(primary_key.clone(), caller_start_ts, current_ts)?;
+
+            // The lock is possibly resolved here only when lock_ttl and commit_ts are both 0.
+            if lock_ttl == 0 && commit_ts == 0 {
+                let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
+                wake_up_waiters_if_needed(&lock_mgr, lock_ts, key_hashes, 0, is_pessimistic_txn);
+            }
+
+            statistics.add(&txn.take_statistics());
+            let pr = ProcessResult::TxnStatus {
+                lock_ttl,
+                commit_ts,
             };
             (pr, txn.into_modifies(), 1, ctx, None)
         }
