@@ -634,7 +634,7 @@ impl<S: Snapshot> MvccTxn<S> {
     /// When transaction T1 meets T2's lock, it may invoke this on T2's primary key. In this
     /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
     /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
-    /// accurate. If `current_ts` is 0, the lock will always be rolled back.
+    /// accurate.
     ///
     /// Returns (`lock_ttl`, `commit_ts`, `is_pessimistic_txn`).
     /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
@@ -650,10 +650,8 @@ impl<S: Snapshot> MvccTxn<S> {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 let is_pessimistic_txn = lock.for_update_ts != 0;
 
-                if current_ts == 0
-                    || extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts)
-                {
-                    // When current_ts == 0 or the lock is expired, clean it up.
+                if extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts) {
+                    // If the lock is expired, clean it up.
                     self.rollback_lock(primary_key, lock)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((0, 0, is_pessimistic_txn));
@@ -1896,35 +1894,6 @@ mod tests {
             u64::max_value(),
             ts(150, 0),
             ts(150, 0),
-            WriteType::Rollback,
-        );
-
-        // Rollback anyway if current_ts is 0.
-        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(270, 0), 100, 0);
-        must_large_txn_locked(&engine, k, ts(270, 0), 100, ts(270, 1), false);
-        must_check_txn_status(&engine, k, ts(270, 0), ts(271, 0), 0, 0, 0);
-        must_unlocked(&engine, k);
-        must_seek_write(
-            &engine,
-            k,
-            u64::max_value(),
-            ts(270, 0),
-            ts(270, 0),
-            WriteType::Rollback,
-        );
-
-        must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(280, 0), ts(280, 0), 100);
-        must_large_txn_locked(&engine, k, ts(280, 0), 100, 0, true);
-        must_check_txn_status(&engine, k, ts(280, 0), ts(281, 0), 0, 0, 0);
-        must_unlocked(&engine, k);
-        // Rolling back a pessimistic lock shouldn't leave Rollback mark. seek_write gets the older
-        // record in write_cf.
-        must_seek_write(
-            &engine,
-            k,
-            u64::max_value(),
-            ts(280, 0),
-            ts(280, 0),
             WriteType::Rollback,
         );
     }
