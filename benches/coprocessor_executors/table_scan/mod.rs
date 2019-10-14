@@ -3,6 +3,8 @@
 pub mod fixture;
 mod util;
 
+use criterion::measurement::Measurement;
+
 use crate::util::scan_bencher::ScanBencher;
 use crate::util::store::*;
 use crate::util::BenchCase;
@@ -12,7 +14,10 @@ const ROWS: usize = 5000;
 /// 1 interested column, which is PK (which is in the key)
 ///
 /// This kind of scanner is used in SQLs like SELECT COUNT(*).
-fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_primary_key<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_2_columns(ROWS);
     input.0.bench(
         b,
@@ -26,7 +31,10 @@ fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
 /// 1 interested column, at the front of each row. Each row contains 100 columns.
 ///
 /// This kind of scanner is used in SQLs like `SELECT COUNT(column)`.
-fn bench_table_scan_datum_front(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_datum_front<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_multi_columns(ROWS, 100);
     input.0.bench(
         b,
@@ -38,7 +46,10 @@ fn bench_table_scan_datum_front(b: &mut criterion::Bencher, input: &Input) {
 }
 
 /// 2 interested columns, at the front of each row. Each row contains 100 columns.
-fn bench_table_scan_datum_multi_front(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_datum_multi_front<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_multi_columns(ROWS, 100);
     input.0.bench(
         b,
@@ -53,7 +64,10 @@ fn bench_table_scan_datum_multi_front(b: &mut criterion::Bencher, input: &Input)
 }
 
 /// 1 interested column, at the end of each row. Each row contains 100 columns.
-fn bench_table_scan_datum_end(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_datum_end<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_multi_columns(ROWS, 100);
     input.0.bench(
         b,
@@ -66,7 +80,10 @@ fn bench_table_scan_datum_end(b: &mut criterion::Bencher, input: &Input) {
 
 /// 100 interested columns, all columns in the row are interested (i.e. there are totally 100
 /// columns in the row).
-fn bench_table_scan_datum_all(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_datum_all<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_multi_columns(ROWS, 100);
     input.0.bench(
         b,
@@ -78,7 +95,10 @@ fn bench_table_scan_datum_all(b: &mut criterion::Bencher, input: &Input) {
 }
 
 /// 3 columns in the row and the last column is very long but only PK is interested.
-fn bench_table_scan_long_datum_primary_key(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_long_datum_primary_key<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_long_column(ROWS);
     input.0.bench(
         b,
@@ -90,7 +110,10 @@ fn bench_table_scan_long_datum_primary_key(b: &mut criterion::Bencher, input: &I
 }
 
 /// 3 columns in the row and the last column is very long but a short column is interested.
-fn bench_table_scan_long_datum_normal(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_long_datum_normal<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_long_column(ROWS);
     input.0.bench(
         b,
@@ -102,7 +125,10 @@ fn bench_table_scan_long_datum_normal(b: &mut criterion::Bencher, input: &Input)
 }
 
 /// 3 columns in the row and the last column is very long and the long column is interested.
-fn bench_table_scan_long_datum_long(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_long_datum_long<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_long_column(ROWS);
     input.0.bench(
         b,
@@ -114,7 +140,10 @@ fn bench_table_scan_long_datum_long(b: &mut criterion::Bencher, input: &Input) {
 }
 
 /// 3 columns in the row and the last column is very long and the all columns are interested.
-fn bench_table_scan_long_datum_all(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_long_datum_all<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_long_column(ROWS);
     input.0.bench(
         b,
@@ -131,7 +160,10 @@ fn bench_table_scan_long_datum_all(b: &mut criterion::Bencher, input: &Input) {
 
 /// 1 interested column, but the column is missing from each row (i.e. it's default value is
 /// used instead). Each row contains totally 10 columns.
-fn bench_table_scan_datum_absent(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_datum_absent<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_missing_column(ROWS, 10);
     input.0.bench(
         b,
@@ -144,7 +176,10 @@ fn bench_table_scan_datum_absent(b: &mut criterion::Bencher, input: &Input) {
 
 /// 1 interested column, but the column is missing from each row (i.e. it's default value is
 /// used instead). Each row contains totally 100 columns.
-fn bench_table_scan_datum_absent_large_row(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_datum_absent_large_row<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_missing_column(ROWS, 100);
     input.0.bench(
         b,
@@ -156,7 +191,10 @@ fn bench_table_scan_datum_absent_large_row(b: &mut criterion::Bencher, input: &I
 }
 
 /// 1 interested column, which is PK. However the range given are point ranges.
-fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &Input) {
+fn bench_table_scan_point_range<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let (table, store) = fixture::table_with_2_columns(ROWS);
 
     let mut ranges = vec![];
@@ -170,21 +208,32 @@ fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &Input) {
 }
 
 #[derive(Clone)]
-struct Input(Box<dyn ScanBencher<util::TableScanParam>>);
+struct Input<M>(Box<dyn ScanBencher<util::TableScanParam, M>>)
+where
+    M: Measurement + 'static;
 
-impl Input {
-    pub fn new<T: ScanBencher<util::TableScanParam> + 'static>(b: T) -> Self {
+impl<M> Input<M>
+where
+    M: Measurement + 'static,
+{
+    pub fn new<T: ScanBencher<util::TableScanParam, M> + 'static>(b: T) -> Self {
         Self(Box::new(b))
     }
 }
 
-impl std::fmt::Debug for Input {
+impl<M> std::fmt::Display for Input<M>
+where
+    M: Measurement + 'static,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.name())
     }
 }
 
-pub fn bench(c: &mut criterion::Criterion) {
+pub fn bench<M>(c: &mut criterion::Criterion<M>)
+where
+    M: Measurement + 'static,
+{
     let mut inputs = vec![
         Input::new(util::NormalTableScanNext1024Bencher::<MemStore>::new()),
         Input::new(util::BatchTableScanNext1024Bencher::<MemStore>::new()),
@@ -245,6 +294,14 @@ pub fn bench(c: &mut criterion::Criterion) {
 
     cases.sort();
     for case in cases {
-        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
+        let mut group = c.benchmark_group(case.get_name());
+        for input in inputs.iter() {
+            group.bench_with_input(
+                criterion::BenchmarkId::from_parameter(input),
+                input,
+                case.get_fn(),
+            ); // TODO: add parameter for each bench
+        }
+        group.finish();
     }
 }

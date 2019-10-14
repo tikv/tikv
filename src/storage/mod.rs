@@ -58,6 +58,7 @@ pub const SHORT_VALUE_MAX_LEN: usize = 255;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
+pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use tikv_util::future_pool::FuturePool;
@@ -204,6 +205,13 @@ pub enum Command {
         primary_key: Key,
         start_ts: u64,
         advise_ttl: u64,
+    },
+    CheckTxnStatus {
+        ctx: Context,
+        primary_key: Key,
+        lock_ts: u64,
+        caller_start_ts: u64,
+        current_ts: u64,
     },
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock {
@@ -364,6 +372,17 @@ impl Display for Command {
                 "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
                 primary_key, start_ts, advise_ttl, ctx
             ),
+            Command::CheckTxnStatus {
+                ref ctx,
+                ref primary_key,
+                lock_ts,
+                caller_start_ts,
+                current_ts,
+            } => write!(
+                f,
+                "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}",
+                primary_key, lock_ts, caller_start_ts, current_ts, ctx
+            ),
             Command::ScanLock {
                 ref ctx,
                 max_ts,
@@ -470,6 +489,7 @@ impl Command {
             Command::Rollback { .. } => CommandKind::rollback,
             Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
             Command::TxnHeartBeat { .. } => CommandKind::txn_heart_beat,
+            Command::CheckTxnStatus { .. } => CommandKind::check_txn_status,
             Command::ScanLock { .. } => CommandKind::scan_lock,
             Command::ResolveLock { .. } => CommandKind::resolve_lock,
             Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
@@ -489,7 +509,7 @@ impl Command {
             | Command::PessimisticRollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. }
             | Command::TxnHeartBeat { start_ts, .. } => start_ts,
-            Command::Commit { lock_ts, .. } => lock_ts,
+            Command::Commit { lock_ts, .. } | Command::CheckTxnStatus { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::ResolveLockLite { start_ts, .. } => start_ts,
             Command::ResolveLock { .. }
@@ -508,6 +528,7 @@ impl Command {
             | Command::Rollback { ref ctx, .. }
             | Command::PessimisticRollback { ref ctx, .. }
             | Command::TxnHeartBeat { ref ctx, .. }
+            | Command::CheckTxnStatus { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::ResolveLockLite { ref ctx, .. }
@@ -527,6 +548,7 @@ impl Command {
             | Command::Rollback { ref mut ctx, .. }
             | Command::PessimisticRollback { ref mut ctx, .. }
             | Command::TxnHeartBeat { ref mut ctx, .. }
+            | Command::CheckTxnStatus { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::ResolveLockLite { ref mut ctx, .. }
@@ -587,6 +609,11 @@ impl Command {
             } => {
                 bytes += primary_key.as_encoded().len();
             }
+            Command::CheckTxnStatus {
+                ref primary_key, ..
+            } => {
+                bytes += primary_key.as_encoded().len();
+            }
             _ => {}
         }
         bytes
@@ -604,6 +631,7 @@ pub struct Options {
     pub is_pessimistic_lock: Vec<bool>,
     // How many keys this transaction involved.
     pub txn_size: u64,
+    pub min_commit_ts: u64,
 }
 
 impl Options {
@@ -617,6 +645,7 @@ impl Options {
             for_update_ts: 0,
             is_pessimistic_lock: vec![],
             txn_size: 0,
+            min_commit_ts: 0,
         }
     }
 
@@ -1297,7 +1326,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Check the specified primary key and enlarge it's TTL if necessary. Returns the new TTL.
     ///
-    /// Schedules a [`Command::TxnHeartBeat`]
+    /// Schedules a [`Command::TxnHeartBeat`].
     pub fn async_txn_heart_beat(
         &self,
         ctx: Context,
@@ -1314,6 +1343,37 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         };
         self.schedule(cmd, StorageCb::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
+        Ok(())
+    }
+
+    /// Check the status of a transaction.
+    ///
+    /// This operation checks whether a transaction has expired it's Lock's TTL, rollback the
+    /// transaction if expired, and update the transaction's min_commit_ts according to the metadata
+    /// in the primary lock.
+    /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
+    /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
+    /// no information about the transaction, results will be both 0.
+    ///
+    /// Schedules a [`Command::CheckTxnStatus`].
+    pub fn async_check_txn_status(
+        &self,
+        ctx: Context,
+        primary_key: Key,
+        lock_ts: u64,
+        caller_start_ts: u64,
+        current_ts: u64,
+        callback: Callback<(u64, u64)>,
+    ) -> Result<()> {
+        let cmd = Command::CheckTxnStatus {
+            ctx,
+            primary_key,
+            lock_ts,
+            caller_start_ts,
+            current_ts,
+        };
+        self.schedule(cmd, StorageCb::TxnStatus(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
         Ok(())
     }
 
@@ -3902,6 +3962,10 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        let mut options = Options::default();
+        options.lock_ttl = 123;
+        options.txn_size = 3;
         storage
             .async_prewrite(
                 Context::default(),
@@ -3912,17 +3976,20 @@ mod tests {
                 ],
                 b"c".to_vec(),
                 101,
-                Options::default(),
+                options,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
+
         let (lock_a, lock_b, lock_c, lock_x, lock_y, lock_z) = (
             {
                 let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"a".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -3930,6 +3997,8 @@ mod tests {
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"b".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -3937,6 +4006,8 @@ mod tests {
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"c".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -3961,6 +4032,7 @@ mod tests {
                 lock
             },
         );
+
         storage
             .async_scan_locks(
                 Context::default(),
@@ -4400,6 +4472,122 @@ mod tests {
                 k.clone(),
                 11,
                 150,
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_check_txn_status() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let k = Key::from_raw(b"k");
+        let v = b"b".to_vec();
+
+        let ts = mvcc::compose_ts;
+
+        // No lock and no commit info. Gets nothing.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(10, 0),
+                ts(12, 0),
+                ts(15, 0),
+                expect_value_callback(tx.clone(), 0, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v.clone()))],
+                k.as_encoded().to_vec(),
+                ts(10, 0),
+                options.clone(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If lock exists and not expired, returns the lock's TTL.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(10, 0),
+                ts(12, 0),
+                ts(15, 0),
+                expect_value_callback(tx.clone(), 0, (100, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // TODO: Check the lock's min_commit_ts field.
+
+        storage
+            .async_commit(
+                Context::default(),
+                vec![k.clone()],
+                ts(10, 0),
+                ts(20, 0),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If the transaction is committed, returns the commit_ts.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(10, 0),
+                ts(12, 0),
+                ts(15, 0),
+                expect_value_callback(tx.clone(), 0, (0, ts(20, 0))),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v))],
+                k.as_encoded().to_vec(),
+                ts(25, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If the lock has expired, cleanup it and return nothing.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(25, 0),
+                ts(126, 0),
+                ts(127, 0),
+                expect_value_callback(tx.clone(), 0, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_commit(
+                Context::default(),
+                vec![k.clone()],
+                ts(25, 0),
+                ts(28, 0),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
                     e => panic!("unexpected error chain: {:?}", e),
