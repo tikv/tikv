@@ -184,10 +184,6 @@ impl Key {
     }
 
     /// Returns whether the encoded key is encoded from `raw_key`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `self` is not a valid encoded key.
     pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
         bytes::is_encoded_from(&self.0, raw_key, false)
     }
