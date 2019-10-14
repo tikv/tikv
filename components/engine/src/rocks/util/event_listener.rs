@@ -76,7 +76,9 @@ impl rocksdb::EventListener for EventListener {
                 DBBackgroundErrorReason::WriteCallback => "write_callback",
                 DBBackgroundErrorReason::MemTable => "memtable",
             };
-            CRITICAL_ERROR.with_label_values(&[format!("rocksdb_bg_{}", r).as_str()]).inc();
+            CRITICAL_ERROR
+                .with_label_values(&[format!("rocksdb_bg_{}", r).as_str()])
+                .inc();
             // Avoid tikv from restarting if rocksdb get corruption.
             if err.starts_with("Corruption") {
                 set_panic_mark();
