@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Borrow;
+
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
@@ -21,8 +23,8 @@ pub fn gen_key_hash(key: &Key) -> u64 {
     farmhash::fingerprint64(&key.to_raw().unwrap())
 }
 
-pub fn gen_key_hashes(keys: &[Key]) -> Vec<u64> {
-    keys.iter().map(|key| gen_key_hash(key)).collect()
+pub fn gen_key_hashes<K: Borrow<Key>>(keys: &[K]) -> Vec<u64> {
+    keys.iter().map(|key| gen_key_hash(key.borrow())).collect()
 }
 
 #[cfg(test)]
