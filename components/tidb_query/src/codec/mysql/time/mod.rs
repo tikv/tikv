@@ -832,9 +832,12 @@ impl ConvertTo<MyDuration> for Time {
         if self.is_zero() {
             return Ok(MyDuration::zero());
         }
-        let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC
-            + i64::from(self.time.nanosecond());
-        MyDuration::from_nanos(nanos, self.fsp as i8)
+        let seconds = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC;
+        // `nanosecond` returns the number of nanoseconds since the whole non-leap second.
+        // Such as for 2019-09-22 07:21:22.670936103 UTC,
+        // it will return 670936103.
+        let nanosecond = i64::from(self.time.nanosecond());
+        MyDuration::from_nanos(seconds + nanosecond, self.fsp as i8)
     }
 }
 
@@ -894,7 +897,7 @@ impl<T: BufferWriter> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
-    fn encode_time(&mut self, v: &Time) -> Result<()> {
+    fn write_time(&mut self, v: &Time) -> Result<()> {
         if !v.is_zero() {
             self.write_u32_le(v.time.hour() as u32)?;
             self.write_u32_le(v.time.nanosecond() / 1000)?;
@@ -920,8 +923,8 @@ pub trait TimeEncoder: NumberEncoder {
 }
 
 pub trait TimeDecoder: NumberDecoder {
-    /// Decodes time encoded by `encode_time` for Chunk format.
-    fn decode_time(&mut self) -> Result<Time> {
+    /// Decodes time encoded by `write_time` for Chunk format.
+    fn read_time(&mut self) -> Result<Time> {
         let hour = self.read_u32_le()?;
         let nanoseconds = 1000 * self.read_u32_le()?;
         let year = i32::from(self.read_u16_le()?);
@@ -1680,8 +1683,8 @@ mod tests {
         for (s, fsp) in cases {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
             let mut buf = vec![];
-            buf.encode_time(&t).unwrap();
-            let got = buf.as_slice().decode_time().unwrap();
+            buf.write_time(&t).unwrap();
+            let got = buf.as_slice().read_time().unwrap();
             assert_eq!(got, t);
         }
     }
