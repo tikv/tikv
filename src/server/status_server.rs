@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::future::{err, ok};
-use tokio_sync::oneshot::{Receiver, Sender};
 #[cfg(feature = "failpoints")]
 use futures::Stream;
 use futures::{self, Future};
@@ -9,6 +8,7 @@ use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio_sync::oneshot::{Receiver, Sender};
 use tokio_threadpool::{Builder, ThreadPool};
 
 use std::net::SocketAddr;

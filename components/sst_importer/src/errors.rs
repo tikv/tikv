@@ -5,8 +5,8 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
-use tokio_sync::oneshot::error::RecvError;
 use grpcio::Error as GrpcError;
+use tokio_sync::oneshot::error::RecvError;
 use uuid::{parser::ParseError, BytesError};
 
 quick_error! {
