@@ -1896,6 +1896,33 @@ mod tests {
             ts(150, 0),
             WriteType::Rollback,
         );
+
+        // Rollback when current_ts is u64::MAX
+        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(270, 0), 100, 0);
+        must_large_txn_locked(&engine, k, ts(270, 0), 100, ts(270, 1), false);
+        must_check_txn_status(&engine, k, ts(270, 0), ts(271, 0), u64::max_value(), 0, 0);
+        must_unlocked(&engine, k);
+        must_seek_write(
+            &engine,
+            k,
+            u64::max_value(),
+            ts(270, 0),
+            ts(270, 0),
+            WriteType::Rollback,
+        );
+
+        must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(280, 0), ts(280, 0), 100);
+        must_large_txn_locked(&engine, k, ts(280, 0), 100, 0, true);
+        must_check_txn_status(&engine, k, ts(280, 0), ts(281, 0), u64::max_value(), 0, 0);
+        must_unlocked(&engine, k);
+        must_seek_write(
+            &engine,
+            k,
+            u64::max_value(),
+            ts(280, 0),
+            ts(280, 0),
+            WriteType::Rollback,
+        );
     }
 
     #[test]
