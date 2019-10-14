@@ -277,16 +277,14 @@ pub mod tests {
         value: &[u8],
         pk: &[u8],
         ts: u64,
-        for_update_ts: u64,
         is_pessimistic_lock: bool,
+        options: Options,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts;
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
-        if for_update_ts == 0 {
+        if options.for_update_ts == 0 {
             txn.prewrite(mutation, pk, &options).unwrap();
         } else {
             txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
@@ -296,7 +294,8 @@ pub mod tests {
     }
 
     pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
-        must_prewrite_put_impl(engine, key, value, pk, ts, 0, false);
+        let options = Options::default();
+        must_prewrite_put_impl(engine, key, value, pk, ts, false, options);
     }
 
     pub fn must_pessimistic_prewrite_put<E: Engine>(
@@ -308,15 +307,25 @@ pub mod tests {
         for_update_ts: u64,
         is_pessimistic_lock: bool,
     ) {
-        must_prewrite_put_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            for_update_ts,
-            is_pessimistic_lock,
-        );
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
+    }
+
+    pub fn must_prewrite_put_for_large_txn<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        ttl: u64,
+        for_update_ts: u64,
+    ) {
+        let mut options = Options::default();
+        options.lock_ttl = ttl;
+        options.min_commit_ts = ts + 1;
+        options.for_update_ts = for_update_ts;
+        must_prewrite_put_impl(engine, key, value, pk, ts, for_update_ts != 0, options);
     }
 
     fn must_prewrite_put_err_impl<E: Engine>(
@@ -457,6 +466,24 @@ pub mod tests {
         must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
+    fn must_acquire_pessimistic_lock_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: u64,
+        options: Options,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
+            .unwrap();
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine.write(&ctx, modifies).unwrap();
+        }
+    }
+
     pub fn must_acquire_pessimistic_lock<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -464,17 +491,23 @@ pub mod tests {
         start_ts: u64,
         for_update_ts: u64,
     ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
-            .unwrap();
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
-            engine.write(&ctx, modifies).unwrap();
-        }
+        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, options);
+    }
+
+    pub fn must_acquire_pessimistic_lock_for_large_txn<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+        lock_ttl: u64,
+    ) {
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        options.lock_ttl = lock_ttl;
+        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, options);
     }
 
     pub fn must_acquire_pessimistic_lock_err<E: Engine>(
@@ -591,6 +624,26 @@ pub mod tests {
             .unwrap_err();
     }
 
+    pub fn must_check_txn_status<E: Engine>(
+        engine: &E,
+        primary_key: &[u8],
+        lock_ts: u64,
+        caller_start_ts: u64,
+        current_ts: u64,
+        expect_lock_ttl: u64,
+        expect_commit_ts: u64,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, lock_ts, true).unwrap();
+        let (lock_ttl, commit_ts, _) = txn
+            .check_txn_status(Key::from_raw(primary_key), caller_start_ts, current_ts)
+            .unwrap();
+        assert_eq!(lock_ttl, expect_lock_ttl);
+        assert_eq!(commit_ts, expect_commit_ts);
+        write(engine, &ctx, txn.into_modifies());
+    }
+
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -605,6 +658,27 @@ pub mod tests {
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
         assert_ne!(lock.lock_type, LockType::Pessimistic);
+    }
+
+    pub fn must_large_txn_locked<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        ttl: u64,
+        min_commit_ts: u64,
+        is_pessimistic: bool,
+    ) {
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(lock.ts, start_ts);
+        assert_eq!(lock.ttl, ttl);
+        assert_eq!(lock.min_commit_ts, min_commit_ts);
+        if is_pessimistic {
+            assert_eq!(lock.lock_type, LockType::Pessimistic);
+        } else {
+            assert_ne!(lock.lock_type, LockType::Pessimistic);
+        }
     }
 
     pub fn must_pessimistic_locked<E: Engine>(
