@@ -503,16 +503,12 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
-        // There are only two cases when a key is rolled back:
-        // 1) A failed transaction rolls back its prewritten keys
-        // 2) Other transactions roll back the secondary locks
-        // In both cases the rollback record needn't be protected from being collapsed.
         self.cleanup(key, 0)
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
-    /// cleanup the lock without checking TTL. If `protect_rollback` is `true` and the lock belongs
-    /// to a pessimistic transaction, the rollback record is protected from being collapsed.
+    /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
+    /// transaction, the rollback record is protected from being collapsed.
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
