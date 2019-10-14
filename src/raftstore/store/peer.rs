@@ -370,13 +370,12 @@ impl Peer {
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
             check_quorum: true,
-            tag: tag.clone(),
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
             ..Default::default()
         };
 
-        let raft_group = RawNode::with_logger(&raft_cfg, ps, &slog_global::get_global())?;
+        let raft_group = RawNode::new(&raft_cfg, ps, &slog_global::get_global())?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -493,6 +492,7 @@ impl Peer {
             .raft
             .raft_log
             .maybe_append(log_idx, log_term, merge.get_commit(), entries)
+            .and_then(|(_, last_idx)| Some(last_idx))
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
@@ -795,7 +795,10 @@ impl Peer {
                 | MessageType::MsgSnapStatus
                 | MessageType::MsgCheckQuorum
                 | MessageType::MsgReadIndex
-                | MessageType::MsgReadIndexResp => {}
+                | MessageType::MsgReadIndexResp
+                // TODO: maybe add these two into metrics
+                | MessageType::MsgBroadcast
+                | MessageType::MsgBroadcastResp => {}
             }
             self.send_raft_message(msg, trans);
         }
@@ -965,7 +968,7 @@ impl Peer {
             self.leader_missing_time = None;
             return StaleState::Valid;
         }
-        let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
+        let naive_peer = !self.is_initialized() || !self.raft_group.raft.promotable();
         // Updates the `leader_missing_time` according to the current state.
         //
         // If we are checking this it means we suspect the leader might be missing.
@@ -2408,7 +2411,8 @@ impl Peer {
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
         let from_peer = self.peer.clone();
-        let to_peer = match self.get_peer_from_cache(msg.get_to()) {
+        let to = if msg.to_proxy { msg.proxy } else { msg.to };
+        let to_peer = match self.get_peer_from_cache(to) {
             Some(p) => p,
             None => {
                 warn!(

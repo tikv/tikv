@@ -138,8 +138,8 @@ rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 
 [replace]
 # TODO: remove this when new raft-rs is published.
-"raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
-"raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
+"raft:0.6.0-alpha" = { git = "https://github.com/Fullstop000/raft-rs", branch = "follower_replication" }
+"raft-proto:0.6.0-alpha" = { git = "https://github.com/Fullstop000/raft-rs", branch = "follower_replication" }
 "protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 
