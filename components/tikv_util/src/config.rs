@@ -754,6 +754,103 @@ pub fn check_data_dir(_data_path: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+mod check_data_dir_empty {
+    use std::fs;
+
+    use super::{canonicalize_path, ConfigError};
+
+    fn get_file_count(data_path: &str) -> Result<usize, ConfigError> {
+        let op = "data-dir.file-count.get";
+        let dir = fs::read_dir(data_path).map_err(|e| {
+            ConfigError::FileSystem(format!(
+                "{}: read file dir {:?} failed: {:?}",
+                op, data_path, e
+            ))
+        })?;
+        let mut file_count = 0;
+        for entry in dir {
+            if entry.is_err() {
+                continue;
+            }
+            let entry = entry.unwrap();
+            if entry.path().is_file() {
+                file_count += 1;
+            }
+        }
+        Ok(file_count)
+    }
+
+    // check dir is empty of file
+    pub fn check_data_dir_empty(data_path: &str) -> Result<(), ConfigError> {
+        let op = "data-dir.empty.check";
+        let real_path = match canonicalize_path(data_path) {
+            Ok(path) => path,
+            Err(e) => {
+                return Err(ConfigError::FileSystem(format!(
+                    "{}: path: {:?} canonicalize failed: {:?}",
+                    op, data_path, e
+                )));
+            }
+        };
+        if get_file_count(&real_path)? > 0 {
+            warn!("directory not empty"; "data_path" => data_path);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::Builder;
+
+        use super::*;
+
+        fn create_file(fpath: &str, buf: &[u8]) {
+            let mut file = File::create(fpath).unwrap();
+            file.write_all(buf).unwrap();
+            file.flush().unwrap();
+        }
+
+        #[test]
+        fn test_get_file_count() {
+            let tmp_path = Builder::new()
+                .prefix("test-get-file-count")
+                .tempdir()
+                .unwrap()
+                .into_path();
+            let count = get_file_count(tmp_path.to_str().unwrap()).unwrap();
+            assert_eq!(count, 0);
+            let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
+            create_file(&tmp_file, b"");
+            let count = get_file_count(tmp_path.to_str().unwrap()).unwrap();
+            assert_eq!(count, 1);
+        }
+
+        #[test]
+        fn test_check_data_dir_empty() {
+            // test invalid data_path
+            let ret = check_data_dir_empty("/sys/invalid");
+            assert!(ret.is_err());
+            // test empty data_path
+            let tmp_path = Builder::new()
+                .prefix("test-get-file-count")
+                .tempdir()
+                .unwrap()
+                .into_path();
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap());
+            assert!(ret.is_ok());
+            // test non-empty data_path
+            let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
+            create_file(&tmp_file, b"");
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap());
+            assert!(ret.is_ok());
+        }
+    }
+}
+
+pub use self::check_data_dir_empty::check_data_dir_empty;
+
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
 pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
