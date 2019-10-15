@@ -5,6 +5,7 @@
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
 
+use std::cmp;
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -12,7 +13,6 @@ use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
 use std::usize;
-use std::cmp;
 
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
