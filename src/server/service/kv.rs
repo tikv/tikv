@@ -324,6 +324,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
             let reqs = std::mem::replace(reqs, vec![]);
             match &id.cf {
                 Some(cf) => {
+                    let timer = GRPC_MSG_HISTOGRAM_VEC.batch_raw_get.start_coarse_timer();
                     let res = storage
                         .batch_async_raw_get(cf.clone(), commands)
                         .then(move |v| {
@@ -369,11 +370,13 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                                     }
                                 }
                             }
+                            timer.observe_duration();
                             Ok(())
                         });
                     poll_future_notify(res);
                 }
                 None => {
+                    let timer = GRPC_MSG_HISTOGRAM_VEC.batch_kv_get.start_coarse_timer();
                     let res = storage.batch_async_get(commands).then(move |v| {
                         match v {
                             Ok(v) => {
@@ -415,6 +418,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                                 }
                             }
                         }
+                        timer.observe_duration();
                         Ok(())
                     });
                     poll_future_notify(res);

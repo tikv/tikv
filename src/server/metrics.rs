@@ -41,6 +41,8 @@ make_static_metric! {
         mvcc_get_by_start_ts,
         split_region,
         read_index,
+        batch_kv_get,
+        batch_raw_get,
     }
     pub struct GrpcMsgHistogramVec: Histogram {
         "type" => GrpcTypeKind,

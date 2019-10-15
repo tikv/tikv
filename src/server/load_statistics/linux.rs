@@ -45,6 +45,7 @@ impl ThreadLoadStatistics {
         }
     }
 
+    /// Designate target thread count of this collector.
     #[inline]
     pub fn set_thread_target(&mut self, target: usize) {
         self.target = target;

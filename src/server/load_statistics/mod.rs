@@ -60,14 +60,11 @@ mod other_os {
 
     impl ThreadLoadStatistics {
         /// Constructs a new `ThreadLoadStatistics`.
-        pub fn new(
-            _slots: usize,
-            _prefix: &str,
-            _thread_load: Arc<ThreadLoad>,
-            _target: Option<usize>,
-        ) -> Self {
+        pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
             ThreadLoadStatistics {}
         }
+        /// Designate target thread count of this collector.
+        pub fn set_thread_target(&mut self, _target: usize) {}
         /// Records current thread load statistics.
         pub fn record(&mut self, _instant: Instant) {}
     }
