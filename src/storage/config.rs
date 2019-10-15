@@ -18,6 +18,7 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_CONCURRENCY: usize = 2048000;
+const MAX_SCHED_CONCURRENCY: usize = 40960000;
 
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests
@@ -59,6 +60,13 @@ impl Config {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
+        }
+        if self.scheduler_concurrency >= MAX_SCHED_CONCURRENCY {
+            warn!(
+                "scheduler concurrency {} exceed max value {}, use {} by default",
+                self.scheduler_concurrency, MAX_SCHED_CONCURRENCY, MAX_SCHED_CONCURRENCY
+            );
+            self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
         Ok(())
     }
