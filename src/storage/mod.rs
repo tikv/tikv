@@ -847,7 +847,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Starts running GC automatically.
     pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
         &self,
-        cfg: AutoGCConfig<S, R>,
+        _cfg: AutoGCConfig<S, R>,
     ) -> Result<()> {
         // self.gc_worker.start_auto_gc(cfg)
         Ok(())
@@ -1412,7 +1412,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ///
     /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
     /// during and after the GC operation.
-    pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
+    pub fn async_gc(&self, _ctx: Context, _safe_point: u64, _callback: Callback<()>) -> Result<()> {
         // self.gc_worker.async_gc(ctx, safe_point, callback)?;
         KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         Ok(())
