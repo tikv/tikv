@@ -158,11 +158,13 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
-    use engine::rocks::util::new_engine;
+    use crate::test_helpers::new_test_engine;
     use tempfile::Builder;
+    use engine_rocks::Rocks;
+    use engine_traits::KvEngine;
 
     fn check_import_options(
-        db: &DB,
+        db: &Rocks,
         expected_db_opts: &ImportModeDBOptions,
         expected_cf_opts: &ImportModeCFOptions,
     ) {
@@ -204,7 +206,7 @@ mod tests {
             .prefix("test_import_mode_switcher")
             .tempdir()
             .unwrap();
-        let db = new_engine(temp_dir.path().to_str().unwrap(), None, &["a", "b"], None).unwrap();
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
 
         let import_db_options = ImportModeDBOptions::new();
         let normal_db_options = ImportModeDBOptions::new_options(&db);
