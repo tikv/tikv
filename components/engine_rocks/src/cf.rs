@@ -2,23 +2,22 @@
 
 use engine_traits::CFHandle;
 use rocksdb::CFHandle as RawCFHandle;
-use std::mem;
 
-// FIXME: This a nasty representation due to the lack of generic associated
-// types. See comment on the KvEngine::CFHandle associated type. This could also
-// be fixed if the CFHandle impl was defined inside the rust-rocksdb crate where
-// the RawCFHandles are managed, but that would be an ugly abstraction
-// violation.
+// FIXME: This a nasty representation pointer casting is due to the lack of
+// generic associated types. See comment on the KvEngine::CFHandle associated
+// type. This could also be fixed if the CFHandle impl was defined inside the
+// rust-rocksdb crate where the RawCFHandles are managed, but that would be an
+// ugly abstraction violation.
 #[repr(transparent)]
 pub struct RocksCFHandle(RawCFHandle);
 
 impl RocksCFHandle {
-    pub fn from_raw<'a>(raw: &'a RawCFHandle) -> &'a RocksCFHandle {
-        unsafe { mem::transmute(raw) }
+    pub fn from_raw(raw: &RawCFHandle) -> &RocksCFHandle {
+        unsafe { &*(raw as *const _ as *const _) }
     }
 
-    pub fn as_inner<'a>(&'a self) -> &'a RawCFHandle {
-        unsafe { mem::transmute(self) }
+    pub fn as_inner(&self) -> &RawCFHandle {
+        &self.0
     }
 }
 
