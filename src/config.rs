@@ -481,12 +481,14 @@ impl WriteCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, cache);
         // Prefix extractor(trim the timestamp at tail) for write cf.
-        let e = Box::new(FixedSuffixSliceTransform::new(8));
-        cf_opts
-            .set_prefix_extractor("FixedSuffixSliceTransform", e)
-            .unwrap();
-        // Create prefix bloom filter for memtable.
-        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        if !self.enable_user_timestamp {
+            let e = Box::new(FixedSuffixSliceTransform::new(8));
+            cf_opts
+                .set_prefix_extractor("FixedSuffixSliceTransform", e)
+                .unwrap();
+            // Create prefix bloom filter for memtable.
+            cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        }
         // Collects user defined properties.
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
