@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::usize;
 
+use super::{Error, Result};
 use spin::Mutex;
 
 const WAITING_LIST_SHRINK_SIZE: usize = 32;
@@ -67,17 +68,23 @@ impl Lock {
 pub struct Latches {
     slots: Vec<Mutex<Latch>>,
     size: usize,
+
+    max_wait_list_len: usize,
 }
 
 impl Latches {
     /// Creates latches.
     ///
     /// The size will be rounded up to the power of 2.
-    pub fn new(size: usize) -> Latches {
+    pub fn new(size: usize, max_wait_list_len: usize) -> Latches {
         let size = usize::next_power_of_two(size);
         let mut slots = Vec::with_capacity(size);
         (0..size).for_each(|_| slots.push(Mutex::new(Latch::new())));
-        Latches { slots, size }
+        Latches {
+            slots,
+            size,
+            max_wait_list_len,
+        }
     }
 
     /// Creates a lock which specifies all the required latches for a command.
@@ -97,10 +104,16 @@ impl Latches {
     /// This method will enqueue the command ID into the waiting queues of the latches. A latch is
     /// considered acquired if the command ID is at the front of the queue. Returns true if all the
     /// Latches are acquired, false otherwise.
-    pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
+    pub fn acquire(&self, lock: &mut Lock, who: u64) -> Result<bool> {
         let mut acquired_count: usize = 0;
+        let mut first_latch_of_lock = lock.owned_count == 0;
         for i in &lock.required_slots[lock.owned_count..] {
             let mut latch = self.slots[*i].lock();
+            if first_latch_of_lock && latch.waiting.len() >= self.max_wait_list_len {
+                return Err(Error::LatchWaitListTooLong);
+            }
+            first_latch_of_lock = false;
+
             let front = latch.waiting.front().cloned();
             match front {
                 Some(cid) => {
@@ -118,7 +131,7 @@ impl Latches {
             }
         }
         lock.owned_count += acquired_count;
-        lock.acquired()
+        Ok(lock.acquired())
     }
 
     /// Releases all latches owned by the `lock` of command with ID `who`, returns the wakeup list.

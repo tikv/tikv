@@ -2073,8 +2073,12 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        SchedTooBusy {
+        SchedTooBusy(reason: String) {
             description("scheduler is too busy")
+            display("scheduler is too busy, reason: {}", reason)
+        }
+        LatchWaitListTooLong {
+            description("latch wait list too long")
         }
         GCWorkerTooBusy {
             description("gc worker is too busy")

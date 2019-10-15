@@ -219,14 +219,14 @@ impl<L: LockMgr> SchedulerInner<L> {
     /// Tries to acquire all the required latches for a command.
     ///
     /// Returns `true` if successful; returns `false` otherwise.
-    fn acquire_lock(&self, cid: u64) -> bool {
+    fn acquire_lock(&self, cid: u64) -> Result<bool> {
         let mut task_contexts = self.task_contexts[id_index(cid)].lock();
         let tctx = task_contexts.get_mut(&cid).unwrap();
-        if self.latches.acquire(&mut tctx.lock, cid) {
+        if self.latches.acquire(&mut tctx.lock, cid)? {
             tctx.on_schedule();
-            return true;
+            return Ok(true);
         }
-        false
+        Ok(false)
     }
 }
 
@@ -302,7 +302,8 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     fn release_lock(&self, lock: &Lock, cid: u64) {
         let wakeup_list = self.inner.latches.release(lock, cid);
         for wcid in wakeup_list {
-            self.try_to_wake_up(wcid);
+            self.try_to_wake_up(wcid)
+                .unwrap_or_else(|e| panic!("unexpected error {:?} in release_lock"));
         }
     }
 
@@ -315,7 +316,13 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         let task = Task::new(cid, cmd);
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
-        self.try_to_wake_up(cid);
+        match self.try_to_wake_up(cid) {
+            Ok(()) => {}
+            e @ Err(StorageError::LatchWaitListTooLong) => {
+                return self.finish_with_err(cid, StorageError::SchedTooBusy(e.description()));
+            }
+            Err(e) => panic!("unexpected error {:?} in try_to_wake_up"),
+        }
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
             .get(priority_tag)
@@ -324,10 +331,11 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
-    fn try_to_wake_up(&self, cid: u64) {
-        if self.inner.acquire_lock(cid) {
+    fn try_to_wake_up(&self, cid: u64) -> Result<()> {
+        if self.inner.acquire_lock(cid)? {
             self.get_snapshot(cid);
         }
+        Ok(())
     }
 
     fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCb) {
@@ -337,7 +345,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
             execute_callback(
                 callback,
                 ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
+                    err: StorageError::SchedTooBusy("pending write bytes reach threshold"),
                 },
             );
             return;
