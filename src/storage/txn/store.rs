@@ -432,6 +432,7 @@ impl Scanner for FixtureStoreScanner {
 #[cfg(test)]
 mod tests {
     use super::Error;
+    use super::Result as TxnResult;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
     use crate::storage::kv::{
@@ -445,6 +446,7 @@ mod tests {
     };
     use engine::IterOption;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use protobuf::reflect::ReflectFieldRef::Optional;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -499,6 +501,33 @@ mod tests {
             store
         }
 
+        fn prewrite(&mut self, key: &[u8], value: &[u8], start_ts: u64) -> TxnResult<()> {
+            self.refresh_snapshot();
+            let mut txn = MvccTxn::new(self.snapshot.clone(), start_ts, true)?;
+            txn.prewrite(
+                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                key,
+                &Options::default(),
+            )?;
+            self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+            Ok(())
+        }
+
+        fn commit(&mut self, key: &[u8], start_ts: u64, commit_ts: u64) -> TxnResult<()> {
+            self.refresh_snapshot();
+            let mut txn = MvccTxn::new(self.snapshot.clone(), start_ts, true)?;
+            let ret = txn.commit(Key::from_raw(key), commit_ts)?;
+            self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+            Ok(())
+        }
+
+        fn rollback(&mut self, key: &[u8], start_ts: u64) {
+            self.refresh_snapshot();
+            let mut txn = MvccTxn::new(self.snapshot.clone(), start_ts, true).unwrap();
+            txn.rollback(Key::from_raw(key)).unwrap();
+            self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
+        }
+
         #[inline]
         fn init_data(&mut self) {
             let primary_key = format!("{}{}", KEY_PREFIX, START_ID);
@@ -535,10 +564,10 @@ mod tests {
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
 
-        fn store(&self) -> SnapshotStore<RocksSnapshot> {
+        fn store(&self, start_ts: u64) -> SnapshotStore<RocksSnapshot> {
             SnapshotStore::new(
                 self.snapshot.clone(),
-                COMMIT_TS + 1,
+                start_ts,
                 IsolationLevel::Si,
                 true,
                 self.enable_user_timestamp,
@@ -636,7 +665,7 @@ mod tests {
     fn test_snapshot_store_get() {
         let key_num = 100;
         let store = TestStore::new(key_num);
-        let snapshot_store = store.store();
+        let snapshot_store = store.store(COMMIT_TS + 1);
         let mut statistics = Statistics::default();
         for key in &store.keys {
             let key = key.as_bytes();
@@ -649,20 +678,76 @@ mod tests {
 
     #[test]
     fn test_snapshot_store_user_timestamp() {
-        let key_num = 100;
-        let store = TestStore::create_store_for_user_timestamp(key_num);
-        let snapshot_store = store.store();
+        let mut store = TestStore::create_store_for_user_timestamp(1);
         let mut statistics = Statistics::default();
-        let mut keys_list = Vec::new();
-        for key in &store.keys {
-            keys_list.push(Key::from_raw(key.as_bytes()));
+        store.prewrite(b"aaaa", b"v1", 2);
+        {
+            let snapshot_store = store.store(1);
+            let data = snapshot_store
+                .get(&Key::from_raw(b"aaaa"), &mut statistics)
+                .unwrap();
+            assert!(data.is_none());
         }
-        let data = snapshot_store
-            .batch_get(&keys_list, &mut statistics)
-            .unwrap();
-        for item in data {
-            let item = item.unwrap();
-            assert!(item.is_some(), "item expect some while get none");
+        store.commit(b"aaaa", 2, 3).unwrap();
+        store.prewrite(b"aaaa", b"v2", 5).unwrap();
+        let ret = store.prewrite(b"aaaa", b"fake", 6);
+        assert!(ret.is_err());
+        store.commit(b"aaaa", 5, 6).unwrap();
+        let ret = store.prewrite(b"aaaa", b"fake", 5);
+        assert!(ret.is_err());
+        store.prewrite(b"aaab", b"v2.1", 5).unwrap();
+        store.commit(b"aaab", 5, 6).unwrap();
+        store.prewrite(b"aaac", b"v2.2", 5).unwrap();
+        store.commit(b"aaac", 5, 6).unwrap();
+
+        {
+            store.refresh_snapshot();
+            let snapshot_store = store.store(4);
+            let data = snapshot_store
+                .get(&Key::from_raw(b"aaaa"), &mut statistics)
+                .unwrap();
+            assert!(data.is_some());
+            assert_eq!(b"v1".to_vec(), data.unwrap());
+            println!("before txn 7");
+            let snapshot_store = store.store(7);
+            let data = snapshot_store
+                .get(&Key::from_raw(b"aaaa"), &mut statistics)
+                .unwrap();
+            assert_eq!(b"v2".to_vec(), data.unwrap());
+        }
+        store.prewrite(b"aaaa", b"v3", 7);
+        store.rollback(b"aaaa", 7);
+        {
+            store.refresh_snapshot();
+            let snapshot_store = store.store(8);
+            let data = snapshot_store
+                .get(&Key::from_raw(b"aaaa"), &mut statistics)
+                .unwrap();
+            assert!(data.is_some());
+            assert_eq!(b"v2".to_vec(), data.unwrap());
+        }
+
+        store.prewrite(b"aaaa", b"v4", 9);
+        store.commit(b"aaaa", 9, 10);
+
+        {
+            store.refresh_snapshot();
+            let snapshot_store = store.store(9);
+            let mut scanner = snapshot_store.scanner(
+                false,
+                false,
+                Some(Key::from_raw(b"aaaa")),
+                Some(Key::from_raw(b"aaac")),
+            ).unwrap();
+            let result = scanner.scan(2).unwrap();
+            assert_eq!(2, result.len());
+            for r in result.iter() {
+                assert!(r.as_ref().is_ok());
+            }
+            assert_eq!(b"aaaa".to_vec(), result[0].as_ref().unwrap().0);
+            assert_eq!(b"v2".to_vec(), result[0].as_ref().unwrap().1);
+            assert_eq!(b"aaab".to_vec(), result[1].as_ref().unwrap().0);
+            assert_eq!(b"v2.1".to_vec(), result[1].as_ref().unwrap().1);
         }
     }
 
@@ -670,7 +755,7 @@ mod tests {
     fn test_snapshot_store_batch_get() {
         let key_num = 100;
         let store = TestStore::new(key_num);
-        let snapshot_store = store.store();
+        let snapshot_store = store.store(COMMIT_TS + 1);
         let mut statistics = Statistics::default();
         let mut keys_list = Vec::new();
         for key in &store.keys {
@@ -689,7 +774,7 @@ mod tests {
     fn test_snapshot_store_scan() {
         let key_num = 100;
         let store = TestStore::new(key_num);
-        let snapshot_store = store.store();
+        let snapshot_store = store.store(COMMIT_TS + 1);
         let key = format!("{}{}", KEY_PREFIX, START_ID);
         let start_key = Key::from_raw(key.as_bytes());
         let mut scanner = snapshot_store
@@ -711,7 +796,7 @@ mod tests {
     fn test_snapshot_store_reverse_scan() {
         let key_num = 100;
         let store = TestStore::new(key_num);
-        let snapshot_store = store.store();
+        let snapshot_store = store.store(COMMIT_TS + 1);
 
         let half = (key_num / 2) as usize;
         let key = format!("{}{}", KEY_PREFIX, START_ID + (half as u64) - 1);
@@ -737,7 +822,7 @@ mod tests {
     fn test_scan_with_bound() {
         let key_num = 100;
         let store = TestStore::new(key_num);
-        let snapshot_store = store.store();
+        let snapshot_store = store.store(COMMIT_TS + 1);
 
         let lower_bound = Key::from_raw(format!("{}{}", KEY_PREFIX, START_ID + 10).as_bytes());
         let upper_bound = Key::from_raw(format!("{}{}", KEY_PREFIX, START_ID + 20).as_bytes());
