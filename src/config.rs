@@ -1332,6 +1332,7 @@ impl TiKvConfig {
 
         self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
         self.rocksdb.writecf.enable_user_timestamp = self.storage.user_timestamp_enabled;
+        self.server.end_point_enable_user_timestamp = self.storage.user_timestamp_enabled;
         self.raft_store.raftdb_path = if self.raft_store.raftdb_path.is_empty() {
             config::canonicalize_sub_path(&self.storage.data_dir, "raft")?
         } else {
@@ -1350,6 +1351,7 @@ impl TiKvConfig {
         if !db_exist(&kv_db_path) && db_exist(&self.raft_store.raftdb_path) {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
+
 
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
         if expect_keepalive > self.server.grpc_keepalive_time.0 {

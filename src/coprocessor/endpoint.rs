@@ -70,6 +70,7 @@ impl<E: Engine> Endpoint<E> {
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
+            enable_user_timestamp: cfg.end_point_enable_user_timestamp,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
@@ -108,6 +109,7 @@ impl<E: Engine> Endpoint<E> {
 
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
+        let enable_user_timestamp = self.enable_user_timestamp;
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
@@ -141,7 +143,7 @@ impl<E: Engine> Endpoint<E> {
                         dag.get_start_ts(),
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
-                        false,
+                        enable_user_timestamp,
                     );
                     dag::build_handler(
                         dag,

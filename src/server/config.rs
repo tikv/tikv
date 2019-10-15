@@ -76,6 +76,7 @@ pub struct Config {
     pub end_point_batch_row_limit: usize,
     pub end_point_stream_batch_row_limit: usize,
     pub end_point_enable_batch_if_possible: bool,
+    pub end_point_enable_user_timestamp: bool,
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
@@ -130,6 +131,7 @@ impl Default for Config {
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
             end_point_stream_batch_row_limit: DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT,
             end_point_enable_batch_if_possible: true,
+            end_point_enable_user_timestamp: true,
             end_point_request_max_handle_duration: ReadableDuration::secs(
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
