@@ -158,7 +158,7 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
-    use crate::test_helpers::new_test_engine;
+    use test_sst_importer::new_test_engine;
     use tempfile::Builder;
     use engine_traits::KvEngine;
 

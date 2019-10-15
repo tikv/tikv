@@ -2930,7 +2930,7 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use uuid::Uuid;
 
-    use crate::import::test_helpers::*;
+    use test_sst_import::*;
     use crate::raftstore::store::{Config, RegionTask};
     use tikv_util::worker::dummy_scheduler;
 

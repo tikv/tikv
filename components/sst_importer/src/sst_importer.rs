@@ -314,9 +314,9 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::*;
+    use test_sst_importer::*;
 
-    use crate::test_helpers::new_test_engine;
+    use test_sst_importer::new_test_engine;
     use tempfile::Builder;
 
     #[test]
