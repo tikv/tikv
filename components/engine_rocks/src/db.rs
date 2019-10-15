@@ -32,6 +32,10 @@ impl Rocks {
         Rocks(db)
     }
 
+    pub fn as_inner(&self) -> &Arc<DB> {
+        &self.0
+    }
+
     pub fn get_sync_db(&self) -> Arc<DB> {
         self.0.clone()
     }
