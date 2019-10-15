@@ -135,6 +135,7 @@ dependencies = [
  "tempfile",
  "test_raftstore",
  "test_util",
+ "tidb_query",
  "tikv",
  "tikv_alloc",
  "tikv_util",
