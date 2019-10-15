@@ -19,6 +19,12 @@ impl ThreadLoad {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn get_threshold(&self) -> usize {
+        // read-only
+        self.threshold
+    }
+
     /// Returns true if the current load exceeds its threshold.
     #[allow(dead_code)]
     pub fn in_heavy_load(&self) -> bool {
@@ -35,12 +41,6 @@ impl ThreadLoad {
     #[allow(dead_code)]
     pub fn load(&self) -> usize {
         self.load.load(Ordering::Acquire)
-    }
-
-    #[allow(dead_code)]
-    pub fn threshold(&self) -> usize {
-        // read-only
-        self.threshold
     }
 }
 

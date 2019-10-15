@@ -865,7 +865,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Get concurrency of normal readpool.
     #[inline]
     pub fn readpool_normal_concurrency(&self) -> usize {
-        self.read_pool_normal.pool_size()
+        self.read_pool_normal.get_pool_size()
     }
 
     /// Create a `Storage` from given engine.
@@ -1026,7 +1026,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         &self,
         gets: Vec<ReadpoolCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "get";
+        const CMD: &str = "batch_async_get";
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -1642,7 +1642,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         cf: String,
         gets: Vec<ReadpoolCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "raw_get";
+        const CMD: &str = "batch_async_raw_get";
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
         let res = self.get_read_pool(priority).spawn_handle(move || {

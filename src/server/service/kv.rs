@@ -75,29 +75,6 @@ impl HistogramObserver {
     }
 }
 
-/// Service handles the RPC messages for the `Tikv` service.
-#[derive(Clone)]
-pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
-    // For handling KV requests.
-    storage: Storage<E, L>,
-    // For handling coprocessor requests.
-    cop: Endpoint<E>,
-    // For handling raft messages.
-    ch: T,
-    // For handling snapshot.
-    snap_scheduler: Scheduler<SnapTask>,
-
-    grpc_thread_load: Arc<ThreadLoad>,
-
-    readpool_normal_thread_load: Arc<ThreadLoad>,
-
-    enable_req_batch: bool,
-
-    req_batch_wait_duration: Option<Duration>,
-
-    timer_pool: Arc<Mutex<ThreadPool>>,
-}
-
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
     region: u64,
@@ -317,115 +294,20 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         storage: &Storage<E, L>,
     ) -> u64 {
         let mut output = 0;
-        for (id, (reqs, commands)) in self.router.iter_mut() {
+        for (id, (reqs, commands)) in self.router.drain() {
             let tx = tx.clone();
-            let commands = std::mem::replace(commands, vec![]);
             output += commands.len();
-            let reqs = std::mem::replace(reqs, vec![]);
-            match &id.cf {
+            match id.cf {
                 Some(cf) => {
-                    let timer = GRPC_MSG_HISTOGRAM_VEC.batch_raw_get.start_coarse_timer();
-                    let res = storage
-                        .batch_async_raw_get(cf.clone(), commands)
-                        .then(move |v| {
-                            match v {
-                                Ok(v) => {
-                                    if reqs.len() != v.len() {
-                                        error!("KvService batch response size mismatch");
-                                    }
-                                    for (req, v) in reqs.into_iter().zip(v.into_iter()) {
-                                        let mut resp = RawGetResponse::default();
-                                        if let Some(err) = extract_region_error(&v) {
-                                            resp.set_region_error(err);
-                                        } else {
-                                            match v {
-                                                Ok(Some(val)) => resp.set_value(val),
-                                                Ok(None) => resp.set_not_found(true),
-                                                Err(e) => resp.set_error(format!("{}", e)),
-                                            }
-                                        }
-                                        let mut res = batch_commands_response::Response::default();
-                                        res.cmd = Some(
-                                            batch_commands_response::response::Cmd::RawGet(resp),
-                                        );
-                                        if tx.send_and_notify((req, res)).is_err() {
-                                            error!("KvService response batch commands fail");
-                                        }
-                                    }
-                                }
-                                e => {
-                                    let mut resp = RawGetResponse::default();
-                                    if let Some(err) = extract_region_error(&e) {
-                                        resp.set_region_error(err);
-                                    } else if let Err(e) = e {
-                                        resp.set_error(format!("{}", e));
-                                    }
-                                    let mut res = batch_commands_response::Response::default();
-                                    res.cmd =
-                                        Some(batch_commands_response::response::Cmd::RawGet(resp));
-                                    for req in reqs {
-                                        if tx.send_and_notify((req, res.clone())).is_err() {
-                                            error!("KvService response batch commands fail");
-                                        }
-                                    }
-                                }
-                            }
-                            timer.observe_duration();
-                            Ok(())
-                        });
-                    poll_future_notify(res);
+                    let f = future_batch_async_raw_get(storage, tx, reqs, cf, commands);
+                    poll_future_notify(f);
                 }
                 None => {
-                    let timer = GRPC_MSG_HISTOGRAM_VEC.batch_kv_get.start_coarse_timer();
-                    let res = storage.batch_async_get(commands).then(move |v| {
-                        match v {
-                            Ok(v) => {
-                                if reqs.len() != v.len() {
-                                    error!("KvService batch response size mismatch");
-                                }
-                                for (req, v) in reqs.into_iter().zip(v.into_iter()) {
-                                    let mut resp = GetResponse::default();
-                                    if let Some(err) = extract_region_error(&v) {
-                                        resp.set_region_error(err);
-                                    } else {
-                                        match v {
-                                            Ok(Some(val)) => resp.set_value(val),
-                                            Ok(None) => resp.set_not_found(true),
-                                            Err(e) => resp.set_error(extract_key_error(&e)),
-                                        }
-                                    }
-                                    let mut res = batch_commands_response::Response::default();
-                                    res.cmd =
-                                        Some(batch_commands_response::response::Cmd::Get(resp));
-                                    if tx.send_and_notify((req, res)).is_err() {
-                                        error!("KvService response batch commands fail");
-                                    }
-                                }
-                            }
-                            e => {
-                                let mut resp = GetResponse::default();
-                                if let Some(err) = extract_region_error(&e) {
-                                    resp.set_region_error(err);
-                                } else if let Err(e) = e {
-                                    resp.set_error(extract_key_error(&e));
-                                }
-                                let mut res = batch_commands_response::Response::default();
-                                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
-                                for req in reqs {
-                                    if tx.send_and_notify((req, res.clone())).is_err() {
-                                        error!("KvService response batch commands fail");
-                                    }
-                                }
-                            }
-                        }
-                        timer.observe_duration();
-                        Ok(())
-                    });
-                    poll_future_notify(res);
+                    let f = future_batch_async_get(storage, tx, reqs, commands);
+                    poll_future_notify(f);
                 }
             }
         }
-        self.router.clear();
         output as u64
     }
 
@@ -526,6 +408,29 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         }
         true
     }
+}
+
+/// Service handles the RPC messages for the `Tikv` service.
+#[derive(Clone)]
+pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
+    // For handling KV requests.
+    storage: Storage<E, L>,
+    // For handling coprocessor requests.
+    cop: Endpoint<E>,
+    // For handling raft messages.
+    ch: T,
+    // For handling snapshot.
+    snap_scheduler: Scheduler<SnapTask>,
+
+    grpc_thread_load: Arc<ThreadLoad>,
+
+    readpool_normal_thread_load: Arc<ThreadLoad>,
+
+    enable_req_batch: bool,
+
+    req_batch_wait_duration: Option<Duration>,
+
+    timer_pool: Arc<Mutex<ThreadPool>>,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
@@ -1914,6 +1819,58 @@ fn future_get<E: Engine, L: LockMgr>(
         })
 }
 
+fn future_batch_async_get<E: Engine, L: LockMgr>(
+    storage: &Storage<E, L>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+    requests: Vec<u64>,
+    commands: Vec<ReadpoolCommand>,
+) -> impl Future<Item = (), Error = ()> {
+    let timer = GRPC_MSG_HISTOGRAM_VEC.batch_kv_get.start_coarse_timer();
+    storage.batch_async_get(commands).then(move |v| {
+        match v {
+            Ok(v) => {
+                if requests.len() != v.len() {
+                    error!("KvService batch response size mismatch");
+                }
+                for (req, v) in requests.into_iter().zip(v.into_iter()) {
+                    let mut resp = GetResponse::default();
+                    if let Some(err) = extract_region_error(&v) {
+                        resp.set_region_error(err);
+                    } else {
+                        match v {
+                            Ok(Some(val)) => resp.set_value(val),
+                            Ok(None) => resp.set_not_found(true),
+                            Err(e) => resp.set_error(extract_key_error(&e)),
+                        }
+                    }
+                    let mut res = batch_commands_response::Response::default();
+                    res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                    if tx.send_and_notify((req, res)).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+            e => {
+                let mut resp = GetResponse::default();
+                if let Some(err) = extract_region_error(&e) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = e {
+                    resp.set_error(extract_key_error(&e));
+                }
+                let mut res = batch_commands_response::Response::default();
+                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                for req in requests {
+                    if tx.send_and_notify((req, res.clone())).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+        }
+        timer.observe_duration();
+        Ok(())
+    })
+}
+
 fn future_scan<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
@@ -2342,6 +2299,59 @@ fn future_raw_get<E: Engine, L: LockMgr>(
             }
             Ok(resp)
         })
+}
+
+fn future_batch_async_raw_get<E: Engine, L: LockMgr>(
+    storage: &Storage<E, L>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+    requests: Vec<u64>,
+    cf: String,
+    commands: Vec<ReadpoolCommand>,
+) -> impl Future<Item = (), Error = ()> {
+    let timer = GRPC_MSG_HISTOGRAM_VEC.batch_raw_get.start_coarse_timer();
+    storage.batch_async_raw_get(cf, commands).then(move |v| {
+        match v {
+            Ok(v) => {
+                if requests.len() != v.len() {
+                    error!("KvService batch response size mismatch");
+                }
+                for (req, v) in requests.into_iter().zip(v.into_iter()) {
+                    let mut resp = RawGetResponse::default();
+                    if let Some(err) = extract_region_error(&v) {
+                        resp.set_region_error(err);
+                    } else {
+                        match v {
+                            Ok(Some(val)) => resp.set_value(val),
+                            Ok(None) => resp.set_not_found(true),
+                            Err(e) => resp.set_error(format!("{}", e)),
+                        }
+                    }
+                    let mut res = batch_commands_response::Response::default();
+                    res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                    if tx.send_and_notify((req, res)).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+            e => {
+                let mut resp = RawGetResponse::default();
+                if let Some(err) = extract_region_error(&e) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = e {
+                    resp.set_error(format!("{}", e));
+                }
+                let mut res = batch_commands_response::Response::default();
+                res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                for req in requests {
+                    if tx.send_and_notify((req, res.clone())).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+        }
+        timer.observe_duration();
+        Ok(())
+    })
 }
 
 fn future_raw_batch_get<E: Engine, L: LockMgr>(

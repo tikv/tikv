@@ -50,7 +50,7 @@ impl crate::AssertSync for FuturePool {}
 impl FuturePool {
     /// Gets inner thread pool size.
     #[inline]
-    pub fn pool_size(&self) -> usize {
+    pub fn get_pool_size(&self) -> usize {
         self.pool_size
     }
 

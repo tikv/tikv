@@ -209,7 +209,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         };
         let mut readpool_normal_load_stats = {
             let tl = Arc::clone(&self.readpool_normal_thread_load);
-            let target = self.readpool_normal_thread_load.threshold() / 100;
+            let target = self.readpool_normal_thread_load.get_threshold() / 100;
             let mut stats =
                 ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl);
             stats.set_thread_target(target);
