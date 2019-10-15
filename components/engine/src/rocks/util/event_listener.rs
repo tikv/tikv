@@ -5,7 +5,6 @@ use crate::rocks::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, WriteStallCondition,
     WriteStallInfo,
 };
-use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::set_panic_mark;
 
 pub struct EventListener {
