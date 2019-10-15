@@ -166,7 +166,7 @@ impl SSTImporter {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return false;
             }
-            if keys::origin_key(iter.key()) < &*range_start {
+            if keys::origin_key(iter.key()) < range_start {
                 // SST's start is before the range to consume, so needs to iterate to skip over
                 return true;
             }
