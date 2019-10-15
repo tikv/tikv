@@ -446,7 +446,6 @@ mod tests {
     };
     use engine::IterOption;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use protobuf::reflect::ReflectFieldRef::Optional;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -715,8 +714,8 @@ mod tests {
                 .unwrap();
             assert_eq!(b"v2".to_vec(), data.unwrap());
         }
-        store.prewrite(b"aaaa", b"v3", 7);
-        store.rollback(b"aaaa", 7);
+        store.prewrite(b"aaaa", b"v3", 7).unwrap();
+        store.rollback(b"aaaa", 7).unwrap();
         {
             store.refresh_snapshot();
             let snapshot_store = store.store(8);
@@ -727,8 +726,8 @@ mod tests {
             assert_eq!(b"v2".to_vec(), data.unwrap());
         }
 
-        store.prewrite(b"aaaa", b"v4", 9);
-        store.commit(b"aaaa", 9, 10);
+        store.prewrite(b"aaaa", b"v4", 9).unwrap();
+        store.commit(b"aaaa", 9, 10).unwrap();
 
         {
             store.refresh_snapshot();
