@@ -22,6 +22,7 @@ pub mod error;
 pub mod mysql;
 mod overflow;
 pub mod raw_datum;
+pub mod row;
 pub mod table;
 
 pub use self::datum::Datum;
