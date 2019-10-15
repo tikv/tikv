@@ -9,7 +9,6 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use engine::rocks::util::{prepare_sst_for_ingestion};
 use engine_traits::{KvEngine, IngestExternalFileOptions};
 
 use super::{Error, Result};
@@ -144,7 +143,7 @@ impl ImportDir {
     fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        prepare_sst_for_ingestion(&path.save, &path.clone)?;
+        engine.prepare_sst_for_ingestion(&path.save, &path.clone)?;
         engine.validate_file_for_ingestion(cf, &path.clone, meta.get_length(), meta.get_crc32())
             .map_err(Error::from)?;
 

@@ -13,6 +13,7 @@ use engine_traits::{
 use rocksdb::{
     set_external_sst_file_global_seq_no, DBIterator, Writable, DB,
 };
+use engine::rocks::util::{prepare_sst_for_ingestion};
 use tikv_util::file::calc_crc32;
 
 use crate::options::{RocksReadOptions, RocksWriteOptions};
@@ -157,6 +158,11 @@ impl KvEngine for Rocks {
         let handle = get_cf_handle(&self.0, cf)?;
         self.0.delete_files_in_range_cf(handle, start_key, end_key, include_end)
             .map_err(From::from)
+    }
+
+    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(&self, path: P, clone: Q) -> Result<()> {
+        Ok(prepare_sst_for_ingestion(path, clone)
+            .map_err(|e| Error::Other(box_err!(e)))?)
     }
 
     fn ingest_external_file_cf(&self, cf: &str, opts: &IngestExternalFileOptions, files: &[&str]) -> Result<()> {
