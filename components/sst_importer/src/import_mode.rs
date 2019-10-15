@@ -160,14 +160,14 @@ mod tests {
 
     use crate::test_helpers::new_test_engine;
     use tempfile::Builder;
-    use engine_rocks::Rocks;
     use engine_traits::KvEngine;
 
-    fn check_import_options(
-        db: &Rocks,
+    fn check_import_options<E>(
+        db: &E,
         expected_db_opts: &ImportModeDBOptions,
         expected_cf_opts: &ImportModeCFOptions,
-    ) {
+    ) where E: KvEngine
+    {
         let db_opts = db.get_db_options();
         assert_eq!(
             db_opts.get_max_background_jobs(),
