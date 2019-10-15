@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, DBOptions, CFOptions};
+use engine_traits::{CFOptions, DBOptions, KvEngine};
 use kvproto::import_sstpb::*;
 
 use super::Result;
@@ -158,15 +158,16 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
-    use test_sst_importer::new_test_engine;
-    use tempfile::Builder;
     use engine_traits::KvEngine;
+    use tempfile::Builder;
+    use test_sst_importer::new_test_engine;
 
     fn check_import_options<E>(
         db: &E,
         expected_db_opts: &ImportModeDBOptions,
         expected_cf_opts: &ImportModeCFOptions,
-    ) where E: KvEngine
+    ) where
+        E: KvEngine,
     {
         let db_opts = db.get_db_options();
         assert_eq!(

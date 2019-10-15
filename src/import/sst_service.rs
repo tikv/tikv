@@ -14,10 +14,10 @@ use kvproto::raft_cmdpb::*;
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
+use engine_rocks::Rocks;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
-use engine_rocks::Rocks;
 
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
@@ -77,8 +77,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => switcher.enter_normal_mode(AsRef::<Rocks>::as_ref(&self.engine), mf),
-                SwitchMode::Import => switcher.enter_import_mode(AsRef::<Rocks>::as_ref(&self.engine), mf),
+                SwitchMode::Normal => {
+                    switcher.enter_normal_mode(AsRef::<Rocks>::as_ref(&self.engine), mf)
+                }
+                SwitchMode::Import => {
+                    switcher.enter_import_mode(AsRef::<Rocks>::as_ref(&self.engine), mf)
+                }
             }
         };
         match res {

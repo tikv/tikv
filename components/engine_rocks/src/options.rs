@@ -1,9 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use rocksdb::{
-    ReadOptions as RawReadOptions,
-    WriteOptions as RawWriteOptions,
-};
+use rocksdb::{ReadOptions as RawReadOptions, WriteOptions as RawWriteOptions};
 
 pub struct RocksReadOptions(RawReadOptions);
 

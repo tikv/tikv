@@ -21,5 +21,4 @@ impl RocksCFHandle {
     }
 }
 
-impl CFHandle for RocksCFHandle {
-}
+impl CFHandle for RocksCFHandle {}

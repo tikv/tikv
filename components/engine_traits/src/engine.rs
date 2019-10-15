@@ -51,7 +51,11 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug 
     fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
     fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions;
     // FIXME: return type
-    fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> StdResult<(), String>;
+    fn set_options_cf(
+        &self,
+        cf: &Self::CFHandle,
+        options: &[(&str, &str)],
+    ) -> StdResult<(), String>;
 
     fn delete_all_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
         if start_key >= end_key {
@@ -62,11 +66,32 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug 
         }
         Ok(())
     }
-    fn delete_all_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], use_delete_range: bool) -> Result<()>;
-    fn delete_files_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], include_end: bool) -> Result<()>;
+    fn delete_all_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        use_delete_range: bool,
+    ) -> Result<()>;
+    fn delete_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()>;
 
-    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(&self, path: P, clone: Q) -> Result<()>;
-    fn ingest_external_file_cf(&self, cf: &str, opts: &IngestExternalFileOptions, files: &[&str]) -> Result<()>;
+    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
+        &self,
+        path: P,
+        clone: Q,
+    ) -> Result<()>;
+    fn ingest_external_file_cf(
+        &self,
+        cf: &str,
+        opts: &IngestExternalFileOptions,
+        files: &[&str],
+    ) -> Result<()>;
     fn validate_file_for_ingestion<P: AsRef<Path>>(
         &self,
         cf: &str,

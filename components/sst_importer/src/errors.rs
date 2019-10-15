@@ -1,10 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::error::Error as StdError;
 use std::io::Error as IoError;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
-use std::error::Error as StdError;
 
 use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;

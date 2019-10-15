@@ -3,25 +3,23 @@
 use std::fs::{self, File};
 use std::ops::Deref;
 use std::path::Path;
-use std::sync::Arc;
 use std::result::Result as StdResult;
+use std::sync::Arc;
 
+use engine::rocks::util::prepare_sst_for_ingestion;
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
-    IngestExternalFileOptions,
+    Error, IngestExternalFileOptions, IterOptions, Iterable, KvEngine, Mutable, Peekable,
+    ReadOptions, Result, WriteOptions,
 };
-use rocksdb::{
-    set_external_sst_file_global_seq_no, DBIterator, Writable, DB,
-};
-use engine::rocks::util::{prepare_sst_for_ingestion};
+use rocksdb::{set_external_sst_file_global_seq_no, DBIterator, Writable, DB};
 use tikv_util::file::calc_crc32;
 
+use crate::cf::RocksCFHandle;
+use crate::cf_options::RocksCFOptions;
+use crate::db_options::RocksDBOptions;
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::{delete_all_in_range_cf, get_cf_handle};
 use crate::{Iterator, Snapshot};
-use crate::db_options::RocksDBOptions;
-use crate::cf_options::RocksCFOptions;
-use crate::cf::RocksCFHandle;
 
 #[derive(Clone, Debug)]
 #[repr(transparent)]
@@ -142,34 +140,57 @@ impl KvEngine for Rocks {
         RocksCFOptions::from_raw(self.0.get_options_cf(cf.as_inner()))
     }
 
-    fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> StdResult<(), String> {
+    fn set_options_cf(
+        &self,
+        cf: &Self::CFHandle,
+        options: &[(&str, &str)],
+    ) -> StdResult<(), String> {
         self.0.set_options_cf(cf.as_inner(), options)
     }
 
-    fn delete_all_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], use_delete_range: bool) -> Result<()> {
+    fn delete_all_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        use_delete_range: bool,
+    ) -> Result<()> {
         if start_key >= end_key {
             return Ok(());
         }
         let handle = get_cf_handle(&self.0, cf)?;
         self.0
             .delete_files_in_range_cf(handle, start_key, end_key, false)?;
-        delete_all_in_range_cf(
-            &self.0, cf, start_key, end_key, use_delete_range,
-        )
+        delete_all_in_range_cf(&self.0, cf, start_key, end_key, use_delete_range)
     }
 
-    fn delete_files_in_range_cf(&self, cf: &str, start_key: &[u8], end_key: &[u8], include_end: bool) -> Result<()> {
+    fn delete_files_in_range_cf(
+        &self,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+        include_end: bool,
+    ) -> Result<()> {
         let handle = get_cf_handle(&self.0, cf)?;
-        self.0.delete_files_in_range_cf(handle, start_key, end_key, include_end)
+        self.0
+            .delete_files_in_range_cf(handle, start_key, end_key, include_end)
             .map_err(From::from)
     }
 
-    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(&self, path: P, clone: Q) -> Result<()> {
-        Ok(prepare_sst_for_ingestion(path, clone)
-            .map_err(|e| Error::Other(box_err!(e)))?)
+    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
+        &self,
+        path: P,
+        clone: Q,
+    ) -> Result<()> {
+        Ok(prepare_sst_for_ingestion(path, clone).map_err(|e| Error::Other(box_err!(e)))?)
     }
 
-    fn ingest_external_file_cf(&self, cf: &str, opts: &IngestExternalFileOptions, files: &[&str]) -> Result<()> {
+    fn ingest_external_file_cf(
+        &self,
+        cf: &str,
+        opts: &IngestExternalFileOptions,
+        files: &[&str],
+    ) -> Result<()> {
         let mut rocks_opts = rocksdb::IngestExternalFileOptions::new();
         rocks_opts.move_files(opts.move_files);
         let handle = get_cf_handle(&self.0, cf)?;

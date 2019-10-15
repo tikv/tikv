@@ -9,7 +9,7 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use engine_traits::{KvEngine, IngestExternalFileOptions};
+use engine_traits::{IngestExternalFileOptions, KvEngine};
 
 use super::{Error, Result};
 
@@ -144,13 +144,14 @@ impl ImportDir {
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
         engine.prepare_sst_for_ingestion(&path.save, &path.clone)?;
-        engine.validate_file_for_ingestion(cf, &path.clone, meta.get_length(), meta.get_crc32())
+        engine
+            .validate_file_for_ingestion(cf, &path.clone, meta.get_length(), meta.get_crc32())
             .map_err(Error::from)?;
 
-        let opts = IngestExternalFileOptions {
-            move_files: true
-        };
-        engine.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()]).map_err(Error::from)
+        let opts = IngestExternalFileOptions { move_files: true };
+        engine
+            .ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])
+            .map_err(Error::from)
     }
 
     fn list_ssts(&self) -> Result<Vec<SstMeta>> {
@@ -316,8 +317,8 @@ mod tests {
     use super::*;
     use test_sst_importer::*;
 
-    use test_sst_importer::new_test_engine;
     use tempfile::Builder;
+    use test_sst_importer::new_test_engine;
 
     #[test]
     fn test_import_dir() {

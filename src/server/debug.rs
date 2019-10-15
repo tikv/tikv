@@ -2063,13 +2063,19 @@ mod tests {
             region_state.set_state(PeerState::Normal);
             region_state.set_region(region);
             let key = keys::region_state_key(region_id);
-            engine.as_inner().put_msg_cf(cf_raft.as_inner(), &key, &region_state).unwrap();
+            engine
+                .as_inner()
+                .put_msg_cf(cf_raft.as_inner(), &key, &region_state)
+                .unwrap();
         }
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
             let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-            engine.as_inner().delete_cf(cf_raft.as_inner(), &key).unwrap();
+            engine
+                .as_inner()
+                .delete_cf(cf_raft.as_inner(), &key)
+                .unwrap();
         };
 
         let mut region = Region::default();

@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::{cmp, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::Rocks;
 use engine::rocks;
 use engine::rocks::Writable;
 use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::Rocks;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -2923,16 +2923,16 @@ mod tests {
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::rocks::Writable;
-    use engine_rocks::Rocks;
     use engine::{WriteBatch, DB};
+    use engine_rocks::Rocks;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
     use uuid::Uuid;
 
-    use test_sst_importer::*;
     use crate::raftstore::store::{Config, RegionTask};
+    use test_sst_importer::*;
     use tikv_util::worker::dummy_scheduler;
 
     use super::*;
