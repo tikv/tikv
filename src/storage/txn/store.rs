@@ -679,7 +679,7 @@ mod tests {
     fn test_snapshot_store_user_timestamp() {
         let mut store = TestStore::create_store_for_user_timestamp(1);
         let mut statistics = Statistics::default();
-        store.prewrite(b"aaaa", b"v1", 2);
+        store.prewrite(b"aaaa", b"v1", 2).unwrap();
         {
             let snapshot_store = store.store(1);
             let data = snapshot_store
