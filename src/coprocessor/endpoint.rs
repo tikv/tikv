@@ -36,6 +36,7 @@ pub struct Endpoint<E: Engine> {
     stream_batch_row_limit: usize,
     stream_channel_size: usize,
     enable_batch_if_possible: bool,
+    enable_user_timestamp: bool,
 
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,

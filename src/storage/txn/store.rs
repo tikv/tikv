@@ -733,12 +733,14 @@ mod tests {
         {
             store.refresh_snapshot();
             let snapshot_store = store.store(9);
-            let mut scanner = snapshot_store.scanner(
-                false,
-                false,
-                Some(Key::from_raw(b"aaaa")),
-                Some(Key::from_raw(b"aaac")),
-            ).unwrap();
+            let mut scanner = snapshot_store
+                .scanner(
+                    false,
+                    false,
+                    Some(Key::from_raw(b"aaaa")),
+                    Some(Key::from_raw(b"aaac")),
+                )
+                .unwrap();
             let result = scanner.scan(2).unwrap();
             assert_eq!(2, result.len());
             for r in result.iter() {

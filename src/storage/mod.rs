@@ -850,6 +850,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         cfg: AutoGCConfig<S, R>,
     ) -> Result<()> {
         // self.gc_worker.start_auto_gc(cfg)
+        Ok(())
     }
 
     /// Get the underlying `Engine` of the `Storage`.
