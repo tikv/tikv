@@ -85,10 +85,10 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         } else {
             None
         };
-        let mut iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
-        if self.prefix_seek {
-            iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
-        }
+        let iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
+        //        if self.prefix_seek {
+        //            iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
+        //        }
         self.snapshot.iter_cf(self.cf, iter_opt, self.scan_mode)
     }
 }

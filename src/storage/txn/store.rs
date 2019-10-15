@@ -172,15 +172,25 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             return Ok(vec![self.get(&keys[0], statistics)]);
         }
 
-        let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
-        order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .enable_user_timestamp(self.user_timestamp_enabled)
             .multi(true)
             .build()?;
+
+        if self.user_timestamp_enabled {
+            let mut values = Vec::with_capacity(keys.len());
+            for k in keys.iter() {
+                let value = point_getter.get(k).map_err(Error::from);
+                values.push(value);
+            }
+            statistics.add(&point_getter.take_statistics());
+            return Ok(values);
+        }
+
+        let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
+        order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
 
         let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
         for _ in 0..keys.len() {

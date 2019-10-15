@@ -571,7 +571,6 @@ fn test_merge_approximate_size_and_keys() {
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
     assert_ne!(left, right);
-    println!("============before transfer======");
 
     // make sure all peer's approximate size is not None.
     cluster.must_transfer_leader(right.get_id(), right.get_peers()[0].clone());
