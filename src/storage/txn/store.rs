@@ -715,7 +715,7 @@ mod tests {
             assert_eq!(b"v2".to_vec(), data.unwrap());
         }
         store.prewrite(b"aaaa", b"v3", 7).unwrap();
-        store.rollback(b"aaaa", 7).unwrap();
+        store.rollback(b"aaaa", 7);
         {
             store.refresh_snapshot();
             let snapshot_store = store.store(8);
