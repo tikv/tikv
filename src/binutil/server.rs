@@ -459,6 +459,21 @@ fn check_system_config(config: &TiKvConfig) {
             "err" => %e
         );
     }
+    // Check blob file dir is empty when titan is disabled
+    if !config.rocksdb.titan.enabled {
+        let titan_dir = if config.rocksdb.titan.dirname.is_empty() {
+            "titandb"
+        } else {
+            config.rocksdb.titan.dirname.as_str()
+        };
+        if let Err(e) = tikv_util::config::check_data_dir_empty(titan_dir) {
+            warn!(
+                "check: titandb-data-dir";
+                "path" => titan_dir,
+                "err" => %e
+            );
+        }
+    }
     // Check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
         warn!(
