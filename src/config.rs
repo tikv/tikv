@@ -1352,7 +1352,6 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
-
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
         if expect_keepalive > self.server.grpc_keepalive_time.0 {
             return Err(format!(
