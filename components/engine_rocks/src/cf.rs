@@ -10,16 +10,15 @@ use std::mem;
 // the RawCFHandles are managed, but that would be an ugly abstraction
 // violation.
 #[repr(transparent)]
-pub struct RocksCFHandle(*mut RawCFHandle);
+pub struct RocksCFHandle(RawCFHandle);
 
 impl RocksCFHandle {
     pub fn from_raw<'a>(raw: &'a RawCFHandle) -> &'a RocksCFHandle {
-        // Scary
         unsafe { mem::transmute(raw) }
     }
 
-    pub fn as_inner(&self) -> &RawCFHandle {
-        unsafe { &*self.0 }
+    pub fn as_inner<'a>(&'a self) -> &'a RawCFHandle {
+        unsafe { mem::transmute(self) }
     }
 }
 
