@@ -76,6 +76,9 @@ impl SSTImporter {
     //  1. only KV pairs in the half-inclusive range (`[start, end)`) are used.
     //     (set the range to `["", "")` to import everything).
     //  2. keys are rewritten according to the given rewrite rule.
+    //
+    // Both the range and rewrite keys are specified using origin keys. However,
+    // the SST itself should be data keys (contain the `z` prefix).
     pub fn download(
         &self,
         meta: &SstMeta,
@@ -150,8 +153,8 @@ impl SSTImporter {
             "path" => path_str,
         );
 
-        let range_start = &*keys::data_key(meta.get_range().get_start());
-        let range_end = &*keys::data_end_key(meta.get_range().get_end());
+        let range_start = meta.get_range().get_start();
+        let range_end = meta.get_range().get_end();
 
         let mut iter = sst_reader.iter();
         let should_iterate = (|| {
@@ -163,15 +166,17 @@ impl SSTImporter {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return false;
             }
-            if iter.key() < range_start {
+            if keys::origin_key(iter.key()) < &*range_start {
                 // SST's start is before the range to consume, so needs to iterate to skip over
                 return true;
             }
-            // seek to end and fetch the last (inclusive) key of the SST.
-            iter.seek(SeekKey::End);
-            if iter.key() >= range_end {
-                // SST's end is after the range to consume
-                return true;
+            if !range_end.is_empty() {
+                // seek to end and fetch the last (inclusive) key of the SST.
+                iter.seek(SeekKey::End);
+                if keys::origin_key(iter.key()) >= range_end {
+                    // SST's end is after the range to consume
+                    return true;
+                }
             }
             // range contained the entire SST, no need to iterate, just moving the file is ok
             false
@@ -185,12 +190,13 @@ impl SSTImporter {
 
         // perform iteration and key rewrite.
         let mut sst_writer = SstWriterBuilder::new().build(path.save.to_str().unwrap())?;
-        let mut key = rewrite_rule.new_key_prefix.to_vec();
+        let mut key = keys::data_key(rewrite_rule.get_new_key_prefix());
+        let new_prefix_data_key_len = key.len();
         let old_prefix = rewrite_rule.get_old_key_prefix();
 
-        iter.seek(SeekKey::Key(range_start));
+        iter.seek(SeekKey::Key(&keys::data_key(range_start)));
         while iter.valid() {
-            let old_key = iter.key();
+            let old_key = keys::origin_key(iter.key());
             if !range_end.is_empty() && old_key >= range_end {
                 break;
             }
@@ -198,7 +204,7 @@ impl SSTImporter {
                 return Err(Error::WrongKeyPrefix(old_key.to_vec(), old_prefix.to_vec()));
             }
 
-            key.truncate(rewrite_rule.new_key_prefix.len());
+            key.truncate(new_prefix_data_key_len);
             key.extend_from_slice(&old_key[old_prefix.len()..]);
             sst_writer.put(&key, iter.value())?;
             iter.next();
@@ -687,7 +693,7 @@ mod tests {
                 &meta,
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
-                &new_rewrite_rule(b"zt123", b"zt567"),
+                &new_rewrite_rule(b"t123", b"t567"),
                 0,
             )
             .unwrap();
@@ -727,7 +733,7 @@ mod tests {
                 &meta,
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
-                &new_rewrite_rule(b"zt123", b"zt9102"),
+                &new_rewrite_rule(b"t123", b"t9102"),
                 0,
             )
             .unwrap();
@@ -766,7 +772,7 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
 
-        // note: for backward-compatibility, the range doesn't contain the DATA_PREFIX 'z'.
+        // note: the range doesn't contain the DATA_PREFIX 'z'.
         meta.mut_range().set_start(b"t123_r02".to_vec());
         meta.mut_range().set_end(b"t123_r13".to_vec());
 
@@ -833,14 +839,14 @@ mod tests {
             &meta,
             &format!("local://{}", ext_sst_dir.path().display()),
             "sample.sst",
-            &new_rewrite_rule(b"zxxx", b"zyyy"),
+            &new_rewrite_rule(b"xxx", b"yyy"),
             0,
         );
 
         match &result {
             Err(Error::WrongKeyPrefix(key, prefix)) => {
-                assert_eq!(key, b"zt123_r01");
-                assert_eq!(prefix, b"zxxx");
+                assert_eq!(key, b"t123_r01");
+                assert_eq!(prefix, b"xxx");
             }
             _ => panic!("unexpected download result: {:?}", result),
         }
