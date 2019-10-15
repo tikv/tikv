@@ -1495,6 +1495,8 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_rocks::Rocks;
+    use engine_traits::KvEngine;
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -2045,7 +2047,7 @@ mod tests {
     #[test]
     fn test_recreate_region() {
         let debugger = new_debugger();
-        let engine = debugger.engines.kv.as_ref();
+        let engine: &Rocks = debugger.engines.kv.as_ref();
 
         let metadata = vec![("", "g"), ("g", "m"), ("m", "")];
 
@@ -2061,13 +2063,13 @@ mod tests {
             region_state.set_state(PeerState::Normal);
             region_state.set_region(region);
             let key = keys::region_state_key(region_id);
-            engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+            AsRef::<DB>::as_ref(engine).put_msg_cf(cf_raft.as_inner(), &key, &region_state).unwrap();
         }
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
             let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-            engine.delete_cf(cf_raft, &key).unwrap();
+            AsRef::<DB>::as_ref(engine).delete_cf(cf_raft.as_inner(), &key).unwrap();
         };
 
         let mut region = Region::default();
@@ -2080,7 +2082,7 @@ mod tests {
         remove_region_state(1);
         remove_region_state(2);
         assert!(debugger.recreate_region(region.clone()).is_ok());
-        assert_eq!(get_region_state(engine, 100).get_region(), &region);
+        assert_eq!(get_region_state(engine.as_ref(), 100).get_region(), &region);
 
         region.set_start_key(b"z".to_vec());
         region.set_end_key(b"".to_vec());

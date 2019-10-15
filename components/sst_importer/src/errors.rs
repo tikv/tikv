@@ -4,6 +4,7 @@ use std::io::Error as IoError;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
+use std::error::Error as StdError;
 
 use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;
@@ -60,6 +61,9 @@ quick_error! {
             display("Invalid SST path {:?}", path)
         }
         InvalidChunk {}
+        RocksEngine(err: Box<dyn StdError + Send + Sync + 'static>) {
+            display("{}", err)
+        }
     }
 }
 

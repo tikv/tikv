@@ -2923,6 +2923,7 @@ mod tests {
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::rocks::Writable;
+    use engine_rocks::Rocks;
     use engine::{WriteBatch, DB};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -2930,7 +2931,7 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use uuid::Uuid;
 
-    use test_sst_import::*;
+    use test_sst_importer::*;
     use crate::raftstore::store::{Config, RegionTask};
     use tikv_util::worker::dummy_scheduler;
 
@@ -3607,7 +3608,7 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        check_db_range(&engines.kv, sst_range);
+        check_db_range(&Rocks::from_db(engines.kv.clone()), sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);
