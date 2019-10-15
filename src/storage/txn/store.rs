@@ -515,7 +515,7 @@ mod tests {
         fn commit(&mut self, key: &[u8], start_ts: u64, commit_ts: u64) -> TxnResult<()> {
             self.refresh_snapshot();
             let mut txn = MvccTxn::new(self.snapshot.clone(), start_ts, true)?;
-            let ret = txn.commit(Key::from_raw(key), commit_ts)?;
+            txn.commit(Key::from_raw(key), commit_ts)?;
             self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             Ok(())
         }
