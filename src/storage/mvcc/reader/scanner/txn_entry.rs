@@ -357,7 +357,7 @@ impl<S: Snapshot> Scanner<S> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
@@ -366,7 +366,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
 
     #[derive(Default)]
-    struct EntryBuilder {
+    pub struct EntryBuilder {
         key: Vec<u8>,
         value: Vec<u8>,
         start_ts: u64,
@@ -374,25 +374,28 @@ mod tests {
     }
 
     impl EntryBuilder {
-        fn key(&mut self, key: &[u8]) -> &mut Self {
+        pub fn key(&mut self, key: &[u8]) -> &mut Self {
             self.key = key.to_owned();
             self
         }
-        fn value(&mut self, val: &[u8]) -> &mut Self {
+        pub fn value(&mut self, val: &[u8]) -> &mut Self {
             self.value = val.to_owned();
             self
         }
-        fn start_ts(&mut self, start_ts: u64) -> &mut Self {
+        pub fn start_ts(&mut self, start_ts: u64) -> &mut Self {
             self.start_ts = start_ts;
             self
         }
-        fn commit_ts(&mut self, commit_ts: u64) -> &mut Self {
+        pub fn commit_ts(&mut self, commit_ts: u64) -> &mut Self {
             self.commit_ts = commit_ts;
             self
         }
-        fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
+        pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
             let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
-            let (key, value, short) = if is_short_value {
+
+            let (key, value, short) = if wt != WriteType::Put {
+                (vec![], vec![], None)
+            } else if is_short_value {
                 (vec![], vec![], Some(self.value.clone()))
             } else {
                 (

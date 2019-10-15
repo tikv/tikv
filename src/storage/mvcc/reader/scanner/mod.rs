@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod backward;
+mod delta;
 mod forward;
 mod txn_entry;
 
@@ -14,6 +15,7 @@ use crate::storage::{
 };
 
 use self::backward::BackwardScanner;
+pub use self::delta::DeltaScanner;
 use self::forward::ForwardScanner;
 pub use self::txn_entry::Scanner as EntryScanner;
 
@@ -113,6 +115,22 @@ impl<S: Snapshot> ScannerBuilder<S> {
             default_cursor,
             lower_bound,
         )?)
+    }
+
+    pub fn build_delta(mut self, begin_ts: u64) -> Result<DeltaScanner<S>> {
+        let lock_cursor = if self.0.isolation_level == IsolationLevel::Si {
+            Some(self.create_cf_cursor(CF_LOCK)?)
+        } else {
+            None
+        };
+
+        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
+        Ok(DeltaScanner::new(
+            self.0,
+            lock_cursor,
+            write_cursor,
+            begin_ts,
+        ))
     }
 }
 
