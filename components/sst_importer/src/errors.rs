@@ -40,11 +40,6 @@ quick_error! {
             from()
             display("RocksDB {}", msg)
         }
-        Engine(err: engine::Error) {
-            from()
-            description("Engine error")
-            display("Engine {:?}", err)
-        }
         EngineTraits(err: engine_traits::Error) {
             from()
             description("Engine error")
