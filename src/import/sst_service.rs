@@ -240,7 +240,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
 
             future::result(res)
-                .map_err(|e| Error::RocksEngine(box_err!(e)))
+                .map_err(|e| Error::Engine(box_err!(e)))
                 .map(|_| CompactResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer))
         }))

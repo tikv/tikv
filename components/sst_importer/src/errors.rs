@@ -37,6 +37,7 @@ quick_error! {
             from()
             cause(err)
         }
+        // FIXME: Remove concrete 'rocks' type
         RocksDB(msg: String) {
             from()
             display("RocksDB {}", msg)
@@ -61,7 +62,7 @@ quick_error! {
             display("Invalid SST path {:?}", path)
         }
         InvalidChunk {}
-        RocksEngine(err: Box<dyn StdError + Send + Sync + 'static>) {
+        Engine(err: Box<dyn StdError + Send + Sync + 'static>) {
             display("{}", err)
         }
     }
