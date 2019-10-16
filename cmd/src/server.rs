@@ -481,7 +481,13 @@ fn check_system_config(config: &TiKvConfig) {
             config.rocksdb.titan.dirname.as_str()
         };
         if let Err(e) = tikv_util::config::check_data_dir_empty(titan_dir, ".blob") {
-            fatal!("check: titandb-data-dir-empty; err: {}", e);
+            fatal!(
+                "check: titandb-data-dir-empty; err: {}; \
+                 hint: You have disabled titan when its data directory is not empty. \
+                 To properly shutdown titan, please enter fallback blob-run-mode and \
+                 wait till titandb files are all safely ingested.",
+                e
+            );
         }
     }
     // Check raft data dir
