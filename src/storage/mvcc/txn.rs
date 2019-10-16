@@ -932,6 +932,7 @@ mod tests {
 
         // Rollback lock
         must_rollback(&engine, k, 15);
+        // Rollbacks of optimistic transactions needn't be protected
         must_get_rollback_protected(&engine, k, 15, false);
     }
 
@@ -945,7 +946,9 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k2, k1, 5, 7);
         must_rollback(&engine, k1, 5);
         must_rollback(&engine, k2, 5);
+        // The rollback of the primary key should be protected
         must_get_rollback_protected(&engine, k1, 5, true);
+        // The rollback of the secondary key needn't be protected
         must_get_rollback_protected(&engine, k2, 5, false);
 
         must_acquire_pessimistic_lock(&engine, k1, k1, 15, 15);
@@ -954,7 +957,9 @@ mod tests {
         must_pessimistic_prewrite_put(&engine, k2, v, k1, 15, 17, true);
         must_rollback(&engine, k1, 15);
         must_rollback(&engine, k2, 15);
+        // The rollback of the primary key should be protected
         must_get_rollback_protected(&engine, k1, 15, true);
+        // The rollback of the secondary key needn't be protected
         must_get_rollback_protected(&engine, k2, 15, false);
     }
 
@@ -997,7 +1002,8 @@ mod tests {
 
         // Try to cleanup another transaction's lock. Does nothing.
         must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
-        // If there is no exisiting lock when cleanup, the rollback needn't be protected.
+        // If there is no exisiting lock when cleanup, it cannot be a pessimistic transaction,
+        // so the rollback needn't be protected.
         must_get_rollback_protected(&engine, k, ts(10, 1), false);
         must_locked(&engine, k, ts(10, 0));
 
@@ -1008,7 +1014,7 @@ mod tests {
         must_get_rollback_protected(&engine, k, ts(10, 0), false);
         must_get_rollback_ts(&engine, k, ts(10, 0));
 
-        // Rollbacks of pessimistic transactions should be protected
+        // Rollbacks of primary keys in pessimistic transactions should be protected
         must_acquire_pessimistic_lock(&engine, k, k, ts(11, 1), ts(12, 1));
         must_cleanup(&engine, k, ts(11, 1), ts(120, 0));
         must_get_rollback_protected(&engine, k, ts(11, 1), true);
@@ -1674,11 +1680,13 @@ mod tests {
         must_cleanup(&engine, k, 47, 0);
         must_unlocked(&engine, k);
 
-        // Cleanups are not collapsed
+        // The rollback of the primary key in a pessimistic transaction should be protected from
+        // being collapsed.
         must_acquire_pessimistic_lock(&engine, k, k, 49, 60);
         must_pessimistic_prewrite_put(&engine, k, v, k, 49, 60, true);
         must_locked(&engine, k, 49);
         must_cleanup(&engine, k, 49, 0);
+        must_get_rollback_protected(&engine, k, 49, true);
         must_prewrite_put(&engine, k, v, k, 51);
         must_rollback_collapsed(&engine, k, 51);
         must_acquire_pessimistic_lock_err(&engine, k, k, 49, 60);
