@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
-use std::collections::Bound::{Included, Unbounded};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
@@ -258,52 +257,9 @@ impl IndexHandles {
         }
         Ok(IndexHandles(res))
     }
-
-    fn get_approximate_distance_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        assert!(start <= end);
-        if start == end {
-            return 0;
-        }
-        let range = self.range::<[u8], _>((Unbounded, Included(start)));
-        let start_offset = match range.last() {
-            Some((_, v)) => v.offset,
-            None => 0,
-        };
-        let mut range = self.range::<[u8], _>((Included(end), Unbounded));
-        let end_offset = match range.next() {
-            Some((_, v)) => v.offset,
-            None => self.iter().last().map_or(0, |(_, v)| v.offset),
-        };
-        if end_offset < start_offset {
-            panic!(
-                "start {:?} end {:?} start_offset {} end_offset {}",
-                start, end, start_offset, end_offset
-            );
-        }
-        end_offset - start_offset
-    }
 }
 
-#[derive(Default)]
-pub struct RowsProperties {
-    pub total_rows: u64,
-    pub index_handles: IndexHandles,
-}
-
-impl RowsProperties {
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<RowsProperties> {
-        let mut res = RowsProperties::default();
-        res.total_rows = props.decode_u64(PROP_NUM_ROWS)?;
-        res.index_handles = props.decode_handles(PROP_ROWS_INDEX)?;
-        Ok(res)
-    }
-
-    pub fn get_approximate_rows_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.index_handles
-            .get_approximate_distance_in_range(start, end)
-    }
-}
-
+// Deprecated. Only for compatible issue from v2.0 or older version.
 #[derive(Debug, Default)]
 pub struct SizeProperties {
     pub total_size: u64,
@@ -323,82 +279,6 @@ impl SizeProperties {
         res.total_size = props.decode_u64(PROP_TOTAL_SIZE)?;
         res.index_handles = props.decode_handles(PROP_SIZE_INDEX)?;
         Ok(res)
-    }
-
-    pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.index_handles
-            .get_approximate_distance_in_range(start, end)
-    }
-
-    pub fn smallest_key(&self) -> Option<Vec<u8>> {
-        self.index_handles
-            .0
-            .iter()
-            .next()
-            .map(|(key, _)| key.clone())
-    }
-
-    pub fn largest_key(&self) -> Option<Vec<u8>> {
-        self.index_handles
-            .0
-            .iter()
-            .last()
-            .map(|(key, _)| key.clone())
-    }
-}
-
-pub struct SizePropertiesCollector {
-    props: SizeProperties,
-    last_key: Vec<u8>,
-    index_handle: IndexHandle,
-}
-
-impl SizePropertiesCollector {
-    fn new() -> SizePropertiesCollector {
-        SizePropertiesCollector {
-            props: SizeProperties::default(),
-            last_key: Vec::new(),
-            index_handle: IndexHandle::default(),
-        }
-    }
-}
-
-impl TablePropertiesCollector for SizePropertiesCollector {
-    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        let size = match get_entry_size(value, entry_type) {
-            Ok(entry_size) => key.len() as u64 + entry_size,
-            Err(_) => return,
-        };
-        self.index_handle.size += size;
-        self.index_handle.offset += size as u64;
-        // Add the start key for convenience.
-        if self.last_key.is_empty() || self.index_handle.size >= DEFAULT_PROP_SIZE_INDEX_DISTANCE {
-            self.props
-                .index_handles
-                .insert(key.to_owned(), self.index_handle.clone());
-            self.index_handle.size = 0;
-        }
-        self.last_key.clear();
-        self.last_key.extend_from_slice(key);
-    }
-
-    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        self.props.total_size = self.index_handle.offset;
-        if self.index_handle.size > 0 {
-            self.props
-                .index_handles
-                .insert(self.last_key.clone(), self.index_handle.clone());
-        }
-        self.props.encode().0
-    }
-}
-
-#[derive(Default)]
-pub struct SizePropertiesCollectorFactory {}
-
-impl TablePropertiesCollectorFactory for SizePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(SizePropertiesCollector::new())
     }
 }
 
@@ -477,8 +357,8 @@ pub enum RangeOffsetKind {
 
 #[derive(Debug, Default, Clone)]
 pub struct RangeOffsets {
-    size: u64,
-    keys: u64,
+    pub size: u64,
+    pub keys: u64,
 }
 
 impl RangeOffsets {
@@ -492,10 +372,18 @@ impl RangeOffsets {
 
 #[derive(Debug, Default)]
 pub struct RangeProperties {
-    pub offsets: BTreeMap<Vec<u8>, RangeOffsets>,
+    pub offsets: Vec<(Vec<u8>, RangeOffsets)>,
 }
 
 impl RangeProperties {
+    pub fn get(&self, key: &[u8]) -> &RangeOffsets {
+        let idx = self
+            .offsets
+            .binary_search_by_key(&key, |&(ref k, _)| k)
+            .unwrap();
+        &self.offsets[idx].1
+    }
+
     pub fn encode(&self) -> UserProperties {
         let mut buf = Vec::with_capacity(1024);
         for (k, offsets) in &self.offsets {
@@ -512,7 +400,7 @@ impl RangeProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
-            Err(e) => debug!("old_version:decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties", e),
+            Err(e) => info!("decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?", e),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }
@@ -527,7 +415,7 @@ impl RangeProperties {
             let mut offsets = RangeOffsets::default();
             offsets.size = number::decode_u64(&mut buf)?;
             offsets.keys = number::decode_u64(&mut buf)?;
-            res.offsets.insert(k, offsets);
+            res.offsets.push((k, offsets));
         }
         Ok(res)
     }
@@ -550,17 +438,28 @@ impl RangeProperties {
         if start == end {
             return 0;
         }
+        let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
+            Ok(idx) => self.offsets[idx].1.get(kind),
+            Err(next_idx) => {
+                if next_idx == 0 {
+                    0
+                } else {
+                    self.offsets[next_idx - 1].1.get(kind)
+                }
+            }
+        };
 
-        let range = self.offsets.range::<[u8], _>((Unbounded, Included(start)));
-        let start_offset = match range.last() {
-            Some((_, v)) => v.get(kind),
-            None => 0,
+        let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
+            Ok(idx) => self.offsets[idx].1.get(kind),
+            Err(next_idx) => {
+                if next_idx == 0 {
+                    0
+                } else {
+                    self.offsets[next_idx - 1].1.get(kind)
+                }
+            }
         };
-        let range = self.offsets.range::<[u8], _>((Unbounded, Included(end)));
-        let end_offset = match range.last() {
-            Some((_, v)) => v.get(kind),
-            None => 0,
-        };
+
         if end_offset < start_offset {
             panic!(
                 "start {:?} end {:?} start_offset {} end_offset {}",
@@ -570,12 +469,56 @@ impl RangeProperties {
         end_offset - start_offset
     }
 
+    // equivalent to range(Excluded(start_key), Excluded(end_key))
+    pub fn take_excluded_range(
+        mut self,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Vec<(Vec<u8>, RangeOffsets)> {
+        let start_offset = match self
+            .offsets
+            .binary_search_by_key(&start_key, |&(ref k, _)| k)
+        {
+            Ok(idx) => {
+                if idx == self.offsets.len() - 1 {
+                    return vec![];
+                } else {
+                    idx + 1
+                }
+            }
+            Err(next_idx) => next_idx,
+        };
+
+        let end_offset = match self.offsets.binary_search_by_key(&end_key, |&(ref k, _)| k) {
+            Ok(idx) => {
+                if idx == 0 {
+                    return vec![];
+                } else {
+                    idx - 1
+                }
+            }
+            Err(next_idx) => {
+                if next_idx == 0 {
+                    return vec![];
+                } else {
+                    next_idx - 1
+                }
+            }
+        };
+
+        if start_offset > end_offset {
+            return vec![];
+        }
+
+        self.offsets.drain(start_offset..=end_offset).collect()
+    }
+
     pub fn smallest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.iter().next().map(|(key, _)| key.clone())
+        self.offsets.first().map(|(k, _)| k.to_owned())
     }
 
     pub fn largest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.iter().last().map(|(key, _)| key.clone())
+        self.offsets.last().map(|(k, _)| k.to_owned())
     }
 }
 
@@ -585,7 +528,7 @@ impl From<SizeProperties> for RangeProperties {
         for (key, size_handle) in p.index_handles.0 {
             let mut range = RangeOffsets::default();
             range.size = size_handle.offset;
-            res.offsets.insert(key, range);
+            res.offsets.push((key, range));
         }
         res
     }
@@ -632,7 +575,7 @@ impl RangePropertiesCollector {
 
     fn insert_new_point(&mut self, key: Vec<u8>) {
         self.last_offsets = self.cur_offsets.clone();
-        self.props.offsets.insert(key, self.cur_offsets.clone());
+        self.props.offsets.push((key, self.cur_offsets.clone()));
     }
 }
 
@@ -829,143 +772,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rows_properties() {
-        let mut collector = MvccPropertiesCollector::new();
-        let num_rows = PROP_ROWS_INDEX_DISTANCE * 3 + 2;
-        for i in 0..num_rows {
-            let key = format!("k-{}", i);
-            let k1 = Key::from_raw(key.as_bytes()).append_ts(2);
-            let k1 = keys::data_key(k1.as_encoded());
-            let k2 = Key::from_raw(key.as_bytes()).append_ts(1);
-            let k2 = keys::data_key(k2.as_encoded());
-            let v = Write::new(WriteType::Put, 0, None).to_bytes();
-            collector.add(&k1, &v, DBEntryType::Put, 0, 0);
-            collector.add(&k2, &v, DBEntryType::Put, 0, 0);
-        }
-        let result = UserProperties(collector.finish());
-
-        let props = RowsProperties::decode(&result).unwrap();
-        assert_eq!(props.total_rows, num_rows);
-        assert_eq!(props.index_handles.len(), 5);
-        let cases = [
-            ("k-0", 1, 1),
-            (
-                "k-10000",
-                PROP_ROWS_INDEX_DISTANCE,
-                PROP_ROWS_INDEX_DISTANCE + 1,
-            ),
-            (
-                "k-20000",
-                PROP_ROWS_INDEX_DISTANCE,
-                PROP_ROWS_INDEX_DISTANCE * 2 + 1,
-            ),
-            (
-                "k-30000",
-                PROP_ROWS_INDEX_DISTANCE,
-                PROP_ROWS_INDEX_DISTANCE * 3 + 1,
-            ),
-            ("k-30001", 1, PROP_ROWS_INDEX_DISTANCE * 3 + 2),
-        ];
-        for &(key, size, offset) in &cases {
-            let k = Key::from_raw(key.as_bytes());
-            let k = keys::data_key(k.as_encoded());
-            let h = &props.index_handles[&k];
-            assert_eq!(h.size, size);
-            assert_eq!(h.offset, offset);
-        }
-
-        let h: Vec<_> = props.index_handles.values().collect();
-        let cases = [
-            ("a", "z", h[4].offset),
-            ("a", "a", 0),
-            ("z", "z", 0),
-            ("k-1", "k-10000", h[1].offset - h[0].offset),
-            ("k-1", "k-20000", h[2].offset - h[0].offset),
-            ("k-16666", "k-18888", h[2].offset - h[1].offset),
-            ("k-16666", "k-26666", h[3].offset - h[1].offset),
-        ];
-        for &(start, end, rows) in &cases {
-            let start = keys::data_key(start.as_bytes());
-            let end = keys::data_key(end.as_bytes());
-            assert_eq!(props.get_approximate_rows_in_range(&start, &end), rows);
-        }
-    }
-
-    #[test]
-    fn test_size_properties() {
-        let cases = [
-            ("a", 0),
-            // handle "a": size = 1, offset = 1,
-            ("b", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
-            ("c", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
-            ("d", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
-            ("e", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
-            // handle "e": size = DISTANCE + 4, offset = DISTANCE + 5
-            ("f", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
-            ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
-            ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
-            ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
-            // handle "i": size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9
-            ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
-            ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE),
-        ];
-        // handle "k": size = DISTANCE / 8 * 12 + 2, offset = DISTANCE / 8 * 29 + 11
-
-        let mut collector = SizePropertiesCollector::new();
-        for &(k, vlen) in &cases {
-            let v = vec![0; vlen as usize];
-            collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
-        }
-        for &(k, vlen) in &cases {
-            let v = vec![0; vlen as usize];
-            collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
-        }
-        let result = UserProperties(collector.finish());
-
-        let props = SizeProperties::decode(&result).unwrap();
-        assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
-        assert_eq!(
-            props.largest_key().unwrap(),
-            cases[cases.len() - 1].0.as_bytes()
-        );
-        assert_eq!(
-            props.total_size,
-            DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11
-        );
-        let handles = &props.index_handles;
-        assert_eq!(handles.len(), 4);
-        let a = &handles[b"a".as_ref()];
-        assert_eq!(a.size, 1);
-        assert_eq!(a.offset, 1);
-        let e = &handles[b"e".as_ref()];
-        assert_eq!(e.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 4);
-        assert_eq!(e.offset, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 5);
-        let i = &handles[b"i".as_ref()];
-        assert_eq!(i.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
-        assert_eq!(i.offset, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
-        let k = &handles[b"k".as_ref()];
-        assert_eq!(k.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
-        assert_eq!(k.offset, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
-
-        let cases = [
-            (" ", "z", k.offset),
-            (" ", " ", 0),
-            ("z", "z", 0),
-            ("a", "k", k.offset - a.offset),
-            ("a", "i", i.offset - a.offset),
-            ("e", "h", i.offset - e.offset),
-            ("g", "h", i.offset - e.offset),
-            ("g", "g", 0),
-        ];
-        for &(start, end, size) in &cases {
-            assert_eq!(
-                props.get_approximate_size_in_range(start.as_bytes(), end.as_bytes()),
-                size
-            );
-        }
-    }
-
-    #[test]
     fn test_range_properties() {
         let cases = [
             ("a", 0, 1),
@@ -1017,34 +823,34 @@ mod tests {
         );
         assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11 as u64);
 
-        let handles = &props.offsets;
-        assert_eq!(handles.len(), 7);
-        let a = &handles[b"a".as_ref()];
+        assert_eq!(props.offsets.len(), 7);
+        let a = props.get(b"a".as_ref());
         assert_eq!(a.size, 1);
-        let e = &handles[b"e".as_ref()];
+        let e = props.get(b"e".as_ref());
         assert_eq!(e.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 5);
-        let i = &handles[b"i".as_ref()];
+        let i = props.get(b"i".as_ref());
         assert_eq!(i.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
-        let k = &handles[b"k".as_ref()];
+        let k = props.get(b"k".as_ref());
         assert_eq!(k.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11);
-        let m = &handles[b"m".as_ref()];
+        let m = props.get(b"m".as_ref());
         assert_eq!(m.keys, 11 + DEFAULT_PROP_KEYS_INDEX_DISTANCE);
-        let n = &handles[b"n".as_ref()];
+        let n = props.get(b"n".as_ref());
         assert_eq!(n.keys, 11 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
-        let o = &handles[b"o".as_ref()];
+        let o = props.get(b"o".as_ref());
         assert_eq!(o.keys, 12 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
         let empty = RangeOffsets::default();
         let cases = [
-            (" ", "k", k, &empty),
-            (" ", " ", &empty, &empty),
-            ("k", "k", k, k),
-            ("a", "k", k, a),
-            ("a", "i", i, a),
-            ("e", "h", e, e),
-            ("b", "h", e, a),
-            ("g", "g", i, i),
+            (" ", "k", k, &empty, 3),
+            (" ", " ", &empty, &empty, 0),
+            ("k", "k", k, k, 0),
+            ("a", "k", k, a, 2),
+            ("a", "i", i, a, 1),
+            ("e", "h", e, e, 0),
+            ("b", "h", e, a, 1),
+            ("g", "g", i, i, 0),
         ];
-        for &(start, end, end_idx, start_idx) in &cases {
+        for &(start, end, end_idx, start_idx, count) in &cases {
+            let props = RangeProperties::decode(&result).unwrap();
             let size = end_idx.size - start_idx.size;
             assert_eq!(
                 props.get_approximate_size_in_range(start.as_bytes(), end.as_bytes()),
@@ -1054,6 +860,12 @@ mod tests {
             assert_eq!(
                 props.get_approximate_keys_in_range(start.as_bytes(), end.as_bytes()),
                 keys
+            );
+            assert_eq!(
+                props
+                    .take_excluded_range(start.as_bytes(), end.as_bytes())
+                    .len(),
+                count
             );
         }
     }

@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn test_check_lock() {
         let key = Key::from_raw(b"foo");
-        let mut lock = Lock::new(LockType::Put, vec![], 100, 3, None, 0, 1);
+        let mut lock = Lock::new(LockType::Put, vec![], 100, 3, None, 0, 1, 0);
 
         // Ignore the lock if read ts is less than the lock version
         assert!(check_lock(&key, 50, &lock).is_ok());
