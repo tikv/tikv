@@ -304,6 +304,12 @@ pub fn is_encoded_from_asc(encoded: &[u8], raw: &[u8]) -> bool {
 
     let mut encoded_group_ptr = last_encoded_group.as_ptr();
     let mut raw_group_ptr = last_raw_group.as_ptr();
+    // Unsafe is used here to eliminate bound checkings by hand.
+    // Safety: At the beginning of the function, we've checked `encoded` and `raw` have the
+    // same group number. After checking the last group, `encoded` and `raw` both only have complete
+    // groups left, which means each encoded group consists of ENC_GROUP_SIZE bytes of data plus
+    // one padding byte and each raw group left has ENC_GROUP_SIZE bytes of data. So we can make
+    // sure we don't move the pointers out of the bounds of the two slices.
     while encoded_group_ptr > encoded.as_ptr() {
         unsafe {
             let pad_ptr = encoded_group_ptr.sub(1);
