@@ -166,10 +166,10 @@ impl BatchLimiter {
                 // thread load is less sensitive to workload,
                 // a small barrier here to make sure we have good samples of thread load.
                 let timeout = self.timeout.unwrap();
-                if latency > timeout.as_millis() as f64 {
+                if latency > timeout.as_millis() as f64 * 2.0 {
                     self.thread_load_estimation = (self.thread_load_estimation + load) / 2;
                 }
-                if self.latency_estimation > timeout.as_millis() as f64 + 0.2 {
+                if self.latency_estimation > timeout.as_millis() as f64 * 2.0 {
                     self.enable_batch = true;
                     self.latency_estimation = 0.0;
                 }
