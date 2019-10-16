@@ -11,7 +11,8 @@ pub struct Builder {
     inner_builder: TokioBuilder,
     name_prefix: Option<String>,
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
-    mark: i8,
+    // bit 0 -> `before_stop`, bit 1 -> `after_start`
+    fn_set_mark: i8,
 }
 
 impl Builder {
@@ -20,7 +21,7 @@ impl Builder {
             inner_builder: TokioBuilder::new(),
             name_prefix: None,
             on_tick: None,
-            mark: 0,
+            fn_set_mark: 0,
         }
     }
 
@@ -53,7 +54,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.mark |= 1;
+        self.fn_set_mark |= 1;
         self.inner_builder.before_stop_wrapper(f);
         self
     }
@@ -62,7 +63,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.mark |= 2;
+        self.fn_set_mark |= 2;
         self.inner_builder.after_start_wrapper(f);
         self
     }
@@ -73,10 +74,10 @@ impl Builder {
         } else {
             "future_pool"
         };
-        if self.mark & 1 == 0 {
+        if self.fn_set_mark & 1 == 0 {
             self.inner_builder.before_stop_wrapper(|| {});
         }
-        if self.mark & 2 == 0 {
+        if self.fn_set_mark & 2 == 0 {
             self.inner_builder.after_start_wrapper(|| {});
         }
         let env = Arc::new(super::Env {

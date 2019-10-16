@@ -117,12 +117,12 @@ impl Collector for ThreadsCollector {
                 // Threads CPU time.
                 let total = cpu_total(&stat);
                 // sanitize thread name before push metrics.
-                let name: String;
-                if let Some(thread_name) = THREAD_NAME_HASHMAP.lock().unwrap().get(&tid) {
-                    name = sanitize_thread_name(tid, thread_name);
+                let name = if let Some(thread_name) = THREAD_NAME_HASHMAP.lock().unwrap().get(&tid)
+                {
+                    sanitize_thread_name(tid, thread_name)
                 } else {
-                    name = sanitize_thread_name(tid, &stat.command);
-                }
+                    sanitize_thread_name(tid, &stat.command)
+                };
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
