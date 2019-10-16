@@ -263,7 +263,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             // The region's end key is empty means it is the last
             // region, we need to set the `finished` flag here in case
             // we run with `next_start` set to None
-            if b.region.get_end_key().is_empty() {
+            if b.region.get_end_key().is_empty() || b.end_key == self.end_key {
                 self.finished = true;
             }
             self.next_start = b.end_key.clone();
@@ -763,6 +763,7 @@ pub mod tests {
             (b"4", b"6", vec![]),
             (b"4", b"5", vec![]),
             (b"2", b"7", vec![(b"3", b"4")]),
+            (b"7", b"8", vec![(b"7", b"8")]),
             (b"3", b"", vec![(b"3", b"4"), (b"7", b"9"), (b"9", b"")]),
             (b"5", b"", vec![(b"7", b"9"), (b"9", b"")]),
             (b"7", b"", vec![(b"7", b"9"), (b"9", b"")]),
