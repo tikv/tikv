@@ -625,75 +625,75 @@ fn test_store_resolve_with_illegal_tso() {
     store.resolve_lock_with_illegal_tso(start_ts, commit_ts);
 }
 
-fn test_txn_store_gc() {
-    let key = "k";
-    let store = AssertionStorage::default();
-    let (_cluster, raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
-    store.test_txn_store_gc(key);
-    raft_store.test_txn_store_gc(key);
-}
-
-fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
-    let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
-    test_txn_store_gc_multiple_keys_cluster_storage(n, prefix.clone());
-    test_txn_store_gc_multiple_keys_single_storage(n, prefix.clone());
-}
-
-pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) {
-    let store = AssertionStorage::default();
-    let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
-    for k in &keys {
-        store.put_ok(k.as_bytes(), b"v1", 5, 10);
-        store.put_ok(k.as_bytes(), b"v2", 15, 20);
-    }
-    store.gc_ok(30);
-    for k in &keys {
-        store.get_none(k.as_bytes(), 15);
-    }
-}
-
-pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String) {
-    let (mut cluster, mut store) =
-        AssertionStorage::new_raft_storage_with_store_count(3, prefix.clone().as_str());
-    let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
-    for k in &keys {
-        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
-        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v2", 15, 20);
-    }
-
-    for k in &keys {
-        // clear data whose commit_ts < 30
-        store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), 30);
-    }
-
-    for k in &keys {
-        store.get_none_from_cluster(&mut cluster, k.as_bytes(), 15);
-    }
-}
-
-fn test_txn_store_gc2_without_key() {
-    test_txn_store_gc_multiple_keys(1, 0);
-}
-
-fn test_txn_store_gc2_with_less_keys() {
-    test_txn_store_gc_multiple_keys(1, 3);
-}
-
-fn test_txn_store_gc2_with_many_keys() {
-    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE + 1);
-}
-
-fn test_txn_store_gc2_with_long_key_prefix() {
-    test_txn_store_gc_multiple_keys(1024, MAX_TXN_WRITE_SIZE / 1024 * 3);
-}
-
-fn test_txn_store_gc3() {
-    let key = "k";
-    let store = AssertionStorage::default();
-    store.test_txn_store_gc3(key.as_bytes()[0]);
-    let (mut cluster, mut raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
-    raft_store.test_txn_store_gc3_for_cluster(&mut cluster, key.as_bytes()[0]);
-}
+//fn test_txn_store_gc() {
+//    let key = "k";
+//    let store = AssertionStorage::default();
+//    let (_cluster, raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
+//    store.test_txn_store_gc(key);
+//    raft_store.test_txn_store_gc(key);
+//}
+//
+//fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
+//    let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
+//    test_txn_store_gc_multiple_keys_cluster_storage(n, prefix.clone());
+//    test_txn_store_gc_multiple_keys_single_storage(n, prefix.clone());
+//}
+//
+//pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) {
+//    let store = AssertionStorage::default();
+//    let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
+//    for k in &keys {
+//        store.put_ok(k.as_bytes(), b"v1", 5, 10);
+//        store.put_ok(k.as_bytes(), b"v2", 15, 20);
+//    }
+//    store.gc_ok(30);
+//    for k in &keys {
+//        store.get_none(k.as_bytes(), 15);
+//    }
+//}
+//
+//pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String) {
+//    let (mut cluster, mut store) =
+//        AssertionStorage::new_raft_storage_with_store_count(3, prefix.clone().as_str());
+//    let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
+//    for k in &keys {
+//        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
+//        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v2", 15, 20);
+//    }
+//
+//    for k in &keys {
+//        // clear data whose commit_ts < 30
+//        store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), 30);
+//    }
+//
+//    for k in &keys {
+//        store.get_none_from_cluster(&mut cluster, k.as_bytes(), 15);
+//    }
+//}
+//
+//fn test_txn_store_gc2_without_key() {
+//    test_txn_store_gc_multiple_keys(1, 0);
+//}
+//
+//fn test_txn_store_gc2_with_less_keys() {
+//    test_txn_store_gc_multiple_keys(1, 3);
+//}
+//
+//fn test_txn_store_gc2_with_many_keys() {
+//    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE + 1);
+//}
+//
+//fn test_txn_store_gc2_with_long_key_prefix() {
+//    test_txn_store_gc_multiple_keys(1024, MAX_TXN_WRITE_SIZE / 1024 * 3);
+//}
+//
+//fn test_txn_store_gc3() {
+//    let key = "k";
+//    let store = AssertionStorage::default();
+//    store.test_txn_store_gc3(key.as_bytes()[0]);
+//    let (mut cluster, mut raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
+//    raft_store.test_txn_store_gc3_for_cluster(&mut cluster, key.as_bytes()[0]);
+//}
 
 #[test]
 fn test_txn_store_rawkv() {
