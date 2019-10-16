@@ -139,7 +139,26 @@ impl Peekable for RegionSnapshot {
             self.region.get_end_key(),
         )?;
         let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key)
+        self.snap.get_value(&data_key).map_err(|e| {
+            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
+            if panic_when_unexpected_key_or_data() {
+                set_panic_mark();
+                panic!(
+                    "failed to get value of key {} in region {}: {:?}",
+                    hex::encode_upper(&key),
+                    self.region.get_id(),
+                    e,
+                );
+            } else {
+                error!(
+                    "failed to get value of key";
+                    "key" => hex::encode_upper(&key),
+                    "region" => self.region.get_id(),
+                    "error" => ?e,
+                );
+                e
+            }
+        })
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
@@ -150,7 +169,27 @@ impl Peekable for RegionSnapshot {
             self.region.get_end_key(),
         )?;
         let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key)
+        self.snap.get_value_cf(cf, &data_key).map_err(|e| {
+            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
+            if panic_when_unexpected_key_or_data() {
+                set_panic_mark();
+                panic!(
+                    "failed to get value of key {} in region {}: {:?}",
+                    hex::encode_upper(&key),
+                    self.region.get_id(),
+                    e,
+                );
+            } else {
+                error!(
+                    "failed to get value of key in cf";
+                    "key" => hex::encode_upper(&key),
+                    "region" => self.region.get_id(),
+                    "cf" => cf,
+                    "error" => ?e,
+                );
+                e
+            }
+        })
     }
 }
 
