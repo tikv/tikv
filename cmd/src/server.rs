@@ -531,12 +531,8 @@ fn check_system_config(config: &TiKvConfig) {
         } else {
             config.rocksdb.titan.dirname.as_str()
         };
-        if let Err(e) = tikv_util::config::check_data_dir_empty(titan_dir) {
-            warn!(
-                "check: titandb-data-dir";
-                "path" => titan_dir,
-                "err" => %e
-            );
+        if let Err(e) = tikv_util::config::check_data_dir_empty(titan_dir, "blob") {
+            fatal!("check: titandb-data-dir-empty; err: {}", e);
         }
     }
     // Check raft data dir
