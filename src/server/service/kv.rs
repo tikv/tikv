@@ -13,7 +13,6 @@ use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::lock_manager::LockMgr;
-use crate::storage::metrics::*;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
@@ -623,7 +622,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
             Key::from_raw(&req.take_end_key()),
             cb,
         );
-        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1765,7 +1763,6 @@ fn future_gc<E: Engine>(
 ) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
     let res = gc_worker.async_gc(req.take_context(), req.get_safe_point(), cb);
-    KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = GcResponse::default();

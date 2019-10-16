@@ -1166,6 +1166,7 @@ impl<E: Engine> GCWorker<E> {
     }
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
+        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         self.worker_scheduler
             .schedule(GCTask::GC {
                 ctx,
@@ -1187,6 +1188,7 @@ impl<E: Engine> GCWorker<E> {
         end_key: Key,
         callback: Callback<()>,
     ) -> Result<()> {
+        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         self.worker_scheduler
             .schedule(GCTask::UnsafeDestroyRange {
                 ctx,
