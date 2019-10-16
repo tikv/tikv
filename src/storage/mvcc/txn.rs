@@ -7,7 +7,8 @@ use super::write::{Write, WriteType};
 use super::{extract_physical, Error, Result};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
-    is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    is_short_value, new_lock_info, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
@@ -225,13 +226,9 @@ impl<S: Snapshot> MvccTxn<S> {
         // abort. Resolve it immediately.
         // Optimistic lock's for_update_ts is zero.
         if for_update_ts > lock.for_update_ts {
-            let mut info = kvproto::kvrpcpb::LockInfo::default();
-            info.set_primary_lock(lock.primary);
-            info.set_lock_version(lock.ts);
-            info.set_key(key.into_raw()?);
+            let mut info = new_lock_info(lock, key.into_raw()?);
             // Set ttl to 0 so TiDB will resolve lock immediately.
             info.set_lock_ttl(0);
-            info.set_txn_size(lock.txn_size);
             Err(Error::KeyIsLocked(info))
         } else {
             Err(Error::Other("stale request".into()))
@@ -248,12 +245,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let for_update_ts = options.for_update_ts;
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                let mut info = kvproto::kvrpcpb::LockInfo::default();
-                info.set_primary_lock(lock.primary);
-                info.set_lock_version(lock.ts);
-                info.set_key(key.into_raw()?);
-                info.set_lock_ttl(lock.ttl);
-                info.set_txn_size(options.txn_size);
+                let info = new_lock_info(lock, key.into_raw()?);
                 return Err(Error::KeyIsLocked(info));
             }
             if lock.lock_type != LockType::Pessimistic {
@@ -413,12 +405,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                let mut info = kvproto::kvrpcpb::LockInfo::default();
-                info.set_primary_lock(lock.primary);
-                info.set_lock_version(lock.ts);
-                info.set_key(key.into_raw()?);
-                info.set_lock_ttl(lock.ttl);
-                info.set_txn_size(lock.txn_size);
+                let info = new_lock_info(lock, key.into_raw()?);
                 return Err(Error::KeyIsLocked(info));
             }
             // TODO: remove it in future
@@ -510,21 +497,13 @@ impl<S: Snapshot> MvccTxn<S> {
     /// committed.
     pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
         match self.reader.load_lock(&key)? {
-            Some(ref mut lock) if lock.ts == self.start_ts => {
+            Some(ref lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
                 // If the lock is not expired, do not rollback it but report key is locked.
                 if current_ts > 0
                     && extract_physical(lock.ts) + lock.ttl >= extract_physical(current_ts)
                 {
-                    // The `lock.primary` field will not be accessed again. Use mem::replace to
-                    // avoid cloning.
-                    let primary = ::std::mem::replace(&mut lock.primary, Default::default());
-                    let mut info = kvproto::kvrpcpb::LockInfo::default();
-                    info.set_primary_lock(primary);
-                    info.set_lock_version(lock.ts);
-                    info.set_key(key.into_raw()?);
-                    info.set_lock_ttl(lock.ttl);
-                    info.set_txn_size(lock.txn_size);
+                    let info = new_lock_info(lock.clone(), key.into_raw()?);
                     return Err(Error::KeyIsLocked(info));
                 }
 

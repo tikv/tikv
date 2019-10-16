@@ -170,11 +170,13 @@ impl LockMgr for LockManager {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
+        timeout: u64,
     ) {
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
-        self.waiter_mgr_scheduler.wait_for(start_ts, cb, pr, lock);
+        self.waiter_mgr_scheduler
+            .wait_for(start_ts, cb, pr, lock, timeout);
 
         // If it is the first lock the transaction waits for, it won't cause deadlock.
         if !is_first_lock {
@@ -229,6 +231,7 @@ mod tests {
             ProcessResult::Res,
             Lock { ts: lock_ts, hash },
             true,
+            0,
         );
         // new waiters should be sensed immediately
         assert!(lock_mgr.has_waiter());

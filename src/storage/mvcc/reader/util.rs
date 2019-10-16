@@ -3,7 +3,7 @@
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::mvcc::{Lock, LockType, Write};
-use crate::storage::{Cursor, Iterator, Key, Statistics, Value};
+use crate::storage::{new_lock_info, Cursor, Iterator, Key, Statistics, Value};
 
 /// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the primary lock will be ignored.
 #[inline]
@@ -22,12 +22,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<()> {
     }
 
     // There is a pending lock. Client should wait or clean it.
-    let mut info = kvproto::kvrpcpb::LockInfo::default();
-    info.set_primary_lock(lock.primary.clone());
-    info.set_lock_version(lock.ts);
-    info.set_key(raw_key);
-    info.set_lock_ttl(lock.ttl);
-    info.set_txn_size(lock.txn_size);
+    let info = new_lock_info(lock.clone(), raw_key);
     Err(Error::KeyIsLocked(info))
 }
 

@@ -26,14 +26,14 @@ use engine::rocks::DB;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo, Op};
 
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
-use self::mvcc::Lock;
+use self::mvcc::{Lock, LockType};
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
@@ -632,6 +632,8 @@ pub struct Options {
     // How many keys this transaction involved.
     pub txn_size: u64,
     pub min_commit_ts: u64,
+    // Time to wait for lock released in milliseconds when encountering locks
+    pub wait_timeout: u64,
 }
 
 impl Options {
@@ -640,12 +642,7 @@ impl Options {
             lock_ttl,
             skip_constraint_check,
             key_only,
-            reverse_scan: false,
-            is_first_lock: false,
-            for_update_ts: 0,
-            is_pessimistic_lock: vec![],
-            txn_size: 0,
-            min_commit_ts: 0,
+            ..Default::default()
         }
     }
 
@@ -2155,6 +2152,23 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
 
 pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     get_error_kind_from_header(header).get_str()
+}
+
+pub fn new_lock_info(lock: Lock, raw_key: Vec<u8>) -> LockInfo {
+    let mut info = LockInfo::default();
+    info.set_primary_lock(lock.primary);
+    info.set_lock_version(lock.ts);
+    info.set_key(raw_key);
+    info.set_lock_ttl(lock.ttl);
+    info.set_txn_size(lock.txn_size);
+    let lock_type = match lock.lock_type {
+        LockType::Put => Op::Put,
+        LockType::Delete => Op::Del,
+        LockType::Lock => Op::Lock,
+        LockType::Pessimistic => Op::PessimisticLock,
+    };
+    info.set_lock_type(lock_type);
+    info
 }
 
 #[cfg(test)]

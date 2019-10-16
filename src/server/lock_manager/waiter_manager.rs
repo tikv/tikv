@@ -33,6 +33,7 @@ pub enum Task {
         cb: StorageCb,
         pr: ProcessResult,
         lock: Lock,
+        timeout: u64,
     },
     WakeUp {
         // lock info
@@ -178,12 +179,20 @@ impl Scheduler {
         true
     }
 
-    pub fn wait_for(&self, start_ts: u64, cb: StorageCb, pr: ProcessResult, lock: Lock) {
+    pub fn wait_for(
+        &self,
+        start_ts: u64,
+        cb: StorageCb,
+        pr: ProcessResult,
+        lock: Lock,
+        timeout: u64,
+    ) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
             cb,
             pr,
             lock,
+            timeout,
         });
     }
 
@@ -212,6 +221,7 @@ impl Scheduler {
 pub struct WaiterManager {
     wait_table: Rc<RefCell<WaitTable>>,
     detector_scheduler: DetectorScheduler,
+    /// Default timeout of waiting for lock.
     wait_for_lock_timeout: u64,
     wake_up_delay_duration: u64,
 }
@@ -232,13 +242,16 @@ impl WaiterManager {
         }
     }
 
-    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
+    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter, mut timeout: u64) {
         let lock = waiter.lock;
         let start_ts = waiter.start_ts;
 
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
-            let when = Instant::now() + Duration::from_millis(self.wait_for_lock_timeout);
+            if timeout == 0 {
+                timeout = self.wait_for_lock_timeout;
+            }
+            let when = Instant::now() + Duration::from_millis(timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
                 .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))
@@ -316,6 +329,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 cb,
                 pr,
                 lock,
+                timeout,
             } => {
                 self.handle_wait_for(
                     handle,
@@ -326,6 +340,7 @@ impl FutureRunnable<Task> for WaiterManager {
                         lock,
                         _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
                     },
+                    timeout,
                 );
                 TASK_COUNTER_VEC.wait_for.inc();
             }
@@ -526,15 +541,40 @@ mod tests {
         let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 
-        // timeout
+        // default timeout
         let (tx, rx) = mpsc::channel();
         let cb = Box::new(move |result| {
             tx.send(result).unwrap();
         });
-        let pr = ProcessResult::Res;
-        waiter_mgr_scheduler.wait_for(0, StorageCb::Boolean(cb), pr, Lock { ts: 0, hash: 0 });
+        waiter_mgr_scheduler.wait_for(
+            0,
+            StorageCb::Boolean(cb),
+            ProcessResult::Res,
+            Lock { ts: 0, hash: 0 },
+            0,
+        );
+        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
         assert_eq!(
-            rx.recv_timeout(Duration::from_millis(2000))
+            rx.recv_timeout(Duration::from_millis(1000))
+                .unwrap()
+                .unwrap(),
+            ()
+        );
+
+        // custom timeout
+        let (tx, rx) = mpsc::channel();
+        let cb = Box::new(move |result| {
+            tx.send(result).unwrap();
+        });
+        waiter_mgr_scheduler.wait_for(
+            0,
+            StorageCb::Boolean(cb),
+            ProcessResult::Res,
+            Lock { ts: 0, hash: 0 },
+            100,
+        );
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(500))
                 .unwrap()
                 .unwrap(),
             ()
@@ -550,6 +590,7 @@ mod tests {
             StorageCb::Boolean(cb),
             ProcessResult::Res,
             Lock { ts: 0, hash: 1 },
+            0,
         );
         waiter_mgr_scheduler.wake_up(0, vec![3, 1, 2], 1);
         assert!(rx
