@@ -328,6 +328,7 @@ pub fn is_encoded_from_asc(encoded: &[u8], raw: &[u8]) -> bool {
 
 /// Returns whether `encoded` is encoded from `raw` using descending memory-comparable format.
 /// Returns `false` if `encoded` is invalid.
+#[allow(clippy::cast_ptr_alignment)]
 pub fn is_encoded_from_desc(encoded: &[u8], raw: &[u8]) -> bool {
     let group_count = raw.len() / ENC_GROUP_SIZE + 1;
     if encoded.len() != group_count * (ENC_GROUP_SIZE + 1) {
