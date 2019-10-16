@@ -329,139 +329,139 @@ fn test_mvcc_rollback_and_cleanup() {
     assert_eq!(scan_lock_resp.locks.len(), 0);
 }
 
-#[test]
-fn test_mvcc_resolve_lock_gc_and_delete() {
-    use kvproto::kvrpcpb::*;
-
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
-
-    let mut ts = 0;
-
-    // Prewrite
-    ts += 1;
-    let prewrite_start_version = ts;
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
-    must_kv_prewrite(
-        &client,
-        ctx.clone(),
-        vec![mutation],
-        k.clone(),
-        prewrite_start_version,
-    );
-
-    // Commit
-    ts += 1;
-    let commit_version = ts;
-    must_kv_commit(
-        &client,
-        ctx.clone(),
-        vec![k.clone()],
-        prewrite_start_version,
-        commit_version,
-    );
-
-    // Prewrite puts some locks.
-    ts += 1;
-    let prewrite_start_version2 = ts;
-    let (k2, v2) = (b"key2".to_vec(), b"value2".to_vec());
-    let new_v = b"new value".to_vec();
-    let mut mut_pri = Mutation::default();
-    mut_pri.set_op(Op::Put);
-    mut_pri.set_key(k.clone());
-    mut_pri.set_value(new_v.clone());
-    let mut mut_sec = Mutation::default();
-    mut_sec.set_op(Op::Put);
-    mut_sec.set_key(k2.clone());
-    mut_sec.set_value(v2.clone());
-    must_kv_prewrite(
-        &client,
-        ctx.clone(),
-        vec![mut_pri, mut_sec],
-        k.clone(),
-        prewrite_start_version2,
-    );
-
-    // Resolve lock
-    ts += 1;
-    let resolve_lock_commit_version = ts;
-    let mut resolve_lock_req = ResolveLockRequest::default();
-    let mut temp_txninfo = TxnInfo::default();
-    temp_txninfo.txn = prewrite_start_version2;
-    temp_txninfo.status = resolve_lock_commit_version;
-    let vec_txninfo = vec![temp_txninfo];
-    resolve_lock_req.set_context(ctx.clone());
-    resolve_lock_req.set_txn_infos(vec_txninfo.into());
-    let resolve_lock_resp = client.kv_resolve_lock(&resolve_lock_req).unwrap();
-    assert!(!resolve_lock_resp.has_region_error());
-    assert!(!resolve_lock_resp.has_error());
-
-    // Get `k` at the latest ts.
-    ts += 1;
-    let get_version1 = ts;
-    let mut get_req1 = GetRequest::default();
-    get_req1.set_context(ctx.clone());
-    get_req1.key = k.clone();
-    get_req1.version = get_version1;
-    let get_resp1 = client.kv_get(&get_req1).unwrap();
-    assert!(!get_resp1.has_region_error());
-    assert!(!get_resp1.has_error());
-    assert_eq!(get_resp1.value, new_v);
-
-    // GC `k` at the latest ts.
-    ts += 1;
-    let gc_safe_ponit = ts;
-    let mut gc_req = GcRequest::default();
-    gc_req.set_context(ctx.clone());
-    gc_req.safe_point = gc_safe_ponit;
-    let gc_resp = client.kv_gc(&gc_req).unwrap();
-    assert!(!gc_resp.has_region_error());
-    assert!(!gc_resp.has_error());
-
-    // the `k` at the old ts should be none.
-    let get_version2 = commit_version + 1;
-    let mut get_req2 = GetRequest::default();
-    get_req2.set_context(ctx.clone());
-    get_req2.key = k.clone();
-    get_req2.version = get_version2;
-    let get_resp2 = client.kv_get(&get_req2).unwrap();
-    assert!(!get_resp2.has_region_error());
-    assert!(!get_resp2.has_error());
-    assert_eq!(get_resp2.value, b"".to_vec());
-
-    // Transaction debugger commands
-    // MvccGetByKey
-    let mut mvcc_get_by_key_req = MvccGetByKeyRequest::default();
-    mvcc_get_by_key_req.set_context(ctx.clone());
-    mvcc_get_by_key_req.key = k.clone();
-    let mvcc_get_by_key_resp = client.mvcc_get_by_key(&mvcc_get_by_key_req).unwrap();
-    assert!(!mvcc_get_by_key_resp.has_region_error());
-    assert!(mvcc_get_by_key_resp.error.is_empty());
-    assert!(mvcc_get_by_key_resp.has_info());
-    // MvccGetByStartTs
-    let mut mvcc_get_by_start_ts_req = MvccGetByStartTsRequest::default();
-    mvcc_get_by_start_ts_req.set_context(ctx.clone());
-    mvcc_get_by_start_ts_req.start_ts = prewrite_start_version2;
-    let mvcc_get_by_start_ts_resp = client
-        .mvcc_get_by_start_ts(&mvcc_get_by_start_ts_req)
-        .unwrap();
-    assert!(!mvcc_get_by_start_ts_resp.has_region_error());
-    assert!(mvcc_get_by_start_ts_resp.error.is_empty());
-    assert!(mvcc_get_by_start_ts_resp.has_info());
-    assert_eq!(mvcc_get_by_start_ts_resp.key, k);
-
-    // Delete range
-    let mut del_req = DeleteRangeRequest::default();
-    del_req.set_context(ctx.clone());
-    del_req.start_key = b"a".to_vec();
-    del_req.end_key = b"z".to_vec();
-    let del_resp = client.kv_delete_range(&del_req).unwrap();
-    assert!(!del_resp.has_region_error());
-    assert!(del_resp.error.is_empty());
-}
+//#[test]
+//fn test_mvcc_resolve_lock_gc_and_delete() {
+//    use kvproto::kvrpcpb::*;
+//
+//    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+//    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+//
+//    let mut ts = 0;
+//
+//    // Prewrite
+//    ts += 1;
+//    let prewrite_start_version = ts;
+//    let mut mutation = Mutation::default();
+//    mutation.set_op(Op::Put);
+//    mutation.set_key(k.clone());
+//    mutation.set_value(v.clone());
+//    must_kv_prewrite(
+//        &client,
+//        ctx.clone(),
+//        vec![mutation],
+//        k.clone(),
+//        prewrite_start_version,
+//    );
+//
+//    // Commit
+//    ts += 1;
+//    let commit_version = ts;
+//    must_kv_commit(
+//        &client,
+//        ctx.clone(),
+//        vec![k.clone()],
+//        prewrite_start_version,
+//        commit_version,
+//    );
+//
+//    // Prewrite puts some locks.
+//    ts += 1;
+//    let prewrite_start_version2 = ts;
+//    let (k2, v2) = (b"key2".to_vec(), b"value2".to_vec());
+//    let new_v = b"new value".to_vec();
+//    let mut mut_pri = Mutation::default();
+//    mut_pri.set_op(Op::Put);
+//    mut_pri.set_key(k.clone());
+//    mut_pri.set_value(new_v.clone());
+//    let mut mut_sec = Mutation::default();
+//    mut_sec.set_op(Op::Put);
+//    mut_sec.set_key(k2.clone());
+//    mut_sec.set_value(v2.clone());
+//    must_kv_prewrite(
+//        &client,
+//        ctx.clone(),
+//        vec![mut_pri, mut_sec],
+//        k.clone(),
+//        prewrite_start_version2,
+//    );
+//
+//    // Resolve lock
+//    ts += 1;
+//    let resolve_lock_commit_version = ts;
+//    let mut resolve_lock_req = ResolveLockRequest::default();
+//    let mut temp_txninfo = TxnInfo::default();
+//    temp_txninfo.txn = prewrite_start_version2;
+//    temp_txninfo.status = resolve_lock_commit_version;
+//    let vec_txninfo = vec![temp_txninfo];
+//    resolve_lock_req.set_context(ctx.clone());
+//    resolve_lock_req.set_txn_infos(vec_txninfo.into());
+//    let resolve_lock_resp = client.kv_resolve_lock(&resolve_lock_req).unwrap();
+//    assert!(!resolve_lock_resp.has_region_error());
+//    assert!(!resolve_lock_resp.has_error());
+//
+//    // Get `k` at the latest ts.
+//    ts += 1;
+//    let get_version1 = ts;
+//    let mut get_req1 = GetRequest::default();
+//    get_req1.set_context(ctx.clone());
+//    get_req1.key = k.clone();
+//    get_req1.version = get_version1;
+//    let get_resp1 = client.kv_get(&get_req1).unwrap();
+//    assert!(!get_resp1.has_region_error());
+//    assert!(!get_resp1.has_error());
+//    assert_eq!(get_resp1.value, new_v);
+//
+//    // GC `k` at the latest ts.
+//    ts += 1;
+//    let gc_safe_ponit = ts;
+//    let mut gc_req = GcRequest::default();
+//    gc_req.set_context(ctx.clone());
+//    gc_req.safe_point = gc_safe_ponit;
+//    let gc_resp = client.kv_gc(&gc_req).unwrap();
+//    assert!(!gc_resp.has_region_error());
+//    assert!(!gc_resp.has_error());
+//
+//    // the `k` at the old ts should be none.
+//    let get_version2 = commit_version + 1;
+//    let mut get_req2 = GetRequest::default();
+//    get_req2.set_context(ctx.clone());
+//    get_req2.key = k.clone();
+//    get_req2.version = get_version2;
+//    let get_resp2 = client.kv_get(&get_req2).unwrap();
+//    assert!(!get_resp2.has_region_error());
+//    assert!(!get_resp2.has_error());
+//    assert_eq!(get_resp2.value, b"".to_vec());
+//
+//    // Transaction debugger commands
+//    // MvccGetByKey
+//    let mut mvcc_get_by_key_req = MvccGetByKeyRequest::default();
+//    mvcc_get_by_key_req.set_context(ctx.clone());
+//    mvcc_get_by_key_req.key = k.clone();
+//    let mvcc_get_by_key_resp = client.mvcc_get_by_key(&mvcc_get_by_key_req).unwrap();
+//    assert!(!mvcc_get_by_key_resp.has_region_error());
+//    assert!(mvcc_get_by_key_resp.error.is_empty());
+//    assert!(mvcc_get_by_key_resp.has_info());
+//    // MvccGetByStartTs
+//    let mut mvcc_get_by_start_ts_req = MvccGetByStartTsRequest::default();
+//    mvcc_get_by_start_ts_req.set_context(ctx.clone());
+//    mvcc_get_by_start_ts_req.start_ts = prewrite_start_version2;
+//    let mvcc_get_by_start_ts_resp = client
+//        .mvcc_get_by_start_ts(&mvcc_get_by_start_ts_req)
+//        .unwrap();
+//    assert!(!mvcc_get_by_start_ts_resp.has_region_error());
+//    assert!(mvcc_get_by_start_ts_resp.error.is_empty());
+//    assert!(mvcc_get_by_start_ts_resp.has_info());
+//    assert_eq!(mvcc_get_by_start_ts_resp.key, k);
+//
+//    // Delete range
+//    let mut del_req = DeleteRangeRequest::default();
+//    del_req.set_context(ctx.clone());
+//    del_req.start_key = b"a".to_vec();
+//    del_req.end_key = b"z".to_vec();
+//    let del_resp = client.kv_delete_range(&del_req).unwrap();
+//    assert!(!del_resp.has_region_error());
+//    assert!(del_resp.error.is_empty());
+//}
 
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
 
