@@ -760,7 +760,7 @@ mod check_data_dir_empty {
 
     use super::ConfigError;
 
-    fn get_file_count(data_path: &str, suffix: &str) -> Result<usize, ConfigError> {
+    fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError> {
         let op = "data-dir.file-count.get";
         let dir = fs::read_dir(data_path).map_err(|e| {
             ConfigError::FileSystem(format!(
@@ -773,25 +773,31 @@ mod check_data_dir_empty {
             if entry.is_err() {
                 continue;
             }
-            let entry = entry.unwrap();
-            if entry.path().is_file() && entry.file_name().to_str().unwrap().ends_with(suffix) {
-                file_count += 1;
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    if extension == ext {
+                        file_count += 1;
+                    }
+                } else if extension.is_empty() {
+                    file_count += 1;
+                }
             }
         }
         Ok(file_count)
     }
 
     // check dir is empty of file with certain suffix
-    pub fn check_data_dir_empty(data_path: &str, suffix: &str) -> Result<(), ConfigError> {
+    pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
         let op = "data-dir.empty.check";
         let dir = Path::new(data_path);
         if dir.exists() && !dir.is_file() {
-            let count = get_file_count(data_path, suffix)?;
+            let count = get_file_count(data_path, extension)?;
             if count > 0 {
                 return Err(ConfigError::Limit(format!(
-                    "{}: the number of file with suffix {} in directory {} is too much, \
+                    "{}: the number of file with extension {} in directory {} is too much, \
                      got {}, expect 0.",
-                    op, suffix, data_path, count,
+                    op, extension, data_path, count,
                 )));
             }
         }
@@ -819,20 +825,22 @@ mod check_data_dir_empty {
                 .tempdir()
                 .unwrap()
                 .into_path();
-            let count = get_file_count(tmp_path.to_str().unwrap(), ".txt").unwrap();
+            let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
             assert_eq!(count, 0);
             let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
             create_file(&tmp_file, b"");
-            let count = get_file_count(tmp_path.to_str().unwrap(), ".txt").unwrap();
+            let count = get_file_count(tmp_path.to_str().unwrap(), "").unwrap();
             assert_eq!(count, 1);
-            let count = get_file_count(tmp_path.to_str().unwrap(), ".txt1").unwrap();
+            let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
+            assert_eq!(count, 1);
+            let count = get_file_count(tmp_path.to_str().unwrap(), "xt").unwrap();
             assert_eq!(count, 0);
         }
 
         #[test]
         fn test_check_data_dir_empty() {
             // test invalid data_path
-            let ret = check_data_dir_empty("/sys/invalid", ".txt");
+            let ret = check_data_dir_empty("/sys/invalid", "txt");
             assert!(ret.is_err());
             // test empty data_path
             let tmp_path = Builder::new()
@@ -840,14 +848,16 @@ mod check_data_dir_empty {
                 .tempdir()
                 .unwrap()
                 .into_path();
-            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), ".txt");
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
             assert!(ret.is_ok());
             // test non-empty data_path
             let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
             create_file(&tmp_file, b"");
-            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), ".txt");
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
             assert!(ret.is_err());
-            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), ".txt1");
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
+            assert!(ret.is_err());
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
             assert!(ret.is_ok());
         }
     }
