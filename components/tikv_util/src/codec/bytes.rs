@@ -278,6 +278,59 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     }
 }
 
+/// Returns whether `encoded` bytes is encoded from `raw`. Returns `false` if `encoded` is invalid.
+pub fn is_encoded_from(encoded: &[u8], raw: &[u8], desc: bool) -> bool {
+    let check_single_chunk = |encoded: &[u8], raw: &[u8]| {
+        let len = raw.len();
+        let pad = (ENC_GROUP_SIZE - len) as u8;
+        if desc {
+            encoded[ENC_GROUP_SIZE] == !(ENC_MARKER - pad)
+                && encoded[..len]
+                    .iter()
+                    .zip(raw)
+                    .all(|(&enc, &raw)| enc == !raw)
+                && encoded[len..encoded.len() - 1]
+                    .iter()
+                    .all(|&v| v == ENC_MARKER)
+        } else {
+            encoded[ENC_GROUP_SIZE] == (ENC_MARKER - pad)
+                && &encoded[..len] == raw
+                && encoded[len..encoded.len() - 1]
+                    .iter()
+                    .all(|&v| v == !ENC_MARKER)
+        }
+    };
+
+    let mut rev_encoded_chunks = encoded.rchunks_exact(ENC_GROUP_SIZE + 1);
+    // Valid encoded bytes must has complete chunks
+    if !rev_encoded_chunks.remainder().is_empty() {
+        return false;
+    }
+
+    // Bytes are compared in reverse order because in real cases like TiDB, if two keys
+    // are different, the last a few bytes are more likely to be different.
+
+    let raw_chunks = raw.chunks_exact(ENC_GROUP_SIZE);
+    // Check the last chunk first
+    match rev_encoded_chunks.next() {
+        Some(encoded_chunk) if check_single_chunk(encoded_chunk, raw_chunks.remainder()) => {}
+        _ => return false,
+    }
+
+    // The count of the remaining chunks must be the same. Using `size_hint` here is both safe and
+    // efficient because chunk iterators implement trait `TrustedLen`.
+    if rev_encoded_chunks.size_hint() != raw_chunks.size_hint() {
+        return false;
+    }
+
+    for (encoded_chunk, raw_chunk) in rev_encoded_chunks.zip(raw_chunks.rev()) {
+        if !check_single_chunk(encoded_chunk, raw_chunk) {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +442,99 @@ mod tests {
         for mut x in invalid_bytes {
             assert!(decode_bytes(&mut x.as_slice(), false).is_err());
             assert!(decode_bytes_in_place(&mut x, false).is_err());
+        }
+    }
+
+    #[test]
+    fn test_is_encoded_from() {
+        for raw_len in 0..=24 {
+            let raw: Vec<u8> = (1..=raw_len).collect();
+            for &desc in &[true, false] {
+                let encoded = encode_order_bytes(&raw, desc);
+                assert!(
+                    is_encoded_from(&encoded, &raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    encoded,
+                    raw,
+                    desc
+                );
+
+                // Should return false if we modify one byte in raw
+                for i in 0..raw.len() {
+                    let mut invalid_raw = raw.clone();
+                    invalid_raw[i] = raw[i].wrapping_add(1);
+                    assert!(
+                        !is_encoded_from(&encoded, &invalid_raw, desc),
+                        "Encoded: {:?}, Raw: {:?}, desc: {}",
+                        encoded,
+                        invalid_raw,
+                        desc
+                    );
+                }
+
+                // Should return false if we modify one byte in encoded
+                for i in 0..encoded.len() {
+                    let mut invalid_encoded = encoded.clone();
+                    invalid_encoded[i] = encoded[i].wrapping_add(1);
+                    assert!(
+                        !is_encoded_from(&invalid_encoded, &raw, desc),
+                        "Encoded: {:?}, Raw: {:?}, desc: {}",
+                        invalid_encoded,
+                        raw,
+                        desc
+                    );
+                }
+
+                // Should return false if encoded length is not a multiple of 9
+                let invalid_encoded = &encoded[..encoded.len() - 1];
+                assert!(
+                    !is_encoded_from(invalid_encoded, &raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    invalid_encoded,
+                    raw,
+                    desc
+                );
+
+                // Should return false if encoded has less or more chunks
+                let shorter_encoded = &encoded[..encoded.len() - ENC_GROUP_SIZE - 1];
+                assert!(
+                    !is_encoded_from(shorter_encoded, &raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    shorter_encoded,
+                    raw,
+                    desc
+                );
+                let mut longer_encoded = encoded.clone();
+                longer_encoded.extend(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+                assert!(
+                    !is_encoded_from(&longer_encoded, &raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    longer_encoded,
+                    raw,
+                    desc
+                );
+
+                // Should return false if raw is longer or shorter
+                if !raw.is_empty() {
+                    let shorter_raw = &raw[..raw.len() - 1];
+                    assert!(
+                        !is_encoded_from(&encoded, shorter_raw, desc),
+                        "Encoded: {:?}, Raw: {:?}, desc: {}",
+                        encoded,
+                        shorter_raw,
+                        desc
+                    );
+                }
+                let mut longer_raw = raw.to_vec();
+                longer_raw.push(0);
+                assert!(
+                    !is_encoded_from(&encoded, &longer_raw, desc),
+                    "Encoded: {:?}, Raw: {:?}, desc: {}",
+                    encoded,
+                    longer_raw,
+                    desc
+                );
+            }
         }
     }
 
@@ -522,6 +668,24 @@ mod tests {
         b.iter(|| {
             let mut encoded = encoded.clone();
             decode_bytes_in_place(&mut encoded, false).unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from(b: &mut Bencher) {
+        let key = [b'x'; 10000];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            assert!(is_encoded_from(&encoded, &key, false));
+        });
+    }
+
+    #[bench]
+    fn bench_is_encoded_from_small(b: &mut Bencher) {
+        let key = [b'x'; 30];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            assert!(is_encoded_from(&encoded, &key, false));
         });
     }
 }
