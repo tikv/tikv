@@ -756,10 +756,11 @@ pub fn check_data_dir(_data_path: &str) -> Result<(), ConfigError> {
 
 mod check_data_dir_empty {
     use std::fs;
+    use std::path::Path;
 
-    use super::{canonicalize_path, ConfigError};
+    use super::ConfigError;
 
-    fn get_file_count(data_path: &str) -> Result<usize, ConfigError> {
+    fn get_file_count(data_path: &str, suffix: &str) -> Result<usize, ConfigError> {
         let op = "data-dir.file-count.get";
         let dir = fs::read_dir(data_path).map_err(|e| {
             ConfigError::FileSystem(format!(
@@ -773,27 +774,26 @@ mod check_data_dir_empty {
                 continue;
             }
             let entry = entry.unwrap();
-            if entry.path().is_file() {
+            if entry.path().is_file() && entry.file_name().to_str().unwrap().ends_with(suffix) {
                 file_count += 1;
             }
         }
         Ok(file_count)
     }
 
-    // check dir is empty of file
-    pub fn check_data_dir_empty(data_path: &str) -> Result<(), ConfigError> {
+    // check dir is empty of file with certain suffix
+    pub fn check_data_dir_empty(data_path: &str, suffix: &str) -> Result<(), ConfigError> {
         let op = "data-dir.empty.check";
-        let real_path = match canonicalize_path(data_path) {
-            Ok(path) => path,
-            Err(e) => {
-                return Err(ConfigError::FileSystem(format!(
-                    "{}: path: {:?} canonicalize failed: {:?}",
-                    op, data_path, e
+        let dir = Path::new(data_path);
+        if dir.exists() && !dir.is_file() {
+            let count = get_file_count(data_path, suffix)?;
+            if count > 0 {
+                return Err(ConfigError::Limit(format!(
+                    "{}: the number of file with suffix {} in directory {} is too much, \
+                     got {}, expect 0.",
+                    op, suffix, data_path, count,
                 )));
             }
-        };
-        if get_file_count(&real_path)? > 0 {
-            warn!("directory not empty"; "data_path" => data_path);
         }
         Ok(())
     }
@@ -819,18 +819,20 @@ mod check_data_dir_empty {
                 .tempdir()
                 .unwrap()
                 .into_path();
-            let count = get_file_count(tmp_path.to_str().unwrap()).unwrap();
+            let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
             assert_eq!(count, 0);
             let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
             create_file(&tmp_file, b"");
-            let count = get_file_count(tmp_path.to_str().unwrap()).unwrap();
+            let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
             assert_eq!(count, 1);
+            let count = get_file_count(tmp_path.to_str().unwrap(), "txt1").unwrap();
+            assert_eq!(count, 0);
         }
 
         #[test]
         fn test_check_data_dir_empty() {
             // test invalid data_path
-            let ret = check_data_dir_empty("/sys/invalid");
+            let ret = check_data_dir_empty("/sys/invalid", "txt");
             assert!(ret.is_err());
             // test empty data_path
             let tmp_path = Builder::new()
@@ -838,12 +840,14 @@ mod check_data_dir_empty {
                 .tempdir()
                 .unwrap()
                 .into_path();
-            let ret = check_data_dir_empty(tmp_path.to_str().unwrap());
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
             assert!(ret.is_ok());
             // test non-empty data_path
             let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
             create_file(&tmp_file, b"");
-            let ret = check_data_dir_empty(tmp_path.to_str().unwrap());
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
+            assert!(ret.is_err());
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt1");
             assert!(ret.is_ok());
         }
     }
