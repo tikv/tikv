@@ -423,7 +423,7 @@ impl<S: Snapshot> MvccReader<S> {
             return false;
         }
 
-        // Note: SInce the properties are file-based, it can be false positive.
+        // Note: Since the properties are file-based, it can be false positive.
         // For example, multiple files can have a different version of the same row.
 
         // A lot of MVCC versions to GC.
