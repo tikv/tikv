@@ -44,7 +44,7 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
-const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 10;
+const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
 
 struct HistogramObserver {
@@ -174,7 +174,7 @@ impl BatchLimiter {
                 if latency > timeout.as_millis() as f64 * 2.0 {
                     self.thread_load_estimation = (self.thread_load_estimation + load) / 2;
                 }
-                if self.latency_estimation > timeout.as_millis() as f64 * 2.0 + 0.2 {
+                if self.latency_estimation > timeout.as_millis() as f64 * 2.0 {
                     self.enable_batch = true;
                     self.latency_estimation = 0.0;
                 }
