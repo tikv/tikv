@@ -17,6 +17,7 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
+use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
 use tikv::config::*;
@@ -542,6 +543,45 @@ pub fn create_test_engine(
     (engines, path)
 }
 
+pub fn create_test_engine_on_dir(
+    engines: Option<Engines>,
+    router: RaftRouter,
+    cfg: &TiKvConfig,
+    dir: &TempDir,
+) -> Engines {
+    // Create engine
+    match engines {
+        Some(e) => e,
+        None => {
+            let mut kv_db_opt = cfg.rocksdb.build_opt();
+            let router = Mutex::new(router);
+            let cmpacted_handler = Box::new(move |event| {
+                router
+                    .lock()
+                    .unwrap()
+                    .send_control(StoreMsg::CompactedEvent(event))
+                    .unwrap();
+            });
+            kv_db_opt.add_event_listener(CompactionListener::new(
+                cmpacted_handler,
+                Some(dummpy_filter),
+            ));
+            let cache = cfg.storage.block_cache.build_shared_cache();
+            let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
+            let engine = Arc::new(
+                rocks::util::new_engine_opt(dir.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                    .unwrap(),
+            );
+            let raft_path = dir.path().join(Path::new("raft"));
+            let raft_engine = Arc::new(
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
+            );
+            Engines::new(engine, raft_engine, cache.is_some())
+        }
+    }
+}
+
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // We don't want to generate snapshots due to compact log.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
@@ -597,6 +637,19 @@ pub fn configure_for_lease_read<T: Simulator>(
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
+}
+
+pub fn configure_for_enable_titan<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    min_blob_size: ReadableSize,
+) {
+    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
+    cluster.cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+}
+
+pub fn configure_for_disable_titan<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.rocksdb.titan.enabled = false;
 }
 
 /// Keep putting random kvs until specified size limit is reached.

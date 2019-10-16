@@ -784,7 +784,7 @@ impl DbConfig {
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
-            // TODO: rmeove CF_RAFT.
+            // TODO: remove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
