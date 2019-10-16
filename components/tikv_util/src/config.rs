@@ -819,20 +819,20 @@ mod check_data_dir_empty {
                 .tempdir()
                 .unwrap()
                 .into_path();
-            let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
+            let count = get_file_count(tmp_path.to_str().unwrap(), ".txt").unwrap();
             assert_eq!(count, 0);
             let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
             create_file(&tmp_file, b"");
-            let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
+            let count = get_file_count(tmp_path.to_str().unwrap(), ".txt").unwrap();
             assert_eq!(count, 1);
-            let count = get_file_count(tmp_path.to_str().unwrap(), "txt1").unwrap();
+            let count = get_file_count(tmp_path.to_str().unwrap(), ".txt1").unwrap();
             assert_eq!(count, 0);
         }
 
         #[test]
         fn test_check_data_dir_empty() {
             // test invalid data_path
-            let ret = check_data_dir_empty("/sys/invalid", "txt");
+            let ret = check_data_dir_empty("/sys/invalid", ".txt");
             assert!(ret.is_err());
             // test empty data_path
             let tmp_path = Builder::new()
@@ -840,14 +840,14 @@ mod check_data_dir_empty {
                 .tempdir()
                 .unwrap()
                 .into_path();
-            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), ".txt");
             assert!(ret.is_ok());
             // test non-empty data_path
             let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
             create_file(&tmp_file, b"");
-            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), ".txt");
             assert!(ret.is_err());
-            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt1");
+            let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), ".txt1");
             assert!(ret.is_ok());
         }
     }
