@@ -787,7 +787,7 @@ mod check_data_dir_empty {
         Ok(file_count)
     }
 
-    // check dir is empty of file with certain suffix
+    // check dir is empty of file with certain extension
     pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
         let op = "data-dir.empty.check";
         let dir = Path::new(data_path);
