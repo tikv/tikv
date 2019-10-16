@@ -16,7 +16,6 @@ use tikv::storage::gc_worker::GC_MAX_PENDING_TASKS;
 use tikv::storage::*;
 use tikv_util::HandyRwLock;
 
-#[test]
 fn test_storage_gcworker_busy() {
     let _guard = crate::setup();
     let snapshot_fp = "raftkv_async_snapshot";
