@@ -461,14 +461,18 @@ fn check_system_config(config: &TiKvConfig) {
     }
     // Check blob file dir is empty when titan is disabled
     if !config.rocksdb.titan.enabled {
-        let titan_dir = if config.rocksdb.titan.dirname.is_empty() {
-            "titandb"
+        let titan_path = if config.rocksdb.titan.dirname.is_empty() {
+            let store_path = Path::new(&config.storage.data_dir);
+            let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
+            db_path.join(Path::new("titandb"))
         } else {
-            config.rocksdb.titan.dirname.as_str()
+            Path::new(&config.rocksdb.titan.dirname).to_path_buf()
         };
-        if let Err(e) = tikv_util::config::check_data_dir_empty(titan_dir, ".blob") {
+        if let Err(e) =
+            tikv_util::config::check_data_dir_empty(titan_path.to_str().unwrap(), "blob")
+        {
             fatal!(
-                "check: titandb-data-dir-empty; err: {}; \
+                "check: titandb-data-dir-empty; err: \"{}\"; \
                  hint: You have disabled titan when its data directory is not empty. \
                  To properly shutdown titan, please enter fallback blob-run-mode and \
                  wait till titandb files are all safely ingested.",
