@@ -35,6 +35,7 @@ use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
+use tikv_util::ts_validator::SafePoint;
 use tikv_util::worker::FutureWorker;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -186,6 +187,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
+    let safe_point = SafePoint::new();
+
     let storage = create_raft_storage(
         engine.clone(),
         &cfg.storage,
@@ -193,6 +196,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Some(engines.kv.clone()),
         Some(raft_router.clone()),
         lock_mgr.clone(),
+        safe_point.get_ts_validator(),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -213,7 +217,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         pd_sender.clone(),
         engine.clone(),
     );
-    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
+    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool, safe_point.get_ts_validator());
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
     let import_service = ImportSSTService::new(

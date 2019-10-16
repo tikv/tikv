@@ -26,6 +26,7 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use tikv_util::future_pool::FuturePool;
+use tikv_util::ts_validator::TsValidator;
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -40,6 +41,7 @@ pub fn create_raft_storage<S>(
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
     lock_mgr: Option<LockManager>,
+    ts_validator: TsValidator,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
@@ -51,6 +53,7 @@ where
         local_storage,
         raft_store_router,
         lock_mgr,
+        ts_validator,
     )?;
     Ok(store)
 }

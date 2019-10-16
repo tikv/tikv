@@ -30,6 +30,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
+use tikv_util::ts_validator::TsValidator;
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -828,6 +829,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
         lock_mgr: Option<L>,
+        ts_validator: TsValidator,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
         let sched = TxnScheduler::new(
