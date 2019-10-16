@@ -564,8 +564,11 @@ impl<S: Snapshot> MvccTxn<S> {
 
                         // Insert a Rollback to Write CF in case that a stale prewrite command
                         // is received after a cleanup command.
-                        // During cleanup, when there is no lock, it cannot be the primary key
-                        // of a pessimistic transaction, so the rollback needn't be protected.
+                        // Pessimistic transactions prewrite successfully only if all its
+                        // pessimistic locks exist. So collapsing the rollback of a pessimistic
+                        // lock is safe. After a pessimistic transaction acquires all its locks,
+                        // it is impossible that neither a lock nor a write record is found.
+                        // Therefore, we don't need to protect the rollback here.
                         let write = Write::new_rollback(ts, false);
                         self.put_write(key, ts, write.to_bytes());
                         Ok(false)

@@ -21,7 +21,7 @@ const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
 /// The short value for rollback records which are protected from being collapsed.
-const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"protected";
+const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"p";
 
 impl WriteType {
     pub fn from_lock_type(tp: LockType) -> Option<WriteType> {
