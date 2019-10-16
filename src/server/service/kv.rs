@@ -1643,14 +1643,38 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: CheckTxnStatusRequest,
 ) -> impl Future<Item = CheckTxnStatusResponse, Error = Error> {
-    let primary_key = Key::from_raw(req.get_primary_key());
+    // let primary_key = Key::from_raw(req.get_primary_key());
 
+    // let (cb, f) = paired_future_callback();
+    // let res = storage.async_check_txn_status(
+    //     req.take_context(),
+    //     primary_key,
+    //     req.get_lock_ts(),
+    //     req.get_caller_start_ts(),
+    //     req.get_current_ts(),
+    //     cb,
+    // );
+
+    // AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    //     let mut resp = CheckTxnStatusResponse::default();
+    //     if let Some(err) = extract_region_error(&v) {
+    //         resp.set_region_error(err);
+    //     } else {
+    //         match v {
+    //             Ok((lock_ttl, commit_ts)) => {
+    //                 resp.set_lock_ttl(lock_ttl);
+    //                 resp.set_commit_version(commit_ts);
+    //             }
+    //             Err(e) => resp.set_error(extract_key_error(&e)),
+    //         }
+    //     }
+    //     resp
+    // })
     let (cb, f) = paired_future_callback();
-    let res = storage.async_check_txn_status(
+    let res = storage.async_cleanup(
         req.take_context(),
-        primary_key,
-        req.get_lock_ts(),
-        req.get_caller_start_ts(),
+        Key::from_raw(req.get_key()),
+        req.get_start_version(),
         req.get_current_ts(),
         cb,
     );
@@ -1659,13 +1683,11 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         let mut resp = CheckTxnStatusResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
-        } else {
-            match v {
-                Ok((lock_ttl, commit_ts)) => {
-                    resp.set_lock_ttl(lock_ttl);
-                    resp.set_commit_version(commit_ts);
-                }
-                Err(e) => resp.set_error(extract_key_error(&e)),
+        } else if let Err(e) = v {
+            if let Some(ts) = extract_committed(&e) {
+                resp.set_commit_version(ts);
+            } else {
+                resp.set_error(extract_key_error(&e));
             }
         }
         resp
