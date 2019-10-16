@@ -16,6 +16,7 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
+use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
 use tikv::config::*;
@@ -587,6 +588,19 @@ pub fn configure_for_lease_read<T: Simulator>(
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
+}
+
+pub fn configure_for_enable_titan<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    min_blob_size: ReadableSize,
+) {
+    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
+    cluster.cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+}
+
+pub fn configure_for_disable_titan<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.rocksdb.titan.enabled = false;
 }
 
 /// Keep putting random kvs until specified size limit is reached.
