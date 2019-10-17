@@ -8,10 +8,9 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
 pub mod config;
-pub mod gc_worker;
 pub mod kv;
 pub mod lock_manager;
-mod metrics;
+pub mod metrics;
 pub mod mvcc;
 pub mod readpool_impl;
 pub mod txn;
@@ -22,21 +21,17 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc};
 use std::{cmp, error, u64};
 
-use engine::rocks::DB;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
 
-use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 use self::kv::with_tls_engine;
 pub use self::kv::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics,
@@ -662,8 +657,6 @@ impl Options {
 pub struct TestStorageBuilder<E: Engine> {
     engine: E,
     config: Config,
-    local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
 }
 
 impl TestStorageBuilder<RocksEngine> {
@@ -672,8 +665,6 @@ impl TestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
-            local_storage: None,
-            raft_store_router: None,
         }
     }
 }
@@ -683,8 +674,6 @@ impl<E: Engine> TestStorageBuilder<E> {
         Self {
             engine,
             config: Config::default(),
-            local_storage: None,
-            raft_store_router: None,
         }
     }
 
@@ -696,36 +685,13 @@ impl<E: Engine> TestStorageBuilder<E> {
         self
     }
 
-    /// Set local storage for GCWorker.
-    ///
-    /// By default, `None` will be used.
-    pub fn local_storage(mut self, local_storage: Arc<DB>) -> Self {
-        self.local_storage = Some(local_storage);
-        self
-    }
-
-    /// Set raft store router for GCWorker.
-    ///
-    /// By default, `None` will be used.
-    pub fn raft_store_router(mut self, raft_store_router: ServerRaftStoreRouter) -> Self {
-        self.raft_store_router = Some(raft_store_router);
-        self
-    }
-
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, DummyLockMgr>> {
         let read_pool = self::readpool_impl::build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-        Storage::from_engine(
-            self.engine,
-            &self.config,
-            read_pool,
-            self.local_storage,
-            self.raft_store_router,
-            None,
-        )
+        Storage::from_engine(self.engine, &self.config, read_pool, None)
     }
 }
 
@@ -760,9 +726,6 @@ pub struct Storage<E: Engine, L: LockMgr> {
     read_pool_normal: FuturePool,
     read_pool_high: FuturePool,
 
-    /// Used to handle requests related to GC.
-    gc_worker: GCWorker<E>,
-
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
     // TODO: This should be implemented in thread pool and worker.
@@ -789,7 +752,6 @@ impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
             read_pool_low: self.read_pool_low.clone(),
             read_pool_normal: self.read_pool_normal.clone(),
             read_pool_high: self.read_pool_high.clone(),
-            gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             pessimistic_txn_enabled: self.pessimistic_txn_enabled,
@@ -810,11 +772,6 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
             return;
         }
 
-        let r = self.gc_worker.stop();
-        if let Err(e) = r {
-            error!("Failed to stop gc_worker:"; "err" => ?e);
-        }
-
         info!("Storage stopped.");
     }
 }
@@ -825,8 +782,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         engine: E,
         config: &Config,
         mut read_pool: Vec<FuturePool>,
-        local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
         lock_mgr: Option<L>,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
@@ -837,14 +792,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
         );
-        let mut gc_worker = GCWorker::new(
-            engine.clone(),
-            local_storage,
-            raft_store_router,
-            config.gc_ratio_threshold,
-        );
-
-        gc_worker.start()?;
 
         let read_pool_high = read_pool.remove(2);
         let read_pool_normal = read_pool.remove(1);
@@ -858,19 +805,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             read_pool_low,
             read_pool_normal,
             read_pool_high,
-            gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             pessimistic_txn_enabled,
         })
-    }
-
-    /// Starts running GC automatically.
-    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
-        &self,
-        cfg: AutoGCConfig<S, R>,
-    ) -> Result<()> {
-        self.gc_worker.start_auto_gc(cfg)
     }
 
     /// Get the underlying `Engine` of the `Storage`.
@@ -1451,36 +1389,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
-        Ok(())
-    }
-
-    /// Do garbage collection, which means cleaning up old MVCC keys.
-    ///
-    /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
-    /// during and after the GC operation.
-    pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
-        self.gc_worker.async_gc(ctx, safe_point, callback)?;
-        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
-        Ok(())
-    }
-
-    /// Delete all data in the range.
-    ///
-    /// This function is **VERY DANGEROUS**. It's not only running on one single region, but it can
-    /// delete a large range that spans over many regions, bypassing the Raft layer. This is
-    /// designed for TiDB to quickly free up the disk space and do GC afterward.
-    /// drop/truncate table/index. By invoking this function, it's user's responsibility to make
-    /// sure no more operations will be performed in this destroyed range.
-    pub fn async_unsafe_destroy_range(
-        &self,
-        ctx: Context,
-        start_key: Key,
-        end_key: Key,
-        callback: Callback<()>,
-    ) -> Result<()> {
-        self.gc_worker
-            .async_unsafe_destroy_range(ctx, start_key, end_key, callback)?;
-        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         Ok(())
     }
 
