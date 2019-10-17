@@ -1496,7 +1496,7 @@ mod tests {
     use engine::Mutable;
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::Rocks;
-    use engine_traits::KvEngine;
+    use engine_traits::CFHandleExt;
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();

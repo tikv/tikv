@@ -24,6 +24,8 @@ pub use crate::options::*;
 mod util;
 mod db_options;
 pub use crate::db_options::*;
+mod cf_handle;
+pub use crate::cf_handle::*;
 mod cf_options;
 pub use crate::cf_options::*;
 

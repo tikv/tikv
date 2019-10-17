@@ -2,7 +2,6 @@
 
 use std::fmt::Debug;
 use std::path::Path;
-use std::result::Result as StdResult;
 
 use crate::*;
 
@@ -22,19 +21,11 @@ pub trait WriteBatch: Mutable + Send {
 }
 
 pub trait KvEngine: Peekable + Mutable + Iterable
-    + DBOptionsExt
+    + DBOptionsExt + CFHandleExt
     + Send + Sync + Clone + Debug + 'static
 {
     type Snap: Snapshot;
     type Batch: WriteBatch;
-    // FIXME: With the current rocks implementation this
-    // type wants to be able to contain a lifetime, but it's
-    // not possible without "generic associated types".
-    //
-    // https://github.com/rust-lang/rfcs/pull/1598
-    // https://github.com/rust-lang/rust/issues/44265
-    type CFHandle: CFHandle;
-    type CFOptions: CFOptions;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()>;
     fn write(&self, wb: &Self::Batch) -> Result<()> {
@@ -46,14 +37,6 @@ pub trait KvEngine: Peekable + Mutable + Iterable
     fn sync(&self) -> Result<()>;
 
     fn cf_names(&self) -> Vec<&str>;
-    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
-    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions;
-    // FIXME: return type
-    fn set_options_cf(
-        &self,
-        cf: &Self::CFHandle,
-        options: &[(&str, &str)],
-    ) -> StdResult<(), String>;
 
     fn delete_all_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
         if start_key >= end_key {

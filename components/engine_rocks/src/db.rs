@@ -3,7 +3,6 @@
 use std::fs::{self, File};
 use std::ops::Deref;
 use std::path::Path;
-use std::result::Result as StdResult;
 use std::sync::Arc;
 
 use engine::rocks::util::prepare_sst_for_ingestion;
@@ -14,8 +13,6 @@ use engine_traits::{
 use rocksdb::{set_external_sst_file_global_seq_no, DBIterator, Writable, DB};
 use tikv_util::file::calc_crc32;
 
-use crate::cf::RocksCFHandle;
-use crate::cf_options::RocksCFOptions;
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::{delete_all_in_range_cf, get_cf_handle};
 use crate::{Iterator, Snapshot};
@@ -90,8 +87,6 @@ impl Into<Arc<DB>> for Rocks {
 impl KvEngine for Rocks {
     type Snap = Snapshot;
     type Batch = crate::WriteBatch;
-    type CFHandle = RocksCFHandle;
-    type CFOptions = RocksCFOptions;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()> {
         if wb.get_db().path() != self.0.path() {
@@ -121,22 +116,6 @@ impl KvEngine for Rocks {
 
     fn cf_names(&self) -> Vec<&str> {
         self.0.cf_names()
-    }
-
-    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
-        self.0.cf_handle(name).map(RocksCFHandle::from_raw)
-    }
-
-    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions {
-        RocksCFOptions::from_raw(self.0.get_options_cf(cf.as_inner()))
-    }
-
-    fn set_options_cf(
-        &self,
-        cf: &Self::CFHandle,
-        options: &[(&str, &str)],
-    ) -> StdResult<(), String> {
-        self.0.set_options_cf(cf.as_inner(), options)
     }
 
     fn delete_all_in_range_cf(

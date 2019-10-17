@@ -9,5 +9,3 @@ pub const CF_RAFT: CfName = "raft";
 pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
-
-pub trait CFHandle {}
