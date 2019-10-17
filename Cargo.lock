@@ -155,7 +155,7 @@ dependencies = [
 [[package]]
 name = "bzip2-sys"
 version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#91d576f75a3cb8acd8b741312c97c9fbd7c3df6a"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#93c465c7a6991668ca8062f454431f65545f4d96"
 dependencies = [
  "cc 1.0.45 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.64 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1089,7 +1089,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.0#a9b913764cdc1f63e80e351eb8c238ed861c1c2f"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.0#7574dae9aec5fb4ea74f62722414e52ca1b1f1c0"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.45 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1106,7 +1106,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.0#a9b913764cdc1f63e80e351eb8c238ed861c1c2f"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.0#7574dae9aec5fb4ea74f62722414e52ca1b1f1c0"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.45 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1866,7 +1866,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.0#a9b913764cdc1f63e80e351eb8c238ed861c1c2f"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=tikv-3.0#7574dae9aec5fb4ea74f62722414e52ca1b1f1c0"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.64 (registry+https://github.com/rust-lang/crates.io-index)",
