@@ -2,8 +2,7 @@
 
 use crate::rocks::util::engine_metrics::*;
 use crate::rocks::{
-    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo,
-    WriteStallInfo,
+    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, WriteStallInfo,
 };
 use tikv_util::set_panic_mark;
 
