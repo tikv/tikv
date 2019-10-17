@@ -816,9 +816,14 @@ mod check_data_dir_empty {
                      got 0, expect 1 or more.",
                     op, extension, data_path,
                 )));
+            } else {
+                return Ok(());
             }
         }
-        Ok(())
+        Err(ConfigError::FileSystem(format!(
+            "{}: path: {:?} doesn't exist or isn't a directory.",
+            op, data_path
+        )))
     }
 
     #[cfg(test)]
@@ -858,7 +863,7 @@ mod check_data_dir_empty {
         fn test_check_data_dir_empty() {
             // test invalid data_path
             let ret = check_data_dir_empty("/sys/invalid", "txt");
-            assert!(ret.is_err());
+            assert!(ret.is_ok());
             // test empty data_path
             let tmp_path = Builder::new()
                 .prefix("test-get-file-count")
