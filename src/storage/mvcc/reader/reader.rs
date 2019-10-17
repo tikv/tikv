@@ -1131,6 +1131,7 @@ mod tests {
                     short_value,
                     for_update_ts,
                     0,
+                    0,
                 ),
             )
         })

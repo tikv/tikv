@@ -17,6 +17,7 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_CONCURRENCY: usize = 2048000;
+const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests
@@ -37,7 +38,6 @@ pub struct Config {
     pub scheduler_worker_pool_size: usize,
     pub scheduler_pending_write_threshold: ReadableSize,
     pub block_cache: BlockCacheConfig,
-    pub gc: GCConfig,
 }
 
 impl Default for Config {
@@ -52,7 +52,6 @@ impl Default for Config {
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             block_cache: BlockCacheConfig::default(),
-            gc: GCConfig::default(),
         }
     }
 }
@@ -62,7 +61,6 @@ impl Config {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
-        self.gc.validate()?;
         Ok(())
     }
 }
@@ -137,54 +135,5 @@ impl BlockCacheConfig {
             }
         };
         None
-    }
-}
-
-pub const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
-pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
-// No limit
-const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-pub struct GCConfig {
-    pub ratio_threshold: f64,
-    pub batch_keys: usize,
-    pub max_write_bytes_per_sec: ReadableSize,
-}
-
-impl Default for GCConfig {
-    fn default() -> GCConfig {
-        GCConfig {
-            ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
-            batch_keys: DEFAULT_GC_BATCH_KEYS,
-            max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
-        }
-    }
-}
-
-impl GCConfig {
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.batch_keys == 0 {
-            return Err(("storage.gc.batch_keys should not be 0.").into());
-        }
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gc_config_validate() {
-        let cfg = GCConfig::default();
-        cfg.validate().unwrap();
-
-        let mut invalid_cfg = GCConfig::default();
-        invalid_cfg.batch_keys = 0;
-        assert!(invalid_cfg.validate().is_err());
     }
 }

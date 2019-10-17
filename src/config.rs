@@ -5,6 +5,7 @@
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
 
+use std::cmp;
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -31,6 +32,7 @@ use crate::raftstore::coprocessor::properties::{
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::server::gc_worker::GCConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
@@ -1196,7 +1198,8 @@ macro_rules! readpool_config {
     };
 }
 
-const DEFAULT_STORAGE_READPOOL_CONCURRENCY: usize = 4;
+const DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY: usize = 4;
+const DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY: usize = 8;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
@@ -1210,10 +1213,14 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
+        let cpu_num = sys_info::cpu_num().unwrap();
+        let mut concurrency = (f64::from(cpu_num) * 0.5) as usize;
+        concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
+        concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
         Self {
-            high_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            normal_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            low_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
+            high_concurrency: concurrency,
+            normal_concurrency: concurrency,
+            low_concurrency: concurrency,
             max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
@@ -1222,7 +1229,7 @@ impl Default for StorageReadPoolConfig {
     }
 }
 
-const DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY: usize = 8;
+const DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY: usize = 2;
 
 readpool_config!(
     CoprReadPoolConfig,
@@ -1233,11 +1240,8 @@ readpool_config!(
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = sys_info::cpu_num().unwrap();
-        let concurrency = if cpu_num > 8 {
-            (f64::from(cpu_num) * 0.8) as usize
-        } else {
-            DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY
-        };
+        let mut concurrency = (f64::from(cpu_num) * 0.8) as usize;
+        concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             high_concurrency: concurrency,
             normal_concurrency: concurrency,
@@ -1288,6 +1292,7 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
     pub import: ImportConfig,
     pub pessimistic_txn: PessimisticTxnConfig,
+    pub gc: GCConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1309,6 +1314,7 @@ impl Default for TiKvConfig {
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
+            gc: GCConfig::default(),
         }
     }
 }
@@ -1357,6 +1363,7 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.pessimistic_txn.validate()?;
+        self.gc.validate()?;
         Ok(())
     }
 

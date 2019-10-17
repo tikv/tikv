@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic, Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -19,16 +19,16 @@ use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 
-use super::config::GCConfig;
-use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
-use super::metrics::*;
-use super::mvcc::{MvccReader, MvccTxn};
-use super::{Callback, Error, Key, Result};
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
+use crate::storage::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
+use crate::storage::metrics::*;
+use crate::storage::mvcc::{MvccReader, MvccTxn};
+use crate::storage::{Callback, Error, Key, Result};
 use pd_client::PdClient;
+use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 
@@ -50,6 +50,40 @@ const BEGIN_KEY: &[u8] = b"";
 
 const PROCESS_TYPE_GC: &str = "gc";
 const PROCESS_TYPE_SCAN: &str = "scan";
+
+pub const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
+pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
+// No limit
+const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
+pub struct GCConfig {
+    pub ratio_threshold: f64,
+    pub batch_keys: usize,
+    pub max_write_bytes_per_sec: ReadableSize,
+}
+
+impl Default for GCConfig {
+    fn default() -> GCConfig {
+        GCConfig {
+            ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
+            batch_keys: DEFAULT_GC_BATCH_KEYS,
+            max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
+        }
+    }
+}
+
+impl GCConfig {
+    pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if self.batch_keys == 0 {
+            return Err(("storage.gc.batch_keys should not be 0.").into());
+        }
+        Ok(())
+    }
+}
 
 /// Provides safe point.
 /// TODO: Give it a better name?
@@ -1062,7 +1096,6 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 }
 
 /// Used to schedule GC operations.
-#[derive(Clone)]
 pub struct GCWorker<E: Engine> {
     engine: E,
     /// `local_storage` represent the underlying RocksDB of the `engine`.
@@ -1072,10 +1105,47 @@ pub struct GCWorker<E: Engine> {
 
     cfg: Option<GCConfig>,
 
+    /// How many strong references. The worker will be stopped
+    /// once there are no more references.
+    refs: Arc<atomic::AtomicUsize>,
     worker: Arc<Mutex<Worker<GCTask>>>,
     worker_scheduler: worker::Scheduler<GCTask>,
 
     gc_manager_handle: Arc<Mutex<Option<GCManagerHandle>>>,
+}
+
+impl<E: Engine> Clone for GCWorker<E> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.refs.fetch_add(1, atomic::Ordering::SeqCst);
+
+        Self {
+            engine: self.engine.clone(),
+            local_storage: self.local_storage.clone(),
+            raft_store_router: self.raft_store_router.clone(),
+            cfg: self.cfg.clone(),
+            refs: self.refs.clone(),
+            worker: self.worker.clone(),
+            worker_scheduler: self.worker_scheduler.clone(),
+            gc_manager_handle: self.gc_manager_handle.clone(),
+        }
+    }
+}
+
+impl<E: Engine> Drop for GCWorker<E> {
+    #[inline]
+    fn drop(&mut self) {
+        let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
+
+        if refs != 1 {
+            return;
+        }
+
+        let r = self.stop();
+        if let Err(e) = r {
+            error!("Failed to stop gc_worker"; "err" => ?e);
+        }
+    }
 }
 
 impl<E: Engine> GCWorker<E> {
@@ -1096,6 +1166,7 @@ impl<E: Engine> GCWorker<E> {
             local_storage,
             raft_store_router,
             cfg: Some(cfg),
+            refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
@@ -1142,6 +1213,7 @@ impl<E: Engine> GCWorker<E> {
     }
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
+        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         self.worker_scheduler
             .schedule(GCTask::GC {
                 ctx,
@@ -1163,6 +1235,7 @@ impl<E: Engine> GCWorker<E> {
         end_key: Key,
         callback: Callback<()>,
     ) -> Result<()> {
+        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         self.worker_scheduler
             .schedule(GCTask::UnsafeDestroyRange {
                 ctx,
@@ -1533,12 +1606,12 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let db = engine.get_rocksdb();
-        let storage = TestStorageBuilder::from_engine(engine)
-            .local_storage(db)
+        let storage = TestStorageBuilder::from_engine(engine.clone())
             .build()
             .unwrap();
-
+        let db = engine.get_rocksdb();
+        let mut gc_worker = GCWorker::new(engine, Some(db), None, GCConfig::default());
+        gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
             .iter()
@@ -1591,7 +1664,7 @@ mod tests {
             .collect();
 
         // Invoke unsafe destroy range.
-        wait_op!(|cb| storage.async_unsafe_destroy_range(
+        wait_op!(|cb| gc_worker.async_unsafe_destroy_range(
             Context::default(),
             start_key,
             end_key,
@@ -1689,5 +1762,15 @@ mod tests {
             b"key1\x00",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_gc_config_validate() {
+        let cfg = GCConfig::default();
+        cfg.validate().unwrap();
+
+        let mut invalid_cfg = GCConfig::default();
+        invalid_cfg.batch_keys = 0;
+        assert!(invalid_cfg.validate().is_err());
     }
 }
