@@ -22,6 +22,8 @@ fn test_turnoff_titan() {
         .collect();
     cluster.run();
 
+    assert_eq!(cluster.must_get(b"k1"), None);
+
     let region = cluster.get_region(b"");
     let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
     let storage = cluster.sim.rl().storages[&leader_id.get_id()].clone();
@@ -38,7 +40,7 @@ fn test_turnoff_titan() {
     for path in &titan_paths {
         assert!(tikv_util::config::check_data_dir_non_empty(path.as_str(), "blob").is_ok());
     }
-    for i in 0..3 {
+    for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
         let mut opt = Vec::new();
