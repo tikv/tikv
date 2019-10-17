@@ -225,7 +225,7 @@ dependencies = [
 [[package]]
 name = "bzip2-sys"
 version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#02096d6f16e6b78cde379ce2305e08d2933e23b7"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#93c465c7a6991668ca8062f454431f65545f4d96"
 dependencies = [
  "cc",
  "libc",
@@ -1391,7 +1391,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#123e9edf2a447425dcc0942a83bbe4ae411963b3"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1408,7 +1408,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#123e9edf2a447425dcc0942a83bbe4ae411963b3"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1475,9 +1475,9 @@ dependencies = [
 name = "match_template"
 version = "0.0.1"
 dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "syn 0.15.44",
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -2394,7 +2394,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#123e9edf2a447425dcc0942a83bbe4ae411963b3"
 dependencies = [
  "crc",
  "libc",
@@ -3747,8 +3747,8 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.13+zstd.1.4.3"
-source = "git+https://github.com/gyscos/zstd-rs.git#64f9263ae02ca52babfd6f5b3888fcf0c6fad413"
+version = "1.4.14+zstd.1.4.3"
+source = "git+https://github.com/gyscos/zstd-rs.git#8656e6baedb61f71abba458ecd88f363ff6458f5"
 dependencies = [
  "cc",
  "glob",
