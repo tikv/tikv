@@ -697,10 +697,24 @@ impl<S: Snapshot> MvccTxn<S> {
                         }
                     }
                     None => {
-                        // Returning 0, 0 will allow the client to clean secondary locks. Put a
-                        // rollback record here to avoid it being successfully prewritten.
-                        let write = Write::new(WriteType::Rollback, self.start_ts, None);
-                        self.put_write(primary_key, self.start_ts, write.to_bytes());
+                        let ts = self.start_ts;
+
+                        // collapse previous rollback if exist.
+                        if self.collapse_rollback {
+                            self.collapse_prev_rollback(key.clone())?;
+                        }
+
+                        // Insert a Rollback to Write CF in case that a stale prewrite command
+                        // is received after a cleanup command.
+                        // Pessimistic transactions prewrite successfully only if all its
+                        // pessimistic locks exist. So collapsing the rollback of a pessimistic
+                        // lock is safe. After a pessimistic transaction acquires all its locks,
+                        // it is impossible that neither a lock nor a write record is found.
+                        // Therefore, we don't need to protect the rollback here.
+                        let write = Write::new_rollback(ts, false);
+                        self.put_write(primary_key, ts, write.to_bytes());
+                        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+
                         Ok((0, 0, false))
                     }
                 }
