@@ -473,27 +473,6 @@ fn check_system_config(config: &TiKvConfig) {
             "err" => %e
         );
     }
-    // Check blob file dir is empty when titan is disabled
-    if !config.rocksdb.titan.enabled {
-        let titan_path = if config.rocksdb.titan.dirname.is_empty() {
-            let store_path = Path::new(&config.storage.data_dir);
-            let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-            db_path.join(Path::new("titandb"))
-        } else {
-            Path::new(&config.rocksdb.titan.dirname).to_path_buf()
-        };
-        if let Err(e) =
-            tikv_util::config::check_data_dir_empty(titan_path.to_str().unwrap(), "blob")
-        {
-            fatal!(
-                "check: titandb-data-dir-empty; err: \"{}\"; \
-                 hint: You have disabled titan when its data directory is not empty. \
-                 To properly shutdown titan, please enter fallback blob-run-mode and \
-                 wait till titandb files are all safely ingested.",
-                e
-            );
-        }
-    }
     // Check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
         warn!(

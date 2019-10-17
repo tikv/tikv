@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::error::Error as StdError;
 use std::sync::{self, mpsc, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
@@ -126,6 +127,10 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
+    pub fn pre_start(&mut self) -> result::Result<(), Box<dyn StdError>> {
+        self.cfg.validate()
+    }
+
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
             let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
@@ -178,6 +183,7 @@ impl<T: Simulator> Cluster<T> {
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in all stores, then start the cluster.
     pub fn run(&mut self) {
+        self.pre_start().unwrap();
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
@@ -186,6 +192,7 @@ impl<T: Simulator> Cluster<T> {
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in store 1, then start the cluster.
     pub fn run_conf_change(&mut self) -> u64 {
+        self.pre_start().unwrap();
         self.create_engines();
         let region_id = self.bootstrap_conf_change();
         self.start().unwrap();
@@ -194,27 +201,6 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_node_ids(&self) -> HashSet<u64> {
         self.sim.rl().get_node_ids()
-    }
-
-    pub fn get_paths(&self) -> Vec<String> {
-        self.paths
-            .iter()
-            .map(|dir| dir.path().to_str().unwrap().to_owned())
-            .collect()
-    }
-
-    pub fn get_kv_paths(&self) -> Vec<String> {
-        self.paths
-            .iter()
-            .map(|dir| dir.path().join("kv").to_str().unwrap().to_owned())
-            .collect()
-    }
-
-    pub fn get_raft_paths(&self) -> Vec<String> {
-        self.paths
-            .iter()
-            .map(|dir| dir.path().join("raft").to_str().unwrap().to_owned())
-            .collect()
     }
 
     pub fn run_node(&mut self, node_id: u64) -> ServerResult<()> {

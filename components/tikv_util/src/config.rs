@@ -770,10 +770,13 @@ mod check_data_dir_empty {
         })?;
         let mut file_count = 0;
         for entry in dir {
-            if entry.is_err() {
-                continue;
-            }
-            let path = entry.unwrap().path();
+            let entry = entry.map_err(|e| {
+                ConfigError::FileSystem(format!(
+                    "{}: read file in file dir {:?} failed: {:?}",
+                    op, data_path, e
+                ))
+            })?;
+            let path = entry.path();
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     if extension == ext {
@@ -795,7 +798,7 @@ mod check_data_dir_empty {
             let count = get_file_count(data_path, extension)?;
             if count > 0 {
                 return Err(ConfigError::Limit(format!(
-                    "{}: the number of file with extension {} in directory {} is too much, \
+                    "{}: the number of file with extension {} in directory {} is non-zero, \
                      got {}, expect 0.",
                     op, extension, data_path, count,
                 )));
@@ -804,7 +807,7 @@ mod check_data_dir_empty {
         Ok(())
     }
 
-    // check dir is empty of file with certain extension
+    // check dir is non-empty of file with certain extension
     pub fn check_data_dir_non_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
         let op = "data-dir.empty.check";
         let dir = Path::new(data_path);
