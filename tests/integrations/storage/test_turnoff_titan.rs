@@ -27,10 +27,10 @@ fn test_turnoff_titan() {
 
     // try reopen db when titandb dir is non-empty
     configure_for_disable_titan(&mut cluster);
-    assert!(cluster.pre_start().is_err());
+    assert!(cluster.pre_start_check().is_err());
 
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
-    assert!(cluster.pre_start().is_ok());
+    assert!(cluster.pre_start_check().is_ok());
     cluster.start().unwrap();
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
@@ -44,6 +44,6 @@ fn test_turnoff_titan() {
     cluster.shutdown();
 
     configure_for_disable_titan(&mut cluster);
-    assert!(cluster.pre_start().is_ok());
+    assert!(cluster.pre_start_check().is_ok());
     cluster.start().unwrap();
 }
