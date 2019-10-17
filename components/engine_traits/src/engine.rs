@@ -73,13 +73,6 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug 
         end_key: &[u8],
         use_delete_range: bool,
     ) -> Result<()>;
-    fn delete_files_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        include_end: bool,
-    ) -> Result<()>;
 
     fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,

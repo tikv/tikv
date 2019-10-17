@@ -164,19 +164,6 @@ impl KvEngine for Rocks {
         delete_all_in_range_cf(&self.0, cf, start_key, end_key, use_delete_range)
     }
 
-    fn delete_files_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        include_end: bool,
-    ) -> Result<()> {
-        let handle = get_cf_handle(&self.0, cf)?;
-        self.0
-            .delete_files_in_range_cf(handle, start_key, end_key, include_end)
-            .map_err(From::from)
-    }
-
     fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         path: P,
