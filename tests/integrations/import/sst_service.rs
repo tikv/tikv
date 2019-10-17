@@ -132,7 +132,6 @@ fn test_download_sst() {
     meta.set_region_epoch(ctx.get_region_epoch().clone());
 
     // Checks that downloading a non-existing storage returns error.
-
     let mut download = DownloadRequest::default();
     download.set_sst(meta.clone());
     download.set_url(format!("local://{}", temp_dir.path().display()));
@@ -146,9 +145,23 @@ fn test_download_sst() {
         _ => panic!("unexpected download reply: {:?}", result),
     }
 
-    // Now perform a proper download.
+    // Checks that downloading an empty SST returns OK (but cannot be ingested)
     download.set_name("test.sst".to_owned());
-    import.download(&download).unwrap();
+    download.mut_sst().mut_range().set_start(vec![sst_range.1]);
+    download
+        .mut_sst()
+        .mut_range()
+        .set_end(vec![sst_range.1 + 1]);
+    let result = import.download(&download).unwrap();
+    assert!(result.get_is_empty());
+
+    // Now perform a proper download.
+    download.mut_sst().mut_range().set_start(Vec::new());
+    download.mut_sst().mut_range().set_end(Vec::new());
+    let result = import.download(&download).unwrap();
+    assert!(!result.get_is_empty());
+    assert_eq!(result.get_range().get_start(), &[sst_range.0]);
+    assert_eq!(result.get_range().get_end(), &[sst_range.1]);
 
     // Do an ingest and verify the result is correct.
 

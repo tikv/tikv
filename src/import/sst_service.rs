@@ -165,7 +165,15 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
             future::result(res)
                 .map_err(Error::from)
-                .map(|_| DownloadResponse::default())
+                .map(|range| {
+                    let mut resp = DownloadResponse::default();
+                    if let Some(r) = range {
+                        resp.set_range(r);
+                    } else {
+                        resp.set_is_empty(true);
+                    }
+                    resp
+                })
                 .then(move |res| send_rpc_response!(res, sink, label, timer))
         }));
     }
