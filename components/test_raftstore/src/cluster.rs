@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
 use std::sync::{self, mpsc, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
@@ -138,7 +137,7 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
-            let raft_path = dir.path().join(Path::new("raft"));
+            let raft_path = dir.path().join("raft");
             let raft_engine = Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
@@ -223,6 +222,13 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_node_ids(&self) -> HashSet<u64> {
         self.sim.rl().get_node_ids()
+    }
+
+    pub fn get_paths(&self) -> Vec<String> {
+        self.paths
+            .iter()
+            .map(|dir| dir.path().to_str().unwrap().to_owned())
+            .collect()
     }
 
     pub fn get_kv_paths(&self) -> Vec<String> {

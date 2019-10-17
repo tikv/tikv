@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
@@ -524,15 +523,12 @@ pub fn create_test_engine(
             ));
             let cache = cfg.storage.block_cache.build_shared_cache();
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
+            let kv_path = path.as_ref().unwrap().path().join("kv");
             let engine = Arc::new(
-                rocks::util::new_engine_opt(
-                    path.as_ref().unwrap().path().to_str().unwrap(),
-                    kv_db_opt,
-                    kv_cfs_opt,
-                )
-                .unwrap(),
+                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                    .unwrap(),
             );
-            let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
+            let raft_path = path.as_ref().unwrap().path().join("raft");
             let raft_engine = Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
@@ -568,11 +564,12 @@ pub fn create_test_engine_on_dir(
             ));
             let cache = cfg.storage.block_cache.build_shared_cache();
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
+            let kv_path = dir.path().join("kv");
             let engine = Arc::new(
-                rocks::util::new_engine_opt(dir.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
-            let raft_path = dir.path().join(Path::new("raft"));
+            let raft_path = dir.path().join("raft");
             let raft_engine = Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
