@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::store::{Callback, CasualMessage};
+use crate::server::gc_worker::GCWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
@@ -42,6 +43,8 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
+    /// Used to handle requests related to GC.
+    gc_worker: GCWorker<E>,
     // For handling KV requests.
     storage: Storage<E, L>,
     // For handling coprocessor requests.
@@ -58,12 +61,14 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
+        gc_worker: GCWorker<E>,
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         thread_load: Arc<ThreadLoad>,
     ) -> Self {
         Service {
+            gc_worker,
             storage,
             cop,
             ch,
@@ -365,7 +370,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
-        let future = future_gc(&self.storage, req)
+        let future = future_gc(&self.gc_worker, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
@@ -611,7 +616,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         assert!(!req.get_end_key().is_empty());
 
         let (cb, f) = paired_future_callback();
-        let res = self.storage.async_unsafe_destroy_range(
+        let res = self.gc_worker.async_unsafe_destroy_range(
             req.take_context(),
             Key::from_raw(&req.take_start_key()),
             Key::from_raw(&req.take_end_key()),
@@ -1013,13 +1018,22 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
+        let gc_worker = self.gc_worker.clone();
 
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
+                handle_batch_commands_request(
+                    &storage,
+                    &gc_worker,
+                    &cop,
+                    &peer,
+                    id,
+                    req,
+                    tx.clone(),
+                );
             }
             future::ok::<_, _>(())
         });
@@ -1105,6 +1119,7 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
 
 fn handle_batch_commands_request<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
+    gc_worker: &GCWorker<E>,
     cop: &Endpoint<E>,
     peer: &str,
     id: u64,
@@ -1219,7 +1234,7 @@ fn handle_batch_commands_request<E: Engine, L: LockMgr>(
         }
         Some(batch_commands_request::request::Cmd::Gc(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
-            let resp = future_gc(&storage, req)
+            let resp = future_gc(&gc_worker, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Gc))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
             response_batch_commands_request(id, resp, tx, timer);
@@ -1742,12 +1757,12 @@ fn future_resolve_lock<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_gc<E: Engine, L: LockMgr>(
-    storage: &Storage<E, L>,
+fn future_gc<E: Engine>(
+    gc_worker: &GCWorker<E>,
     mut req: GcRequest,
 ) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_gc(req.take_context(), req.get_safe_point(), cb);
+    let res = gc_worker.async_gc(req.take_context(), req.get_safe_point(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = GcResponse::default();

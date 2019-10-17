@@ -6,6 +6,7 @@ mod raft_client;
 pub mod config;
 pub mod debug;
 pub mod errors;
+pub mod gc_worker;
 pub mod load_statistics;
 pub mod lock_manager;
 pub mod node;
