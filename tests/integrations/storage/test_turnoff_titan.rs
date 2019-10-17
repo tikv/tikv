@@ -46,8 +46,7 @@ fn test_turnoff_titan() {
     cluster.compact_data();
     sleep_ms(500);
     cluster.shutdown();
-    configure_for_disable_titan(&mut cluster);
-    cluster.start_new_engines().unwrap();
+    // TODO: reopen cluster on the same directory and check data integrity.
     for path in &titan_paths {
         assert!(tikv_util::config::check_data_dir_empty(path.as_str(), "blob").is_ok());
     }
