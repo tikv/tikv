@@ -646,10 +646,22 @@ impl<I: Iterator> Cursor<I> {
     pub fn valid(&self) -> Result<bool> {
         if !self.iter.valid() {
             if let Err(e) = self.iter.status() {
-                CRITICAL_ERROR.with_label_values(&["rocksdb"]).inc();
+                CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();
                 if panic_when_unexpected_key_or_data() {
                     set_panic_mark();
-                    panic!("Rocksdb error: {}", e);
+                    panic!(
+                        "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
+                        e,
+                        self.min_key.as_ref().map(|k| hex::encode_upper(k)),
+                        self.max_key.as_ref().map(|k| hex::encode_upper(k))
+                    );
+                } else {
+                    error!(
+                        "failed to iterate";
+                        "min_key" => ?self.min_key.as_ref().map(|k| hex::encode_upper(k)),
+                        "max_key" => ?self.max_key.as_ref().map(|k| hex::encode_upper(k)),
+                        "error" => ?e,
+                    );
                 }
                 return Err(e);
             }

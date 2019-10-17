@@ -435,7 +435,14 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 /// Get the max possible decimal with giving precision and fraction digit count.
-fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
+/// The `prec` should >= `frac_cnt`.
+///
+/// # Panics
+///
+/// Will panic if `prec` < `frac_cnt`.
+/// The panic is because of `debug_assert`.
+pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
+    debug_assert!(prec >= frac_cnt);
     let int_cnt = prec - frac_cnt;
     let mut res = Decimal::new(int_cnt, frac_cnt, false);
     let mut idx = 0;
@@ -465,6 +472,12 @@ fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
 
 /// `max_or_min_dec`(`NewMaxOrMinDec` in tidb) returns the max or min
 /// value decimal for given precision and fraction.
+/// The `prec` should >= `frac_cnt`.
+///
+/// # Panics
+///
+/// Will panic if `prec` < `frac_cnt`.
+/// The panic is because of `debug_assert`.
 pub fn max_or_min_dec(negative: bool, prec: u8, frac: u8) -> Decimal {
     let mut ret = max_decimal(prec, frac);
     ret.negative = negative;
@@ -1112,6 +1125,9 @@ impl Decimal {
     /// produces a new decimal according to `flen` and `decimal`.
     pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
         let (prec, frac) = self.prec_and_frac();
+        if flen < decimal {
+            return Err(Error::m_bigger_than_d(""));
+        }
         if !self.is_zero() && prec - frac > flen - decimal {
             return Ok(max_or_min_dec(self.negative, flen, decimal));
             // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
