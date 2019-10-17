@@ -4,12 +4,8 @@ use std::path::Path;
 
 use engine::rocks::util::get_cf_handle;
 use engine::*;
-use kvproto::kvrpcpb::Context;
 use test_raftstore::*;
-use tikv::storage::kv::*;
-use tikv::storage::Key;
 use tikv_util::config::ReadableSize;
-use tikv_util::HandyRwLock;
 
 #[test]
 fn test_turnoff_titan() {
@@ -24,16 +20,15 @@ fn test_turnoff_titan() {
 
     assert_eq!(cluster.must_get(b"k1"), None);
 
-    let region = cluster.get_region(b"");
-    let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
-    let storage = cluster.sim.rl().storages[&leader_id.get_id()].clone();
-
-    let mut ctx = Context::default();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(region.get_peers()[0].clone());
-
-    bulk_insert(&ctx, &storage, 10);
+    let size = 100;
+    for i in 0..size {
+        assert!(cluster
+            .put(
+                format!("key-{}", i).as_bytes(),
+                format!("value-{}", i).as_bytes(),
+            )
+            .is_ok());
+    }
 
     cluster.must_flush_cf(CF_DEFAULT, true);
     cluster.compact_data();
@@ -56,22 +51,4 @@ fn test_turnoff_titan() {
     for path in &titan_paths {
         assert!(tikv_util::config::check_data_dir_empty(path.as_str(), "blob").is_ok());
     }
-}
-
-fn bulk_insert<E: Engine>(ctx: &Context, engine: &E, size: usize) {
-    for i in 0..size {
-        must_put_cf(
-            ctx,
-            engine,
-            CF_DEFAULT,
-            format!("key-{}", i).as_bytes(),
-            format!("value-{}", i).as_bytes(),
-        );
-    }
-}
-
-fn must_put_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
-    engine
-        .put_cf(ctx, cf, Key::from_raw(key), value.to_vec())
-        .unwrap();
 }
