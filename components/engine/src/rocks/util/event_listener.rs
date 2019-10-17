@@ -1,9 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::rocks::util::engine_metrics::*;
-use crate::rocks::{
-    CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
-};
+use crate::rocks::{CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallInfo};
 
 pub struct EventListener {
     db_name: String,
@@ -17,26 +15,11 @@ impl EventListener {
     }
 }
 
-#[inline]
-fn tag_write_stall_condition(e: WriteStallCondition) -> &'static str {
-    match e {
-        WriteStallCondition::Normal => "normal",
-        WriteStallCondition::Delayed => "delayed",
-        WriteStallCondition::Stopped => "stopped",
-    }
-}
-
 impl rocksdb::EventListener for EventListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "flush"])
             .inc();
-        STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC
-            .with_label_values(&[&self.db_name, info.cf_name(), "triggered_writes_slowdown"])
-            .set(info.triggered_writes_slowdown() as i64);
-        STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC
-            .with_label_values(&[&self.db_name, info.cf_name(), "triggered_writes_stop"])
-            .set(info.triggered_writes_stop() as i64);
     }
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
@@ -68,20 +51,5 @@ impl rocksdb::EventListener for EventListener {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "stall_conditions_changed"])
             .inc();
-
-        STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC
-            .with_label_values(&[
-                &self.db_name,
-                info.cf_name(),
-                tag_write_stall_condition(info.cur()),
-            ])
-            .set(1);
-        STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC
-            .with_label_values(&[
-                &self.db_name,
-                info.cf_name(),
-                tag_write_stall_condition(info.prev()),
-            ])
-            .set(0);
     }
 }

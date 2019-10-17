@@ -1126,11 +1126,6 @@ lazy_static! {
         "Number of immutable mem-table",
         &["db", "cf"]
     ).unwrap();
-    pub static ref STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_engine_stall_conditions_changed",
-        "Stall conditions changed of each column family",
-        &["db", "cf", "type"]
-    ).unwrap();
     pub static ref STORE_ENGINE_BLOB_LOCATE_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_blob_locate",
         "Number of calls to blob seek/next/prev",
