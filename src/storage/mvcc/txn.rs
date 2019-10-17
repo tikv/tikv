@@ -701,7 +701,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
                         // collapse previous rollback if exist.
                         if self.collapse_rollback {
-                            self.collapse_prev_rollback(key.clone())?;
+                            self.collapse_prev_rollback(primary_key.clone())?;
                         }
 
                         // Insert a Rollback to Write CF in case that a stale prewrite command
