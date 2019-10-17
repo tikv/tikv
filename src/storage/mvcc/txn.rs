@@ -170,12 +170,15 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    fn rollback_lock(&mut self, key: Key, lock: &Lock) -> Result<()> {
+    fn rollback_lock(&mut self, key: Key, lock: &Lock, is_pessimistic_txn: bool) -> Result<()> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
             self.delete_value(key.clone(), lock.ts);
         }
-        let write = Write::new(WriteType::Rollback, self.start_ts, None);
+
+        // Only the primary key of a pessimistic transaction needs to be protected.
+        let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
+        let write = Write::new_rollback(self.start_ts, protected);
         self.put_write(key.clone(), self.start_ts, write.to_bytes());
         self.unlock_key(key.clone());
         if self.collapse_rollback {
@@ -504,7 +507,8 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
-    /// cleanup the lock without checking TTL.
+    /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
+    /// transaction, the rollback record is protected from being collapsed.
     ///
     /// Returns whether the lock is a pessimistic lock. Returns error if the key has already been
     /// committed.
@@ -529,7 +533,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
 
                 let is_pessimistic_txn = lock.for_update_ts != 0;
-                self.rollback_lock(key, lock)?;
+                self.rollback_lock(key, lock, is_pessimistic_txn)?;
                 Ok(is_pessimistic_txn)
             }
             _ => {
@@ -558,8 +562,14 @@ impl<S: Snapshot> MvccTxn<S> {
                             self.collapse_prev_rollback(key.clone())?;
                         }
 
-                        // insert a Rollback to WriteCF when receives Rollback before Prewrite
-                        let write = Write::new(WriteType::Rollback, ts, None);
+                        // Insert a Rollback to Write CF in case that a stale prewrite command
+                        // is received after a cleanup command.
+                        // Pessimistic transactions prewrite successfully only if all its
+                        // pessimistic locks exist. So collapsing the rollback of a pessimistic
+                        // lock is safe. After a pessimistic transaction acquires all its locks,
+                        // it is impossible that neither a lock nor a write record is found.
+                        // Therefore, we don't need to protect the rollback here.
+                        let write = Write::new_rollback(ts, false);
                         self.put_write(key, ts, write.to_bytes());
                         Ok(false)
                     }
@@ -583,7 +593,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-            if write.write_type == WriteType::Rollback {
+            if write.write_type == WriteType::Rollback && !write.is_protected() {
                 self.delete_write(key, commit_ts);
             }
         }
@@ -652,7 +662,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 if extract_physical(lock.ts) + lock.ttl < extract_physical(current_ts) {
                     // If the lock is expired, clean it up.
-                    self.rollback_lock(primary_key, lock)?;
+                    self.rollback_lock(primary_key, lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
                     return Ok((0, 0, is_pessimistic_txn));
                 }
@@ -912,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_lock() {
+    fn test_rollback_lock_optimistic() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k1", b"v1");
@@ -925,6 +935,35 @@ mod tests {
 
         // Rollback lock
         must_rollback(&engine, k, 15);
+        // Rollbacks of optimistic transactions needn't be protected
+        must_get_rollback_protected(&engine, k, 15, false);
+    }
+
+    #[test]
+    fn test_rollback_lock_pessimistic() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (k1, k2, v) = (b"k1", b"k2", b"v1");
+
+        must_acquire_pessimistic_lock(&engine, k1, k1, 5, 5);
+        must_acquire_pessimistic_lock(&engine, k2, k1, 5, 7);
+        must_rollback(&engine, k1, 5);
+        must_rollback(&engine, k2, 5);
+        // The rollback of the primary key should be protected
+        must_get_rollback_protected(&engine, k1, 5, true);
+        // The rollback of the secondary key needn't be protected
+        must_get_rollback_protected(&engine, k2, 5, false);
+
+        must_acquire_pessimistic_lock(&engine, k1, k1, 15, 15);
+        must_acquire_pessimistic_lock(&engine, k2, k1, 15, 17);
+        must_pessimistic_prewrite_put(&engine, k1, v, k1, 15, 17, true);
+        must_pessimistic_prewrite_put(&engine, k2, v, k1, 15, 17, true);
+        must_rollback(&engine, k1, 15);
+        must_rollback(&engine, k2, 15);
+        // The rollback of the primary key should be protected
+        must_get_rollback_protected(&engine, k1, 15, true);
+        // The rollback of the secondary key needn't be protected
+        must_get_rollback_protected(&engine, k2, 15, false);
     }
 
     #[test]
@@ -966,12 +1005,27 @@ mod tests {
 
         // Try to cleanup another transaction's lock. Does nothing.
         must_cleanup(&engine, k, ts(10, 1), ts(120, 0));
+        // If there is no exisiting lock when cleanup, it cannot be a pessimistic transaction,
+        // so the rollback needn't be protected.
+        must_get_rollback_protected(&engine, k, ts(10, 1), false);
         must_locked(&engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
         must_cleanup(&engine, k, ts(10, 0), ts(120, 0));
         must_unlocked(&engine, k);
+        // Rollbacks of optimistic transactions needn't be protected
+        must_get_rollback_protected(&engine, k, ts(10, 0), false);
         must_get_rollback_ts(&engine, k, ts(10, 0));
+
+        // Rollbacks of primary keys in pessimistic transactions should be protected
+        must_acquire_pessimistic_lock(&engine, k, k, ts(11, 1), ts(12, 1));
+        must_cleanup(&engine, k, ts(11, 1), ts(120, 0));
+        must_get_rollback_protected(&engine, k, ts(11, 1), true);
+
+        must_acquire_pessimistic_lock(&engine, k, k, ts(13, 1), ts(14, 1));
+        must_pessimistic_prewrite_put(&engine, k, v, k, ts(13, 1), ts(14, 1), true);
+        must_cleanup(&engine, k, ts(13, 1), ts(120, 0));
+        must_get_rollback_protected(&engine, k, ts(13, 1), true);
     }
 
     #[test]
@@ -1450,12 +1504,12 @@ mod tests {
         // Lock conflict
         must_prewrite_put(&engine, k, v, k, 3);
         must_acquire_pessimistic_lock_err(&engine, k, k, 4, 4);
-        must_rollback(&engine, k, 3);
+        must_cleanup(&engine, k, 3, 0);
         must_unlocked(&engine, k);
         must_acquire_pessimistic_lock(&engine, k, k, 5, 5);
         must_prewrite_lock_err(&engine, k, k, 6);
         must_acquire_pessimistic_lock_err(&engine, k, k, 6, 6);
-        must_rollback(&engine, k, 5);
+        must_cleanup(&engine, k, 5, 0);
         must_unlocked(&engine, k);
 
         // Data conflict
@@ -1472,7 +1526,7 @@ mod tests {
         // Rollback
         must_acquire_pessimistic_lock(&engine, k, k, 11, 11);
         must_pessimistic_locked(&engine, k, 11, 11);
-        must_rollback(&engine, k, 11);
+        must_cleanup(&engine, k, 11, 0);
         must_acquire_pessimistic_lock_err(&engine, k, k, 11, 11);
         must_pessimistic_prewrite_put_err(&engine, k, v, k, 11, 11, true);
         must_prewrite_lock_err(&engine, k, k, 11);
@@ -1481,7 +1535,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 12, 12);
         must_pessimistic_prewrite_put(&engine, k, v, k, 12, 12, true);
         must_locked(&engine, k, 12);
-        must_rollback(&engine, k, 12);
+        must_cleanup(&engine, k, 12, 0);
         must_acquire_pessimistic_lock_err(&engine, k, k, 12, 12);
         must_pessimistic_prewrite_put_err(&engine, k, v, k, 12, 12, true);
         must_prewrite_lock_err(&engine, k, k, 12);
@@ -1525,7 +1579,7 @@ mod tests {
         must_prewrite_put(&engine, k, v, k, 23);
         must_locked(&engine, k, 23);
         must_acquire_pessimistic_lock_err(&engine, k, k, 23, 23);
-        must_rollback(&engine, k, 23);
+        must_cleanup(&engine, k, 23, 0);
         must_acquire_pessimistic_lock(&engine, k, k, 24, 24);
         must_pessimistic_locked(&engine, k, 24, 24);
         must_commit_err(&engine, k, 24, 25);
@@ -1626,8 +1680,19 @@ mod tests {
         // there won't be conflicts. So this case is also not checked, and prewrite will succeeed.
         must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, false);
         must_locked(&engine, k, 47);
-        must_rollback(&engine, k, 47);
+        must_cleanup(&engine, k, 47, 0);
         must_unlocked(&engine, k);
+
+        // The rollback of the primary key in a pessimistic transaction should be protected from
+        // being collapsed.
+        must_acquire_pessimistic_lock(&engine, k, k, 49, 60);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 49, 60, true);
+        must_locked(&engine, k, 49);
+        must_cleanup(&engine, k, 49, 0);
+        must_get_rollback_protected(&engine, k, 49, true);
+        must_prewrite_put(&engine, k, v, k, 51);
+        must_rollback_collapsed(&engine, k, 51);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 49, 60);
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {
