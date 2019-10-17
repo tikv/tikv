@@ -541,7 +541,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 Ok(is_pessimistic_txn)
             }
             _ => {
-                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
+                match self.reader.get_txn_commit_info(&key, self.start_ts)? {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
@@ -577,7 +577,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         self.put_write(key, ts, write.to_bytes());
                         Ok(false)
                     }
-                };
+                }
             }
         }
     }
