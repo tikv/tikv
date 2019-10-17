@@ -21,6 +21,7 @@ mod cf_handle;
 pub use cf_handle::*;
 mod cf_options;
 pub use cf_options::*;
+mod import;
 
 #[cfg(test)]
 mod tests {

@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::Debug;
-use std::path::Path;
 
 use crate::*;
 
@@ -21,7 +20,7 @@ pub trait WriteBatch: Mutable + Send {
 }
 
 pub trait KvEngine: Peekable + Mutable + Iterable
-    + DBOptionsExt + CFHandleExt
+    + DBOptionsExt + CFHandleExt + Import
     + Send + Sync + Clone + Debug + 'static
 {
     type Snap: Snapshot;
@@ -53,24 +52,5 @@ pub trait KvEngine: Peekable + Mutable + Iterable
         start_key: &[u8],
         end_key: &[u8],
         use_delete_range: bool,
-    ) -> Result<()>;
-
-    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
-        &self,
-        path: P,
-        clone: Q,
-    ) -> Result<()>;
-    fn ingest_external_file_cf(
-        &self,
-        cf: &str,
-        opts: &IngestExternalFileOptions,
-        files: &[&str],
-    ) -> Result<()>;
-    fn validate_file_for_ingestion<P: AsRef<Path>>(
-        &self,
-        cf: &str,
-        path: P,
-        expected_size: u64,
-        expected_checksum: u32,
     ) -> Result<()>;
 }

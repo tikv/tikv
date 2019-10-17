@@ -1,17 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::{self, File};
+use std::fs;
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 
-use engine::rocks::util::prepare_sst_for_ingestion;
 use engine_traits::{
-    Error, IngestExternalFileOptions, IterOptions, Iterable, KvEngine, Mutable, Peekable,
+    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable,
     ReadOptions, Result, WriteOptions,
 };
-use rocksdb::{set_external_sst_file_global_seq_no, DBIterator, Writable, DB};
-use tikv_util::file::calc_crc32;
+use rocksdb::{DBIterator, Writable, DB};
 
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::{delete_all_in_range_cf, get_cf_handle};
@@ -132,70 +130,6 @@ impl KvEngine for Rocks {
         self.0
             .delete_files_in_range_cf(handle, start_key, end_key, false)?;
         delete_all_in_range_cf(&self.0, cf, start_key, end_key, use_delete_range)
-    }
-
-    fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
-        &self,
-        path: P,
-        clone: Q,
-    ) -> Result<()> {
-        Ok(prepare_sst_for_ingestion(path, clone).map_err(|e| Error::Other(box_err!(e)))?)
-    }
-
-    fn ingest_external_file_cf(
-        &self,
-        cf: &str,
-        opts: &IngestExternalFileOptions,
-        files: &[&str],
-    ) -> Result<()> {
-        let mut rocks_opts = rocksdb::IngestExternalFileOptions::new();
-        rocks_opts.move_files(opts.move_files);
-        let handle = get_cf_handle(&self.0, cf)?;
-        self.0
-            .ingest_external_file_cf(&handle, &rocks_opts, files)?;
-        Ok(())
-    }
-
-    fn validate_file_for_ingestion<P: AsRef<Path>>(
-        &self,
-        cf: &str,
-        path: P,
-        expected_size: u64,
-        expected_checksum: u32,
-    ) -> Result<()> {
-        let path = path.as_ref().to_str().unwrap();
-        let f = File::open(path)?;
-
-        let meta = f.metadata()?;
-        if meta.len() != expected_size {
-            return Err(Error::Engine(format!(
-                "invalid size {} for {}, expected {}",
-                meta.len(),
-                path,
-                expected_size
-            )));
-        }
-
-        let checksum = calc_crc32(path)?;
-        if checksum == expected_checksum {
-            return Ok(());
-        }
-
-        // RocksDB may have modified the global seqno.
-        let cf_handle = get_cf_handle(&self.0, cf)?;
-        set_external_sst_file_global_seq_no(&self.0, cf_handle, path, 0)?;
-        f.sync_all()
-            .map_err(|e| format!("sync {}: {:?}", path, e))?;
-
-        let checksum = calc_crc32(path)?;
-        if checksum != expected_checksum {
-            return Err(Error::Engine(format!(
-                "invalid checksum {} for {}, expected {}",
-                checksum, path, expected_checksum
-            )));
-        }
-
-        Ok(())
     }
 }
 
