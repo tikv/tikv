@@ -127,7 +127,7 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
-    pub fn pre_start(&mut self) -> result::Result<(), Box<dyn StdError>> {
+    pub fn pre_start_check(&mut self) -> result::Result<(), Box<dyn StdError>> {
         self.cfg.validate()
     }
 
@@ -183,7 +183,7 @@ impl<T: Simulator> Cluster<T> {
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in all stores, then start the cluster.
     pub fn run(&mut self) {
-        self.pre_start().unwrap();
+        self.pre_start_check().unwrap();
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
@@ -192,7 +192,7 @@ impl<T: Simulator> Cluster<T> {
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in store 1, then start the cluster.
     pub fn run_conf_change(&mut self) -> u64 {
-        self.pre_start().unwrap();
+        self.pre_start_check().unwrap();
         self.create_engines();
         let region_id = self.bootstrap_conf_change();
         self.start().unwrap();
