@@ -763,7 +763,7 @@ pub mod tests {
         protected: bool,
     ) {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
 
         let (ts, write) = reader
             .seek_write(&Key::from_raw(key), start_ts)
