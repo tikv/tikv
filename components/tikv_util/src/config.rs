@@ -807,28 +807,6 @@ mod check_data_dir_empty {
         Ok(())
     }
 
-    // check dir is non-empty of file with certain extension
-    pub fn check_data_dir_non_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
-        let op = "data-dir.empty.check";
-        let dir = Path::new(data_path);
-        if dir.exists() && !dir.is_file() {
-            let count = get_file_count(data_path, extension)?;
-            if count == 0 {
-                return Err(ConfigError::Limit(format!(
-                    "{}: the number of file with extension {} in directory {} is too small, \
-                     got 0, expect 1 or more.",
-                    op, extension, data_path,
-                )));
-            } else {
-                return Ok(());
-            }
-        }
-        Err(ConfigError::FileSystem(format!(
-            "{}: path: {:?} doesn't exist or isn't a directory.",
-            op, data_path
-        )))
-    }
-
     #[cfg(test)]
     mod tests {
         use std::fs::File;
@@ -885,35 +863,10 @@ mod check_data_dir_empty {
             let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
             assert!(ret.is_ok());
         }
-
-        #[test]
-        fn test_check_data_dir_non_empty() {
-            // test invalid data_path
-            let ret = check_data_dir_non_empty("/sys/invalid", "txt");
-            assert!(ret.is_err());
-            // test empty data_path
-            let tmp_path = Builder::new()
-                .prefix("test-get-file-count")
-                .tempdir()
-                .unwrap()
-                .into_path();
-            let ret = check_data_dir_non_empty(tmp_path.to_str().unwrap(), "txt");
-            assert!(ret.is_err());
-            // test non-empty data_path
-            let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
-            create_file(&tmp_file, b"");
-            let ret = check_data_dir_non_empty(tmp_path.to_str().unwrap(), "");
-            assert!(ret.is_ok());
-            let ret = check_data_dir_non_empty(tmp_path.to_str().unwrap(), "txt");
-            assert!(ret.is_ok());
-            let ret = check_data_dir_non_empty(tmp_path.to_str().unwrap(), "xt");
-            assert!(ret.is_err());
-        }
     }
 }
 
 pub use self::check_data_dir_empty::check_data_dir_empty;
-pub use self::check_data_dir_empty::check_data_dir_non_empty;
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
